@@ -89,6 +89,8 @@ def default_snapshot_path(base_dir: str | Path, exchange: str, label: str) -> Pa
 
 def get_bot_class(exchange: str):
     exchange = str(exchange).lower()
+    if exchange in {"defx", "paradex"}:
+        raise ValueError(f"Exchange {exchange!r} was retired in v9")
     if exchange == "binance":
         from exchanges.binance import BinanceBot
 
@@ -105,10 +107,6 @@ def get_bot_class(exchange: str):
         from exchanges.bybit import BybitBot
 
         return BybitBot
-    if exchange == "defx":
-        from exchanges.defx import DefxBot
-
-        return DefxBot
     if exchange == "gateio":
         from exchanges.gateio import GateIOBot
 
@@ -133,10 +131,6 @@ def get_bot_class(exchange: str):
         from exchanges.weex import WeexBot
 
         return WeexBot
-    if exchange == "paradex":
-        from exchanges.paradex import ParadexBot
-
-        return ParadexBot
     from exchanges.ccxt_bot import CCXTBot
 
     return CCXTBot

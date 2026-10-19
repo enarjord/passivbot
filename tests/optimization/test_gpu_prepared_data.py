@@ -76,7 +76,8 @@ def test_suite_prepared_data_rejects_changed_run_or_market_settings(builds, kind
     first = service._prepared_multicoin_data(**inputs, cache=cache)
     changed = deepcopy(inputs)
     row = changed[kind][1]
-    changed[kind][1] = replace(row, **{field: getattr(row, field) + 1})
+    value = getattr(row, field)
+    changed[kind][1] = replace(row, **{field: 1 if value is None else value + 1})
     assert service._prepared_multicoin_data(**changed, cache=cache) is not first
     assert len(builds) == 2
 
@@ -100,24 +101,43 @@ def test_failed_preparation_never_publishes_cache_entry(monkeypatch):
 
 
 @pytest.mark.parametrize("device,cache_enabled,spilled", [
-    ("cuda", True, True), ("cuda", False, False), ("mps", True, False),
+    ("cuda", True, True), ("cuda", False, False), ("mps", True, True),
 ])
-def test_backend_scope_spills_only_cached_cuda_suite_data(
+def test_backend_scope_spills_only_cached_gpu_suite_data(
     builds, monkeypatch, device, cache_enabled, spilled,
 ):
     from pathlib import Path
-    from optimization.gpu.residency import cuda_suite_residency_scope, current_cuda_residency
+    from optimization.gpu.residency import cuda_residency_scope, metal_residency_scope, current_gpu_residency
 
     monkeypatch.setattr(service, "gpu_device", lambda: device)
-    @cuda_suite_residency_scope
-    def run():
+    scope = {'cuda': cuda_residency_scope, 'mps': metal_residency_scope}[device]
+    with scope():
         cache = {} if cache_enabled else None
         data = service._prepared_multicoin_data(**_inputs(), cache=cache)
-        assert current_cuda_residency().owns(data) is spilled
+        assert current_gpu_residency().owns(data) is spilled
         if spilled:
             assert isinstance(builds[0][1]["spill_dir"], Path)
             assert service._prepared_multicoin_data(**_inputs(), cache=cache) is data
             assert len(builds) == 1
         else:
             assert "spill_dir" not in builds[0][1]
-    run()
+
+
+def test_prepared_data_cache_separates_original_f64_market_slippage(builds):
+    import numpy as np
+    cache = {}
+    slip = 0.0005
+    adjacent = np.nextafter(slip, np.inf)
+    assert np.float32(slip) == np.float32(adjacent)
+    first = service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_pct=slip)
+    assert service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_pct=slip) is first
+    second = service._prepared_multicoin_data(**_inputs(), cache=cache, market_order_slippage_pct=adjacent)
+    assert second is not first
+    assert [row[1]["market_order_slippage_pct"] for row in builds] == [slip, adjacent]
+
+
+def test_market_execution_preparation_abi_invalidates_cached_market_data(builds, monkeypatch):
+    cache = {}
+    first = service._prepared_multicoin_data(**_inputs(), cache=cache)
+    monkeypatch.setattr(service, "MARKET_EXECUTION_TICKS_ABI", service.MARKET_EXECUTION_TICKS_ABI + 1)
+    assert service._prepared_multicoin_data(**_inputs(), cache=cache) is not first

@@ -297,6 +297,13 @@ result envelopes containing a `config` object with `bot` and `live` sections. A 
 stays disabled. The command preserves authored date tokens such as `"now"`, approved/ignored coin
 lists and file references, sparse coin overrides, scenarios, reducers and optimizer runtime pins.
 It does not apply optimizer pins to bot values or flatten referenced override files.
+Cleanup modes standardize numeric output using schema defaults: float settings use `0.0`
+and integer settings use `0`, including sparse coin patches, scenario overrides, runtime pins
+and optimizer bounds. Position counts use integers. Fractional values are never rounded to match
+an integer default, and converting an integer to a float must preserve its value exactly.
+Supported override selectors use their canonical field types. Numeric market-setting overrides
+such as `price_step`, `qty_step`, `min_qty`, `min_cost`, contract multipliers and fees use floats.
+Optimizer limit thresholds and range endpoints also use floats, regardless of list order.
 Relative `override_config_path` values are kept verbatim and resolve relative to the exported
 config's directory. Keep the output beside the input or update those references when relocating it.
 
@@ -310,14 +317,15 @@ Modes:
 | `optimize` | Optimizer and backtest inputs with shared bot/live/logging sections; no monitor |
 | `format` | Strict JSON formatting only; preserve every value, numeric spelling and duplicate object member |
 
-Cleanup validates selected sections using the shared loader before export; irrelevant sections are
-discarded before normalization. Only `format` accepts arbitrary JSON (including arrays and result
-documents) without requiring a config. Cleanup rejects duplicate object keys instead of silently
-choosing one. Dynamic schema areas such as scenarios and coin patches remain sparse. Full cleanup
-can change values through the same supported normalization/default rules as loading: inspect a new
-output before adopting it. Explicit strategy/HSL migrations remain separate: enabled pre-v8.6 HSL
-requires `migrate-hsl`, and V7 trailing-grid configs require `migrate-config-v7`. Cleanup does not
-authorize strategy migration or remove the need to re-backtest a migrated configuration.
+Cleanup accepts final canonical v9 configuration and explicitly extracts supported config wrappers
+and known top-level result metadata from saved artifacts. It rejects unknown authored keys and
+obsolete structural aliases rather than silently dropping or migrating them. Output modes select
+sections only after validation. Only `format` accepts arbitrary JSON (including arrays and result
+documents) without requiring a config; it preserves numeric spelling and duplicate members.
+Semantic cleanup rejects duplicate object keys. Sparse coin/scenario patches remain sparse.
+Cleanup can apply documented normalization/defaults; inspect new output before adopting it.
+Released v8 inputs require [explicit migration](v8_to_v9_migration.md) with chosen spans and
+required acknowledgments. Pre-v8 layouts and the removed v7 strategy are unsupported.
 
 ```shell
 # Default full cleanup to a separate file.
@@ -375,7 +383,23 @@ the shared config pipeline rather than adding a second migration implementation.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_martingale_long.json`).
 - `passivbot tool cache-integrity-doctor` – Read-only local cache smoke report for missing roots, file counts/sizes, cache-family summaries, report-only warm-cache readiness evidence, v2 candle coverage/gap evidence with interior/boundary gap summaries, fill/HSL metadata evidence, and empty or corrupt JSON/NDJSON/NPY artifacts.
 - `passivbot tool candle-doctor` – Audits legacy `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs before importing into the v2 store.
-- `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
+- `passivbot tool import-historical-data` – Explicitly imports validated legacy daily-cache or historical shards into the current OHLCV store. Dry run is the default; `--execute` writes missing rows while preserving valid current rows and every source file. Startup never performs this conversion.
+
+
+### Explicit historical import
+
+```sh
+passivbot tool import-historical-data --legacy-root historical_data \
+  --source-layout historical --store-root caches/ohlcvs --exchange binance \
+  --symbol BTCUSDT --timeframe 1m --start-ms 1704067200000 --end-ms 1704153600000
+```
+
+Choose the exact source root, layout, symbol and half-open time range. Inspect the reported
+row count, then add `--execute` to import. `daily_cache` is the other source layout.
+Existing valid current-store rows win; repeated import adds no duplicates. Malformed source
+rows and corrupt/conflicting current chunks fail explicitly. Source shards are never renamed,
+deleted or rewritten. Dry inspection does not create or modify the requested target store.
+Current-store integrity checks remain part of startup independently of legacy conversion.
 
 ## Crash finder
 
@@ -479,10 +503,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   scoped HSL observations when present, with expired or degraded captures explicitly
   labeled stale/unavailable. Current drawdown, cooldown and startup panic-order prediction
   remain unavailable: a saved observation does not prove current exchange state.
-- HSL performance probes use the current evaluator: see
-  `tests/hsl_live_benchmark.py`, `tests/hsl_backtest_benchmark.py`
-  and `tests/hsl_gpu_benchmark.py`. These deterministic offline probes
-  replace the retired legacy `hsl-replay-benchmark` tool.
+- Use the current [optimizer benchmark suite](optimizer_benchmark.md) and
+  [GPU parity tools](gpu_parity.md) for v9 measurements. The standalone v8 HSL
+  probes and legacy `hsl-replay-benchmark` tool are retired; historical probe
+  sources are linked in [HSL validation](hsl_testing.md#performance).
 - `passivbot tool live-event-query` validates and queries local structured monitor event
   segments. It is read-only and does not contact exchanges. Use `--event-type`,
   `--level`, `--cycle-id`, ID filters, `--symbol`, `--pside`, `--tag`,
@@ -930,17 +954,25 @@ passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/appro
 
 ## HSL configuration migration
 
-`passivbot tool migrate-hsl input.json output.json` prepares a separate HSL
-configuration without exchange access or deployment. It works with the live-only installation,
-including configs that select the GPU optimizer; migration does not load optimizer or GPU runtimes.
-To replace the input after full validation,
-use `passivbot tool migrate-hsl input.json --in-place --restart-policy long=always`, choosing
-restart policy for each required scope. `--in-place` and an output path are mutually exclusive.
-Replacement is atomic and preserves file ownership and permissions; validation or write failure leaves the
-input unchanged. No backup is created; retain a copy yourself if needed.
-File-backed coin overrides are validated
-and saved inline (including scenario-local patches), so moving the output cannot change their policy.
-Effective optimizer and scenario policies are validated as well as the base config. Explicit restart choices also
-update matching optimizer fixed overrides; retired or unmatched fixed selectors are rejected.
-See the [migration contract](configuration.md#hsl-configuration)
-for explicit restart choices, unified portfolio policy, and compatibility limits.
+`passivbot tool migrate-config-v9` explicitly converts versioned v8 configurations
+without exchange access or deployment. It requires a slow memory span because an EMA
+span is not equivalent to a finite rolling window:
+
+```sh
+passivbot tool migrate-config-v9 input.json \
+  --lookback-ema-span-minutes 43200.0 --dry-run --diff
+passivbot tool migrate-config-v9 input.json output.v9.json \
+  --lookback-ema-span-minutes 43200.0
+```
+
+The example span is a policy choice requiring retuning. Distinct scenario/window overrides
+need explicit choices, and removed permanent-stop policies require acknowledgement.
+The retired `migrate-hsl` command cannot choose v9 policy.
+
+The tool works on live-only installations and validates effective base, referenced-file,
+scenario and optimizer policies without loading GPU runtimes. Referenced coin policies
+are materialized inline with file-then-inline precedence. Separate outputs are protected
+from overwrite. `--in-place` creates a backup before atomic replacement and preserves
+ownership and permissions; failed validation leaves the input unchanged. Retain private
+configs and reports privately. See the [v9 migration guide](v8_to_v9_migration.md) for
+backup/rollback behavior, scope changes and fresh optimizer evaluation requirements.

@@ -84,9 +84,6 @@ except ImportError:  # pragma: no cover - editable source-only tooling fallback
 _RUST_EMA_LAST = getattr(pbr, "ema_last", None) if pbr is not None else None
 
 from legacy_data_migrator import (
-    standardize_cache_directories,
-    migrate_legacy_data_all_on_init,
-    merge_duplicate_symbol_directories,
     normalize_ccxt_volume_to_base,
 )
 import live.ema_timing as ema_timing
@@ -1254,7 +1251,8 @@ class CandlestickManager:
             str, Optional[Tuple[int, int, int]]
         ] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
-        self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
+        self._ema_cache: Dict[str, Dict[Tuple[str, float, str], Tuple[float, int, int]]] = {}
+        self._ema_inputs: Dict[str, Dict[Tuple[str, float, str], np.ndarray]] = {}
         # Compatibility attribute retained for older monitor/tool code.  The
         # candlestick manager no longer owns current in-progress prices.
         self._current_close_cache: Dict[str, Tuple[float, int]] = {}
@@ -1309,57 +1307,27 @@ class CandlestickManager:
         self._closed = False
         atexit.register(self._cleanup_on_exit)
 
-        # Standardize cache directory names (e.g., binanceusdm -> binance),
-        # migrate any legacy data from historical_data/ to caches/ohlcv/,
-        # and merge any duplicate symbol directories from inconsistent sanitization
+        # Startup checks only the current store. Historical conversion is an
+        # explicit offline import and never consumes or renames legacy sources.
         ohlcv_cache_base = _ensure_legacy_ohlcv_cache_base(self.cache_dir)
-        historical_data_path = os.path.join(
-            os.path.dirname(os.path.abspath(self.cache_dir)),
-            "historical_data",
-        )
         GATEIO_CACHE_CUTOFF_DATE = "2026-02-07"
         if self.exchange_name == "gateio" and GATEIO_CACHE_CUTOFF_DATE:
-            _quarantine_gateio_cache_if_stale(
-                ohlcv_cache_base,
-                GATEIO_CACHE_CUTOFF_DATE,
-            )
-        migration_lock = os.path.join(ohlcv_cache_base, ".migration.lock")
-        migration_done = os.path.join(ohlcv_cache_base, ".migration_done")
+            _quarantine_gateio_cache_if_stale(ohlcv_cache_base, GATEIO_CACHE_CUTOFF_DATE)
         try:
-            with portalocker.Lock(migration_lock, timeout=0.1, fail_when_locked=True):
+            with portalocker.Lock(
+                os.path.join(ohlcv_cache_base, ".startup-integrity.lock"),
+                timeout=0.1, fail_when_locked=True,
+            ):
                 try:
                     _quarantine_root_level_timeframe_debris(ohlcv_cache_base)
                 except Exception as exc:
                     logging.error(
                         "Root-level OHLCV cache cleanup failed (non-fatal). Continuing "
                         "error_type=%s cache_base=%s",
-                        bounded_exception_type(exc),
-                        ohlcv_cache_base,
+                        bounded_exception_type(exc), ohlcv_cache_base,
                     )
-                if not os.path.exists(migration_done):
-                    try:
-                        standardize_cache_directories(ohlcv_cache_base)
-                        migrate_legacy_data_all_on_init(
-                            cache_base=ohlcv_cache_base,
-                            historical_data_path=historical_data_path,
-                        )
-                        merge_duplicate_symbol_directories(ohlcv_cache_base)
-                        try:
-                            with open(migration_done, "w", encoding="utf-8") as handle:
-                                handle.write(str(int(time.time())))
-                        except Exception:
-                            pass
-                    except Exception as exc:
-                        logging.error(
-                            "Cache migration failed (non-fatal). Continuing without migration "
-                            "error_type=%s cache_base=%s historical_data_path=%s",
-                            bounded_exception_type(exc),
-                            ohlcv_cache_base,
-                            historical_data_path,
-                        )
         except portalocker.exceptions.LockException:
-            # Another process is handling migrations; skip.
-            pass
+            pass  # Another startup owns this current-store integrity check.
 
         self._setup_logging()
         self._cleanup_stale_locks()
@@ -2215,6 +2183,21 @@ class CandlestickManager:
         except Exception:
             return 0
 
+    @staticmethod
+    def _ema_index_content(index: dict):
+        """Content identity excludes refresh/retry bookkeeping."""
+        shards = tuple(sorted(
+            (str(day), info.get("min_ts"), info.get("max_ts"), info.get("count"), info.get("crc32"))
+            for day, info in index.get("shards", {}).items() if isinstance(info, dict)
+        ))
+        gaps = []
+        for gap in index.get("meta", {}).get("known_gaps", []):
+            if isinstance(gap, dict):
+                gaps.append((gap.get("start_ts"), gap.get("end_ts"), gap.get("reason")))
+            elif isinstance(gap, (list, tuple)) and len(gap) >= 2:
+                gaps.append((gap[0], gap[1], None))
+        return shards, tuple(gaps)
+
     def _ensure_symbol_index(
         self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
     ) -> dict:
@@ -2298,6 +2281,10 @@ class CandlestickManager:
                 )
             if isinstance(meta.get("known_gaps"), list):
                 meta["known_gaps"] = _GapMetadataList(meta["known_gaps"])
+            if existing is not None and self._ema_index_content(existing) != self._ema_index_content(idx):
+                # Another writer changed or removed historical source content.
+                # Its continuation cannot be proven from our bounded EMA window.
+                self._invalidate_ema_cache(symbol, timeframe=tf_norm)
             self._index[key] = idx
             self._index_mtime[key] = current_mtime
             if migrated_pre_inception:
@@ -2347,6 +2334,7 @@ class CandlestickManager:
         # Keep cached index consistent if shard files were deleted while running.
         removed = self._prune_missing_shards_from_index(idx)
         if removed:
+            self._invalidate_ema_cache(symbol, timeframe=tf_norm)
             self._log(
                 "warning",
                 "index_pruned_missing_shards",
@@ -3178,32 +3166,21 @@ class CandlestickManager:
         source_norm = str(source or "").lower()
         persist_before_cache = tf_norm == "1m" and source_norm == "ws"
         candle_content_changed = True
+        changed_from_ts = int(arr[0]["ts"])
         replaces_synthetic = False
         if tf_norm == "1m":
             cached_before = _sorted_candle_copy(self._ensure_symbol_cache(symbol))
-            incoming_unique = self._merge_overwrite(
-                np.empty((0,), dtype=CANDLE_DTYPE),
-                arr,
-            )
+            incoming_unique = self._merge_overwrite(np.empty((0,), dtype=CANDLE_DTYPE), arr)
+            changed = np.ones(incoming_unique.size, dtype=bool)
             if cached_before.size and incoming_unique.size:
-                positions = np.searchsorted(
-                    cached_before["ts"].astype(np.int64),
-                    incoming_unique["ts"].astype(np.int64),
-                )
-                if np.all(positions < cached_before.size):
-                    matched = cached_before[positions]
-                    candle_content_changed = not (
-                        np.array_equal(
-                            matched["ts"].astype(np.int64),
-                            incoming_unique["ts"].astype(np.int64),
-                        )
-                        and np.array_equal(matched, incoming_unique)
-                    )
+                positions = np.searchsorted(cached_before["ts"], incoming_unique["ts"])
+                inside = positions < cached_before.size
+                changed[inside] = cached_before[positions[inside]] != incoming_unique[inside]
+            candle_content_changed = bool(np.any(changed))
+            if candle_content_changed:
+                changed_from_ts = int(incoming_unique["ts"][changed][0])
             synthetic = self._synthetic_timestamps.get(symbol, set())
-            replaces_synthetic = bool(
-                synthetic
-                and any(int(ts) in synthetic for ts in incoming_unique["ts"])
-            )
+            replaces_synthetic = bool(synthetic and any(int(ts) in synthetic for ts in incoming_unique["ts"]))
         # WebSocket rows become canonical trading inputs only after the shard
         # write succeeds. A failed write must not leave restart-sensitive
         # candles or EMA state visible exclusively in RAM.
@@ -3239,7 +3216,7 @@ class CandlestickManager:
                 raise OSError("WebSocket candle persistence verification failed")
         if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
-            self._invalidate_ema_cache(symbol, timeframe="1m")
+            self._invalidate_ema_cache(symbol, timeframe="1m", changed_from_ts=changed_from_ts)
 
         # Update inception_ts if this is new earliest data for 1m (defer save until end)
         if tf_norm == "1m":
@@ -3356,24 +3333,23 @@ class CandlestickManager:
         return 0
 
     def _invalidate_ema_cache(
-        self, symbol: str, *, timeframe: Optional[str] = None
+        self, symbol: str, *, timeframe: Optional[str] = None, changed_from_ts: Optional[int] = None
     ) -> None:
-        """Invalidate cached EMA values for a symbol, optionally for one timeframe."""
-        if symbol not in self._ema_cache:
-            return
-        if timeframe is None:
-            del self._ema_cache[symbol]
-            return
-        tf_key = str(_tf_to_ms(timeframe))
+        """Discard affected history, while retaining scalars across pure appends."""
+        cache = self._ema_cache.get(symbol, {})
+        tf_key = str(_tf_to_ms(timeframe)) if timeframe is not None else None
         retained = {
-            key: value
-            for key, value in self._ema_cache[symbol].items()
-            if len(key) < 3 or str(key[2]) != tf_key
+            key: value for key, value in cache.items()
+            if (tf_key is not None and (len(key) < 3 or str(key[2]) != tf_key))
+            or (changed_from_ts is not None and int(value[1]) < int(changed_from_ts))
         }
+        inputs = self._ema_inputs.get(symbol, {})
         if retained:
             self._ema_cache[symbol] = retained
+            self._ema_inputs[symbol] = {key: value for key, value in inputs.items() if key in retained}
         else:
-            del self._ema_cache[symbol]
+            self._ema_cache.pop(symbol, None)
+            self._ema_inputs.pop(symbol, None)
 
     def _invalidate_tf_range_cache(
         self,
@@ -8088,6 +8064,8 @@ class CandlestickManager:
                                 self._tf_range_cache[symbol] = sym_cache
                                 return out_disk
 
+                    ema_disk_before = (disk_arr.copy() if isinstance(disk_arr, np.ndarray)
+                                       else np.empty((0,), dtype=CANDLE_DTYPE))
                     fetch_spans = [(int(start_ts), int(end_ts))]
                     if (
                         max_age_ms != 0
@@ -8124,8 +8102,17 @@ class CandlestickManager:
                     def _persist_tf_batch(batch: np.ndarray) -> None:
                         nonlocal persisted_batches
                         persisted_batches = True
+                        changed = np.ones(batch.size, dtype=bool)
+                        if ema_disk_before.size and batch.size:
+                            positions = np.searchsorted(ema_disk_before["ts"], batch["ts"])
+                            inside = positions < ema_disk_before.size
+                            changed[inside] = ema_disk_before[positions[inside]] != batch[inside]
                         self._persist_batch(symbol, batch, timeframe=out_tf)
-                        self._invalidate_ema_cache(symbol, timeframe=out_tf)
+                        if np.any(changed):
+                            self._invalidate_ema_cache(
+                                symbol, timeframe=out_tf,
+                                changed_from_ts=int(np.min(batch["ts"][changed])),
+                            )
 
                     fetched_ranges = []
                     for span_start, span_end in fetch_spans:
@@ -8193,7 +8180,6 @@ class CandlestickManager:
                         )
                     else:
                         out = fetched_out
-                    self._invalidate_ema_cache(symbol, timeframe=out_tf)
                     if fetched_out.size:
                         self._invalidate_tf_range_cache(
                             symbol,
@@ -9412,71 +9398,87 @@ class CandlestickManager:
 
     @ema_timing.timed("ema_compute")
     def _ema(self, values: np.ndarray, span: float) -> float:
-        """Return the final bias-corrected EMA without allocating a full series."""
-        if _RUST_EMA_LAST is not None:
-            contiguous = np.ascontiguousarray(values, dtype=np.float64)
-            return float(_RUST_EMA_LAST(contiguous, float(span)))
-        n = int(values.shape[0])
-        if n == 0:
-            return float("nan")
+        """Normalize a bootstrap over up to two spans of completed samples."""
         span = float(span)
-        alpha = 2.0 / (span + 1.0)
-        one_minus = 1.0 - alpha
-        first_finite_idx = None
-        for i in range(n):
-            if np.isfinite(float(values[i])):
-                first_finite_idx = i
-                break
-        if first_finite_idx is None:
-            return float("nan")
-        num = float(values[first_finite_idx])
-        den = 1.0
-        for i in range(first_finite_idx + 1, n):
-            value = float(values[i])
-            if not np.isfinite(value):
-                continue
-            num = alpha * value + one_minus * num
-            den = alpha + one_minus * den
-            if den <= np.finfo(np.float64).tiny:
-                num = alpha * value
-                den = alpha
-        return float(num / den)
+        if not math.isfinite(span) or span <= 0.0:
+            raise ValueError("EMA span must be finite and greater than zero")
+        count = max(1, int(math.ceil(2.0 * span)))
+        values = np.asarray(values, dtype=np.float64)[-count:]
+        if _RUST_EMA_LAST is not None:
+            return float(_RUST_EMA_LAST(np.ascontiguousarray(values), span))
+        decay = 1.0 - min(1.0, 2.0 / (span + 1.0))
+        numerator = denominator = 0.0
+        for value in values:
+            if math.isfinite(float(value)):
+                numerator = float(value) + decay * numerator
+                denominator = 1.0 + decay * denominator
+        return numerator / denominator if denominator > 0.0 else float("nan")
 
     def _ema_series(self, values: np.ndarray, span: float) -> np.ndarray:
-        """Return bias-corrected EMA (pandas ewm adjust=True) over `values`."""
-
-        n = int(values.shape[0])
-        if n == 0:
-            return np.empty((0,), dtype=np.float64)
+        """Causal series: normalize the initial two-span prefix, then advance once."""
         span = float(span)
-        alpha = 2.0 / (span + 1.0)
-        one_minus = 1.0 - alpha
-        out = np.empty((n,), dtype=np.float64)
-        first_finite_idx = None
-        for i in range(n):
-            if np.isfinite(float(values[i])):
-                first_finite_idx = i
-                break
-        if first_finite_idx is None:
-            out.fill(float("nan"))
-            return out
-        if first_finite_idx > 0:
-            out[:first_finite_idx] = float("nan")
-        num = float(values[first_finite_idx])
-        den = 1.0
-        out[first_finite_idx] = num / den
-        for i in range(first_finite_idx + 1, n):
-            v = float(values[i])
-            if not np.isfinite(v):
-                out[i] = out[i - 1]
-                continue
-            num = alpha * v + one_minus * num
-            den = alpha + one_minus * den
-            if den <= np.finfo(np.float64).tiny:
-                num = alpha * v
-                den = alpha
-            out[i] = num / den
+        if not math.isfinite(span) or span <= 0.0:
+            raise ValueError("EMA span must be finite and greater than zero")
+        alpha = min(1.0, 2.0 / (span + 1.0))
+        decay = 1.0 - alpha
+        count = max(1, int(math.ceil(2.0 * span)))
+        out = np.empty(len(values), dtype=np.float64)
+        numerator = denominator = 0.0
+        previous = float("nan")
+        for i, value in enumerate(values):
+            value = float(value)
+            if math.isfinite(value):
+                if i < count or not math.isfinite(previous):
+                    numerator = value + decay * numerator
+                    denominator = 1.0 + decay * denominator
+                    previous = numerator / denominator
+                else:
+                    previous = decay * previous + alpha * value
+            out[i] = previous
         return out
+
+    def _ema_from_completed_window(self, symbol, key, arr, span, end_ts, now, *, values=None, commit=True):
+        """Advance a validated scalar from an unchanged completed prefix exactly once."""
+        cache = self._ema_cache.setdefault(symbol, {}) if commit else self._ema_cache.get(symbol, {})
+        inputs = self._ema_inputs.setdefault(symbol, {}) if commit else self._ema_inputs.get(symbol, {})
+        previous = cache.get(key)
+        source = inputs.get(key)
+        period_ms = int(key[2])
+        if arr.size > 1 and str(self.exchange_name).lower() != "fake":
+            discontinuities = np.flatnonzero(np.diff(arr["ts"].astype(np.int64)) != period_ms)
+            if discontinuities.size:
+                offset = int(discontinuities[-1]) + 1
+                arr = arr[offset:]
+                if values is not None:
+                    values = np.asarray(values)[offset:]
+        series = self._ema_metric_series(str(key[0]).split(":")[0], arr) if values is None else values
+        value = None
+        if previous is not None and source is not None and arr.size and source.size:
+            old_value, old_end, _computed = previous
+            if math.isfinite(old_value) and int(end_ts) >= old_end:
+                old_prefix = source[(source["ts"] >= arr[0]["ts"]) & (source["ts"] <= old_end)]
+                prefix = arr[arr["ts"] <= old_end]
+                unchanged = (old_prefix.size and prefix.size
+                             and (int(end_ts) > old_end or int(arr[0]["ts"]) == int(source[0]["ts"]))
+                             and int(prefix[-1]["ts"]) == old_end
+                             and np.array_equal(old_prefix, prefix))
+                suffix_mask = arr["ts"] > old_end
+                suffix_ts = np.asarray(arr["ts"][suffix_mask], dtype=np.int64)
+                contiguous = (not suffix_ts.size or
+                              (int(suffix_ts[0]) == old_end + period_ms
+                               and np.all(np.diff(suffix_ts) == period_ms)))
+                if unchanged and contiguous:
+                    value = float(old_value)
+                    alpha = min(1.0, 2.0 / (float(span) + 1.0))
+                    for sample in np.asarray(series)[suffix_mask]:
+                        if math.isfinite(float(sample)):
+                            value = (1.0 - alpha) * value + alpha * float(sample)
+        if value is None:
+            value = float(self._ema(np.asarray(series, dtype=np.float64), span))
+        if commit and math.isfinite(value):
+            cache[key] = (value, int(end_ts), int(now))
+            inputs[key] = arr[-max(1, int(math.ceil(2.0 * span))):].copy()
+        return value
 
     @staticmethod
     def _normalize_spans_by_metric(
@@ -9620,7 +9622,7 @@ class CandlestickManager:
         if not normalized:
             return {}
         max_span = max(span for spans in normalized.values() for span in spans)
-        window_candles = max(1, int(math.ceil(max_span)))
+        window_candles = max(1, int(math.ceil(2.0 * max_span)))
         start_ts = min(
             int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
             last_cached,
@@ -9742,12 +9744,17 @@ class CandlestickManager:
             series = self._ema_metric_series(metric_key, arr)
             metric_out: Dict[float, float] = {}
             for span in spans:
-                span_candles = max(1, int(math.ceil(span)))
+                span_candles = max(1, int(math.ceil(2.0 * span)))
                 tail = series[-span_candles:] if series.shape[0] > span_candles else series
                 if tail.shape[0] == 0:
                     metric_out[span] = float("nan")
                 else:
-                    metric_out[span] = float(self._ema(tail, span))
+                    metric_arr = arr[-span_candles:]
+                    key = (metric_key, float(span), str(period_ms))
+                    metric_out[span] = self._ema_from_completed_window(
+                        symbol, key, metric_arr, span, latest_expected, self._now_ms(),
+                        values=tail, commit=False,
+                    )
             out[metric_key] = metric_out
         projection_cache[cache_key] = {
             metric_key: dict(values) for metric_key, values in out.items()
@@ -9820,7 +9827,7 @@ class CandlestickManager:
         ):
             return {}
         max_span = max(span for spans in normalized.values() for span in spans)
-        max_candles = max(1, int(math.ceil(max_span)))
+        max_candles = max(1, int(math.ceil(2.0 * max_span)))
         if window_candles is not None:
             try:
                 max_candles = max(max_candles, int(window_candles))
@@ -9847,14 +9854,14 @@ class CandlestickManager:
         }
         for metric_key, spans in normalized.items():
             for span in spans:
-                span_candles = max(1, int(math.ceil(span)))
+                span_candles = max(1, int(math.ceil(2.0 * span)))
                 metric_start_ts = int(last_cached - period_ms * (span_candles - 1))
                 tail = self._slice_ts_range(
                     raw, metric_start_ts, int(last_cached), assume_sorted=True
                 )
                 if tail.size == 0 or not candle_range_has_full_coverage(
                     tail,
-                    metric_start_ts,
+                    int(last_cached - period_ms * (max(1, int(math.ceil(span))) - 1)),
                     int(last_cached),
                     timeframe=timeframe,
                 ):
@@ -9862,7 +9869,10 @@ class CandlestickManager:
                 series = self._ema_metric_series(metric_key, tail)
                 if series.shape[0] == 0:
                     continue
-                val = float(self._ema(series, span))
+                key = (f"{metric_key}:cached", float(span), str(period_ms))
+                val = self._ema_from_completed_window(
+                    symbol, key, tail, span, last_cached, self._now_ms(), values=series
+                )
                 if math.isfinite(val):
                     out[str(metric_key)][float(span)] = val
         return out
@@ -9870,7 +9880,7 @@ class CandlestickManager:
     async def _latest_finalized_range(
         self, span: float, *, period_ms: int = ONE_MIN_MS
     ) -> Tuple[int, int]:
-        span_candles = max(1, int(math.ceil(float(span))))
+        span_candles = max(1, int(math.ceil(2.0 * float(span))))
         now = self._now_ms()
         # Align to timeframe buckets and exclude current in-progress bucket
         end_floor = (int(now) // int(period_ms)) * int(period_ms)
@@ -9940,6 +9950,7 @@ class CandlestickManager:
             timestamps = np.unique(np.asarray(arr["ts"], dtype=np.int64))
         except (KeyError, TypeError, ValueError):
             return False
+        timestamps = timestamps[(timestamps >= int(start_ts)) & (timestamps <= int(end_ts))]
         expected_len = int((int(end_ts) - int(start_ts)) // int(period_ms)) + 1
         if (
             expected_len <= 0
@@ -10033,14 +10044,14 @@ class CandlestickManager:
         allow_remote_fetch: bool = True,
         allow_provisional_internal_gaps: bool = True,
     ) -> float:
-        """Return latest EMA of close over last `span` finalized candles.
+        """Return the completed-close EMA with bounded bootstrap and cached continuation.
 
         Supports higher timeframe via `tf`/`timeframe`.
         """
         out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
-        # EMA result cache: reuse if end_ts unchanged and within TTL
+        # Revalidate completed source rows; TTL controls candle I/O freshness only.
         now = self._now_ms()
         tf_key = str(period_ms)
         cache_metric_key = (
@@ -10048,10 +10059,6 @@ class CandlestickManager:
         )
         key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
-        if max_age_ms is not None and max_age_ms > 0 and key in cache:
-            val, cached_end_ts, computed_at = cache[key]
-            if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
-                return float(val)
         arr = await self.get_candles(
             symbol,
             start_ts=start_ts,
@@ -10064,14 +10071,17 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return float("nan")
+        required_start = int(end_ts - period_ms * (max(1, int(math.ceil(span))) - 1))
         if not self._ema_window_has_required_coverage(
-            arr, start_ts, end_ts, symbol=symbol, timeframe=out_tf
+            arr, required_start, end_ts, symbol=symbol, timeframe=out_tf
+        ):
+            return float("nan")
+        if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
+            arr, required_start, end_ts, period_ms
         ):
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
-        res = float(self._ema(closes, span))
-        # Store in cache
-        cache[key] = (res, int(end_ts), int(now))
+        res = self._ema_from_completed_window(symbol, key, arr, span, end_ts, now, values=closes)
         return res
 
     async def get_ema_bounds(
@@ -10241,7 +10251,7 @@ class CandlestickManager:
         allow_remote_fetch: bool = True,
         allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
-        """Return latest EMA of quote volume over last `span` finalized candles.
+        """Return the completed quote-volume EMA with bounded bootstrap and continuation.
 
         Quote volume per candle is approximated as base_volume * typical_price,
         where typical_price = (high + low + close) / 3. This is a common
@@ -10299,10 +10309,6 @@ class CandlestickManager:
         )
         key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
-        if max_age_ms is not None and max_age_ms > 0 and key in cache:
-            val, cached_end_ts, computed_at = cache[key]
-            if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
-                return float(val)
         arr = await self.get_candles(
             symbol,
             start_ts=start_ts,
@@ -10315,17 +10321,17 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return float("nan")
+        required_start = int(end_ts - period_ms * (max(1, int(math.ceil(span))) - 1))
         if not self._ema_window_has_required_coverage(
-            arr, start_ts, end_ts, symbol=symbol, timeframe=out_tf
+            arr, required_start, end_ts, symbol=symbol, timeframe=out_tf
         ):
             return float("nan")
         if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
-            arr, start_ts, end_ts, period_ms
+            arr, required_start, end_ts, period_ms
         ):
             return float("nan")
         series = series_fn(arr)
-        res = float(self._ema(series, span))
-        cache[key] = (res, int(end_ts), int(now))
+        res = self._ema_from_completed_window(symbol, key, arr, span, end_ts, now, values=series)
         return res
 
     async def get_latest_ema_metrics(
@@ -10353,7 +10359,7 @@ class CandlestickManager:
         period_ms = _tf_to_ms(out_tf)
         # Use the largest span to fetch a superset window.
         max_span = max(float(s) for s in spans_by_metric.values())
-        max_candles = max(1, int(math.ceil(max_span)))
+        max_candles = max(1, int(math.ceil(2.0 * max_span)))
         start_ts, end_ts = await self._latest_finalized_range(max_span, period_ms=period_ms)
         if window_candles is not None:
             try:
@@ -10368,11 +10374,6 @@ class CandlestickManager:
         missing: List[str] = []
         for metric_key, span in spans_by_metric.items():
             key = (f"{metric_key}:strict", float(span), tf_key)
-            if max_age_ms is not None and max_age_ms > 0 and key in cache:
-                val, cached_end_ts, computed_at = cache[key]
-                if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
-                    out[str(metric_key)] = float(val)
-                    continue
             missing.append(str(metric_key))
 
         if not missing:
@@ -10392,18 +10393,6 @@ class CandlestickManager:
             allow_provisional_internal_gaps=False,
         )
         if raw.size == 0:
-            for metric_key in missing:
-                out[metric_key] = float("nan")
-            return out
-        if not self._ema_window_has_required_coverage(
-            raw, start_ts, end_ts, symbol=symbol, timeframe=out_tf
-        ):
-            for metric_key in missing:
-                out[metric_key] = float("nan")
-            return out
-        if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
-            raw, start_ts, end_ts, period_ms
-        ):
             for metric_key in missing:
                 out[metric_key] = float("nan")
             return out
@@ -10432,10 +10421,18 @@ class CandlestickManager:
 
         for metric_key in missing:
             span = float(spans_by_metric[metric_key])
-            span_candles = max(1, int(math.ceil(span)))
+            span_candles = max(1, int(math.ceil(2.0 * span)))
             metric_start_ts = int(end_ts - period_ms * (span_candles - 1))
             # Get window ending at end_ts. Prefer slicing by tail length; if data is short, use what we have.
             tail = raw[-span_candles:] if raw.size > span_candles else raw
+            required_start = int(end_ts - period_ms * (max(1, int(math.ceil(span))) - 1))
+            if not self._ema_window_has_required_coverage(
+                tail, required_start, end_ts, symbol=symbol, timeframe=out_tf
+            ) or (period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
+                tail, required_start, end_ts, period_ms
+            )):
+                out[metric_key] = float("nan")
+                continue
             if period_ms == ONE_MIN_MS:
                 # Re-apply gap standardization on the requested metric window.
                 # This matches get_candles(strict=False) behavior for the same [start,end] window.
@@ -10451,7 +10448,7 @@ class CandlestickManager:
                 )
             if tail.size == 0 or not self._ema_window_has_required_coverage(
                 tail,
-                metric_start_ts,
+                int(end_ts - period_ms * (max(1, int(math.ceil(span))) - 1)),
                 end_ts,
                 symbol=symbol,
                 timeframe=out_tf,
@@ -10459,13 +10456,9 @@ class CandlestickManager:
                 out[metric_key] = float("nan")
                 continue
             series = series_for(metric_key, tail)
-            res = float(self._ema(series, span))
+            key = (f"{metric_key}:strict", span, tf_key)
+            res = self._ema_from_completed_window(symbol, key, tail, span, end_ts, now, values=series)
             out[metric_key] = res
-            cache[(f"{metric_key}:strict", span, tf_key)] = (
-                res,
-                int(end_ts),
-                int(now),
-            )
 
         return out
 
@@ -10512,14 +10505,6 @@ class CandlestickManager:
                     span, period_ms=period_ms
                 )
                 key = (cache_metric_key, float(span), tf_key)
-                if max_age_ms is not None and max_age_ms > 0 and key in cache:
-                    val, cached_end_ts, computed_at = cache[key]
-                    if (
-                        int(cached_end_ts) == int(end_ts)
-                        and now - int(computed_at) <= int(max_age_ms)
-                    ):
-                        out[metric_key][span] = float(val)
-                        continue
                 missing.setdefault(metric_key, []).append(span)
         if not missing:
             return out
@@ -10550,7 +10535,7 @@ class CandlestickManager:
                 else f"{metric_key}:strict"
             )
             for span in spans:
-                span_candles = max(1, int(math.ceil(span)))
+                span_candles = max(1, int(math.ceil(2.0 * span)))
                 metric_start_ts = int(
                     end_ts - period_ms * (span_candles - 1)
                 )
@@ -10562,7 +10547,7 @@ class CandlestickManager:
                 )
                 if tail.size == 0 or not self._ema_window_has_required_coverage(
                     tail,
-                    metric_start_ts,
+                    int(end_ts - period_ms * (max(1, int(math.ceil(span))) - 1)),
                     end_ts,
                     symbol=symbol,
                     timeframe=out_tf,
@@ -10571,20 +10556,15 @@ class CandlestickManager:
                     continue
                 if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
                     tail,
-                    metric_start_ts,
+                    int(end_ts - period_ms * (max(1, int(math.ceil(span))) - 1)),
                     end_ts,
                     period_ms,
                 ):
                     out[metric_key][span] = float("nan")
                     continue
-                value = float(self._ema(self._ema_metric_series(metric_key, tail), span))
-                out[metric_key][span] = value
-                if not math.isfinite(value):
-                    continue
-                cache[(cache_metric_key, float(span), tf_key)] = (
-                    value,
-                    int(end_ts),
-                    int(now),
+                key = (cache_metric_key, float(span), tf_key)
+                out[metric_key][span] = self._ema_from_completed_window(
+                    symbol, key, tail, span, end_ts, now
                 )
         return out
 

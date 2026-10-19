@@ -1,5 +1,13 @@
-// Rust seeds adjusted price EMA numerator/denominator with price/1, so its
-// denominator stays one and the recurrence reduces to the seeded EMA below.
+#ifndef PASSIVBOT_UNSTUCK_ENABLED
+#define PASSIVBOT_UNSTUCK_ENABLED 1
+#endif
+
+#ifndef PASSIVBOT_UNSTUCK_EMA_ENABLED
+#define PASSIVBOT_UNSTUCK_EMA_ENABLED 1
+#endif
+
+// Price EMAs finalize their normalized warmup at the first usable planning
+// boundary. Between completed candles they retain only this scalar recurrence.
 // Horizons arrive in candle periods after host-side minute scaling.
 struct UnstuckEmaBand {
     float3 alpha;

@@ -190,7 +190,6 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
         bot["entry_cooldown"]["base_duration_minutes"] = 0
         bot["forager"].update(
             unilateralness_ema_span_1m=3.25,
-            volume_drop_pct=0,
             score_weights=dict(
                 volume=0, volatility=0, ema_readiness=0, unilateralness=1
             ),
@@ -219,15 +218,15 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
 
 
 @GPU
-@pytest.mark.parametrize("recent", [False, True])
-def test_adaptive_temporal_chunks_preserve_all_outputs(recent):
-    from test_gpu_mps import _tm_directional_temporal_fixture
-    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
-    from optimization.gpu.model import (
-        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS as keys,
-    )
+def test_adaptive_temporal_chunks_preserve_all_native_outputs():
+    from test_gpu_mps import _multicoin_exposure_fixture
+    from optimization.gpu.model import TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS as keys
 
-    market, run, data, row, kwargs = _tm_directional_temporal_fixture()
+    count = 250
+    phase = np.arange(count, dtype=float)
+    closes = np.column_stack((100 + 2*np.sin(phase/11), 120 + 3*np.cos(phase/17)))
+    runner, row = _multicoin_exposure_fixture("trailing_martingale", "long",
+                                             count=count, closes=closes)
     for key, value in dict(
         entry_cooldown_max_duration_minutes=30,
         entry_cooldown_exposure_weight=7,
@@ -236,43 +235,18 @@ def test_adaptive_temporal_chunks_preserve_all_outputs(recent):
         unilateralness_window=65,
     ).items():
         row[keys.index(key)] = value
-    matrix = np.asarray([row + row], dtype=float)
-    history = dict(history_start_step=73, trade_start_step=113) if recent else {}
-    plain = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
-    expected = {
-        k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
-        for k, v in plain.run(matrix, **history).items()
-    }
-    chunked = MpsTrailingMartingaleRunner(
-        market, run, data, max_dispatch_candidate_bars=94, **kwargs
-    )
-    for key, value in chunked.run(matrix, **history).items():
+    matrix = np.asarray([row], dtype=float)
+    expected = {key: value.cpu().clone() if isinstance(value, torch.Tensor) else value
+                for key, value in runner.run(matrix).items()}
+    runner.max_dispatch_candidate_bars = 94
+    for key, value in runner.run(matrix).items():
         if isinstance(value, torch.Tensor):
-            torch.testing.assert_close(
-                value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True
-            )
+            torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
         else:
             assert value == expected[key]
+    assert runner._last_temporal_dispatch["dispatch_count"] > 1
 
 
-def test_new_optimizer_dimensions_map_for_both_strategies_and_sides():
-    from optimization.backends.gpu_backend import (
-        EMA_STRATEGY_BOUND_MAP,
-        TRAILING_MARTINGALE_STRATEGY_BOUND_MAP,
-    )
-
-    expected = {
-        "entry_cooldown_min_duration_minutes": "entry_cooldown_min_duration_minutes",
-        "entry_cooldown_max_duration_minutes": "entry_cooldown_max_duration_minutes",
-        "entry_cooldown_weights_minutes_exposure_ratio": "entry_cooldown_exposure_weight",
-        "entry_cooldown_weights_minutes_adverse_directionality": "entry_cooldown_adverse_weight",
-        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
-        "forager_score_weights_unilateralness": "forager_score_weights_unilateralness",
-    }
-    for mapping in (EMA_STRATEGY_BOUND_MAP, TRAILING_MARTINGALE_STRATEGY_BOUND_MAP):
-        for side in ("long", "short"):
-            for source, target in expected.items():
-                assert mapping[f"{side}_{source}"] == f"{side}_{target}"
 
 
 @GPU
@@ -312,7 +286,7 @@ def test_policy_floor_ceiling_and_additive_weights(
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
     from test_gpu_entry_sizing_parity import _fixture
-    from optimization.gpu.service import MpsMulticoinProxy
+    from optimization.gpu.service import SharedAccountReplay
     from optimization.gpu.model import (
         EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
         TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START,
@@ -339,7 +313,7 @@ def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
             }
         }
     }
-    proxy = MpsMulticoinProxy(
+    proxy = SharedAccountReplay(
         config=cfg,
         hlcvs=candles,
         mss=mss,
@@ -362,8 +336,6 @@ def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
 @pytest.mark.parametrize(
     "name",
     [
-        "mps_ema_anchor_source_py",
-        "mps_trailing_martingale_source_py",
         "mps_ema_anchor_multicoin_source_py",
         "mps_trailing_martingale_multicoin_source_py",
     ],
@@ -458,7 +430,7 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         bot["risk"].pop("entry_cooldown_minutes", None)
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["forager"].update(
-            unilateralness_ema_span_1m=1.0, volume_drop_pct=0,
+            unilateralness_ema_span_1m=1.0,
             score_weights=dict(volume=1, volatility=0, ema_readiness=0, unilateralness=1),
         )
         if strategy == "ema_anchor":
@@ -516,7 +488,7 @@ def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
 def test_gpu_rms_interval_demand_keeps_real_consumers(count, slots, dynamic, adverse, accept):
     from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
     from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS as keys
-    from tools.gpu_proxy_benchmark import _base_parameter_values
+    from gpu_replay_fixtures import _base_parameter_values
 
     values = _base_parameter_values()
     values.update(n_positions=slots, forager_score_weights_unilateralness=1,
@@ -617,7 +589,7 @@ def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(str
 def test_effective_coin_cooldown_interval_demand(pins, base, floor, ceiling, adverse, accept):
     from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
     from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS as keys
-    from tools.gpu_proxy_benchmark import _base_parameter_values
+    from gpu_replay_fixtures import _base_parameter_values
 
     values = _base_parameter_values()
     values.update(entry_cooldown_minutes=base, entry_cooldown_min_duration_minutes=floor,
@@ -635,7 +607,7 @@ def test_effective_coin_cooldown_interval_demand(pins, base, floor, ceiling, adv
 def test_inherited_coin_cooldown_clamp_validates_every_candidate_and_coin():
     from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
     from optimization.gpu.model import EMA_ANCHOR_MULTICOIN_PARAM_KEYS as keys
-    from tools.gpu_proxy_benchmark import _base_parameter_values
+    from gpu_replay_fixtures import _base_parameter_values
 
     values = _base_parameter_values()
     values.update(entry_cooldown_minutes=10, entry_cooldown_adverse_weight=0,

@@ -1,4 +1,3 @@
-import logging
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Optional
 
@@ -10,8 +9,7 @@ from utils import (
 )
 from optimization.random_seed import normalize_optional_seed
 
-from .limits import _resolve_optimize_limits_for_load
-from .log_output import log_config_message
+from .limits import normalize_limit_entries
 from .optimize_bounds import sort_optimize_bounds_in_place
 from .scoring import extract_objective_specs
 from .schema import get_template_config
@@ -29,7 +27,7 @@ BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
     "fee_pct_sanity_abs_max",
     "market_orders_allowed",
     "market_order_near_touch_threshold",
-    "pnls_max_lookback_days",
+    "lookback_ema_span_minutes",
 )
 
 TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
@@ -70,7 +68,7 @@ def hydrate_missing_template_fields(
     )
 
 
-def seed_missing_compatibility_sections(
+def seed_missing_default_sections(
     template: dict, result: dict, *, tracker=None
 ) -> None:
     for pside in ("long", "short"):
@@ -141,6 +139,11 @@ def sync_with_template(
         target, source = template_with_extras, result
         for key in section:
             target, source = target[key], source[key]
+        if section == ("bot",):
+            target["risk"] = deepcopy(source["risk"])
+            target["unstuck"] = deepcopy(source["unstuck"])
+        elif "risk" in source:
+            target["risk"] = deepcopy(source["risk"])
         if "hsl" in source:
             target["hsl"] = deepcopy(source["hsl"])
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
@@ -266,9 +269,9 @@ def normalize_optimizer_settings(
         spec.to_config() for spec in extract_objective_specs(result)
     ]
     backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
-    if backend not in {"deap", "gpu", "pymoo"}:
+    if backend not in {"gpu", "pymoo"}:
         raise ValueError(
-            "optimize.backend must be one of ['deap', 'gpu', 'pymoo']; "
+            "optimize.backend must be one of ['gpu', 'pymoo']; "
             f"got {result['optimize'].get('backend')!r}"
         )
     result["optimize"]["backend"] = backend
@@ -290,39 +293,18 @@ def normalize_optimizer_settings(
     result["optimize"]["objective_scenario"] = objective_scenario
     result["optimize"]["seed"] = normalize_optional_seed(result["optimize"].get("seed"))
 
-    current_limits = deepcopy(result["optimize"].get("limits", []))
-    limits_snapshot = deepcopy(current_limits)
     if raw_optimize_limits_present is None:
         raw_optimize_limits_present = "limits" in result.get("optimize", {})
         if raw_optimize_limits is None and raw_optimize_limits_present:
             raw_optimize_limits = deepcopy(result["optimize"].get("limits"))
     template_limits = deepcopy(get_template_config()["optimize"]["limits"])
-    resolved_limits, resolution = _resolve_optimize_limits_for_load(
-        raw_optimize_limits=raw_optimize_limits,
-        raw_optimize_limits_present=raw_optimize_limits_present,
-        template_limits=template_limits,
-    )
+    if raw_optimize_limits_present:
+        resolved_limits = normalize_limit_entries(raw_optimize_limits)
+    else:
+        resolved_limits = template_limits
     result["optimize"]["limits"] = resolved_limits
-    if resolution == "normalized_legacy":
-        log_config_message(
-            verbose,
-            logging.INFO,
-            "normalized optimize.limits to canonical schema (%d entries)",
-            len(resolved_limits),
-        )
-        if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
-    elif resolution == "fallback_template":
-        log_config_message(
-            verbose,
-            logging.WARNING,
-            "optimize.limits malformed or unsupported; falling back to template defaults (%d entries)",
-            len(template_limits),
-        )
-        if tracker is not None:
-            tracker.update(["optimize", "limits"], limits_snapshot, resolved_limits)
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
         strategy_kind=result.get("live", {}).get("strategy_kind"),
-        portfolio_hsl=result["live"].get("hsl_signal_mode") == "unified",
+        portfolio_hsl=result["bot"]["risk"]["hsl"]["scope"] == "portfolio",
     )

@@ -15,7 +15,7 @@ Throughout:
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
-  In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
+  In live mode this is derived from a fixed denominator (`max_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 * Excess allowance is always bounded:
   `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
@@ -182,27 +182,38 @@ Apple MPS screening supports independent unstuck horizons and bounds for both su
 including per-coin overrides and candle-interval scaling. Start a fresh GPU run after upgrading;
 older screening checkpoints use a different parameter layout.
 
-Auto-unstuck requires a positive remaining realized-loss allowance. It does not wait for equity
-to fall below a loss floor. The allowance is reconstructed from the account-wide realized-PnL
-window configured by `live.pnls_max_lookback_days`:
+Auto-unstuck requires a positive remaining realized-loss allowance. It uses one continuous
+account-wide net-realized-PnL drawdown memory, with its global
+`bot.unstuck.memory_ema_span_minutes` span. This memory includes ordinary/HSL closes, entry/exit
+fees and signed rebates; it excludes unrealized PnL and does not reset at HSL episode
+boundaries. For each elapsed minute and then each ordered realized event:
 
 ```text
-balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)
-loss_fraction = unstuck.loss_allowance_pct * total_wallet_exposure_limit
-remaining_allowance = max(0, balance - balance_peak * (1 - loss_fraction))
+alpha = 2 / (bot.unstuck.memory_ema_span_minutes + 1)
+D_realized = (1 - alpha) * D_realized
+D_realized = max(0, D_realized - net_realized_PnL)
+p = unstuck.loss_allowance_pct * applicable_total_wallet_exposure_limit
+remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
+
+Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
+create no negative loss credit. The global `bot.risk.loss_gate` consumes the same ordered net fills with its own
+`memory_ema_span_minutes` and separate drawdown accumulator. Its allowance uses
+`p = max_drawdown_ratio`, without TWEL multiplication. Each enabled filter consumes a fill
+once while the economic ledger records it once. Old rolling windows and loss percentages require
+explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
 
 If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
 coin+side uses the override percentage in this same account-wide allowance formula.
 The override does not create a per-slot budget or separate per-coin realized-PnL tracking.
 
-With auto-unstuck enabled and positive `loss_allowance_pct`, `close_pct`, `threshold` and side
+With auto-unstuck enabled and positive `loss_allowance_pct`, `close_pct`, `exposure_trigger_ratio` and side
 TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
 
 ```text
 effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)
 wallet_exposure = abs(position_size) * position_price * c_mult / balance
-eligible_exposure = wallet_exposure / effective_wel > unstuck.threshold
+eligible_exposure = wallet_exposure / effective_wel > unstuck.exposure_trigger_ratio
 ```
 
 Here `position_price` is average entry price. The threshold is an eligibility trigger only;
@@ -287,7 +298,7 @@ if not total_exposure_enforcer_enabled:
 
 exposure_i      = wallet_exposure(...)
 overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer_threshold
-                     / n_positions
+                     / max_positions
 overweight_psize_i = overweight_i * balance / (price_i * c_mult_i)
 ```
 
@@ -369,7 +380,7 @@ intervention:
 | `strategy.<kind>.ema_span_*`                    | Defines the strategy's price EMA band                      | `EMA_low`, `EMA_high` |
 | `unstuck.ema_span_*`                            | Defines the independent auto-unstuck EMA band              | `EMA_low`, `EMA_high` |
 | `entry_grid_spacing_*`, `entry_grid_double_down_factor` | Controls grid spacing and growth of re-entry quantities | `next_grid_price`, `next_grid_qty` |
-| `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `threshold`, `retracement` |
+| `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `exposure_trigger_ratio`, `retracement` |
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |

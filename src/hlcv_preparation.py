@@ -31,7 +31,6 @@ from binance_ohlcv_archive import (
 )
 from backtest_dataset_materializer import BacktestDatasetMaterializer, materialize_frames
 from ohlcv_catalog import KNOWN_GAP_RETRY_MS, OhlcvCatalog
-from ohlcv_legacy_import import import_legacy_range_into_store
 from ohlcv_planner import plan_local_symbol_range
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
@@ -1391,10 +1390,6 @@ async def try_prepare_hlcvs_v2_local(
     if exchange == "combined":
         return None
 
-    legacy_root_cfg = Path(
-        config.get("backtest", {}).get("ohlcv_source_dir") or Path("caches") / "ohlcv"
-    )
-    legacy_root = legacy_root_cfg if legacy_root_cfg.exists() else None
 
     coins = effective_backtest_data_coins(config)
     if any(coin.startswith("xyz:") for coin in coins):
@@ -1481,7 +1476,6 @@ async def try_prepare_hlcvs_v2_local(
                 om=om,
                 catalog=catalog,
                 store=store,
-                legacy_root=legacy_root,
                 exchange=store_exchange,
                 coin=coin,
                 symbol=symbol,
@@ -1530,7 +1524,6 @@ async def try_prepare_hlcvs_v2_local(
                     om=btc_om,
                     catalog=catalog,
                     store=store,
-                    legacy_root=legacy_root,
                     exchange=btc_exchange,
                     coin="BTC",
                     symbol=btc_symbol,
@@ -1653,7 +1646,6 @@ async def _resolve_v2_store_range_impl(
     om: HLCVManager,
     catalog: OhlcvCatalog,
     store: OhlcvStore,
-    legacy_root: Path | None,
     exchange: str,
     coin: str,
     symbol: str,
@@ -1666,52 +1658,12 @@ async def _resolve_v2_store_range_impl(
 ):
     plan = plan_local_symbol_range(
         catalog=catalog,
-        legacy_root=legacy_root,
         exchange=exchange,
         timeframe="1m",
         symbol=symbol,
         start_ts=start_ts,
         end_ts=end_ts,
     )
-    if plan.should_try_legacy_import:
-        imported_rows = import_legacy_range_into_store(
-            store=store,
-            legacy_root=legacy_root,
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        logging.info(
-            "[%s] imported %d legacy 1m rows into v2 store for %s (%s -> %s)",
-            exchange,
-            imported_rows,
-            coin,
-            ts_to_date(start_ts),
-            ts_to_date(end_ts),
-        )
-    elif plan.blocked_by_persistent_gap and plan.legacy_inspection is not None:
-        # Even when legacy data doesn't fully cover the persistent gap,
-        # import whatever is available so the valid window starts earlier.
-        imported_rows = import_legacy_range_into_store(
-            store=store,
-            legacy_root=legacy_root,
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        if imported_rows > 0:
-            logging.info(
-                "[%s] imported %d partial-coverage legacy 1m rows into v2 store for %s (%s -> %s)",
-                exchange,
-                imported_rows,
-                coin,
-                ts_to_date(start_ts),
-                ts_to_date(end_ts),
-            )
     rng = await _read_v2_range_repairing_corrupt_chunk(
         om=om,
         catalog=catalog,
@@ -1725,42 +1677,6 @@ async def _resolve_v2_store_range_impl(
     )
     if rng is None:
         return None
-    if (
-        not rng.valid.all()
-        and rng.valid.any()
-        and legacy_root is not None
-    ):
-        imported_rows = _import_legacy_invalid_windows(
-            store=store,
-            legacy_root=legacy_root,
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            timestamps=rng.timestamps,
-            valid=rng.valid,
-        )
-        if imported_rows > 0:
-            logging.info(
-                "[%s] imported %d legacy 1m rows for invalid v2 windows for %s (%s -> %s)",
-                exchange,
-                imported_rows,
-                coin,
-                ts_to_date(start_ts),
-                ts_to_date(end_ts),
-            )
-            rng = await _read_v2_range_repairing_corrupt_chunk(
-                om=om,
-                catalog=catalog,
-                store=store,
-                exchange=exchange,
-                coin=coin,
-                symbol=symbol,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                allow_remote_fetch=allow_remote_fetch,
-            )
-            if rng is None:
-                return None
     if rng.valid.all():
         logging.info(
             "[%s] %s for %s (%s -> %s)",
@@ -1787,7 +1703,6 @@ async def _resolve_v2_store_range_impl(
             om=om,
             catalog=catalog,
             store=store,
-            legacy_root=legacy_root,
             exchange=exchange,
             coin=coin,
             symbol=symbol,
@@ -2236,104 +2151,6 @@ async def _resolve_v2_store_range_impl(
         start_ts=start_ts,
         end_ts=end_ts,
     ):
-        # The legacy candlestick manager may populate daily legacy shards during
-        # the failed fetch path. Re-check once so those newly written shards can
-        # still repair the v2 store without waiting for a later run.
-        post_fetch_plan = plan_local_symbol_range(
-            catalog=catalog,
-            legacy_root=legacy_root,
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        if post_fetch_plan.should_try_legacy_import:
-            imported_rows = import_legacy_range_into_store(
-                store=store,
-                legacy_root=legacy_root,
-                exchange=exchange,
-                timeframe="1m",
-                symbol=symbol,
-                start_ts=start_ts,
-                end_ts=end_ts,
-            )
-            logging.info(
-                "[%s] imported %d post-fetch legacy 1m rows into v2 store for %s (%s -> %s)",
-                exchange,
-                imported_rows,
-                coin,
-                ts_to_date(start_ts),
-                ts_to_date(end_ts),
-            )
-            rng = await _read_v2_range_repairing_corrupt_chunk(
-                om=om,
-                catalog=catalog,
-                store=store,
-                exchange=exchange,
-                coin=coin,
-                symbol=symbol,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                allow_remote_fetch=allow_remote_fetch,
-            )
-            if rng is None:
-                return None
-            if rng.valid.all():
-                logging.info(
-                    "[%s] %s for %s after post-fetch legacy import (%s -> %s)",
-                    exchange,
-                    local_hit_log_label,
-                    coin,
-                    ts_to_date(start_ts),
-                    ts_to_date(end_ts),
-                )
-                return rng
-            rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
-                await refresh_after_unconfirmed_tail_retry(rng, post_fetch_plan)
-            )
-            if blocked_by_unconfirmed_tail:
-                return None
-            if rng.valid.all():
-                return rng
-            if _range_has_tolerable_internal_sparse_gaps(
-                rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
-            ):
-                logging.info(
-                    "[%s] %s sparse-valid for %s after post-fetch legacy import (%s -> %s)",
-                    exchange,
-                    local_hit_log_label,
-                    coin,
-                    ts_to_date(start_ts),
-                    ts_to_date(end_ts),
-                )
-                return rng
-            partial_rng = _usable_partial_coverage_window(
-                rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
-            )
-            if partial_rng is not None:
-                valid_idx = np.flatnonzero(partial_rng.valid)
-                logging.info(
-                    "[%s] %s partial coverage for %s after post-fetch legacy import (%s -> %s)",
-                    exchange,
-                    local_hit_log_label,
-                    coin,
-                    ts_to_date(int(partial_rng.timestamps[int(valid_idx[0])])),
-                    ts_to_date(int(partial_rng.timestamps[int(valid_idx[-1])])),
-                )
-                return partial_rng
-            if allow_partial_window:
-                partial_rng = _extract_single_valid_window(rng)
-                if partial_rng is not None:
-                    logging.info(
-                        "[%s] using partial v2 local window for %s after post-fetch legacy "
-                        "import (%s -> %s)",
-                        exchange,
-                        coin,
-                        ts_to_date(int(partial_rng.timestamps[0])),
-                        ts_to_date(int(partial_rng.timestamps[-1])),
-                    )
-                    return partial_rng
         return None
     rng = await _read_v2_range_repairing_corrupt_chunk(
         om=om,
@@ -2855,28 +2672,6 @@ def _is_repairable_chunk_integrity_error(exc: ValueError) -> bool:
     )
 
 
-def _import_legacy_invalid_windows(
-    *,
-    store: OhlcvStore,
-    legacy_root: Path,
-    exchange: str,
-    timeframe: str,
-    symbol: str,
-    timestamps: np.ndarray,
-    valid: np.ndarray,
-) -> int:
-    imported_rows = 0
-    for window_start_ts, window_end_ts in _iter_invalid_windows(timestamps, valid):
-        imported_rows += import_legacy_range_into_store(
-            store=store,
-            legacy_root=legacy_root,
-            exchange=exchange,
-            timeframe=timeframe,
-            symbol=symbol,
-            start_ts=window_start_ts,
-            end_ts=window_end_ts,
-        )
-    return imported_rows
 
 
 async def _fetch_invalid_windows_into_v2_store(
@@ -3410,7 +3205,6 @@ async def _retry_unconfirmed_short_tail_range(
     om,
     catalog: OhlcvCatalog,
     store: OhlcvStore,
-    legacy_root: Path | None,
     exchange: str,
     coin: str,
     symbol: str,
@@ -3463,7 +3257,6 @@ async def _retry_unconfirmed_short_tail_range(
         return rng, plan, invalid_windows, True
     plan = plan_local_symbol_range(
         catalog=catalog,
-        legacy_root=legacy_root,
         exchange=exchange,
         timeframe="1m",
         symbol=symbol,
@@ -4610,10 +4403,6 @@ async def prepare_hlcvs_combined(
             ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
         )
     btc_om: Optional[HLCVManager] = None
-    legacy_root_cfg = Path(
-        config.get("backtest", {}).get("ohlcv_source_dir") or Path("caches") / "ohlcv"
-    )
-    legacy_root = legacy_root_cfg if legacy_root_cfg.exists() else None
     catalog = OhlcvCatalog(Path("caches") / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(Path("caches") / "ohlcvs", catalog)
 
@@ -4631,7 +4420,6 @@ async def prepare_hlcvs_combined(
             normalization_candidate_exchanges=normalization_candidate_exchanges,
             catalog=catalog,
             store=store,
-            legacy_root=legacy_root,
             use_v2_local=use_v2_local,
         )
 
@@ -4648,7 +4436,6 @@ async def prepare_hlcvs_combined(
             force_refetch_gaps=force_refetch_gaps,
             catalog=catalog,
             store=store,
-            legacy_root=legacy_root,
         )
         btc_om = None
 
@@ -4726,7 +4513,6 @@ async def _prepare_hlcvs_combined_impl(
     normalization_candidate_exchanges: Optional[Sequence[str]] = None,
     catalog: OhlcvCatalog,
     store: OhlcvStore,
-    legacy_root: Path | None,
     use_v2_local: bool = True,
 ):
     market_settings_sources = market_settings_sources or {}
@@ -4795,7 +4581,6 @@ async def _prepare_hlcvs_combined_impl(
             force_refetch_gaps=force_refetch_gaps,
             catalog=catalog,
             store=store,
-            legacy_root=legacy_root,
             use_v2_local=use_v2_local,
             candidate_report=candidate_report,
         )
@@ -5383,7 +5168,6 @@ async def _resolve_combined_coin(
     force_refetch_gaps: bool,
     catalog: OhlcvCatalog,
     store: OhlcvStore,
-    legacy_root: Path | None,
     use_v2_local: bool = True,
     candidate_report: list[dict] | None = None,
 ) -> Optional[CombinedCoinResolution]:
@@ -5414,7 +5198,6 @@ async def _resolve_combined_coin(
                 force_refetch_gaps=force_refetch_gaps,
                 catalog=catalog,
                 store=store,
-                legacy_root=legacy_root,
                 exchanges_to_consider=exchanges_to_consider,
                 use_v2_local=use_v2_local,
                 candidate_report=candidate_report,
@@ -5483,7 +5266,6 @@ async def _load_combined_coin_candidates(
     force_refetch_gaps: bool,
     catalog: OhlcvCatalog,
     store: OhlcvStore,
-    legacy_root: Path | None,
     exchanges_to_consider: Sequence[str],
     use_v2_local: bool = True,
     candidate_report: list[dict] | None = None,
@@ -5515,7 +5297,6 @@ async def _load_combined_coin_candidates(
                     progress_position=position_map.get(ex, 1),
                     catalog=catalog,
                     store=store,
-                    legacy_root=legacy_root,
                     use_v2_local=use_v2_local,
                 )
             )
@@ -5598,7 +5379,6 @@ async def _load_combined_btc_prices(
     force_refetch_gaps: bool,
     catalog: OhlcvCatalog,
     store: OhlcvStore,
-    legacy_root: Path | None,
     ohlcv_source_dir: str | None = None,
     use_v2_local: bool = True,
 ) -> tuple[pd.DataFrame, Optional[str]]:
@@ -5641,7 +5421,6 @@ async def _load_combined_btc_prices(
                     om=btc_om,
                     catalog=catalog,
                     store=store,
-                    legacy_root=legacy_root,
                     exchange=to_standard_exchange_name(btc_exchange),
                     coin="BTC",
                     symbol=btc_symbol,
@@ -5705,7 +5484,6 @@ async def fetch_data_for_coin_and_exchange(
     progress_position: int = 1,
     catalog: OhlcvCatalog | None = None,
     store: OhlcvStore | None = None,
-    legacy_root: Path | None = None,
     use_v2_local: bool = False,
 ):
     t0 = time.monotonic()
@@ -5744,7 +5522,6 @@ async def fetch_data_for_coin_and_exchange(
             om=om,
             catalog=catalog,
             store=store,
-            legacy_root=legacy_root,
             exchange=to_standard_exchange_name(ex),
             coin=coin,
             symbol=symbol,

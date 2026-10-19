@@ -685,7 +685,7 @@ def get_quote(exchange, quote=None):
         return quote
     # Legacy hardcoded defaults for backward compatibility
     exchange = to_ccxt_exchange_id(exchange)
-    return "USDC" if exchange in ["hyperliquid", "defx", "paradex", "lighter"] else "USDT"
+    return "USDC" if exchange in ["hyperliquid", "lighter"] else "USDT"
 
 
 def remove_powers_of_ten(text):
@@ -1081,6 +1081,8 @@ def split_exchange_qualified_market_identifier(identifier: str):
     if not isinstance(identifier, str) or "::" not in identifier:
         return None, identifier
     prefix, value = identifier.split("::", 1)
+    if prefix.lower() in {"defx", "paradex"}:
+        raise ValueError(f"Exchange {prefix.lower()!r} was retired in v9")
     if not prefix or not value or "/" in prefix:
         return None, identifier
     global _KNOWN_EXCHANGE_QUALIFIERS
@@ -1094,7 +1096,6 @@ def split_exchange_qualified_market_identifier(identifier: str):
                 "bitget",
                 "bitunix",
                 "bybit",
-                "defx",
                 "fake",
                 "gate",
                 "gateio",
@@ -1102,7 +1103,6 @@ def split_exchange_qualified_market_identifier(identifier: str):
                 "kucoin",
                 "kucoinfutures",
                 "okx",
-                "paradex",
                 "weex",
             }
         )

@@ -309,39 +309,30 @@ class TestPerCoinWarmupCalculation:
         # Warmup = 3000 * 3.0 = 9000
         assert per_coin_warmup["BTC"] == 9000
 
-    def test_per_coin_warmup_with_trailing_grid_v7_nested_entry_volatility_hours(
-        self, base_config
-    ):
-        base_config["live"]["strategy_kind"] = "trailing_grid_v7"
+    @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+    def test_per_coin_warmup_with_supported_hour_volatility(self, base_config, strategy):
+        base_config["live"]["strategy_kind"] = strategy
+        hour_key = "offset_volatility_ema_span_1h" if strategy == "ema_anchor" else "volatility_ema_span_1h"
+        minute_key = "offset_volatility_ema_span_1m" if strategy == "ema_anchor" else "volatility_ema_span_1m"
         for pside in ("long", "short"):
             side = base_config["bot"][pside]
             side["forager_volume_ema_span_1m"] = 1.0
             side["forager_volatility_ema_span_1m"] = 1.0
-            side["strategy"] = {
-                "trailing_grid_v7": {
-                    "ema_span_0": 1.0,
-                    "ema_span_1": 1.0,
-                    "entry": {"volatility_ema_span_hours": 4.0},
-                }
-            }
+            spans = {"ema_span_0": 1.0, "ema_span_1": 1.0}
+            side["strategy"] = {strategy: {
+                **({"entry": spans} if strategy == "trailing_martingale" else spans),
+                minute_key: 1.0, hour_key: 4.25,
+            }}
         base_config["coin_overrides"] = {
-            "BTC": {
-                "bot": {
-                    "long": {
-                        "strategy": {
-                            "trailing_grid_v7": {
-                                "entry": {"volatility_ema_span_hours": 10.0}
-                            }
-                        }
-                    }
-                }
-            }
+            "BTC": {"bot": {"long": {"strategy": {strategy: {
+                hour_key: 10.125,
+            }}}}}
         }
 
         per_coin = compute_per_coin_warmup_minutes(base_config)
 
-        assert per_coin["__default__"] == 720
-        assert per_coin["BTC"] == 1800
+        assert per_coin["__default__"] == 765
+        assert per_coin["BTC"] == 1823
 
 
 # ============================================================================
@@ -417,26 +408,37 @@ class TestEMASpanExtraction:
         # New max is 20000, warmup = 60000
         assert warmup == 60000
 
-    def test_trailing_grid_v7_entry_volatility_hours_bound_is_considered(self, base_config):
-        base_config["live"]["strategy_kind"] = "trailing_grid_v7"
+    @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+    def test_supported_hour_volatility_bound_is_considered(self, base_config, strategy):
+        base_config["live"]["strategy_kind"] = strategy
+        hour_key = "offset_volatility_ema_span_1h" if strategy == "ema_anchor" else "volatility_ema_span_1h"
+        minute_key = "offset_volatility_ema_span_1m" if strategy == "ema_anchor" else "volatility_ema_span_1m"
         for pside in ("long", "short"):
             side = base_config["bot"][pside]
             side["forager_volume_ema_span_1m"] = 1.0
             side["forager_volatility_ema_span_1m"] = 1.0
-            side["strategy"] = {
-                "trailing_grid_v7": {
-                    "ema_span_0": 1.0,
-                    "ema_span_1": 1.0,
-                    "entry": {"volatility_ema_span_hours": 1.0},
-                }
-            }
+            spans = {"ema_span_0": 1.0, "ema_span_1": 1.0}
+            side["strategy"] = {strategy: {
+                **({"entry": spans} if strategy == "trailing_martingale" else spans),
+                minute_key: 1.0, hour_key: 1.0,
+            }}
         base_config["optimize"]["bounds"] = {
-            "long_entry_volatility_ema_span_hours": [4.0, 20.0, 1.0],
+            "long": {"strategy": {strategy: {
+                hour_key: [4.0, 20.125, 0.125],
+            }}}
         }
 
         warmup = compute_backtest_warmup_minutes(base_config)
 
-        assert warmup == 3600
+        assert warmup == 3623
+
+    @pytest.mark.parametrize("compute", [
+        compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes,
+    ])
+    def test_retired_strategy_rejected_before_warmup(self, base_config, compute):
+        base_config["live"]["strategy_kind"] = "trailing_grid_v7"
+        with pytest.raises(ValueError, match="unsupported strategy kind.*trailing_grid_v7"):
+            compute(base_config)
 
 
 # ============================================================================

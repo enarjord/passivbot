@@ -146,7 +146,7 @@ async def test_raw_coverage_and_missing_warmup_tail_internal(tmp_path, monkeypat
         mask[missing] = False
     catalog, store, ts = raw_store(tmp_path, mask)
     om = SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False)
-    kwargs = dict(om=om, catalog=catalog, store=store, legacy_root=None, exchange="binance",
+    kwargs = dict(om=om, catalog=catalog, store=store, exchange="binance",
                   coin="BTC", symbol=SYMBOL, start_ts=int(ts[0]), end_ts=int(ts[-1]),
                   allow_remote_fetch=True, local_hit_log_label="test", remote_fetch_log_label="test")
     with simulation_data_policy(OFFLINE):
@@ -170,7 +170,7 @@ async def test_confirmed_listing_boundary_remains_usable(tmp_path, monkeypatch):
     with simulation_data_policy(OFFLINE):
         rng = await hp._resolve_v2_store_range(
             om=SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0), catalog=catalog,
-            store=store, legacy_root=None, exchange="binance", coin="BTC", symbol=SYMBOL,
+            store=store, exchange="binance", coin="BTC", symbol=SYMBOL,
             start_ts=int(ts[0]), end_ts=int(ts[-1]), allow_remote_fetch=True,
             local_hit_log_label="test", remote_fetch_log_label="test")
         assert rng.timestamps[0] == ts[2]
@@ -322,7 +322,7 @@ async def test_combined_offline_never_swallows_missing_coin(monkeypatch, empty):
             forced_sources={}, market_settings_sources={}, exchanges_to_consider=["binance"],
             normalization_candidate_exchanges=[], om_dict={"binance": object()},
             per_coin_warmups={}, default_warm=0, force_refetch_gaps=False,
-            catalog=None, store=None, legacy_root=None)
+            catalog=None, store=None)
 
 
 @pytest.mark.asyncio
@@ -337,7 +337,7 @@ async def test_known_tail_does_not_authorize_unknown_leading_gap(tmp_path, monke
     with simulation_data_policy(OFFLINE), pytest.raises(OfflineDataError, match="Unverified offline candle boundary"):
         await hp._resolve_v2_store_range(
             om=SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0), catalog=catalog,
-            store=store, legacy_root=None, exchange="binance", coin="BTC", symbol=SYMBOL,
+            store=store, exchange="binance", coin="BTC", symbol=SYMBOL,
             start_ts=int(ts[0]), end_ts=int(ts[-1]), allow_remote_fetch=True,
             local_hit_log_label="test", remote_fetch_log_label="test")
 
@@ -378,7 +378,7 @@ async def test_btc_candidates_try_all_local_sources(monkeypatch, use_v2, all_mis
             exchanges_to_consider=["bybit"], timestamps=ts,
             effective_start_date="2024-01-01", end_date="2024-01-02",
             gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
-            catalog=None, store=None, legacy_root=None, use_v2_local=use_v2)
+            catalog=None, store=None, use_v2_local=use_v2)
         if all_missing:
             with pytest.raises(OfflineDataError, match="BTC benchmark"):
                 await call
@@ -454,7 +454,7 @@ async def test_multi_venue_btc_prefers_configured_local_sources(
             exchanges_to_consider=venues, timestamps=ts,
             effective_start_date="2024-01-01", end_date="2024-01-02",
             gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
-            catalog=None, store=None, legacy_root=None, use_v2_local=use_v2,
+            catalog=None, store=None, use_v2_local=use_v2,
         )
     assert source_exchange == expected_source
     assert len(frame) == 2
@@ -677,7 +677,7 @@ async def test_combined_btc_rejects_partial_history(
         exchanges_to_consider=["hyperliquid", "bybit"], timestamps=ts,
         effective_start_date="2024-01-01", end_date="2024-01-02",
         gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
-        catalog=None, store=None, legacy_root=None, use_v2_local=use_v2,
+        catalog=None, store=None, use_v2_local=use_v2,
     )
     with simulation_data_policy(OFFLINE):
         if fallback_available:

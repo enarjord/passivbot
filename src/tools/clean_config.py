@@ -37,6 +37,119 @@ def _reject_constant(value):
     raise ValueError(f"{value} is not a valid JSON number")
 
 
+def normalize_export_numbers(config: dict) -> dict:
+    """Use schema numeric types without rounding values or hydrating sparse patches."""
+    from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
+    from config.param_paths import resolve_dotted_config_path, resolve_optimizer_key_path
+    from config.schema import get_template_config
+
+    template = get_template_config()
+    template["bot"]["risk"]["hsl"].update(template["bot"]["long"]["hsl"])
+    for side in ("long", "short"):
+        # Position counts are rounded to integers by the shared loader even
+        # though historical template defaults use floats.
+        template["bot"][side]["risk"]["max_positions"] = 0
+        template["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 0.0
+    # Nullable numeric fields have no numeric default from which to infer type.
+    template["backtest"].update(btc_collateral_ltv_cap=0.0, ew_half_life_days=0.0)
+    template["live"].update(
+        balance_override=0.0,
+        max_concurrent_api_requests=0,
+        max_forager_candle_staleness_minutes=0.0,
+    )
+    template["optimize"].update(population_size=0, seed=0)
+    template["optimize"]["gpu"].update(batch_size=0, max_dispatch_candidate_bars=0)
+    market_float_fields = {
+        "price_step", "qty_step", "min_qty", "min_cost", "c_mult",
+    }
+
+    def schema_at(path):
+        # Dotted override paths may address a sparse coin patch. Its leaf types
+        # are the same as those of the corresponding root config fields.
+        if path[:1] == ("coin_overrides",):
+            path = path[2:]
+        if path and path[0] == "bot" and all(
+            isinstance(part, str) for part in path
+        ):
+            path = resolve_dotted_config_path(config, ".".join(path))
+        # Limit entries are an open list: their threshold type does not depend
+        # on the entry's position or on the number of template examples.
+        if path[:2] == ("optimize", "limits") and len(path) in (4, 5):
+            if len(path) == 4 and path[3] == "value":
+                return 0.0
+            if len(path) == 5 and path[3] == "range" and isinstance(path[4], int):
+                return 0.0
+        if (
+            path[:2] == ("backtest", "market_settings")
+            and path[-1] in market_float_fields
+            and (
+                (len(path) == 5 and path[2] == "overrides")
+                or (len(path) == 6 and path[2] == "overrides_by_exchange")
+            )
+        ):
+            return 0.0
+        node = template
+        for part in path:
+            if isinstance(node, dict):
+                node = node.get(part)
+            elif (
+                isinstance(node, list)
+                and path[:2] == ("optimize", "bounds")
+                and isinstance(part, int)
+                and part < len(node)
+            ):
+                node = node[part]
+            else:
+                return None
+        return node
+
+    def normalize(value, path=()):
+        if isinstance(value, dict):
+            if path == ("coin_overrides",):
+                return {coin: normalize(patch) for coin, patch in value.items()}
+            if path == ("optimize", "fixed_runtime_overrides") or (
+                len(path) == 4
+                and path[:2] == ("backtest", "scenarios")
+                and path[-1] == "overrides"
+            ):
+                return {
+                    key: normalize(item, resolve_dotted_config_path(config, key))
+                    for key, item in value.items()
+                }
+            return {
+                key: normalize(item, (*path, key)) for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [normalize(item, (*path, index)) for index, item in enumerate(value)]
+        default = schema_at(path)
+        if path[:2] == ("optimize", "bounds") and isinstance(path[-1], int):
+            parameter_path = ("bot", *path[2:-1])
+            if len(path) == 6 and path[2] in {"long", "short"}:
+                flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(path[3], {}).get(path[4])
+                if flat_key is not None:
+                    parameter_path = resolve_optimizer_key_path(config, f"{path[2]}_{flat_key}")
+            parameter_default = schema_at(parameter_path)
+            if type(parameter_default) in (int, float):
+                default = parameter_default
+        if type(default) is float and type(value) is int:
+            try:
+                converted = float(value)
+            except OverflowError as exc:
+                raise ValueError(
+                    f"{'.'.join(map(str, path))} is too large to export as a float"
+                ) from exc
+            if converted != value:
+                raise ValueError(
+                    f"{'.'.join(map(str, path))} cannot be exported as a float without losing precision"
+                )
+            return converted
+        if type(default) is int and type(value) is float and value.is_integer():
+            return int(value)
+        return value
+
+    return normalize(config)
+
+
 def cleanup_config(
     source: dict, *, mode: str = "full", base_config_path: str = ""
 ) -> dict:
@@ -51,32 +164,51 @@ def cleanup_config(
         normalize_optimizer_settings,
     )
     from config.project import project_config
-    from config_utils import sanitize_prepared_config_for_dump, strip_config_metadata
+    from config.schema import get_template_config
+    from config.authored import validate_authored_config
+    from config.migrations.v9 import require_v9_runtime_config
+    from config_utils import sanitize_prepared_config_for_dump
 
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
     if not isinstance(source, dict):
         raise TypeError("config root must be an object")
     payload = source
+    result_record = any(key in payload for key in (
+        "analysis", "metrics", "suite_metrics", "optimizer_anchor",
+        "optimizer_evaluation_contract",
+    ))
     if "bot" not in payload and isinstance(payload.get("config"), dict):
         payload = payload["config"]
+        result_record = True
     if not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
     ):
         raise ValueError(
-            "expected a V8 config with bot and live objects (possibly inside config)"
+            "expected a v9 config with bot and live objects (possibly inside config)"
         )
-    # Ignore result envelopes and validate only the sections relevant to this
-    # export. Missing pipeline sections are hydrated by the shared loader.
-    from config.migrations.excess_allowance import retire_excess_allowance_mode
-
     payload = deepcopy(payload)
-    retire_excess_allowance_mode(payload)
-    target = "canonical" if mode == "full" else mode
-    payload = strip_config_metadata(project_config(payload, target, record_step=False))
+    # These exact top-level fields belong to saved result records, rather than
+    # authored configuration. Nested fields still pass through strict validation.
+    for key in (
+        "analysis", "metrics", "suite_metrics", "optimizer_anchor",
+        "optimizer_evaluation_contract",
+        "_raw", "_raw_effective", "_transform_log", "_coins_sources",
+    ):
+        payload.pop(key, None)
+    if result_record and isinstance(payload.get("backtest"), dict):
+        # Optimizer result records retain concrete dataset membership as
+        # provenance. Authored membership remains live/scenario policy.
+        payload["backtest"].pop("coins", None)
     for section, value in payload.items():
         if section != "config_version" and not isinstance(value, dict):
             raise TypeError(f"config.{section} must be an object")
+    # Validate authored structure before a lossy projection can hide mistakes or
+    # retired authority. Value normalization remains specific to the export.
+    require_v9_runtime_config(payload)
+    validate_authored_config(payload, get_template_config())
+    target = "canonical" if mode == "full" else mode
+    payload = project_config(payload, target, record_step=False)
     prepared = prepare_config(
         deepcopy(payload),
         base_config_path=base_config_path,
@@ -149,7 +281,7 @@ def render_source(
     cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
     return (
         json_dumps_streamlined(
-            cleaned,
+            normalize_export_numbers(cleaned),
             indent=indent,
             max_inline=max_inline,
             sort_keys=True,

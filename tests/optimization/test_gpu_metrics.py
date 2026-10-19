@@ -6,6 +6,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from optimization.gpu.model import GAP_BINS
+
 from optimization.gpu.metrics import (
     ENTRY_INTERVAL_METRICS,
     GPU_EXACT_ONLY_METRICS,
@@ -30,11 +32,6 @@ from optimization.gpu.metrics import (
     _sharpe_sortino,
     _smoothed_adg,
     _smoothed_gain_adg,
-    _weighted_adg,
-    _weighted_daily_series_metrics,
-    _weighted_subset_context,
-    _weighted_subsets,
-    _weighted_strategy_eq_metrics,
     compute_objectives,
     validate_gpu_metric_names,
 )
@@ -158,7 +155,7 @@ def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
         "last_fill_ts": torch.tensor([2 * 86_400_000.0]),
@@ -248,7 +245,7 @@ def test_equity_balance_diff_metrics_fail_closed_without_metal_output():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
         "last_fill_ts": torch.full((1,), float("nan")),
@@ -284,7 +281,7 @@ def test_equity_balance_diff_metrics_use_rust_defaults_without_fills():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
         "last_fill_ts": torch.full((1,), float("nan")),
@@ -384,7 +381,7 @@ def test_equity_curve_metrics_use_rust_defaults_without_fills():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
         "last_fill_ts": torch.full((1,), float("nan")),
@@ -447,7 +444,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "held_max_ms": torch.zeros(2),
         "position_unchanged_max_ms": torch.zeros(2),
         "gap_sum_squared_hours": torch.zeros(2),
-        "gap_hist": torch.zeros((2, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((2, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(2),
         "first_fill_ts": torch.tensor([0.0, float("nan")]),
         "last_fill_ts": torch.tensor([3_600_000.0, float("nan")]),
@@ -540,7 +537,7 @@ def test_fill_activity_metrics_ignore_inactive_daily_slots_and_zero_single_sampl
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
         "last_fill_ts": torch.tensor([0.0]),
@@ -585,7 +582,7 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
             [18 * 3_600_000.0], dtype=torch.float64
         ),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -798,7 +795,7 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
         "last_fill_ts": torch.tensor([180_000.0]),
@@ -836,388 +833,24 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
     )
 
 
-def test_weighted_daily_pnl_metrics_match_rust_suffix_contract():
-    day_ms = 86_400_000
-    ratios = torch.tensor(
-        [0.10, -0.05, 0.02, -0.01, 0.03, 0.04, -0.02, 0.01, 0.05, -0.03],
-        dtype=torch.float64,
-    )
-    balances = torch.full((1, 10), 100.0, dtype=torch.float64)
-    day_end = torch.full((1, 10), 100.0, dtype=torch.float64)
-    out = {
-        "day_end_eq": day_end,
-        "day_min_eq": day_end.clone(),
-        "day_max_dd": torch.zeros_like(day_end),
-        "day_volume": torch.zeros_like(day_end),
-        "day_has_fill": torch.ones((1, 10), dtype=torch.bool),
-        "day_net_pnl": ratios.unsqueeze(0) * balances,
-        "day_last_fill_balance": balances,
-        "day_fill_count": torch.ones((1, 10), dtype=torch.float64),
-        "max_dd": torch.zeros(1),
-        "held_max_ms": torch.zeros(1),
-        "position_unchanged_max_ms": torch.zeros(1),
-        "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1),
-        "first_fill_ts": torch.tensor([0.0]),
-        "last_fill_ts": torch.tensor([9.0 * day_ms]),
-        "recovery_max_ms": torch.zeros(1),
-        "last_high_ts": torch.tensor([9.0 * day_ms]),
-        "first_eq_ts": torch.tensor([0.0]),
-        "last_eq_ts": torch.tensor([9.0 * day_ms]),
-        "liq_step": torch.tensor([-1]),
-    }
-    requested = {
-        "adg_pnl_w",
-        "mdg_pnl_w",
-        "sharpe_ratio_pnl_w",
-        "sortino_ratio_pnl_w",
-    }
-
-    metrics = compute_objectives(
-        out,
-        SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=day_ms),
-        {"ts0": 0.0, "n": 10},
-        needed=requested,
-    )
-
-    suffixes = [
-        ratios,
-        ratios[5:],
-        ratios[7:],
-        ratios[8:],
-        ratios[8:],
-        ratios[8:],
-        ratios[9:],
-        ratios[9:],
-        ratios[9:],
-        ratios[9:],
-    ]
-    expected = {name: 0.0 for name in requested}
-    for suffix in suffixes:
-        mean = suffix.mean()
-        median = (
-            suffix.median()
-            if len(suffix) % 2
-            else suffix.sort()
-            .values[len(suffix) // 2 - 1 : len(suffix) // 2 + 1]
-            .mean()
-        )
-        std = torch.sqrt(((suffix - mean) ** 2).mean())
-        downside_values = suffix[suffix < 0.0]
-        downside = (
-            torch.sqrt((downside_values**2).mean())
-            if len(downside_values)
-            else torch.tensor(0.0)
-        )
-        expected["adg_pnl_w"] += mean.item() / 10.0
-        expected["mdg_pnl_w"] += median.item() / 10.0
-        expected["sharpe_ratio_pnl_w"] += (
-            0.0 if std.item() == 0.0 else (mean / std).item() / 10.0
-        )
-        expected["sortino_ratio_pnl_w"] += (
-            0.0 if downside.item() == 0.0 else (mean / downside).item() / 10.0
-        )
-    assert set(metrics) == requested
-    _assert_proxy_surface_partition(requested)
-    for name, value in expected.items():
-        assert metrics[name].item() == pytest.approx(value)
 
 
-def test_weighted_daily_series_metrics_match_rust_suffix_contract():
-    day_ms = 86_400_000
-    day_count = 100
-    day_index = torch.arange(day_count, dtype=torch.float64)
-    day_end = (100.0 * torch.exp(day_index * 0.001)).unsqueeze(0)
-    day_volume = (day_index + 1.0).unsqueeze(0)
-    active = torch.ones_like(day_end, dtype=torch.bool)
-    day_has_fill = torch.ones_like(active)
-    requested = {
-        "equity_choppiness_w_usd",
-        "equity_jerkiness_w_usd",
-        "exponential_fit_error_w_usd",
-        "volume_pct_per_day_avg_w",
-    }
-
-    metrics = _weighted_daily_series_metrics(
-        day_end,
-        day_volume,
-        day_has_fill,
-        active,
-        torch.tensor([float(day_count)]),
-        torch.tensor([(day_count - 1) * day_ms], dtype=torch.float64),
-        torch.tensor([0.0]),
-        torch.tensor([(day_count - 1) * day_ms], dtype=torch.float64),
-        0.0,
-        day_ms,
-        requested,
-    )
-
-    starts = [0, 50, 67, 75, 80, 83, 86, 88, 89, 90]
-
-    def reference_shape(values):
-        values = np.asarray(values, dtype=np.float64)
-        choppiness = np.abs(np.diff(values)).sum() / abs(values[-1] - values[0])
-        jerkiness = np.mean(
-            np.abs(values[2:] - 2.0 * values[1:-1] + values[:-2])
-            / np.abs((values[:-2] + values[1:-1] + values[2:]) / 3.0)
-        )
-        x = np.arange(len(values), dtype=np.float64)
-        y = np.log(values)
-        slope = (len(values) * np.sum(x * y) - np.sum(x) * np.sum(y)) / (
-            len(values) * np.sum(x * x) - np.sum(x) ** 2
-        )
-        intercept = (np.sum(y) - slope * np.sum(x)) / len(values)
-        fit_error = np.mean((slope * x + intercept - y) ** 2)
-        return choppiness, jerkiness, fit_error
-
-    expected_shape = np.asarray(
-        [reference_shape(day_end[0, start:].numpy()) for start in starts]
-    ).mean(axis=0)
-    expected_volume = np.mean([day_volume[0, start:].mean().item() for start in starts])
-
-    assert set(metrics) == requested
-    _assert_proxy_surface_partition(requested)
-    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(expected_shape[0])
-    assert metrics["equity_jerkiness_w_usd"].item() == pytest.approx(expected_shape[1])
-    assert metrics["exponential_fit_error_w_usd"].item() == pytest.approx(
-        expected_shape[2], abs=1e-24
-    )
-    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(expected_volume)
 
 
-@pytest.mark.parametrize("fill_count", [0.0, 1.0])
-def test_weighted_daily_series_metrics_evaluate_single_fill_run(fill_count):
-    day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
-    requested = set(
-        [
-            "equity_choppiness_w_usd",
-            "equity_jerkiness_w_usd",
-            "exponential_fit_error_w_usd",
-            "volume_pct_per_day_avg_w",
-        ]
-    )
-
-    metrics = _weighted_daily_series_metrics(
-        day_end,
-        torch.tensor([[0.5, 0.0]], dtype=torch.float64),
-        torch.tensor([[True, False]]),
-        torch.ones_like(day_end, dtype=torch.bool),
-        torch.tensor([fill_count]),
-        torch.tensor([0.0]),
-        torch.tensor([0.0]),
-        torch.tensor([86_400_000.0]),
-        0.0,
-        86_400_000,
-        requested,
-    )
-
-    assert set(metrics) == requested
-    if fill_count == 0:
-        assert metrics["volume_pct_per_day_avg_w"].item() == 0.0
-        for name in requested - {"volume_pct_per_day_avg_w"}:
-            assert metrics[name].item() == 1.0
-    else:
-        # Three nonempty windows: the full run and two one-sample suffixes.
-        assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.5 / 3)
-        assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(1.0 / 3)
-        assert metrics["equity_jerkiness_w_usd"].item() == 0.0
-        assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
 
 
-def test_weighted_daily_series_metrics_average_only_nonempty_windows():
-    requested = {
-        "equity_choppiness_w_usd",
-        "equity_jerkiness_w_usd",
-        "exponential_fit_error_w_usd",
-        "volume_pct_per_day_avg_w",
-    }
-
-    metrics = _weighted_daily_series_metrics(
-        torch.tensor([[100.0]], dtype=torch.float64),
-        torch.tensor([[0.5]], dtype=torch.float64),
-        torch.tensor([[True]]),
-        torch.tensor([[True]]),
-        torch.tensor([2.0]),
-        torch.tensor([0.0]),
-        torch.tensor([0.0]),
-        torch.tensor([0.0]),
-        0.0,
-        60_000,
-        requested,
-    )
-
-    assert metrics["equity_choppiness_w_usd"].item() == 0.0
-    assert metrics["equity_jerkiness_w_usd"].item() == 0.0
-    assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
-    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.5)
 
 
-def test_weighted_metrics_include_fill_free_losing_tail():
-    day_ms = 86_400_000
-    equities = torch.arange(10000.0, 7000.0, -100.0, dtype=torch.float64).unsqueeze(0)
-    active = torch.ones_like(equities, dtype=torch.bool)
-    first_ts = torch.tensor([0.0], dtype=torch.float64)
-    last_ts = torch.tensor([29.0 * day_ms], dtype=torch.float64)
-    adg = _weighted_adg(equities, active, first_ts, last_ts, 0.0, day_ms)
-    shape = _weighted_daily_series_metrics(
-        equities,
-        torch.zeros_like(equities),
-        torch.zeros_like(active),
-        active,
-        torch.tensor([2.0]),
-        torch.tensor([float(day_ms)]),
-        first_ts,
-        last_ts,
-        0.0,
-        day_ms,
-        {"equity_choppiness_w_usd"},
-    )
-    starts = [0, 15, 20, 23, 24, 25, 26, 26, 27, 27]
-    expected = np.mean(
-        [
-            (7200.0 / equities[0, start].item()) ** (1.0 / (30 - start)) - 1.0
-            for start in starts
-        ]
-    )
-    assert adg.item() == pytest.approx(expected, abs=1e-12)
-    assert shape["equity_choppiness_w_usd"].item() == 1.0
-    assert (_daily_peak_recovery_ms(equities, active) / 3_600_000).item() == 696.0
 
 
-def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
-    metrics = _weighted_daily_series_metrics(
-        torch.tensor([[100.0]], dtype=torch.float64),
-        torch.tensor([[0.5]], dtype=torch.float64),
-        torch.tensor([[True]]),
-        torch.tensor([[True]]),
-        torch.tensor([2.0]),
-        torch.tensor([3_600_000.0]),
-        torch.tensor([0.0]),
-        torch.tensor([3_600_000.0]),
-        0.0,
-        60_000,
-        {"volume_pct_per_day_avg_w"},
-    )
-
-    # Every trailing cutoff is inside the same UTC day. The daily aggregate
-    # contains pre-cutoff volume, so only the unambiguous full-run tenth is
-    # admitted; exact Rust validation owns partial-day volume after a cutoff.
-    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
 
 
-def test_weighted_suffix_admission_uses_integer_candle_steps():
-    interval_ms = 60_000
-    sample_count = 17_898
-    first_step = 1
-    last_step = first_step + sample_count - 1
-    active = torch.ones((1, 13), dtype=torch.bool)
-
-    _, _, subset_start_steps, _, _ = _weighted_subset_context(
-        active,
-        torch.tensor([np.float32(first_step * interval_ms)]),
-        torch.tensor([np.float32(last_step * interval_ms)]),
-        0.0,
-        interval_ms,
-    )
-    last_fill_ts = torch.tensor(
-        [np.float32((first_step + sample_count // 2) * interval_ms)]
-    )
-    last_fill_step = torch.floor(last_fill_ts / float(interval_ms) + 0.5).to(torch.long)
-
-    # The equivalent float32 timestamp expressions differ by 64 ms at this
-    # realistic span. Integer candle-step admission still includes Rust's
-    # exact half-window boundary fill.
-    assert (
-        np.float32(first_step * interval_ms)
-        + np.float32((sample_count // 2) * interval_ms)
-        != last_fill_ts.item()
-    )
-    assert subset_start_steps[1].item() == last_fill_step.item()
-
-    day_end = torch.arange(100.0, 113.0).unsqueeze(0)
-    day_has_fill = torch.zeros_like(day_end, dtype=torch.bool)
-    day_has_fill[:, 6] = True
-    metrics = _weighted_daily_series_metrics(
-        day_end,
-        torch.zeros_like(day_end),
-        day_has_fill,
-        active,
-        torch.tensor([2.0]),
-        last_fill_ts,
-        torch.tensor([np.float32(first_step * interval_ms)]),
-        torch.tensor([np.float32(last_step * interval_ms)]),
-        0.0,
-        interval_ms,
-        {"equity_choppiness_w_usd"},
-    )
-
-    # Every nonempty linear suffix contributes, including those after the last fill.
-    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(1.0)
 
 
-def test_weighted_subsets_normalize_relative_timestamps_to_unix_origin():
-    day_ms = 86_400_000
-    origin = 1_704_067_200_000.0
-    active = torch.ones((1, 10), dtype=torch.bool)
-
-    relative_eligible, relative_subsets = _weighted_subsets(
-        active,
-        torch.tensor([0.0]),
-        torch.tensor([9.0 * day_ms]),
-        origin,
-        day_ms,
-    )
-    absolute_eligible, absolute_subsets = _weighted_subsets(
-        active,
-        torch.tensor([origin]),
-        torch.tensor([origin + 9.0 * day_ms]),
-        origin,
-        day_ms,
-    )
-
-    assert relative_eligible.item()
-    assert torch.equal(relative_eligible, absolute_eligible)
-    for relative, absolute in zip(relative_subsets, absolute_subsets):
-        assert torch.equal(relative, absolute)
-    assert relative_subsets[1].tolist() == [[False] * 5 + [True] * 5]
 
 
-def test_weighted_pnl_uses_fill_count_not_fill_day_count_for_eligibility():
-    day_ms = 86_400_000
-    day_end = torch.full((1, 10), 100.0, dtype=torch.float64)
-    out = {
-        "day_end_eq": day_end,
-        "day_min_eq": day_end.clone(),
-        "day_max_dd": torch.zeros_like(day_end),
-        "day_volume": torch.zeros_like(day_end),
-        "day_has_fill": torch.tensor([[True] + [False] * 9]),
-        "day_net_pnl": torch.tensor([[10.0] + [0.0] * 9]),
-        "day_last_fill_balance": torch.tensor([[110.0] + [100.0] * 9]),
-        "day_fill_count": torch.tensor([[2.0] + [0.0] * 9]),
-        "max_dd": torch.zeros(1),
-        "held_max_ms": torch.zeros(1),
-        "position_unchanged_max_ms": torch.zeros(1),
-        "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1),
-        "first_fill_ts": torch.tensor([0.0]),
-        "last_fill_ts": torch.tensor([0.0]),
-        "recovery_max_ms": torch.zeros(1),
-        "last_high_ts": torch.tensor([9.0 * day_ms]),
-        "first_eq_ts": torch.tensor([0.0]),
-        "last_eq_ts": torch.tensor([9.0 * day_ms]),
-        "liq_step": torch.tensor([-1]),
-    }
 
-    metrics = compute_objectives(
-        out,
-        SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=day_ms),
-        {"ts0": 0.0, "n": 10},
-        needed={"adg_pnl_w"},
-    )
 
-    assert metrics["adg_pnl_w"].item() == pytest.approx((10.0 / 110.0) / 10.0)
 
 
 def test_empty_median_return_series_matches_rust_zero_contract():
@@ -1234,37 +867,8 @@ def test_even_median_averages_middle_values_like_rust():
     assert _masked_median(values, mask).item() == pytest.approx(0.3)
 
 
-def test_weighted_adg_keeps_short_active_subsets_nonempty():
-    day_eq = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
-    active = torch.tensor([[True, True]])
-
-    assert _weighted_adg(
-        day_eq,
-        active,
-        torch.tensor([0.0]),
-        torch.tensor([172_740_000.0]),
-        0,
-        60_000,
-    ).item() == pytest.approx(0.0)
 
 
-def test_weighted_adg_slices_minutes_before_daily_reduction():
-    day_eq = torch.tensor([[100.0, 100.0, 100.0, 121.0]], dtype=torch.float64)
-    active = torch.tensor([[True, True, True, True]])
-    last_ts = float((4 * 1440 - 1) * 60_000)
-
-    actual = _weighted_adg(
-        day_eq,
-        active,
-        torch.tensor([0.0]),
-        torch.tensor([last_ts]),
-        0,
-        60_000,
-    )
-
-    full = _smoothed_adg(day_eq, active)
-    last_two = _smoothed_adg(day_eq, torch.tensor([[False, False, True, True]]))
-    assert actual.item() == pytest.approx(((full + 2.0 * last_two) / 10.0).item())
 
 
 def test_fill_gap_summary_metric_surface_is_supported():
@@ -1284,8 +888,9 @@ def test_fill_gap_summary_metric_surface_is_supported():
 
 def test_fill_gap_summary_without_fills_uses_whole_active_span():
     out = {
+        "fill_count": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "first_fill_ts": torch.tensor([float("nan")]),
         "last_fill_ts": torch.tensor([float("nan")]),
         "first_eq_ts": torch.tensor([0.0]),
@@ -1298,11 +903,12 @@ def test_fill_gap_summary_without_fills_uses_whole_active_span():
 
 
 def test_fill_gap_histogram_is_conservative_for_interpolated_percentiles():
-    gap_hist = torch.zeros((1, 128), dtype=torch.int32)
+    gap_hist = torch.zeros((1, GAP_BINS), dtype=torch.int32)
     gap_minutes = 120
-    bin_index = int(math.log(gap_minutes + 1.0) * 127.0 / math.log(4_000_001.0))
+    bin_index = int(math.log(gap_minutes + 1.0) * (GAP_BINS - 1) / math.log(4_000_001.0))
     gap_hist[0, bin_index] = 1
     out = {
+        "fill_count": torch.tensor([2.0]),
         "gap_hist": gap_hist,
         "gap_sum_squared_hours": torch.tensor([4.0]),
         "first_fill_ts": torch.tensor([3_600_000.0]),
@@ -1326,8 +932,8 @@ def test_fill_gap_histogram_is_conservative_for_interpolated_percentiles():
 def test_fill_gap_float32_bin_decode_never_understates_boundary_samples():
     samples = {0, 1, 4_000_000}
     log_max = math.log(4_000_001.0)
-    for index in range(127):
-        edge = math.exp((index + 1) * log_max / 127.0) - 1.0
+    for index in range(GAP_BINS - 1):
+        edge = math.exp((index + 1) * log_max / (GAP_BINS - 1)) - 1.0
         center = math.floor(edge)
         samples.update(max(0, center + delta) for delta in range(-2, 3))
 
@@ -1335,12 +941,35 @@ def test_fill_gap_float32_bin_decode_never_understates_boundary_samples():
         encoded = int(
             np.float32(
                 np.log(np.float32(gap) + np.float32(1.0))
-                * np.float32(127.0)
+                * np.float32(GAP_BINS - 1)
                 / np.log(np.float32(4_000_001.0))
             )
         )
-        encoded = min(max(encoded, 0), 127)
+        encoded = min(max(encoded, 0), GAP_BINS - 1)
         assert _GAP_HIST_UPPER_STEPS[encoded] >= gap
+
+
+def test_fill_gap_refinement_distinguishes_neighbouring_half_hour_intervals():
+    observed = []
+    for steps in (29, 30, 31):
+        histogram = torch.zeros((1, GAP_BINS), dtype=torch.int32)
+        bin_index = int(math.log(steps + 1) * (GAP_BINS - 1) / math.log(4_000_001))
+        histogram[0, bin_index] = 1
+        output = {
+            "fill_count": torch.tensor([2.0]), "gap_hist": histogram,
+            "gap_sum_squared_hours": torch.tensor([(steps / 60) ** 2]),
+            "first_fill_ts": torch.tensor([0.0]),
+            "last_fill_ts": torch.tensor([steps * 60_000.0]),
+            "first_eq_ts": torch.tensor([0.0]),
+            "last_eq_ts": torch.tensor([steps * 60_000.0]),
+        }
+        metrics = _fill_gap_metrics(output, SimpleNamespace(interval_ms=60_000))
+        expected = np.percentile([0.0, steps / 60, 0.0], 95)
+        value = metrics["fills_gap_p95_hours"].item()
+        assert value == pytest.approx(expected, abs=1e-12)
+        observed.append(value)
+    # The old bins collapsed all three intervals into the same 31-minute edge.
+    assert observed[0] < observed[1] < observed[2]
 
 
 def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
@@ -1349,9 +978,13 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
     first_fill_step = first_eq_step + 1
     last_fill_step = first_eq_step + 3
     last_eq_step = first_eq_step + 4
+    histogram = torch.zeros((1, GAP_BINS), dtype=torch.int32)
+    bin_index = int(math.log(3.0) * (GAP_BINS - 1) / math.log(4_000_001.0))
+    histogram[0, bin_index] = 1  # The inter-fill gap is two candles.
     out = {
+        "fill_count": torch.tensor([2.0]),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": histogram,
         "first_fill_ts": torch.tensor(
             [first_fill_step * interval_ms], dtype=torch.float32
         ),
@@ -1364,16 +997,17 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
 
     metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=interval_ms))
 
-    assert metrics["fills_gap_mean_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_mean_hours"].item() == pytest.approx(4.0 / 3.0 / 60.0)
     assert metrics["fills_gap_median_hours"].item() == pytest.approx(1.0 / 60.0)
-    assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.0 / 60.0)
-    assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.9 / 60.0)
+    assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.98 / 60.0)
 
 
 def test_fill_gap_time_weighted_mean_uses_exact_boundary_gaps():
     out = {
+        "fill_count": torch.tensor([1.0]),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "first_fill_ts": torch.tensor([3_600_000.0]),
         "last_fill_ts": torch.tensor([3_600_000.0]),
         "first_eq_ts": torch.tensor([0.0]),
@@ -1383,6 +1017,55 @@ def test_fill_gap_time_weighted_mean_uses_exact_boundary_gaps():
     metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
 
     assert metrics["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("interval_ms", [60_000, 300_000])
+@pytest.mark.parametrize("fill_steps", [[], [1], [1, 2, 3], [1, 1, 2, 2, 2, 3], [1] * 40])
+def test_fill_gap_percentiles_include_each_fill_and_preserve_source_counts(interval_ms, fill_steps):
+    histogram = torch.zeros((1, GAP_BINS), dtype=torch.int32)
+    distinct = sorted(set(fill_steps))
+    gaps = np.diff(distinct)
+    for gap in gaps:
+        bin_index = int(math.log(float(gap) + 1) * (GAP_BINS - 1) / math.log(4_000_001))
+        histogram[0, bin_index] += 1
+    hours = interval_ms / 3_600_000
+    out = {
+        "fill_count": torch.tensor([float(len(fill_steps))]),
+        "gap_hist": histogram,
+        "gap_sum_squared_hours": torch.tensor([sum((gaps * hours)**2)]),
+        "first_fill_ts": torch.tensor([distinct[0] * interval_ms if distinct else float("nan")]),
+        "last_fill_ts": torch.tensor([distinct[-1] * interval_ms if distinct else float("nan")]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([4 * interval_ms]),
+    }
+    before = histogram.clone()
+    actual = _fill_gap_metrics(out, SimpleNamespace(interval_ms=interval_ms))
+    # Independently enumerate Rust's boundaries, retaining duplicate fills.
+    per_fill_gaps = np.diff([0, *fill_steps, 4]) * hours
+    for name, percentile in (("median", 50), ("p95", 95), ("p99", 99)):
+        assert actual[f"fills_gap_{name}_hours"].item() == pytest.approx(
+            np.percentile(per_fill_gaps, percentile)
+        )
+    unique_gaps = np.diff([0, *distinct, 4]) * hours
+    assert actual["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(
+        sum(unique_gaps**2) / (4 * hours)
+    )
+    torch.testing.assert_close(histogram, before, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("count", [float("nan"), float("inf"), -1.0, 1.5, 0.0])
+def test_fill_gap_percentiles_reject_invalid_or_insufficient_fill_counts(count):
+    out = {
+        "fill_count": torch.tensor([count]),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
+        "gap_sum_squared_hours": torch.zeros(1),
+        "first_fill_ts": torch.tensor([60_000.0]),
+        "last_fill_ts": torch.tensor([60_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([120_000.0]),
+    }
+    with pytest.raises(RuntimeError, match="fill count"):
+        _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
 
 
 def _entry_interval_output(gaps):
@@ -1604,7 +1287,7 @@ def test_hard_stop_raw_drawdown_metrics_fail_closed_without_outputs():
         )
 
 
-def test_hard_stop_ema_tail_reduction_matches_rust_side_max_contract():
+def test_retained_directional_proxy_ema_tail_uses_legacy_side_max():
     from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
 
     metrics = _hard_stop_ema_tail_metrics(
@@ -1623,6 +1306,19 @@ def test_hard_stop_ema_tail_reduction_matches_rust_side_max_contract():
     assert metrics[
         "drawdown_worst_mean_1pct_ema_strategy_eq_short"
     ].tolist() == pytest.approx([0.09, 0.21])
+
+
+def test_hard_stop_ema_tail_uses_observed_portfolio_summary():
+    from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
+
+    metrics = _hard_stop_ema_tail_metrics({
+        "hsl_drawdown_ema_mean_worst_1pct_portfolio": torch.tensor([0.9]),
+        "hsl_drawdown_ema_mean_worst_1pct_long": torch.tensor([0.6]),
+        "hsl_drawdown_ema_mean_worst_1pct_short": torch.tensor([0.45]),
+    })
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq"].item() == pytest.approx(0.9)
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq_long"].item() == pytest.approx(0.6)
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq_short"].item() == pytest.approx(0.45)
 
 
 def test_hard_stop_ema_tail_metrics_fail_closed_without_directional_outputs():
@@ -1704,7 +1400,8 @@ def test_strategy_eq_recovery_distribution_fails_closed_without_mps_output():
         _strategy_eq_recovery_distribution_metrics({})
 
 
-def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
+@pytest.mark.parametrize("portfolio", [False, True], ids=["directional", "portfolio"])
+def test_hard_stop_lifecycle_reduction_matches_rust_formulas(portfolio):
     out = {
         "day_end_eq": torch.zeros((2, 1), dtype=torch.float32),
         "max_dd": torch.zeros(2, dtype=torch.float32),
@@ -1726,18 +1423,21 @@ def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
         "hsl_restart_retrigger_count": torch.tensor([1.0, 0.0]),
     }
 
+    out["hsl_unified_scope"] = torch.tensor([portfolio, False])
     metrics = _hard_stop_lifecycle_metrics(out, SimpleNamespace(interval_ms=60_000))
 
+    assert metrics["hard_stop_triggers_long"].tolist() == [0.0 if portfolio else 2.0, 0.0]
+    assert metrics["hard_stop_triggers_short"].tolist() == [0.0 if portfolio else 1.0, 0.0]
     assert metrics["hard_stop_triggers"].tolist() == [3.0, 0.0]
     assert metrics["hard_stop_triggers_per_year"].tolist() == pytest.approx(
         [3.0 * 365.25, 0.0]
     )
     assert metrics["hard_stop_restarts"].tolist() == [2.0, 0.0]
     assert metrics["hard_stop_restarts_per_year_long"].tolist() == pytest.approx(
-        [365.25, 0.0]
+        [0.0 if portfolio else 365.25, 0.0]
     )
     assert metrics["hard_stop_restarts_per_year_short"].tolist() == pytest.approx(
-        [365.25, 0.0]
+        [0.0 if portfolio else 365.25, 0.0]
     )
     assert metrics["hard_stop_time_in_red_pct"][0].item() == pytest.approx(
         720.0 / 1441.0
@@ -1775,8 +1475,9 @@ def test_hard_stop_panic_loss_reduction_matches_rust_formulas():
         out, SimpleNamespace(starting_balance=1_000.0)
     )
 
+    # Rust normalizes panic-close loss, not the legacy independent halt scalar.
     assert metrics["hard_stop_halt_to_restart_equity_loss_pct"].tolist() == [
-        0.025,
+        0.045,
         0.0,
     ]
     assert metrics["hard_stop_panic_close_loss_sum"].tolist() == [45.0, 0.0]
@@ -1800,24 +1501,6 @@ def test_hard_stop_panic_loss_metrics_fail_closed_without_directional_outputs():
         )
 
 
-def test_weighted_strategy_equity_metric_surface_is_supported():
-    assert {
-        "mdg_strategy_eq_w",
-        "sharpe_ratio_strategy_eq_w",
-        "sortino_ratio_strategy_eq_w",
-        "omega_ratio_strategy_eq_w",
-        "calmar_ratio_strategy_eq_w",
-        "sterling_ratio_strategy_eq_w",
-    } <= set(SUPPORTED_METRICS)
-    assert {
-        "adg_w_usd",
-        "calmar_ratio_w_usd",
-        "mdg_w_usd",
-        "omega_ratio_w_usd",
-        "sharpe_ratio_w_usd",
-        "sortino_ratio_w_usd",
-        "sterling_ratio_w_usd",
-    } <= set(SUPPORTED_METRICS)
 
 
 def test_pnl_recovery_metrics_fail_closed_without_kernel_output():
@@ -1831,7 +1514,7 @@ def test_pnl_recovery_metrics_fail_closed_without_kernel_output():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
         "last_fill_ts": torch.full((1,), float("nan")),
@@ -1883,241 +1566,55 @@ def test_expected_shortfall_uses_worst_one_percent_daily_min_return():
     assert _mean_worst_one_pct_abs(values, mask).item() == pytest.approx(0.4)
 
 
-def test_weighted_strategy_metrics_use_rust_minute_sliced_subset_average():
-    day_end = torch.tensor([[100.0, 90.0, 100.0, 90.0]], dtype=torch.float64)
-    day_min = day_end.clone()
-    day_dd = torch.tensor([[0.0, 0.1, 0.05, 0.1]], dtype=torch.float64)
-    active = torch.ones_like(day_end, dtype=torch.bool)
-    last_ts = float((4 * 1440 - 1) * 60_000)
-    requested = {
-        "mdg_strategy_eq_w",
-        "sharpe_ratio_strategy_eq_w",
-        "sortino_ratio_strategy_eq_w",
-        "omega_ratio_strategy_eq_w",
-        "calmar_ratio_strategy_eq_w",
-        "sterling_ratio_strategy_eq_w",
-    }
-
-    metrics = _weighted_strategy_eq_metrics(
-        day_end,
-        day_min,
-        day_dd,
-        active,
-        torch.tensor([0.0], dtype=torch.float64),
-        torch.tensor([last_ts], dtype=torch.float64),
-        0,
-        60_000,
-        requested,
-    )
-
-    full_returns, full_mask = _pct_change(day_end, active)
-    last_two = torch.tensor([[False, False, True, True]])
-    tail_returns, tail_mask = _pct_change(day_end, last_two)
-    expected_mdg = (
-        _masked_median(full_returns, full_mask)
-        + 2.0 * _masked_median(tail_returns, tail_mask)
-    ) / 10.0
-    expected_omega = (
-        _omega_ratio(full_returns, full_mask)
-        + 2.0 * _omega_ratio(tail_returns, tail_mask)
-    ) / 10.0
-
-    assert set(metrics) == requested
-    assert metrics["mdg_strategy_eq_w"].item() == pytest.approx(expected_mdg.item())
-    assert metrics["omega_ratio_strategy_eq_w"].item() == pytest.approx(
-        expected_omega.item()
-    )
-    assert all(torch.isfinite(value).all().item() for value in metrics.values())
 
 
 def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     day_end = torch.tensor([[100.0, 110.0, 90.0, 120.0]], dtype=torch.float64)
     day_min = torch.tensor([[100.0, 105.0, 80.0, 100.0]], dtype=torch.float64)
-    day_dd = torch.tensor([[0.0, 0.05, 0.30, 0.20]], dtype=torch.float64)
-    out = {
-        "day_end_eq": day_end,
-        "day_min_eq": day_min,
-        "day_max_dd": day_dd,
-        "day_volume": torch.zeros_like(day_end),
-        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
-        "max_dd": torch.tensor([0.30], dtype=torch.float64),
-        "held_max_ms": torch.zeros(1, dtype=torch.float64),
-        "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1, dtype=torch.float64),
-        "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
-        "last_high_ts": torch.tensor([180_000.0], dtype=torch.float64),
-        "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
-        "last_eq_ts": torch.tensor([180_000.0], dtype=torch.float64),
-        "liq_step": torch.tensor([-1.0], dtype=torch.float64),
-        "candidate_total_wallet_exposure_limit_long": torch.tensor(
-            [1.25], dtype=torch.float64
-        ),
-        "candidate_total_wallet_exposure_limit_short": torch.tensor(
-            [0.5], dtype=torch.float64
-        ),
-    }
-    run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000)
-    requested = {
-        "adg_strategy_eq",
-        "drawdown_worst_mean_1pct_strategy_eq",
-        "drawdown_worst_strategy_eq",
-        "gain_strategy_eq",
-        "mdg_strategy_eq",
-        "omega_ratio_strategy_eq",
-        "sharpe_ratio_strategy_eq",
-        "sortino_ratio_strategy_eq",
-        "expected_shortfall_1pct_strategy_eq",
-        "calmar_ratio_strategy_eq",
-        "sterling_ratio_strategy_eq",
-        "strategy_eq_underwater_pct_median",
-    }
-    alias_sources = {
-        "adg_usd": "adg_strategy_eq",
-        "adg_w_usd": "adg_strategy_eq_w",
-        "calmar_ratio_usd": "calmar_ratio_strategy_eq",
-        "calmar_ratio_w_usd": "calmar_ratio_strategy_eq_w",
-        "drawdown_worst_mean_1pct_usd": "drawdown_worst_mean_1pct_strategy_eq",
-        "drawdown_worst_usd": "drawdown_worst_strategy_eq",
-        "expected_shortfall_1pct_usd": "expected_shortfall_1pct_strategy_eq",
-        "gain_usd": "gain_strategy_eq",
-        "mdg_usd": "mdg_strategy_eq",
-        "mdg_w_usd": "mdg_strategy_eq_w",
-        "omega_ratio_usd": "omega_ratio_strategy_eq",
-        "omega_ratio_w_usd": "omega_ratio_strategy_eq_w",
-        "sharpe_ratio_usd": "sharpe_ratio_strategy_eq",
-        "sharpe_ratio_w_usd": "sharpe_ratio_strategy_eq_w",
-        "sortino_ratio_usd": "sortino_ratio_strategy_eq",
-        "sortino_ratio_w_usd": "sortino_ratio_strategy_eq_w",
-        "sterling_ratio_usd": "sterling_ratio_strategy_eq",
-        "sterling_ratio_w_usd": "sterling_ratio_strategy_eq_w",
-    }
+    day_dd = torch.tensor([[0.0, 0.05, 0.3, 0.2]], dtype=torch.float64)
+    out = {'day_end_eq': day_end, 'day_min_eq': day_min, 'day_max_dd': day_dd, 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.zeros_like(day_end, dtype=torch.bool), 'max_dd': torch.tensor([0.3], dtype=torch.float64), 'held_max_ms': torch.zeros(1, dtype=torch.float64), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1, dtype=torch.float64), 'first_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'last_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'recovery_max_ms': torch.zeros(1, dtype=torch.float64), 'last_high_ts': torch.tensor([180000.0], dtype=torch.float64), 'first_eq_ts': torch.tensor([0.0], dtype=torch.float64), 'last_eq_ts': torch.tensor([180000.0], dtype=torch.float64), 'liq_step': torch.tensor([-1.0], dtype=torch.float64), 'candidate_total_wallet_exposure_limit_long': torch.tensor([1.25], dtype=torch.float64), 'candidate_total_wallet_exposure_limit_short': torch.tensor([0.5], dtype=torch.float64)}
+    run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60000)
+    requested = {'adg_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_strategy_eq', 'gain_strategy_eq', 'mdg_strategy_eq', 'omega_ratio_strategy_eq', 'sharpe_ratio_strategy_eq', 'sortino_ratio_strategy_eq', 'expected_shortfall_1pct_strategy_eq', 'calmar_ratio_strategy_eq', 'sterling_ratio_strategy_eq', 'strategy_eq_underwater_pct_median'}
+    alias_sources = {'adg_usd': 'adg_strategy_eq', 'calmar_ratio_usd': 'calmar_ratio_strategy_eq', 'drawdown_worst_mean_1pct_usd': 'drawdown_worst_mean_1pct_strategy_eq', 'drawdown_worst_usd': 'drawdown_worst_strategy_eq', 'expected_shortfall_1pct_usd': 'expected_shortfall_1pct_strategy_eq', 'gain_usd': 'gain_strategy_eq', 'mdg_usd': 'mdg_strategy_eq', 'omega_ratio_usd': 'omega_ratio_strategy_eq', 'sharpe_ratio_usd': 'sharpe_ratio_strategy_eq', 'sortino_ratio_usd': 'sortino_ratio_strategy_eq', 'sterling_ratio_usd': 'sterling_ratio_strategy_eq'}
     requested.update(alias_sources)
     requested.update(alias_sources.values())
-    per_exposure_sources = {
-        "adg_per_exposure_long_usd": ("adg_strategy_eq", 1.25),
-        "adg_per_exposure_short_usd": ("adg_strategy_eq", 0.5),
-        "adg_w_per_exposure_long_usd": ("adg_strategy_eq_w", 1.25),
-        "adg_w_per_exposure_short_usd": ("adg_strategy_eq_w", 0.5),
-        "gain_per_exposure_long_usd": ("gain_strategy_eq", 1.25),
-        "gain_per_exposure_short_usd": ("gain_strategy_eq", 0.5),
-        "mdg_per_exposure_long_usd": ("mdg_strategy_eq", 1.25),
-        "mdg_per_exposure_short_usd": ("mdg_strategy_eq", 0.5),
-        "mdg_w_per_exposure_long_usd": ("mdg_strategy_eq_w", 1.25),
-        "mdg_w_per_exposure_short_usd": ("mdg_strategy_eq_w", 0.5),
-    }
+    per_exposure_sources = {'adg_per_exposure_long_usd': ('adg_strategy_eq', 1.25), 'adg_per_exposure_short_usd': ('adg_strategy_eq', 0.5), 'gain_per_exposure_long_usd': ('gain_strategy_eq', 1.25), 'gain_per_exposure_short_usd': ('gain_strategy_eq', 0.5), 'mdg_per_exposure_long_usd': ('mdg_strategy_eq', 1.25), 'mdg_per_exposure_short_usd': ('mdg_strategy_eq', 0.5)}
     requested.update(per_exposure_sources)
     _assert_proxy_surface_partition(per_exposure_sources)
-
-    metrics = compute_objectives(out, run, {"ts0": 0.0, "n": 4}, needed=requested)
-
+    metrics = compute_objectives(out, run, {'ts0': 0.0, 'n': 4}, needed=requested)
     gain, adg = _smoothed_gain_adg(day_end, torch.ones_like(day_end, dtype=torch.bool))
     assert set(metrics) == requested
-    assert metrics["gain_strategy_eq"].item() == pytest.approx(gain.item())
-    assert metrics["calmar_ratio_strategy_eq"].item() == pytest.approx(
-        adg.item() / 0.30
-    )
-    assert metrics["sterling_ratio_strategy_eq"].item() == pytest.approx(
-        adg.item() / 0.30
-    )
-    assert metrics["strategy_eq_underwater_pct_median"].item() == pytest.approx(0.125)
-    assert metrics["expected_shortfall_1pct_strategy_eq"].item() == pytest.approx(
-        abs((80.0 - 105.0) / 105.0)
-    )
-    expected_omega = ((110.0 - 100.0) / 100.0 + (120.0 - 90.0) / 90.0) / abs(
-        (90.0 - 110.0) / 110.0
-    )
-    assert metrics["omega_ratio_strategy_eq"].item() == pytest.approx(expected_omega)
+    assert metrics['gain_strategy_eq'].item() == pytest.approx(gain.item())
+    assert metrics['calmar_ratio_strategy_eq'].item() == pytest.approx(adg.item() / 0.3)
+    assert metrics['sterling_ratio_strategy_eq'].item() == pytest.approx(adg.item() / 0.3)
+    assert metrics['strategy_eq_underwater_pct_median'].item() == pytest.approx(0.125)
+    assert metrics['expected_shortfall_1pct_strategy_eq'].item() == pytest.approx(abs((80.0 - 105.0) / 105.0))
+    expected_omega = ((110.0 - 100.0) / 100.0 + (120.0 - 90.0) / 90.0) / abs((90.0 - 110.0) / 110.0)
+    assert metrics['omega_ratio_strategy_eq'].item() == pytest.approx(expected_omega)
     for alias, source in alias_sources.items():
         assert metrics[alias].item() == pytest.approx(metrics[source].item())
     for name, (source, denominator) in per_exposure_sources.items():
-        assert metrics[name].item() == pytest.approx(
-            metrics[source].item() / denominator
-        )
-
-    out["candidate_total_wallet_exposure_limit_short"] = torch.zeros(
-        1, dtype=torch.float64
-    )
-    zero_exposure = compute_objectives(
-        out,
-        run,
-        {"ts0": 0.0, "n": 4},
-        needed={"gain_per_exposure_short_usd"},
-    )
-    assert zero_exposure["gain_per_exposure_short_usd"].item() == 0.0
+        assert metrics[name].item() == pytest.approx(metrics[source].item() / denominator)
+    out['candidate_total_wallet_exposure_limit_short'] = torch.zeros(1, dtype=torch.float64)
+    zero_exposure = compute_objectives(out, run, {'ts0': 0.0, 'n': 4}, needed={'gain_per_exposure_short_usd'})
+    assert zero_exposure['gain_per_exposure_short_usd'].item() == 0.0
 
 
-@pytest.mark.parametrize("fill_count", [1.0, 3.0])
+@pytest.mark.parametrize('fill_count', [1.0, 3.0])
 def test_btc_account_metrics_use_prepared_daily_price_context(fill_count):
     day_end = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
-    out = {
-        "day_end_eq": day_end,
-        "day_min_eq": day_end.clone(),
-        "day_max_dd": torch.zeros_like(day_end),
-        "day_volume": torch.zeros_like(day_end),
-        "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
-        "fill_count": torch.tensor([fill_count]),
-        "max_dd": torch.zeros(1),
-        "held_max_ms": torch.zeros(1),
-        "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1),
-        "first_fill_ts": torch.tensor([0.0]),
-        "last_fill_ts": torch.tensor([2 * 86_400_000.0]),
-        "recovery_max_ms": torch.zeros(1),
-        "last_high_ts": torch.tensor([86_400_000.0]),
-        "first_eq_ts": torch.tensor([0.0]),
-        "last_eq_ts": torch.tensor([2 * 86_400_000.0]),
-        "liq_step": torch.tensor([-1]),
-        "total_wallet_exposure_max": torch.tensor([2.0]),
-        "total_wallet_exposure_mean": torch.tensor([1.0]),
-        "candidate_total_wallet_exposure_limit_long": torch.tensor([1.25]),
-        "candidate_total_wallet_exposure_limit_short": torch.tensor([0.5]),
-    }
-    requested = {
-        "adg_btc",
-        "gain_btc",
-        "gain_per_exposure_long_btc",
-        "peak_recovery_days_equity_btc",
-        "adg_w_btc",
-        "adg_w_per_exposure_long_btc",
-    }
+    out = {'day_end_eq': day_end, 'day_min_eq': day_end.clone(), 'day_max_dd': torch.zeros_like(day_end), 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.ones_like(day_end, dtype=torch.bool), 'fill_count': torch.tensor([fill_count]), 'max_dd': torch.zeros(1), 'held_max_ms': torch.zeros(1), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1), 'first_fill_ts': torch.tensor([0.0]), 'last_fill_ts': torch.tensor([2 * 86400000.0]), 'recovery_max_ms': torch.zeros(1), 'last_high_ts': torch.tensor([86400000.0]), 'first_eq_ts': torch.tensor([0.0]), 'last_eq_ts': torch.tensor([2 * 86400000.0]), 'liq_step': torch.tensor([-1]), 'total_wallet_exposure_max': torch.tensor([2.0]), 'total_wallet_exposure_mean': torch.tensor([1.0]), 'candidate_total_wallet_exposure_limit_long': torch.tensor([1.25]), 'candidate_total_wallet_exposure_limit_short': torch.tensor([0.5])}
+    requested = {'adg_btc', 'gain_btc', 'gain_per_exposure_long_btc', 'peak_recovery_days_equity_btc'}
     btc_day_end = np.array([10.0, 10.0, 20.0])
-
-    metrics = compute_objectives(
-        out,
-        SimpleNamespace(
-            requested_start_ts_ms=0,
-            guard_ts_ms=0,
-            interval_ms=86_400_000,
-        ),
-        {
-            "ts0": 0.0,
-            "n": 3,
-            "btc_day_end_price": btc_day_end,
-            "btc_prices": btc_day_end,
-        },
-        needed=requested,
-    )
-
+    metrics = compute_objectives(out, SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=86400000), {'ts0': 0.0, 'n': 3, 'btc_day_end_price': btc_day_end, 'btc_prices': btc_day_end}, needed=requested)
     btc_equity = torch.tensor([[10.0, 11.0, 4.5]], dtype=torch.float64)
-    expected_gain, expected_adg = _smoothed_gain_adg(
-        btc_equity, torch.ones_like(btc_equity, dtype=torch.bool)
-    )
+    expected_gain, expected_adg = _smoothed_gain_adg(btc_equity, torch.ones_like(btc_equity, dtype=torch.bool))
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
-    assert metrics["gain_btc"].item() == pytest.approx(expected_gain.item())
-    assert metrics["adg_btc"].item() == pytest.approx(expected_adg.item())
-    assert metrics["gain_per_exposure_long_btc"].item() == pytest.approx(
-        expected_gain.item() / 1.25
-    )
-    assert metrics["peak_recovery_days_equity_btc"].item() == 1.0
-    assert metrics["adg_w_btc"].item() < 0.0
-    assert metrics["adg_w_per_exposure_long_btc"].item() == pytest.approx(
-        metrics["adg_w_btc"].item() / 1.25
-    )
+    assert metrics['gain_btc'].item() == pytest.approx(expected_gain.item())
+    assert metrics['adg_btc'].item() == pytest.approx(expected_adg.item())
+    assert metrics['gain_per_exposure_long_btc'].item() == pytest.approx(expected_gain.item() / 1.25)
+    assert metrics['peak_recovery_days_equity_btc'].item() == 1.0
 
 
 def test_btc_account_metrics_fail_closed_without_price_context():
@@ -2132,7 +1629,7 @@ def test_btc_account_metrics_fail_closed_without_price_context():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
         "last_fill_ts": torch.tensor([86_400_000.0]),
@@ -2178,7 +1675,7 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
         "last_fill_ts": torch.tensor([3 * 86_400_000.0]),
@@ -2322,7 +1819,7 @@ def test_btc_account_metrics_use_candidate_liquidation_endpoint_price():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
         "last_fill_ts": torch.tensor([float(day_ms)]),
@@ -2364,7 +1861,7 @@ def test_objectives_include_final_active_calendar_day():
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2399,7 +1896,7 @@ def test_completion_uses_rust_exclusive_requested_end():
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2423,61 +1920,16 @@ def test_completion_uses_rust_exclusive_requested_end():
 
 def test_completion_is_zero_when_no_equity_sample_exists():
     day_end = torch.tensor([[0.0]], dtype=torch.float64)
-    out = {
-        "day_end_eq": day_end,
-        "day_min_eq": torch.full_like(day_end, float("inf")),
-        "day_max_dd": torch.zeros_like(day_end),
-        "day_volume": torch.zeros_like(day_end),
-        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
-        "max_dd": torch.zeros(1, dtype=torch.float64),
-        "held_max_ms": torch.zeros(1, dtype=torch.float64),
-        "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1, dtype=torch.float64),
-        "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
-        "last_high_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "first_eq_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "last_eq_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "liq_step": torch.tensor([-1.0], dtype=torch.float64),
-    }
-    run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000)
-
-    metrics = compute_objectives(
-        out,
-        run,
-        {"ts0": 0.0, "n": 3},
-        needed={
-            "adg_rolling_hmean_strategy_eq",
-            "adg_strategy_eq",
-            "adg_strategy_eq_w",
-            "adg_time_integrated_strategy_eq",
-            "backtest_completion_ratio",
-            "fills_gap_longest_days",
-            "fills_gap_mean_hours",
-            "fills_gap_median_hours",
-            "fills_gap_p95_hours",
-            "fills_gap_p99_hours",
-            "fills_gap_time_weighted_mean_hours",
-            "positive_gain_participation_strategy_eq",
-        },
-    )
-
-    assert metrics["backtest_completion_ratio"].item() == 0.0
-    assert metrics["adg_strategy_eq"].item() == 0.0
-    assert metrics["adg_strategy_eq_w"].item() == 0.0
-    assert metrics["adg_rolling_hmean_strategy_eq"].item() == 0.0
-    assert metrics["adg_time_integrated_strategy_eq"].item() == 0.0
-    assert metrics["positive_gain_participation_strategy_eq"].item() == 0.0
-    assert metrics["fills_gap_longest_days"].item() == 0.0
-    for name in (
-        "fills_gap_mean_hours",
-        "fills_gap_median_hours",
-        "fills_gap_p95_hours",
-        "fills_gap_p99_hours",
-        "fills_gap_time_weighted_mean_hours",
-    ):
+    out = {'fill_count': torch.zeros(1), 'day_end_eq': day_end, 'day_min_eq': torch.full_like(day_end, float('inf')), 'day_max_dd': torch.zeros_like(day_end), 'day_volume': torch.zeros_like(day_end), 'day_has_fill': torch.zeros_like(day_end, dtype=torch.bool), 'max_dd': torch.zeros(1, dtype=torch.float64), 'held_max_ms': torch.zeros(1, dtype=torch.float64), 'gap_sum_squared_hours': torch.zeros(1), 'gap_hist': torch.zeros((1, GAP_BINS), dtype=torch.int32), 'gap_max_ms': torch.zeros(1, dtype=torch.float64), 'first_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'last_fill_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'recovery_max_ms': torch.zeros(1, dtype=torch.float64), 'last_high_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'first_eq_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'last_eq_ts': torch.full((1,), float('nan'), dtype=torch.float64), 'liq_step': torch.tensor([-1.0], dtype=torch.float64)}
+    run = SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60000)
+    metrics = compute_objectives(out, run, {'ts0': 0.0, 'n': 3}, needed={'adg_rolling_hmean_strategy_eq', 'adg_strategy_eq', 'adg_time_integrated_strategy_eq', 'backtest_completion_ratio', 'fills_gap_longest_days', 'fills_gap_mean_hours', 'fills_gap_median_hours', 'fills_gap_p95_hours', 'fills_gap_p99_hours', 'fills_gap_time_weighted_mean_hours', 'positive_gain_participation_strategy_eq'})
+    assert metrics['backtest_completion_ratio'].item() == 0.0
+    assert metrics['adg_strategy_eq'].item() == 0.0
+    assert metrics['adg_rolling_hmean_strategy_eq'].item() == 0.0
+    assert metrics['adg_time_integrated_strategy_eq'].item() == 0.0
+    assert metrics['positive_gain_participation_strategy_eq'].item() == 0.0
+    assert metrics['fills_gap_longest_days'].item() == 0.0
+    for name in ('fills_gap_mean_hours', 'fills_gap_median_hours', 'fills_gap_p95_hours', 'fills_gap_p99_hours', 'fills_gap_time_weighted_mean_hours'):
         assert metrics[name].item() == 0.0
 
 
@@ -2492,7 +1944,7 @@ def test_completion_uses_raw_requested_start_before_available_history():
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
         "gap_sum_squared_hours": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_hist": torch.zeros((1, GAP_BINS), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2532,9 +1984,10 @@ def test_fill_gap_time_weighted_mean_uses_streamed_moment(gap_hours, interval_ms
     if gap_hours * 3_600_000 < interval_ms:
         return
     steps = round(gap_hours * 3_600_000 / interval_ms)
-    histogram = torch.zeros((1, 128), dtype=torch.int32)
-    histogram[0, int(math.log(steps + 1) * 127 / math.log(4_000_001))] = 3
+    histogram = torch.zeros((1, GAP_BINS), dtype=torch.int32)
+    histogram[0, int(math.log(steps + 1) * (GAP_BINS - 1) / math.log(4_000_001))] = 3
     out = {
+        "fill_count": torch.tensor([4.0]),
         "gap_hist": histogram,
         "gap_sum_squared_hours": torch.tensor([3 * gap_hours**2]),
         "first_fill_ts": torch.tensor([0.0]),

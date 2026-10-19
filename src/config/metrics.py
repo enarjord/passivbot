@@ -1,15 +1,16 @@
 from collections.abc import Mapping
+import re
 from typing import Any
 
 CURRENCY_METRICS = {
+    "adg_ew",
+    "sharpe_ratio_ew",
+    "sortino_ratio_ew",
+    "omega_ratio_ew",
     "adg",
     "adg_per_exposure_long",
     "adg_per_exposure_short",
-    "adg_w",
-    "adg_w_per_exposure_long",
-    "adg_w_per_exposure_short",
     "calmar_ratio",
-    "calmar_ratio_w",
     "drawdown_worst",
     "drawdown_worst_mean_1pct",
     "equity_balance_diff_neg_max",
@@ -18,44 +19,44 @@ CURRENCY_METRICS = {
     "equity_balance_diff_pos_mean",
     "equity_choppiness",
     "exposure_mean_ratio",
-    "exposure_mean_ratio_w",
     "exposure_ratio",
-    "exposure_ratio_w",
-    "equity_choppiness_w",
     "equity_jerkiness",
-    "equity_jerkiness_w",
     "peak_recovery_days_equity",
     "peak_recovery_hours_equity",
     "expected_shortfall_1pct",
     "exponential_fit_error",
-    "exponential_fit_error_w",
     "gain",
     "gain_per_exposure_long",
     "gain_per_exposure_short",
     "mdg",
     "mdg_per_exposure_long",
     "mdg_per_exposure_short",
-    "mdg_w",
-    "mdg_w_per_exposure_long",
-    "mdg_w_per_exposure_short",
     "omega_ratio",
-    "omega_ratio_w",
     "paper_loss_mean_ratio",
-    "paper_loss_mean_ratio_w",
     "paper_loss_ratio",
-    "paper_loss_ratio_w",
     "sharpe_ratio",
-    "sharpe_ratio_w",
     "sortino_ratio",
-    "sortino_ratio_w",
     "sterling_ratio",
-    "sterling_ratio_w",
 }
 
+EXPOSURE_RMS_METRICS = frozenset({
+    "total_wallet_exposure_rms_long",
+    "total_wallet_exposure_rms_short",
+    "total_wallet_exposure_rms_gross",
+    "total_wallet_exposure_utilization_rms_long",
+    "total_wallet_exposure_utilization_rms_short",
+    "position_exposure_utilization_rms_long",
+    "position_exposure_utilization_rms_short",
+})
+
 SHARED_METRICS = {
+    *EXPOSURE_RMS_METRICS,
+    "adg_strategy_eq_ew",
+    "sharpe_ratio_strategy_eq_ew",
+    "sortino_ratio_strategy_eq_ew",
+    "omega_ratio_strategy_eq_ew",
     "backtest_completion_ratio",
     "positions_held_per_day",
-    "positions_held_per_day_w",
     "position_held_time_weighted_mean_hours",
     "position_held_hours_mean",
     "position_held_hours_max",
@@ -66,7 +67,6 @@ SHARED_METRICS = {
     "position_held_days_median",
     "position_unchanged_days_max",
     "win_rate",
-    "win_rate_w",
     "trade_loss_max",
     "trade_loss_mean",
     "trade_loss_median",
@@ -97,9 +97,7 @@ SHARED_METRICS = {
     "fills_per_day_short",
     "fills_top_symbol_share",
     "volume_pct_per_day_avg",
-    "volume_pct_per_day_avg_w",
     "loss_profit_ratio",
-    "loss_profit_ratio_w",
     "peak_recovery_days_pnl",
     "peak_recovery_hours_pnl",
     "high_exposure_days_mean_long",
@@ -111,13 +109,9 @@ SHARED_METRICS = {
     "high_exposure_hours_mean_short",
     "high_exposure_hours_max_short",
     "adg_pnl",
-    "adg_pnl_w",
     "mdg_pnl",
-    "mdg_pnl_w",
     "sharpe_ratio_pnl",
-    "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
-    "sortino_ratio_pnl_w",
     "gain_strategy_eq",
     "adg_strategy_eq",
     "adg_rolling_hmean_strategy_eq",
@@ -130,13 +124,6 @@ SHARED_METRICS = {
     "expected_shortfall_1pct_strategy_eq",
     "calmar_ratio_strategy_eq",
     "sterling_ratio_strategy_eq",
-    "adg_strategy_eq_w",
-    "mdg_strategy_eq_w",
-    "sharpe_ratio_strategy_eq_w",
-    "sortino_ratio_strategy_eq_w",
-    "omega_ratio_strategy_eq_w",
-    "calmar_ratio_strategy_eq_w",
-    "sterling_ratio_strategy_eq_w",
     "drawdown_worst_strategy_eq",
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_mean_1pct_strategy_eq",
@@ -218,13 +205,6 @@ METRIC_ALIASES = {
     "expected_shortfall_1pct_strategy_pnl_rebased": "expected_shortfall_1pct_strategy_eq",
     "calmar_ratio_strategy_pnl_rebased": "calmar_ratio_strategy_eq",
     "sterling_ratio_strategy_pnl_rebased": "sterling_ratio_strategy_eq",
-    "adg_strategy_pnl_rebased_w": "adg_strategy_eq_w",
-    "mdg_strategy_pnl_rebased_w": "mdg_strategy_eq_w",
-    "sharpe_ratio_strategy_pnl_rebased_w": "sharpe_ratio_strategy_eq_w",
-    "sortino_ratio_strategy_pnl_rebased_w": "sortino_ratio_strategy_eq_w",
-    "omega_ratio_strategy_pnl_rebased_w": "omega_ratio_strategy_eq_w",
-    "calmar_ratio_strategy_pnl_rebased_w": "calmar_ratio_strategy_eq_w",
-    "sterling_ratio_strategy_pnl_rebased_w": "sterling_ratio_strategy_eq_w",
     "drawdown_worst_hsl": "drawdown_worst_strategy_eq",
     "drawdown_worst_hsl_long": "drawdown_worst_strategy_eq_long",
     "drawdown_worst_hsl_short": "drawdown_worst_strategy_eq_short",
@@ -321,3 +301,14 @@ def canonicalize_limit_name(limit_key: str) -> str:
             metric = limit_key[len(prefix) :]
             return prefix + canonicalize_metric_name(metric)
     return canonicalize_metric_name(limit_key)
+
+
+_RETIRED_WEIGHTED_METRIC = re.compile(r"_w(?:_|$)", re.IGNORECASE)
+
+
+def reject_retired_metric(metric: str, *, path: str) -> None:
+    if _RETIRED_WEIGHTED_METRIC.search(str(metric)):
+        raise ValueError(
+            f"{path}: legacy weighted metric {metric!r} is retired; "
+            "choose a supported metric with the intended formula explicitly"
+        )

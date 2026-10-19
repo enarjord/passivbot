@@ -13,7 +13,6 @@ import passivbot_rust as pbr
 
 from live.event_bus import EventTypes, ReasonCodes
 from trailing_diagnostics import (
-    build_trailing_grid_v7_diagnostic,
     build_trailing_close_diagnostic,
     build_trailing_entry_diagnostic,
     build_trailing_martingale_close_diagnostic,
@@ -936,9 +935,6 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             "pending_symbols": pending_symbols,
             "next_symbol": pending_symbols[0] if pending_symbols else None,
             "score_weights": dict(self.bot_value(pside, "forager_score_weights") or {}),
-            "volume_drop_pct": float(
-                self.bot_value(pside, "forager_volume_drop_pct") or 0.0
-            ),
         }
         if float(out[pside]["score_weights"].get("unilateralness", 0.0)) > 0.0:
             # Enabled RMS totals come from the same Rust selection that placed
@@ -1770,76 +1766,6 @@ def _build_monitor_trailing_close_payload(
     return payload
 
 
-def _build_monitor_trailing_grid_v7_payload(
-    self,
-    symbol: str,
-    pside: str,
-    *,
-    balance_raw: float,
-    current_price: float,
-    position_size: float,
-    position_price: float,
-    trailing_bundle: dict[str, float],
-    market_entry: dict[str, Any],
-) -> Optional[dict[str, Any]]:
-    strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
-    if not callable(strategy_getter):
-        return None
-    strategy_params = strategy_getter(pside, symbol)
-    if not isinstance(strategy_params, dict):
-        return None
-    entry_params = strategy_params.get("entry", {})
-    if not isinstance(entry_params, dict):
-        return None
-    ema_bands = (
-        market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
-    )
-    side_ema_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
-    if not isinstance(side_ema_bands, dict):
-        return None
-    try:
-        h1_span = float(entry_params.get("volatility_ema_span_hours", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        h1_span = 0.0
-    try:
-        n_positions = int(round(float(self.bp(pside, "n_positions", symbol) or 0.0)))
-    except (AttributeError, KeyError, TypeError, ValueError):
-        n_positions = int(self.get_max_n_positions(pside) or 1)
-    inputs = {
-        "symbol": symbol,
-        "pside": pside,
-        "balance_raw": float(balance_raw),
-        "current_price": float(current_price),
-        "position_size": float(position_size),
-        "position_price": float(position_price),
-        "qty_step": float(self.qty_steps[symbol]),
-        "price_step": float(self.price_steps[symbol]),
-        "min_qty": float(self.min_qtys[symbol]),
-        "min_cost": float(
-            max(
-                getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0,
-                getattr(self, "min_costs", {}).get(symbol, 0.0) or 0.0,
-            )
-        ),
-        "c_mult": float(self.c_mults[symbol]),
-        "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
-        "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
-        "h1_log_range_ema": float(_monitor_h1_logrange_for_span(self, symbol, h1_span)),
-        "strategy_params": strategy_params,
-        "n_positions": n_positions,
-        "wallet_exposure_limit": float(self.bp(pside, "wallet_exposure_limit", symbol)),
-        "total_wallet_exposure_limit": float(
-            self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
-        ),
-        "risk_we_excess_allowance_pct": float(
-            self.bp(pside, "risk_we_excess_allowance_pct", symbol)
-        ),
-        "risk_wel_enforcer_threshold": float(
-            self.bp(pside, "risk_wel_enforcer_threshold", symbol)
-        ),
-        **dict(trailing_bundle),
-    }
-    return build_trailing_grid_v7_diagnostic(inputs)
 
 
 def _build_monitor_trailing_section(
@@ -1856,7 +1782,7 @@ def _build_monitor_trailing_section(
     strategy_kind = (
         str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
     )
-    if strategy_kind not in {"trailing_martingale", "trailing_grid_v7"}:
+    if strategy_kind != "trailing_martingale":
         reason = (
             "strategy_has_no_trailing_diagnostics"
             if strategy_kind == "ema_anchor"
@@ -1909,49 +1835,34 @@ def _build_monitor_trailing_section(
             position_size = float(pos.get("size", 0.0) or 0.0)
             position_price = float(pos.get("price", 0.0) or 0.0)
             side_payload: dict[str, Any] = {"extrema": dict(trailing_bundle)}
-            if strategy_kind == "trailing_grid_v7":
-                v7_payload = _build_monitor_trailing_grid_v7_payload(
-                    self,
-                    symbol,
-                    pside,
-                    balance_raw=balance_raw,
-                    current_price=current_price,
-                    position_size=position_size,
-                    position_price=position_price,
-                    trailing_bundle=trailing_bundle,
-                    market_entry=market_entry,
-                )
-                if v7_payload is not None:
-                    side_payload.update(v7_payload)
-            else:
-                entry_payload = _build_monitor_trailing_entry_payload(
-                    self,
-                    symbol,
-                    pside,
-                    balance_raw=balance_raw,
-                    current_price=current_price,
-                    position_size=position_size,
-                    position_price=position_price,
-                    trailing_bundle=trailing_bundle,
-                    market_entry=market_entry,
-                    strategy_cache=strategy_cache,
-                )
-                if entry_payload is not None:
-                    side_payload["entry"] = entry_payload
-                close_payload = _build_monitor_trailing_close_payload(
-                    self,
-                    symbol,
-                    pside,
-                    balance_raw=balance_raw,
-                    balance_strategy=balance_strategy,
-                    current_price=current_price,
-                    position_size=position_size,
-                    position_price=position_price,
-                    trailing_bundle=trailing_bundle,
-                    strategy_cache=strategy_cache,
-                )
-                if close_payload is not None:
-                    side_payload["close"] = close_payload
+            entry_payload = _build_monitor_trailing_entry_payload(
+                self,
+                symbol,
+                pside,
+                balance_raw=balance_raw,
+                current_price=current_price,
+                position_size=position_size,
+                position_price=position_price,
+                trailing_bundle=trailing_bundle,
+                market_entry=market_entry,
+                strategy_cache=strategy_cache,
+            )
+            if entry_payload is not None:
+                side_payload["entry"] = entry_payload
+            close_payload = _build_monitor_trailing_close_payload(
+                self,
+                symbol,
+                pside,
+                balance_raw=balance_raw,
+                balance_strategy=balance_strategy,
+                current_price=current_price,
+                position_size=position_size,
+                position_price=position_price,
+                trailing_bundle=trailing_bundle,
+                strategy_cache=strategy_cache,
+            )
+            if close_payload is not None:
+                side_payload["close"] = close_payload
             if "entry" in side_payload or "close" in side_payload:
                 symbol_payload[pside] = side_payload
         if symbol_payload:

@@ -75,7 +75,10 @@ async def test_change_during_connector_queue_defers_at_transport(
                 )
             return await client.cancel_order(existing["id"], key[0])
 
-    bot = SimpleNamespace(cca=client, _position_fill_sync=sync, config={"live": {}})
+    bot = SimpleNamespace(
+        cca=client, _position_fill_sync=sync,
+        config={"bot": {"risk": {"hsl": {"scope": "coin"}}}},
+    )
 
     owner = SimpleNamespace(_write_lock=asyncio.Lock(), admit=lambda order: True)
     monkeypatch.setattr(hsl_live, "owner", lambda bot: owner)
@@ -139,6 +142,9 @@ async def test_fake_runner_settles_without_waiting_on_frozen_market_clock():
         config = {"live": {}}
         cca = FakeCCXTClient(_scenario(), quote="USDT")
 
+        def _record_authoritative_surface(self, *args):
+            raise AssertionError("clock-only fixture must not acquire account snapshots")
+
         async def update_pnls(self, **kwargs):
             calls.append(syncmod.state(self).clock())
             return True
@@ -165,7 +171,7 @@ def test_submission_bookkeeping_waits_for_write_and_survives_ambiguous_retry():
     bot = SimpleNamespace(
         cca=SimpleNamespace(_position_fill_transport_guard=True),
         _position_fill_sync=gate,
-        config={},
+        config={"bot": {"risk": {"hsl": {"scope": "coin"}}}},
     )
     calls = []
     with syncmod.connector_context(bot, dict(symbol=key[0], position_side=key[1])):

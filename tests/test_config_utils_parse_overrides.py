@@ -4,11 +4,10 @@ import config_utils
 
 
 def _base_config_with_override(coin_key, override_value):
-    return {
-        "bot": {"long": {}, "short": {}},
-        "live": {"user": "tester", "approved_coins": [], "ignored_coins": {"long": [], "short": []}},
-        "coin_overrides": {coin_key: override_value},
-    }
+    config = config_utils.get_template_config()
+    config["live"].update(user="tester", approved_coins=[], ignored_coins={"long": [], "short": []})
+    config["coin_overrides"] = {coin_key: override_value}
+    return config
 
 
 def test_parse_overrides_rejects_flat_strategy_mods(monkeypatch):
@@ -81,10 +80,10 @@ def test_parse_overrides_preserves_exact_market_identifier(identifier, monkeypat
     assert "ABC" not in parsed["coin_overrides"]
 
 
-def test_parse_overrides_retains_coin_flags_key(monkeypatch):
+
+def test_normal_loading_rejects_retired_coin_flags(monkeypatch):
+    from config import prepare_config
     cfg = _base_config_with_override("BTC", {"live": {"forced_mode_long": "manual"}})
     cfg["live"]["coin_flags"] = None
-    monkeypatch.setattr(config_utils, "load_override_config", lambda c, coin: {})
-    res = config_utils.parse_overrides(deepcopy(cfg), verbose=False)
-    assert "coin_flags" in res["live"]
-    assert isinstance(res["live"]["coin_flags"], dict)
+    with pytest.raises(ValueError, match="coin_flags.*unknown"):
+        prepare_config(cfg, verbose=False)

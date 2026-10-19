@@ -9,6 +9,7 @@ import json
 import types
 import zlib
 from collections import OrderedDict
+from fractions import Fraction
 import pytest
 import numpy as np
 from pathlib import Path
@@ -335,12 +336,12 @@ def test_ema_series_skips_leading_nonfinite_without_poisoning_window(tmp_path):
     out = cm._ema_series(values, span=3.0)
 
     assert math.isnan(float(out[0]))
-    assert float(out[-1]) == pytest.approx(2.0)
+    assert float(out[-1]) == pytest.approx(7.0 / 3.0)
     assert math.isnan(float(cm._ema_series(np.asarray([float("nan")]), span=3.0)[-1]))
 
 
 @pytest.mark.parametrize("span", [1.0, 2.5, 10.0, 100.0])
-def test_final_ema_matches_full_series_without_allocation(tmp_path, span):
+def test_final_ema_normalized_bootstrap_without_series_allocation(tmp_path, span, monkeypatch):
     cm = CandlestickManager(
         exchange=None,
         exchange_name="test",
@@ -351,11 +352,13 @@ def test_final_ema_matches_full_series_without_allocation(tmp_path, span):
         dtype=np.float64,
     )
 
-    assert cm._ema(values, span) == pytest.approx(
-        float(cm._ema_series(values, span)[-1]),
-        rel=0.0,
-        abs=1e-15,
-    )
+    monkeypatch.setattr("candlestick_manager._RUST_EMA_LAST", None)
+    tail = values[-max(1, math.ceil(2.0 * span)):]
+    tail = tail[np.isfinite(tail)]
+    decay = 1.0 - min(1.0, 2.0 / (span + 1.0))
+    weights = decay ** np.arange(tail.size - 1, -1, -1)
+    assert cm._ema(values, span) == pytest.approx(float(np.sum(weights * tail) / weights.sum()))
+
 
 
 @pytest.mark.parametrize("span", [1.0, 2.5, 10.0, 100.0, 2_000.0])
@@ -366,15 +369,19 @@ def test_rust_ema_last_matches_python_reference(span):
         [float("nan"), 1.0, 2.0, float("nan"), -3.0, 8.0, 13.0],
         dtype=np.float64,
     )
-    alpha = 2.0 / (span + 1.0)
-    expected = 1.0
-    for value in [2.0, -3.0, 8.0, 13.0]:
-        expected = alpha * value + (1.0 - alpha) * expected
-    assert pbr.ema_last(values, span) == pytest.approx(
-        expected,
-        rel=0.0,
-        abs=1e-15,
-    )
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("current native Rust EMA required")
+    from rust_utils import verify_loaded_runtime_extension
+    verify_loaded_runtime_extension()
+    tail = values[-max(1, math.ceil(2.0 * span)):]
+    tail = tail[np.isfinite(tail)]
+    decay = 1 - min(Fraction(1), Fraction(2) / (Fraction(span) + 1))
+    weights = [decay ** (tail.size - 1 - index) for index in range(tail.size)]
+    exact = sum(weight * Fraction(float(value)) for value, weight in zip(tail, weights)) / sum(weights)
+    expected = float(exact)
+    # The binary64 scalar fold rounds each operation. Compare these short
+    # fixtures to independently evaluated exact weights within one final ULP.
+    assert abs(pbr.ema_last(values, span) - expected) <= math.ulp(expected)
 
 
 @pytest.mark.asyncio
@@ -600,7 +607,8 @@ async def test_latest_cached_h1_ema_metrics_use_h1_index(tmp_path):
     )
 
     assert out["log_range"] > 0.0
-    assert symbol not in cm._ema_cache
+    assert ("log_range", 4.0, str(hour_ms)) not in cm._ema_cache.get(symbol, {})
+    assert ("log_range:cached", 4.0, str(hour_ms)) in cm._ema_cache[symbol]
     too_stale = await cm.get_latest_cached_ema_metrics(
         symbol,
         {"log_range": 4.0},
@@ -920,24 +928,19 @@ def test_remote_fetch_callback_is_sanitized_and_exception_is_isolated(tmp_path):
     assert sanitize_remote_fetch_diagnostic(payload) == payload
 
 
-def test_cache_migration_diagnostics_redact_hostile_exception_text(tmp_path, monkeypatch, caplog):
+def test_startup_integrity_diagnostics_redact_hostile_exception_text(tmp_path, monkeypatch, caplog):
     secret = "cache-secret-should-not-reach-logs"
 
     def fail_cleanup(_cache_base):
         raise RuntimeError(secret)
 
-    def fail_migration(_cache_base):
-        raise RuntimeError(secret)
-
     monkeypatch.setattr(candlestick_manager, "_quarantine_root_level_timeframe_debris", fail_cleanup)
-    monkeypatch.setattr(candlestick_manager, "standardize_cache_directories", fail_migration)
     caplog.set_level(logging.ERROR)
 
     CandlestickManager(exchange=None, exchange_name="cache-test", cache_dir=str(tmp_path / "caches"))
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("Root-level OHLCV cache cleanup failed" in message for message in messages)
-    assert any("Cache migration failed" in message for message in messages)
     assert all(secret not in message for message in messages)
     assert all("error_type=RuntimeError" in message for message in messages)
     assert all(record.exc_info is None for record in caplog.records)
@@ -1416,9 +1419,8 @@ async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
     ema = await cm.get_latest_ema_close(symbol, span)
     # compute expected EMA manually
     alpha = 2.0 / (span + 1.0)
-    expected = closes[0]
-    for v in closes[1:]:
-        expected = alpha * v + (1 - alpha) * expected
+    weights = (1.0 - alpha) ** np.arange(len(closes) - 1, -1, -1)
+    expected = float(np.dot(weights, closes) / weights.sum())
     assert pytest.approx(expected, rel=1e-9) == ema
 
 
@@ -2060,24 +2062,24 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
     assert set(out1.keys()) == set(spans.keys())
 
     qv_series = (
-        np.asarray(arr[-5:]["bv"], dtype=np.float64)
+        np.asarray(arr[-10:]["bv"], dtype=np.float64)
         * (
-            np.asarray(arr[-5:]["h"], dtype=np.float64)
-            + np.asarray(arr[-5:]["l"], dtype=np.float64)
-            + np.asarray(arr[-5:]["c"], dtype=np.float64)
+            np.asarray(arr[-10:]["h"], dtype=np.float64)
+            + np.asarray(arr[-10:]["l"], dtype=np.float64)
+            + np.asarray(arr[-10:]["c"], dtype=np.float64)
         )
         / 3.0
     )
     lr_series = np.log(
-        np.maximum(np.asarray(arr[-3:]["h"], dtype=np.float64), 1e-12)
-        / np.maximum(np.asarray(arr[-3:]["l"], dtype=np.float64), 1e-12)
+        np.maximum(np.asarray(arr[-6:]["h"], dtype=np.float64), 1e-12)
+        / np.maximum(np.asarray(arr[-6:]["l"], dtype=np.float64), 1e-12)
     )
     assert out1["qv"] == pytest.approx(float(cm._ema(qv_series, 5.0)))
     assert out1["log_range"] == pytest.approx(float(cm._ema(lr_series, 3.0)))
 
-    # Second call should hit EMA cache (no new get_candles call).
+    # Revalidate the completed prefix without consuming it again.
     out2 = await cm.get_latest_ema_metrics(symbol, spans, max_age_ms=60_000, timeframe=None)
-    assert calls["n"] == 1
+    assert calls["n"] == 2
     assert out2["qv"] == pytest.approx(out1["qv"])
     assert out2["log_range"] == pytest.approx(out1["log_range"])
 
@@ -2132,7 +2134,7 @@ async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeyp
     assert np.isfinite(value)
     assert seen == {
         "symbol": symbol,
-        "start_ts": expected_start,
+        "start_ts": fixed_now_ms - 4 * hour_ms,
         "end_ts": expected_end,
         "timeframe": "1h",
     }

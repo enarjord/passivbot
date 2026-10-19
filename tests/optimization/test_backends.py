@@ -1,11 +1,8 @@
 import argparse
 import copy
-import functools
-from multiprocessing.reduction import ForkingPickler
 
 import pytest
 
-from config.scoring import ObjectiveSpec, engine_space_fitness_weights, to_engine_value
 from config_utils import (
     add_config_arguments,
     format_config,
@@ -14,14 +11,6 @@ from config_utils import (
 )
 from optimization.backends import get_backend_runner
 from optimization.backends import run_gpu_backend
-from optimization.backends.deap_backend import (
-    DEFAULT_DEAP_POPULATION_SIZE,
-    _clone_evaluated_individual,
-    _evaluate_deap_worker,
-    _initialize_deap_worker,
-    _resolve_deap_population_size,
-)
-from optimization.backends.deap_backend import run_backend as run_deap_backend
 from optimization.backends.pymoo_backend import run_backend as run_pymoo_backend
 from optimization.backends.pymoo_backend import (
     _population_from_payloads,
@@ -70,13 +59,11 @@ def test_format_config_accepts_gpu_backend():
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["backend"] == "gpu"
-    assert out["optimize"]["gpu"]["population_size"] is None
     assert out["optimize"]["gpu"]["batch_size"] is None
     assert out["optimize"]["gpu"]["max_dispatch_candidate_bars"] is None
-    assert out["optimize"]["gpu"]["auto_lean_parallelism"] is True
-    assert out["optimize"]["gpu"]["seed_bootstrap"] == {
-        "max_exact": 128,
-        "mode": "auto",
+    assert set(out["optimize"]["gpu"]) == {
+        "batch_size", "max_dispatch_candidate_bars", "tuning_mode",
+        "checkpoint_interval_seconds", "screening",
     }
 
 
@@ -99,29 +86,49 @@ def test_optimizer_backend_cli_alias_updates_config():
     assert out["optimize"]["backend"] == "pymoo"
 
 
+@pytest.mark.parametrize("help_all", [False, True])
+def test_gpu_backend_help_names_both_supported_devices(help_all):
+    parser = argparse.ArgumentParser()
+    add_config_arguments(parser, get_template_config(), command="optimize", help_all=help_all)
+    help_text = " ".join(parser.format_help().split())
+    assert "NVIDIA/CUDA" in help_text
+    assert "experimental Apple Metal" in help_text
+
+
 def test_gpu_backend_registry_entry_is_lazy():
     assert get_backend_runner("gpu") is run_gpu_backend
 
 
-def test_optimizer_backend_cli_explicit_deap_matches_default():
+def test_native_backend_config_and_registry_remain_lazy(monkeypatch):
+    import builtins
+    original = builtins.__import__
+    def guarded(name, *args, **kwargs):
+        if name in {"torch", "cupy", "optimization.backends.gpu_backend"}:
+            pytest.fail("CPU/config paths must not initialize optional native GPU runtime")
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "GPU"
+    assert format_config(current, verbose=False)["optimize"]["backend"] == "gpu"
+    assert get_backend_runner("gpu") is run_gpu_backend
+
+
+def test_optimizer_backend_cli_rejects_retired_deap(capsys):
     parser = _optimize_parser()
-    args = parser.parse_args(["--optimizer-backend", "deap"])
-    config = copy.deepcopy(get_template_config())
-
-    update_config_with_args(config, args, verbose=False)
-    out = format_config(config, verbose=False)
-
-    assert out["optimize"]["backend"] == "deap"
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(["--optimizer-backend", "deap"])
+    assert error.value.code == 2
+    message = capsys.readouterr().err
+    assert "deap" in message and "pymoo" in message and "gpu" in message
 
 
-def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
+def test_format_config_normalizes_canonical_pymoo_nested_defaults():
     current = copy.deepcopy(get_template_config())
     current["optimize"]["backend"] = "pymoo"
-    current["optimize"]["crossover_eta"] = 17.0
-    current["optimize"]["crossover_probability"] = 0.33
-    current["optimize"]["mutation_eta"] = 11.0
-    current["optimize"]["mutation_indpb"] = 0.07
-    current["optimize"].pop("pymoo", None)
+    current["optimize"]["pymoo"]["shared"] = {
+        "crossover_eta": 17.0, "crossover_prob_var": 0.33,
+        "mutation_eta": 11.0, "mutation_prob": 0.07,
+    }
 
     out = format_config(current, verbose=False)
 
@@ -180,11 +187,9 @@ def test_format_config_rejects_negative_optimizer_seed():
         format_config(current, verbose=False)
 
 
-def test_resolve_deap_population_size_uses_fallback_for_null():
-    assert _resolve_deap_population_size({"optimize": {"population_size": None}}) == DEFAULT_DEAP_POPULATION_SIZE
 
 
-def test_deap_backend_apply_payload_uses_worker_evaluation_vector():
+def test_evaluation_payload_uses_worker_evaluation_vector():
     class Fitness:
         values = ()
         constraint_violation = None
@@ -211,53 +216,12 @@ def test_deap_backend_apply_payload_uses_worker_evaluation_vector():
     assert metrics == {"objective": 1.0}
 
 
-def test_clone_evaluated_individual_preserves_fitness_and_metrics():
-    class Fitness:
-        def __init__(self):
-            self.values = ()
-            self.valid = False
-            self.constraint_violation = None
-
-    class Candidate(list):
-        def __init__(self, values):
-            super().__init__(values)
-            self.fitness = Fitness()
-
-    individual = Candidate([1.0, 2.0])
-    individual.fitness.values = (0.7,)
-    individual.fitness.valid = True
-    individual.fitness.constraint_violation = 1.5
-    individual.constraint_violation = 1.5
-    individual.evaluation_metrics = {"nested": {"value": 1}}
-
-    clone = _clone_evaluated_individual(individual)
-
-    assert clone is not individual
-    assert clone == [1.0, 2.0]
-    assert clone.fitness.values == (0.7,)
-    assert clone.fitness.constraint_violation == 1.5
-    assert clone.constraint_violation == 1.5
-    assert clone.evaluation_metrics == {"nested": {"value": 1}}
-    individual.evaluation_metrics["nested"]["value"] = 2
-    assert clone.evaluation_metrics == {"nested": {"value": 1}}
 
 
-def test_deap_worker_seed_initializer_is_pickleable():
-    ForkingPickler.dumps(functools.partial(_initialize_deap_worker, None, None))
 
 
-def test_deap_worker_evaluate_uses_initializer_globals():
-    class Evaluator:
-        def evaluate(self, individual, overrides_list):
-            return tuple(individual), tuple(overrides_list)
-
-    _initialize_deap_worker(None, None, Evaluator(), ["override.a"])
-
-    assert _evaluate_deap_worker([1.0, 2.0]) == ((1.0, 2.0), ("override.a",))
 
 
-def test_deap_worker_task_evaluator_is_pickleable_without_bound_evaluator():
-    ForkingPickler.dumps(_evaluate_deap_worker)
 
 
 def test_pymoo_reuses_pre_evaluated_starting_seed_payloads():
@@ -342,7 +306,7 @@ def test_pymoo_seed_population_marks_all_default_evaluator_values():
 
 
 def test_get_backend_runner_resolves_supported_backends():
-    assert get_backend_runner("deap") is run_deap_backend
+    assert get_backend_runner(None) is run_pymoo_backend
     assert get_backend_runner("pymoo") is run_pymoo_backend
 
 
@@ -351,50 +315,10 @@ def test_get_backend_runner_rejects_unknown_backend():
         get_backend_runner("unknown")
 
 
-def test_engine_space_fitness_weights_keep_deap_in_minimization_mode():
-    specs = [
-        ObjectiveSpec(metric="adg_strategy_pnl_rebased", goal="max"),
-        ObjectiveSpec(metric="drawdown_worst", goal="min"),
-    ]
-
-    assert engine_space_fitness_weights(specs) == (-1.0, -1.0)
 
 
-def test_deap_engine_space_still_prefers_higher_raw_value_for_goal_max():
-    pytest.importorskip("deap")
-    from deap import creator
-    from optimize import ConstraintAwareFitness
 
-    if hasattr(creator, "TestEngineSpaceFitness"):
-        del creator.TestEngineSpaceFitness
 
-    creator.create(
-        "TestEngineSpaceFitness",
-        ConstraintAwareFitness,
-        weights=engine_space_fitness_weights(
-            [
-                ObjectiveSpec(metric="adg_strategy_pnl_rebased", goal="max"),
-                ObjectiveSpec(metric="drawdown_worst", goal="min"),
-            ]
-        ),
-    )
-
-    better = creator.TestEngineSpaceFitness(
-        (
-            to_engine_value(ObjectiveSpec(metric="adg_strategy_pnl_rebased", goal="max"), 10.0),
-            to_engine_value(ObjectiveSpec(metric="drawdown_worst", goal="min"), 2.0),
-        )
-    )
-    worse = creator.TestEngineSpaceFitness(
-        (
-            to_engine_value(ObjectiveSpec(metric="adg_strategy_pnl_rebased", goal="max"), 5.0),
-            to_engine_value(ObjectiveSpec(metric="drawdown_worst", goal="min"), 3.0),
-        )
-    )
-    better.constraint_violation = 0.0
-    worse.constraint_violation = 0.0
-
-    assert better.dominates(worse)
-    assert not worse.dominates(better)
-
-    del creator.TestEngineSpaceFitness
+def test_get_backend_runner_rejects_retired_deap():
+    with pytest.raises(ValueError, match="unsupported optimizer backend"):
+        get_backend_runner("deap")

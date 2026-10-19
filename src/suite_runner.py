@@ -199,18 +199,6 @@ def _suite_override_from_section(
 ) -> Dict[str, Any]:
     if not isinstance(section, dict):
         raise ValueError(f"Suite config {source_label} must be a mapping.")
-    if "suite" in section:
-        suite = section["suite"]
-        if not isinstance(suite, dict):
-            raise ValueError(
-                f"Suite config {source_label} field 'suite' must be a mapping."
-            )
-        suite_override = deepcopy(suite)
-        canonicalize_reducer_mapping(
-            suite_override,
-            path=f"suite config {source_label}.suite",
-        )
-        return suite_override
     if "scenarios" not in section:
         raise ValueError(f"Suite config {source_label} must define scenarios.")
     scenarios = section["scenarios"]
@@ -239,34 +227,34 @@ def load_suite_override_config(
     """
     Load a suite override file without normalizing it as a full bot config.
 
-    External suite files are intentionally partial: they may contain only
-    backtest.scenarios/backtest.reducer or a legacy backtest.suite wrapper.
-    Full config flavor detection is therefore the wrong boundary here. File
-    entry points pass their still-raw base as source_config so old HSL policies
-    are gated before schema hydration; parsing-only callers may omit it.
+    Accept canonical full configs, partial backtest sections, or an external
+    section containing scenarios with optional reducer/exchanges/volume policy.
+    Validate the entire authored document before selecting suite fields. File
+    entry points provide the execution base for strategy/scope policy and
+    referenced patches; parsing-only callers use canonical default policy.
     """
 
     raw = load_raw_config(str(suite_config_path), log_errors=True)
     if not isinstance(raw, dict):
         raise ValueError(f"Suite config {suite_config_path} must be a mapping.")
+    from config.authored import validate_authored_config
+    from config.migrations.v9 import require_v9_runtime_config
+    from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
+
+    versioned = deepcopy(raw)
+    versioned.setdefault("config_version", CONFIG_SCHEMA_VERSION)
+    source = (effective_config_payload(source_config) if source_config is not None
+              else versioned)
+    require_v9_runtime_config(source)
+    require_v9_runtime_config(versioned)
+    authored = raw if "backtest" in raw else {"backtest": raw}
+    validate_authored_config(authored, get_template_config(), policy_context=source)
+    require_current_hsl_schema(
+        source, base_config_path=base_config_path, additional_inputs=(raw,),
+    )
     source_label = str(suite_config_path)
-    backtest = raw.get("backtest")
-    if isinstance(backtest, dict) and ("scenarios" in backtest or "suite" in backtest):
-        override = _suite_override_from_section(backtest, source_label=source_label)
-    elif "scenarios" in raw or "suite" in raw:
-        override = _suite_override_from_section(raw, source_label=source_label)
-    else:
-        raise ValueError(
-            f"Suite config {suite_config_path} must define backtest.scenarios "
-            "or legacy backtest.suite."
-        )
-    if source_config is not None:
-        require_current_hsl_schema(
-            effective_config_payload(source_config),
-            base_config_path=base_config_path,
-            additional_inputs=(override,),
-        )
-    return override
+    section = raw["backtest"] if "backtest" in raw else raw
+    return _suite_override_from_section(section, source_label=source_label)
 
 
 def _normalize_scenario_label(raw_label: Any, index: int) -> str:
@@ -956,6 +944,12 @@ async def prepare_master_datasets(
 
     async def _prepare_dataset(config, exchange):
         kwargs = {"allow_internal_nan_gaps": True} if allow_internal_nan_gaps else {}
+        if config["backtest"].get("organillo_csv") is not None:
+            # Masters serve scenarios with different schedules and date windows.
+            # Apply each schedule after slicing, rather than pruning a shared master.
+            config = deepcopy(config)
+            config["backtest"]["organillo_csv"] = None
+            config["backtest"]["organillo_sha256"] = None
         return await prepare_hlcvs_mss(config, exchange, **kwargs)
 
     dataset_windows = _derive_dataset_windows(
@@ -1215,7 +1209,10 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     if tracker is None:
         tracker = ConfigTransformTracker()
     if overrides:
+        from config.ew import reject_ew_scenario_overrides
         from config.hsl import validate_override_paths
+
+        reject_ew_scenario_overrides(overrides)
 
         validate_override_paths(config, overrides)
         for dotted_path, value in overrides.items():
@@ -1381,6 +1378,16 @@ def apply_scenario(
         backtest_section["coin_sources"] = resolved_sources
 
     apply_scenario_overrides(cfg, scenario.overrides, tracker)
+
+    if cfg["backtest"].get("organillo_csv") is not None:
+        from organillo import freeze_config, period_coins
+        freeze_config(cfg)
+        candidates = period_coins(cfg, master_coins)
+        filtered_coins = [coin for coin in filtered_coins if coin in candidates]
+        if not filtered_coins:
+            raise ValueError(f"Organillo scenario {scenario.label} has no usable coin identities")
+        for exchange in scenario_exchanges:
+            cfg["backtest"]["coins"][exchange] = list(filtered_coins)
 
     if tracker.summary() and not quiet:
         details = tracker.merge_details({"scenario": scenario.label})

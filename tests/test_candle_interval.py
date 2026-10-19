@@ -145,9 +145,9 @@ def test_backtest_with_candle_interval():
     assert equities_array.shape[0] <= n_minutes // 5
     assert np.isfinite(analysis["positions_held_per_day"])
     assert analysis["liquidated"] is False
+    assert "win_rate_w" not in analysis
     for key in [
         "win_rate",
-        "win_rate_w",
         "trade_loss_max",
         "trade_loss_mean",
         "trade_loss_median",
@@ -193,9 +193,9 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
     config["live"]["max_warmup_minutes"] = 0
     config["live"]["hedge_mode"] = False
     config["bot"]["long"]["hsl"]["enabled"] = True
-    config["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.0
+    config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.0
     config["bot"]["short"]["hsl"]["enabled"] = True
-    config["bot"]["short"]["hsl"]["ema_span_minutes"] = 1.0
+    config["bot"]["short"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.0
 
     n_minutes = 60
     start_ts = 1609459200000
@@ -232,10 +232,10 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
         timestamps,
     )
     assert payload.backtest_params["equity_hard_stop_loss"]["sides"][0][
-        "ema_span_minutes"
+        "drawdown_ratio_ema_span_minutes"
     ] == pytest.approx(1.0)
     assert payload.backtest_params["equity_hard_stop_loss"]["sides"][1][
-        "ema_span_minutes"
+        "drawdown_ratio_ema_span_minutes"
     ] == pytest.approx(1.0)
 
 
@@ -344,7 +344,7 @@ def test_build_backtest_payload_rejects_fractional_candle_interval():
         )
 
 
-def test_backtest_rejects_invalid_liquidation_threshold():
+def test_backtest_rejects_invalid_equity_floor_ratio():
     from backtest import build_backtest_payload
     from config_utils import load_config
 
@@ -358,7 +358,7 @@ def test_backtest_rejects_invalid_liquidation_threshold():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config["backtest"]["liquidation_threshold"] = 1.0
+    config["backtest"]["equity_floor_ratio"] = 1.0
     config["live"]["warmup_ratio"] = 0.0
     config["live"]["max_warmup_minutes"] = 0
     config["live"]["hedge_mode"] = False
@@ -391,7 +391,7 @@ def test_backtest_rejects_invalid_liquidation_threshold():
 
     with pytest.raises(
         ValueError,
-        match=r"backtest\.liquidation_threshold must satisfy 0\.0 <= x < 1\.0",
+        match=r"backtest\.equity_floor_ratio must satisfy 0\.0 <= x < 1\.0",
     ):
         build_backtest_payload(
             hlcvs,

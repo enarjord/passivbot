@@ -8,7 +8,6 @@ from bitget_normalization import deduce_uta_side_pside
 from exchanges.bitget import BitgetBot
 from exchanges.binance import BinanceBot
 from exchanges.bybit import BybitBot
-from exchanges.defx import DefxBot
 from exchanges.gateio import GateIOBot
 from exchanges.hyperliquid import HyperliquidBot
 from exchanges.okx import OKXBot
@@ -1594,18 +1593,6 @@ async def test_okx_legacy_and_staged_balance_snapshot_use_same_collateral_value(
     assert staged_balance == pytest.approx(legacy_balance)
 
 
-def test_legacy_defx_prefers_existing_position_state_over_side():
-    bot = DefxBot.__new__(DefxBot)
-    bot.positions = {
-        "BTC/USDT:USDT": {
-            "long": {"size": 1.0},
-            "short": {"size": 0.0},
-        }
-    }
-    bot.has_position = lambda pside, symbol: abs(
-        float(bot.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
-    ) > 0.0
-    assert bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "sell"}) == "long"
 
 
 @pytest.mark.asyncio

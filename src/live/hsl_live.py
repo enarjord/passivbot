@@ -16,10 +16,10 @@ from live.market_snapshot import MarketSnapshotUnavailable
 
 
 def policy(bot, side, symbol=None):
-    if bot.config["live"]["hsl_signal_mode"] == "unified":
-        return dict(bot.config["bot"]["hsl"])
+    if bot.config["bot"]["risk"]["hsl"]["scope"] == "portfolio":
+        return dict(bot.config["bot"]["risk"]["hsl"])
     result = dict(bot.config["bot"][side]["hsl"])
-    if symbol is not None and bot.config["live"]["hsl_signal_mode"] == "coin":
+    if symbol is not None and bot.config["bot"]["risk"]["hsl"]["scope"] == "coin":
         result.update(
             bot.coin_overrides.get(symbol, {})
             .get("bot", {})
@@ -87,6 +87,25 @@ def matches(scope, symbol, side):
     )
 
 
+@dataclass(frozen=True, eq=False)
+class OrdinaryReceipts:
+    """Strong references to the immutable HSL acquisitions used in preparation."""
+
+    sources: tuple
+    fills: object
+
+    def matches(self, other):
+        return (
+            self.fills is other.fills
+            and len(self.sources) == len(other.sources)
+            and all(
+                symbol == current_symbol and receipt is current_receipt
+                for (symbol, receipt), (current_symbol, current_receipt)
+                in zip(self.sources, other.sources)
+            )
+        )
+
+
 @dataclass(frozen=True)
 class Wave:
     captured_ms: int
@@ -99,6 +118,7 @@ class Wave:
     balance: float
     generation: int
     required_fills: tuple | None = None
+    ordinary_receipts: OrdinaryReceipts | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -137,6 +157,10 @@ class Owner:
         self._discard_quote_tasks = set()
         self._quote_cursor = 0
         self._position_observation = None
+        # Transport clock configuration survives replacement of disposable
+        # HSL observation/replay owners; real live uses UTC by default.
+        self._observation_clock_offset = getattr(bot, "_hsl_observation_clock_offset", None)
+        self._account_clock_projector = getattr(bot, "_hsl_account_clock_projector", None)
 
     def capture(self, quotes=None, *, target=None):
         # Factual caches only. The adapter clips every observation again to the
@@ -159,8 +183,18 @@ class Owner:
             position_observation=self._position_observation,
             use_observed_fills=True,
             target=target,
+            observation_clock_offset_ms=(
+                0 if self._observation_clock_offset is None
+                else self._observation_clock_offset(now_utc)
+            ),
+            account_clock_projector=self._account_clock_projector,
+            fact_clock_projector=getattr(bot, "_hsl_fact_clock_projector", None),
         )
-        decisions = runtime.evaluate(requests)
+        evaluated = runtime.evaluate(requests)
+        if any(not isinstance(item, (runtime.Decision, runtime.Unavailable)) for item in evaluated):
+            raise runtime.InvalidHslOutput("invalid HSL evaluation result type")
+        decisions = tuple(item for item in evaluated if isinstance(item, runtime.Decision))
+        unavailable += tuple(item for item in evaluated if isinstance(item, runtime.Unavailable))
         wave = Wave(
             now_utc,
             self._position_observation.observed_ms,
@@ -182,12 +216,21 @@ class Owner:
         previous = self._position_observation
         now_utc = int(utc_ms())
         max_age = int(bot._live_market_snapshot_max_age_ms())
-        if (
-            previous is None
-            or previous.payload != current_position.payload
-            or previous.generation != current_position.generation
-            or not 0 <= now_utc - previous.observed_ms <= max_age // 2
-        ):
+        retain = (
+            previous is not None
+            and previous.payload == current_position.payload
+            and previous.generation == current_position.generation
+            and 0 <= now_utc - previous.observed_ms <= max_age // 2
+        )
+        if retain and self._account_clock_projector is not None:
+            observed = self._account_clock_projector(
+                "positions", previous.revision, previous.observed_ms
+            )
+            now_event = int(bot.get_exchange_time())
+            if type(observed) is not int or not 0 < observed <= now_event:
+                raise ValueError("invalid projected HSL account clock")
+            retain = now_event - observed <= max_age // 2
+        if not retain:
             self._position_observation = current_position
         return now_utc, max_age
 
@@ -199,6 +242,11 @@ class Owner:
     def _account_matches(self, wave, now):
         bot = self.bot
         if self._shutdown_requested() or self._refresh_lock.locked():
+            return False
+        if (
+            wave.ordinary_receipts is not None
+            and not wave.ordinary_receipts.matches(self.ordinary_receipts())
+        ):
             return False
         if (
             wave.required_fills is not None
@@ -376,9 +424,7 @@ class Owner:
         if not runtime.enabled(bot) or bot._pnls_manager is None:
             return set()
         now = int(bot.get_exchange_time())
-        start = max(
-            0, now - round(bot.config["live"]["pnls_max_lookback_days"] * 86_400_000)
-        )
+        start = runtime.history_start_ms(bot, now)
         tape = runtime.capture_fills(
             bot._pnls_manager.get_events(start_ms=start), bot.c_mults
         )
@@ -472,11 +518,7 @@ class Owner:
             self, "_next_history_window", 0.0
         ):
             end = int(self.bot.get_exchange_time())
-            kwargs["since_ms"] = max(
-                0,
-                end
-                - round(self.bot.config["live"]["pnls_max_lookback_days"] * 86_400_000),
-            )
+            kwargs["since_ms"] = runtime.history_start_ms(self.bot, end)
             self._next_history_window = now + 900.0
         self._fill_task = asyncio.create_task(self._refresh_history(kwargs))
 
@@ -528,11 +570,9 @@ class Owner:
             from utils import utc_ms
 
             self._reader = CandleSourceReader(
-                self.bot.cm, observation_clock=lambda: int(utc_ms())
+                self.bot.cm, observation_clock=lambda: int(utc_ms()),
+                receipt_observer=getattr(self.bot, "_hsl_candle_receipt_observer", None),
             )
-        self._source_task = asyncio.create_task(self._read_sources())
-
-    async def _read_sources(self):
         bot = self.bot
         symbols = {
             symbol
@@ -540,15 +580,19 @@ class Owner:
             if any(position["size"] != 0 for position in sides.values())
         }
         symbols.update(self.history_symbols())
+        # Own the requested cohort before protection can close its last held
+        # position and before the canonical closing fill becomes visible.
+        self._source_task = asyncio.create_task(self._read_sources(tuple(sorted(symbols))))
+
+    async def _read_sources(self, symbols):
+        bot = self.bot
         self.sources = {
             symbol: source
             for symbol, source in self.sources.items()
             if symbol in symbols
         }
         now = int(bot.get_exchange_time())
-        start = max(
-            0, now - round(bot.config["live"]["pnls_max_lookback_days"] * 86_400_000)
-        )
+        start = runtime.history_start_ms(bot, now)
         # Publish each factual result as it arrives; no all-symbol barrier.
         for symbol in sorted(symbols):
             self.sources[symbol] = await self._reader.acquire(
@@ -593,9 +637,19 @@ class Owner:
             and before[1:] == after[1:]
         )
 
+    def ordinary_receipts(self):
+        # Quotes acquired by preparation are deliberately excluded. HSL candle
+        # and fill acquisitions are immutable; even equal replacement payloads
+        # require a plan prepared against the new actual receipt.
+        return OrdinaryReceipts(
+            tuple(sorted(self.sources.items())),
+            getattr(self.bot, "_hsl_fill_observation", None),
+        )
+
     async def _ordinary_plan(self):
         bot = self.bot
         account = self.account_facts()
+        receipts = self.ordinary_receipts()
         await bot.prepare_planning_universe()
         if not self.same_account_facts(account, self.account_facts()):
             return None
@@ -611,6 +665,8 @@ class Owner:
         cancels, creates = await bot.calc_orders_to_cancel_and_create()
         if not self.same_account_facts(account, self.account_facts()):
             return None
+        if not receipts.matches(self.ordinary_receipts()):
+            return None
         # Preparation may span confirming raw-balance changes. Ordinary Rust
         # risk consumes the latest raw balance at its actual calculation, so
         # reconciliation and submission must retain that exact observation.
@@ -619,7 +675,9 @@ class Owner:
         # Empty plans need the same immutable receipt as nonempty plans. An
         # order dictionary is not the authority for the completed calculation.
         wave = replace(
-            bot._hsl_planning_wave, required_fills=self.required_fill_facts()
+            bot._hsl_planning_wave,
+            required_fills=self.required_fill_facts(),
+            ordinary_receipts=receipts,
         )
         return cancels, creates, bot._current_planning_snapshot, wave
 

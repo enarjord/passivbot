@@ -13,6 +13,7 @@ import pytest
 import tools.run_fake_live as run_fake_live_module
 from fill_events_manager import FillEvent, FillEventCache
 from config_utils import load_config
+from config.schema import get_template_config
 from exchanges.fake import FakeCCXTClient
 from live.event_bus import EventTypes, LiveEvent
 from passivbot import setup_bot
@@ -30,6 +31,12 @@ from tools.run_fake_live import (
     _run_fake_bot,
     _summarize_remote_calls,
 )
+
+
+def _isolated_fake_user(prefix, tmp_path):
+    # Python-version runs share repository caches but have distinct temp roots.
+    suffix = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{suffix}"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,8 +108,12 @@ def _scenario() -> dict:
 class _StubBot:
     def __init__(self) -> None:
         self.loop_calls = 0
-        self.config = {"live": {"hsl_signal_mode": "coin"}}
-        self._hsl_live = SimpleNamespace(cycle=self.cycle)
+        self.config = {"bot": {"risk": {"hsl": {"scope": "coin"}}}}
+        self._hsl_live = SimpleNamespace(
+            cycle=self.cycle, _ordinary=None,
+            _quote_tasks={}, _discard_quote_tasks=set(),
+            required_fill_facts=lambda: None,
+        )
 
     async def cycle(self):
         self.loop_calls += 1
@@ -173,7 +184,7 @@ async def test_fake_live_persists_events_when_console_pipeline_is_disabled(
         pytest.skip("requires real passivbot_rust extension")
 
     monkeypatch.setenv("PASSIVBOT_LIVE_EVENT_CONSOLE", "0")
-    user = f"fake_capture_only_{tmp_path.name}"
+    user = _isolated_fake_user("fake_capture_only", tmp_path)
     _cleanup_fake_user_state(user)
     scenario = hjson.loads(
         (
@@ -238,7 +249,7 @@ def test_apply_assertions_validates_positions():
 def test_apply_assertions_supports_path_assertions_and_logs():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
-    bot.config = {"live": {"hsl_signal_mode": "coin"}}
+    bot.config = {"bot": {"risk": {"hsl": {"scope": "coin"}}}}
     bot.get_exchange_time = lambda: 0
     step_summaries = [{"step_index": 0, "fills": 0, "positions": []}]
     scenario = {
@@ -383,6 +394,25 @@ def test_extract_hsl_trace_returns_serializable_state():
 
 
 @pytest.mark.fake_live
+@pytest.mark.parametrize("gate_fraction,horizon_ms", [(0.0, 900_000), (0.5, 900_000), (1.0, 300_000)])
+@pytest.mark.parametrize("now_ms", [60_000, 2_000_000])
+def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fraction, horizon_ms, now_ms):
+    config = get_template_config()
+    config["live"]["risk_bootstrap_max_lookback_minutes"] = 15.0
+    config["bot"]["risk"]["loss_gate"].update(
+        memory_ema_span_minutes=3.0, max_drawdown_ratio=gate_fraction
+    )
+    for pside in ("long", "short"):
+        config["bot"][pside]["hsl"]["enabled"] = False
+        config["bot"][pside]["unstuck"]["enabled"] = False
+    assert "lookback_ema_span_minutes" not in config["live"]
+    bot = SimpleNamespace(config=config)
+    client = SimpleNamespace(now_ms=now_ms)
+    expected = (None, "all") if now_ms <= horizon_ms else (now_ms - horizon_ms, "window")
+    assert run_fake_live_module._fake_fill_cache_coverage(bot, client, []) == expected
+
+
+@pytest.mark.fake_live
 def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     scenario = _scenario()
     scenario["account"]["fills"] = [
@@ -439,8 +469,8 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     class _Stub:
         def __init__(self):
             self.config = {
-                "live": {"hsl_signal_mode": "coin"},
                 "bot": {
+                    "risk": {"hsl": {"scope": "coin"}},
                     "long": {
                         "hsl": {"enabled": True, "panic_close_order_type": "market"}
                     }
@@ -468,7 +498,6 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "entry_trailing_threshold_pct": 0.001,
                 "filter_volatility_ema_span_1m": 0.0,
                 "filter_volume_ema_span_1m": 1.0,
-                "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
                     "unilateralness": 0.0,
                     "volume": 1.0,
@@ -550,7 +579,6 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "entry_trailing_threshold_pct": 0.001,
                         "forager_volatility_ema_span_1m": 0.0,
                         "forager_volume_ema_span_1m": 1.0,
-                        "forager_volume_drop_pct": 0.0,
                         "forager_score_weights": {
                             "unilateralness": 0.0,
                             "volume": 1.0,
@@ -588,7 +616,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                     "short": {},
                 }
             }
-            self.config["live"] = {"hsl_signal_mode": "coin"}
+            self.config["bot"]["risk"] = {"hsl": {"scope": "coin"}}
             self.config["bot"]["long"]["hsl"] = {
                 "enabled": True,
                 "panic_close_order_type": "market",
@@ -628,7 +656,13 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
 def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     cm = type("CandlestickManager", (), {})()
-    bot = type("Bot", (), {"cca": client, "cm": cm})()
+
+    def record_surface(self, *args):
+        raise AssertionError("clock-only fixture must not acquire account snapshots")
+
+    bot = type(
+        "Bot", (), {"cca": client, "cm": cm, "_record_authoritative_surface": record_surface}
+    )()
     _install_runtime_overrides(bot, {})
     bot.cca = None
 
@@ -819,7 +853,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
-    user = f"fake_coin_overrides_{tmp_path.name}"
+    user = _isolated_fake_user("fake_coin_overrides", tmp_path)
     _cleanup_fake_user_state(user)
     base_config = hjson.loads(
         (REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json").read_text(
@@ -835,7 +869,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             {
                 "bot": {
                     "long": {
-                        "risk": {"entry_cooldown_minutes": 3.0},
+                        "entry_cooldown": {"base_duration_minutes": 3.0},
                         "unstuck": {
                             "ema_gating_enabled": False,
                             "loss_allowance_pct": 0.1,
@@ -851,7 +885,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             "override_config_path": override_path.name,
             "bot": {
                 "long": {
-                    "risk": {"entry_cooldown_minutes": 0.05},
+                    "entry_cooldown": {"base_duration_minutes": 0.05},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_pct": global_threshold}
@@ -910,7 +944,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
-async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
+async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_once(
     tmp_path, monkeypatch
 ):
     import passivbot_rust as pbr
@@ -918,8 +952,8 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
-    user = "fake_hsl_pnls_lookback_all_test"
-    user = f"{user}_{tmp_path.name}"
+    user = "fake_gate_only_memory_backfill_test"
+    user = _isolated_fake_user(user, tmp_path)
     scenario_path = REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
     cache_dir = REPO_ROOT / "caches" / "fill_events" / "fake" / user
     _cleanup_fake_user_state(user)
@@ -928,9 +962,13 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
         str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"), verbose=False
     )
     cfg["bot"]["long"]["hsl"]["enabled"] = False
-    cfg["live"]["pnls_max_lookback_days"] = "all"
-    cfg["live"]["hsl_signal_mode"] = "pside"
-    config_path = tmp_path / "fake_live_hsl_btc_all_lookback.json"
+    # The gate alone owns strict shared-memory bootstrap coverage, even with
+    # both HSL and auto-unstuck disabled.
+    for pside in ("long", "short"):
+        cfg["bot"][pside]["unstuck"]["enabled"] = False
+    cfg["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.5
+    cfg["bot"]["risk"]["hsl"]["scope"] = "pside"
+    config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario_copy_path = tmp_path / "hsl_long_red_restart_no_assertions.hjson"
     scenario_cfg = hjson.loads(scenario_path.read_text(encoding="utf-8"))
@@ -994,7 +1032,9 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
 
         cache = FillEventCache(cache_dir)
         cached_ids = [str(event.id) for event in cache.load()]
-        assert cache.get_history_scope() == "all"
+        assert cache.get_history_scope() == "window"
+        assert cache.get_covered_start_ms() > 0
+        assert "approximate zero initializer" in log_text
         assert "10" in cached_ids
         assert {"10", "11", "12"}.issubset(set(cached_ids))
     finally:
@@ -1042,23 +1082,22 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg = load_config(
         str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"), verbose=False
     )
-    cfg["bot"]["long"]["hsl_enabled"] = False
-    cfg["bot"]["short"]["hsl_enabled"] = False
+    cfg["bot"]["long"]["hsl"]["enabled"] = False
+    cfg["bot"]["short"]["hsl"]["enabled"] = False
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "initial_qty_pct"
     ] = 0.0276
-    cfg["bot"]["long"]["n_positions"] = 5.0
-    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.8
-    cfg["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.37
-    cfg["bot"]["short"]["n_positions"] = 0.0
-    cfg["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["long"]["risk"]["max_positions"] = 5
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.8
+    cfg["bot"]["long"]["risk"]["we_excess_allowance_pct"] = 0.37
+    cfg["bot"]["short"]["risk"]["max_positions"] = 0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     cfg["live"]["approved_coins"]["long"] = ["SOL"]
     cfg["live"]["approved_coins"]["short"] = []
     cfg["live"]["ignored_coins"]["long"] = []
     cfg["live"]["ignored_coins"]["short"] = []
     cfg["live"]["filter_by_min_effective_cost"] = True
     cfg["live"]["market_orders_allowed"] = False
-    cfg["live"]["fake_scenario_path"] = str(scenario_path)
     config_path = tmp_path / "fake_live_min_effective_cost.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
 

@@ -318,7 +318,7 @@ def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit
     side_cfg.pop("risk_we_excess_allowance_pct")
     side_cfg["risk"] = {
         "total_wallet_exposure_limit": 0.2,
-        "n_positions": 1,
+        "max_positions": 1,
         "we_excess_allowance_pct": 0.5,
     }
     inputs = build_trailing_inputs_from_snapshot(
@@ -344,7 +344,7 @@ def test_snapshot_trailing_diagnostic_excess_is_always_bounded():
     side_cfg.pop("risk_we_excess_allowance_pct")
     side_cfg["risk"] = {
         "total_wallet_exposure_limit": 0.2,
-        "n_positions": 1,
+        "max_positions": 1,
         "we_excess_allowance_pct": 0.5,
     }
     inputs = build_trailing_inputs_from_snapshot(

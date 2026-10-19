@@ -29,14 +29,14 @@ def payload(*args, **kwargs):
     return result
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_native_scope_values_and_effective_threshold_are_plotted(mode):
     cfg, markets, _ = inputs(mode)
     if mode == "coin":
         cfg["coin_overrides"] = {
             "AAA": {
                 "bot": {
-                    "long": {"hsl": {"red_threshold": 0.025, "ema_span_minutes": 2.75}}
+                    "long": {"hsl": {"red_threshold": 0.025, "drawdown_ratio_ema_span_minutes": 2.75}}
                 }
             }
         }
@@ -96,7 +96,7 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         if mode == "coin":
             assert scope["policy"]["red_threshold"] == 0.025
             assert "AAA long" in signal_ax.get_title()
-        if mode == "unified":
+        if mode == "portfolio":
             assert scope["side"] is None and scope["coin"] is None
             assert "portfolio" in signal_ax.get_title()
         fig.canvas.draw()
@@ -174,9 +174,9 @@ def test_coin_plots_keep_each_coin_and_side_separate():
 
 
 def test_native_report_saved_even_when_all_plotting_disabled(tmp_path):
-    cfg, _, candles = inputs("unified")
+    cfg, _, candles = inputs("portfolio")
     cfg["disable_plotting"] = True
-    args = payload("unified", cfg=cfg)
+    args = payload("portfolio", cfg=cfg)
     prepared = prepared_payload(args)
     fills, equities, analysis = execute_backtest(prepared, cfg)
     post_process(
@@ -201,8 +201,8 @@ def test_native_report_saved_even_when_all_plotting_disabled(tmp_path):
 
 
 def test_compact_native_report_is_explicit_and_has_no_plot_trace():
-    cfg, _, _ = inputs("unified")
-    args = payload("unified")
+    cfg, _, _ = inputs("portfolio")
+    args = payload("portfolio")
     args[-1]["metrics_only"] = True
     prepared = prepared_payload(args)
     execute_backtest(prepared, cfg)
@@ -225,7 +225,7 @@ def test_compact_native_report_is_explicit_and_has_no_plot_trace():
 def test_artifact_workspace_preserves_native_report_and_legacy_absence(tmp_path):
     folder = _write_artifact(tmp_path)
     assert load_backtest_artifact(folder).hsl_report is None
-    report = run(payload("unified"))[4]["hsl"]
+    report = run(payload("portfolio"))[4]["hsl"]
     (folder / "hsl_report.json").write_text(json.dumps(report))
     artifact = load_backtest_artifact(folder)
     assert artifact.hsl_report == report
@@ -237,10 +237,15 @@ def test_unsupported_report_version_is_not_interpreted_as_legacy():
         hsl_report({"hsl": {"schema_version": 999, "engine": "hsl"}})
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_retired_unified_report_mode_requires_fresh_v9_replay():
+    with pytest.raises(ValueError, match="unsupported HSL report schema"):
+        hsl_report({"hsl": {"schema_version": 1, "engine": "hsl", "mode": "unified"}})
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
     cfg, markets, _ = inputs(mode)
-    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    policy = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     policy["cooldown_minutes_after_red"] = 0
     data = run(payload(mode, cfg=cfg, mss=markets))[4]
     report = data["hsl"]
@@ -302,7 +307,7 @@ def test_report_rows_and_reason_lists_are_independent():
     assert run(payload("coin"))[4]["hsl"] == before
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_default_report_preserves_trading_metrics_and_events_without_samples(mode):
     # Exercise canonical default transport rather than the plotting fixture opt-in.
     args = base_payload(mode)
@@ -341,7 +346,7 @@ def test_single_side_hsl_suite_preserves_full_results_and_optimizer_metrics(inac
         pair[inactive]["n_positions"] = 0
     hsl = args[-1]["equity_hard_stop_loss"]
     for policy in [hsl["sides"][side_index], *(pair[side_index] for pair in hsl["coins"].values())]:
-        policy.update(enabled=True, restart_after_red_policy="always")
+        policy.update(enabled=True)
     # The reference path retains all price diagnostics and per-minute samples.
     args[-1]["hsl_detailed_report"] = True
     reference = run(args)
@@ -364,6 +369,7 @@ def test_report_option_roundtrips_and_is_strictly_boolean(detailed):
     from config_utils import strip_config_metadata
 
     cfg, markets, _ = inputs()
+    del cfg["backtest"]["coins"]  # Derived dataset membership is not authored config.
     cfg["backtest"]["hsl_detailed_report"] = detailed
     normalized = prepare_config(cfg, verbose=False, target="canonical", runtime=None)
     persisted = json.loads(json.dumps(strip_config_metadata(normalized)))

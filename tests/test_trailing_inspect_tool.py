@@ -51,42 +51,40 @@ def _context(
     forced_mode="normal",
     enforcer_enabled=False,
     enforcer_threshold=0.8,
-    total_entry_gate=False,
     total_enforcer=False,
     total_enforcer_threshold=0.9,
     total_enforcer_policy="reduce_portfolio",
     unstuck_enabled=False,
     unstuck_close_pct=0.0,
     unstuck_loss_allowance_pct=0.0,
-    unstuck_threshold=0.0,
+    unstuck_exposure_trigger_ratio=0.0,
     unstuck_ema_gating_enabled=False,
-    max_realized_loss_pct=1.0,
+    loss_gate_max_drawdown_ratio=1.0,
     hsl_enabled=False,
     hedge_mode=False,
 ):
     return {
         "active": active,
         "total_wallet_exposure_limit": 1.0 if active else 0.0,
-        "n_positions": 1,
+        "max_positions": 1,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled,
         "hsl_enabled_global": hsl_enabled,
         "hsl_enabled_override_symbols": [],
-        "hsl_signal_mode": "coin",
+        "hsl_scope": "coin",
         "hedge_mode": hedge_mode,
         "coin_strategy_override_symbols": [],
         "coin_context_override_descriptions": [],
-        "max_realized_loss_pct": max_realized_loss_pct,
+        "loss_gate_max_drawdown_ratio": loss_gate_max_drawdown_ratio,
         "position_exposure_enforcer_enabled": enforcer_enabled,
         "position_exposure_enforcer_threshold": enforcer_threshold,
-        "total_exposure_entry_gate_enabled": total_entry_gate,
         "total_exposure_enforcer_enabled": total_enforcer,
         "total_exposure_enforcer_threshold": total_enforcer_threshold,
         "total_exposure_enforcer_policy": total_enforcer_policy,
         "unstuck_enabled": unstuck_enabled,
         "unstuck_close_pct": unstuck_close_pct,
         "unstuck_loss_allowance_pct": unstuck_loss_allowance_pct,
-        "unstuck_threshold": unstuck_threshold,
+        "unstuck_exposure_trigger_ratio": unstuck_exposure_trigger_ratio,
         "unstuck_ema_gating_enabled": unstuck_ema_gating_enabled,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
@@ -318,8 +316,9 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
 
 def test_extract_side_context_includes_global_and_risk_paths():
     config = {
-        "live": {"forced_mode_long": "p", "max_realized_loss_pct": 0.05},
+        "live": {"forced_mode_long": "p"},
         "bot": {
+            "risk": {"hsl": {"scope": "coin"}, "loss_gate": {"max_drawdown_ratio": 0.05}},
             "long": {
                 "entry_cooldown": {
                     "base_duration_minutes": 2.0, "min_duration_minutes": 0.0,
@@ -328,10 +327,9 @@ def test_extract_side_context_includes_global_and_risk_paths():
                 },
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
-                    "n_positions": 1,
+                    "max_positions": 1,
                     "position_exposure_enforcer_enabled": True,
                     "position_exposure_enforcer_threshold": 0.8,
-                    "total_exposure_entry_gate_enabled": True,
                     "total_exposure_enforcer_enabled": True,
                     "total_exposure_enforcer_threshold": 0.9,
                     "total_exposure_enforcer_policy": "reduce_portfolio",
@@ -340,7 +338,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
                     "enabled": True,
                     "close_pct": 0.1,
                     "loss_allowance_pct": 0.02,
-                    "threshold": 0.7,
+                    "exposure_trigger_ratio": 0.7,
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -357,25 +355,44 @@ def test_extract_side_context_includes_global_and_risk_paths():
     assert context["forced_mode"] == "panic"
     assert context["position_exposure_enforcer_enabled"] is True
     assert context["position_exposure_enforcer_threshold"] == pytest.approx(0.8)
-    assert context["total_exposure_entry_gate_enabled"] is True
     assert context["total_exposure_enforcer_enabled"] is True
     assert context["total_exposure_enforcer_threshold"] == pytest.approx(0.9)
     assert context["total_exposure_enforcer_policy"] == "reduce_portfolio"
     assert context["unstuck_enabled"] is True
     assert context["unstuck_close_pct"] == pytest.approx(0.1)
     assert context["unstuck_loss_allowance_pct"] == pytest.approx(0.02)
-    assert context["unstuck_threshold"] == pytest.approx(0.7)
+    assert context["unstuck_exposure_trigger_ratio"] == pytest.approx(0.7)
     assert context["unstuck_ema_gating_enabled"] is False
-    assert context["max_realized_loss_pct"] == pytest.approx(0.05)
+    assert context["loss_gate_max_drawdown_ratio"] == pytest.approx(0.05)
+
+
+def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
+    from config.schema import get_template_config
+
+    config = get_template_config()
+    config["bot"]["risk"]["hsl"].update(scope="portfolio", enabled=True)
+    config["bot"]["long"]["hsl"]["enabled"] = False
+    config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.125
+    config["bot"]["long"]["risk"]["max_positions"] = 3.0
+    config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 0.75
+
+    context = trailing_inspect._extract_side_context(config, "long")
+
+    assert context["hsl_scope"] == "portfolio"
+    assert context["hsl_enabled_global"] is True
+    assert context["loss_gate_max_drawdown_ratio"] == 0.125
+    assert context["max_positions"] == 3
+    assert context["unstuck_exposure_trigger_ratio"] == 0.75
+    assert "total_exposure_entry_gate_enabled" not in context
 
 
 def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     config = {
         "live": {
             "forced_mode_long": "normal",
-            "hsl_signal_mode": "coin",
         },
         "bot": {
+            "risk": {"hsl": {"scope": "coin"}, "loss_gate": {"max_drawdown_ratio": 1.0}},
             "long": {
                 "hsl": {"enabled": False},
                 "entry_cooldown": {
@@ -385,7 +402,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                 },
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
-                    "n_positions": 1,
+                    "max_positions": 1,
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -420,7 +437,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     assert context["hsl_enabled"] is True
     assert context["hsl_enabled_global"] is False
     assert context["hsl_enabled_override_symbols"] == ["XRP"]
-    assert context["hsl_signal_mode"] == "coin"
+    assert context["hsl_scope"] == "coin"
     assert context["coin_strategy_override_symbols"] == ["XRP"]
     assert context["coin_context_override_descriptions"] == [
         "DOGE (bot.long.hsl)",
@@ -446,7 +463,7 @@ def test_overview_marks_hsl_runtime_paths_and_coin_override_omission():
     assert "HSL-dependent" in trailing_inspect._scenario_rows(side, "entry")[0][-1]
     assert "HSL-dependent" in trailing_inspect._scenario_rows(side, "close")[0][-1]
     comments = " ".join(side["classification"]["overall_comments"])
-    assert "offline config report cannot know the live HSL tier" in comments
+    assert "offline config report cannot know the current HSL permission or cooldown" in comments
     assert "explicitly omitted from these tables" in comments
     assert "non-strategy runtime overrides are also omitted" in comments
     assert "XRP" in comments
@@ -475,7 +492,7 @@ def test_hsl_runtime_precedes_static_forced_mode_labels(forced_mode):
     side = result["sides"]["long"]
     entry_path = trailing_inspect._scenario_rows(side, "entry")[0][-1]
     close_path = trailing_inspect._scenario_rows(side, "close")[0][-1]
-    assert entry_path == f"HSL-dependent / {forced_mode} fallback blocks entry"
+    assert entry_path == f"HSL-dependent / {forced_mode} fallback blocks entry / portfolio-dependent"
     assert close_path == f"WEL-first / HSL-dependent / {forced_mode} fallback"
     comments = " ".join(side["classification"]["overall_comments"])
     assert "HSL runtime state has precedence" in comments
@@ -486,10 +503,11 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
     config = {
         "live": {"forced_mode_long": "not-a-mode"},
         "bot": {
+            "risk": {"hsl": {"scope": "coin"}, "loss_gate": {"max_drawdown_ratio": 1.0}},
             "long": {
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
-                    "n_positions": 1,
+                    "max_positions": 1,
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -567,12 +585,12 @@ def test_overview_marks_position_enforcer_before_close_geometry():
     assert "post-reduction prices cannot be inferred" in report
 
 
-def test_overview_marks_entries_portfolio_dependent_when_total_gate_enabled():
+def test_overview_marks_entries_portfolio_dependent_under_unconditional_cap():
     result = trailing_inspect.build_overview(
         sources={
             "long": {
                 "params": _params(),
-                "context": _context(total_entry_gate=True),
+                "context": _context(),
             }
         },
         parameter_source="test config",
@@ -582,7 +600,7 @@ def test_overview_marks_entries_portfolio_dependent_when_total_gate_enabled():
     )
 
     report = trailing_inspect.render_overview(result)
-    assert "account-wide total-exposure entry gate is enabled" in report
+    assert "side total-exposure entry cap applies unconditionally" in report
     assert "portfolio-dependent" in report
     assert "may crop or remove the order" in report
     assert "exposure-capped" in report
@@ -623,8 +641,8 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
                     unstuck_enabled=True,
                     unstuck_close_pct=0.1,
                     unstuck_loss_allowance_pct=0.02,
-                    unstuck_threshold=0.7,
-                    max_realized_loss_pct=0.05,
+                    unstuck_exposure_trigger_ratio=0.7,
+                    loss_gate_max_drawdown_ratio=0.05,
                 ),
             }
         },
@@ -640,7 +658,7 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
     assert "position threshold 70%" in report
     assert "unstuck-dependent" in report
     assert "EMA gating is disabled" in report
-    assert "realized-loss gate is active at 5% of peak balance" in report
+    assert "realized-loss gate is active at a maximum remembered drawdown ratio of 5%" in report
     assert "PnL-gated" in report
     assert "projected batch PnL" in report
 
@@ -650,7 +668,7 @@ def test_unstuck_requires_positive_threshold():
         unstuck_enabled=True,
         unstuck_close_pct=0.1,
         unstuck_loss_allowance_pct=0.02,
-        unstuck_threshold=0.0,
+        unstuck_exposure_trigger_ratio=0.0,
     )
     result = trailing_inspect.build_overview(
         sources={"long": {"params": _params(), "context": context}},
@@ -675,7 +693,7 @@ def test_unstuck_runtime_label_requires_exposure_strictly_above_threshold():
                     unstuck_enabled=True,
                     unstuck_close_pct=0.1,
                     unstuck_loss_allowance_pct=0.02,
-                    unstuck_threshold=0.7,
+                    unstuck_exposure_trigger_ratio=0.7,
                 ),
             }
         },
@@ -706,7 +724,7 @@ def test_unstuck_explanation_honors_ema_gating_toggle(ema_gating_enabled):
                     unstuck_enabled=True,
                     unstuck_close_pct=0.1,
                     unstuck_loss_allowance_pct=0.02,
-                    unstuck_threshold=0.7,
+                    unstuck_exposure_trigger_ratio=0.7,
                     unstuck_ema_gating_enabled=ema_gating_enabled,
                 ),
             }
@@ -782,7 +800,7 @@ def test_overview_marks_long_threshold_at_100_percent_unreachable():
     params = _params()
     params["entry"]["threshold_base_pct"] = 1.0
     result = trailing_inspect.build_overview(
-        sources={"long": {"params": params, "context": _context(total_entry_gate=True)}},
+        sources={"long": {"params": params, "context": _context()}},
         parameter_source="test config",
         price_anchor=100.0,
         volatility_scenarios=(("normal", 0.0, 0.0),),
@@ -1095,7 +1113,7 @@ def test_overview_explains_protective_reducer_consolidation():
                     unstuck_enabled=True,
                     unstuck_close_pct=0.1,
                     unstuck_loss_allowance_pct=0.02,
-                    unstuck_threshold=0.7,
+                    unstuck_exposure_trigger_ratio=0.7,
                 ),
             }
         },

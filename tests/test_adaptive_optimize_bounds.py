@@ -121,8 +121,10 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
         source["optimize"].pop("bounds")
     elif missing == "optimize":
         source.pop("optimize")
-    cfg = prepare_config({"config": source} if wrapped else source,
-                         live_only=live_only, verbose=False)
+    if wrapped:
+        with pytest.raises(ValueError, match="config_version.*explicit migration"):
+            prepare_config({"config": source}, live_only=live_only, verbose=False)
+    cfg = prepare_config(source, live_only=live_only, verbose=False)
     for candidate in (cfg, clean_config(cfg)):
         bounds = flat_bounds(candidate)
         for side in ("long", "short"):
@@ -151,6 +153,16 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
         else:
             source["optimize"]["bounds"][f"{side}_forager_score_weights_unilateralness"] = [0.0, 1.0, 0.01]
             source["optimize"]["bounds"][f"{side}_unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
+    if form != "grouped":
+        with pytest.raises(ValueError, match="unknown configuration field"):
+            prepare_config(source, verbose=False)
+        for side in ("long", "short"):
+            source["optimize"]["bounds"].pop(f"{side}_forager_score_weights_unilateralness", None)
+            source["optimize"]["bounds"].pop(f"{side}_unilateralness_ema_span_1m", None)
+            forager = source["optimize"]["bounds"][side]["forager"]
+            forager.pop("score_weights", None)
+            forager["score_weights_unilateralness"] = [0.0, 1.0, 0.01]
+            forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
     cfg = prepare_config(source, verbose=False)
     path = str(tmp_path / "config.json")
     dump_config(cfg, path, clean=True)
@@ -278,6 +290,18 @@ def test_explicit_cooldown_bounds_survive_roundtrip_with_null_bot_ceiling(form, 
                 target.setdefault("weights_minutes", {})[key.removeprefix("weights_minutes_")] = value
             else:
                 target[key] = value
+    if form != "nested":
+        with pytest.raises(ValueError, match="unknown configuration field"):
+            prepare_config(source, verbose=False)
+        for side in ("long", "short"):
+            target = source["optimize"]["bounds"][side]["entry_cooldown"]
+            for key, value in expected.items():
+                source["optimize"]["bounds"].pop(f"{side}_entry_cooldown_{key}", None)
+                if key.startswith("weights_minutes_"):
+                    target.pop(key, None)
+                    target.setdefault("weights_minutes", {})[key.removeprefix("weights_minutes_")] = value
+                else:
+                    target[key] = value
     cfg = prepare_config(source, verbose=False)
     path = str(tmp_path / "config.json")
     dump_config(cfg, path, clean=True)

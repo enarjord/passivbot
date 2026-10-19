@@ -363,7 +363,7 @@ def merge_fill_evidence(retained, snapshot):
 
 
 def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
-    if mode == "unified":
+    if mode == "portfolio":
         if pside is not None or symbol is not None:
             raise ValueError("unified has no side/symbol selector")
         return snapshot.pairs

@@ -1,8 +1,4 @@
-"""Configuration boundary for the sole HSL engine.
-
-Missing restart choices remain explicit nulls while a scope is disabled, so later
-CLI/scenario enablement cannot mistake hydration for an operator's policy choice.
-"""
+"""Configuration boundary for the v9 decaying-risk HSL engine."""
 
 from copy import deepcopy
 import logging
@@ -26,10 +22,10 @@ FIELDS = frozenset(
         "enabled",
         "scale_budget_with_excess_allowance",
         "red_threshold",
-        "ema_span_minutes",
+        "drawdown_ratio_ema_span_minutes",
+        "memory_ema_span_minutes",
         "panic_close_order_type",
         "cooldown_minutes_after_red",
-        "restart_after_red_policy",
     }
 )
 
@@ -58,56 +54,36 @@ def _requires_hsl_migration(node, path=""):
 
 
 def require_current_hsl_schema(config, *, base_config_path="", additional_inputs=()):
-    """Check raw root, attached inputs and referenced files before hydration."""
-    from .migrations.legacy_v7 import _parse_version_tuple
+    """Reject v8 policy before hydration or CLI/scenario enablement can erase it."""
+    from .migrations.v9 import require_v9_runtime_config
 
-    version = _parse_version_tuple(config.get("config_version"))
-    retired_selector = "hsl_engine" in config.get("live", {})
-    if version is not None and version >= (8, 6, 0) and not retired_selector:
-        return
-    message = "pre-v8.6 HSL configuration requires explicit migration with passivbot tool migrate-hsl and re-backtesting before use"
-    inputs = (config, *additional_inputs)
-    if any(_requires_hsl_migration(node) for node in inputs):
-        if retired_selector:
-            engine(config)
-        raise ValueError(message)
-    from .overrides import load_override_config, parse_old_coin_flags
+    require_v9_runtime_config(config, additional_inputs=additional_inputs)
+    from .overrides import load_override_config, _validated_file_patch, _resolve_override_config_path
     from .parse import load_raw_config
 
-    # Use the normal resolver (root-relative path, then cwd), but inspect the
-    # authored file without first merging it into a current-schema template.
-    for node in inputs:
+    for node in (config, *additional_inputs):
         for path, value in _authored_paths(node):
             if "coin_overrides" in path and path.endswith("override_config_path"):
                 reference = value
-            elif "coin_flags." in path and isinstance(value, str):
-                # Reuse the actual legacy flag parser rather than guessing how
-                # -lc and its path are represented, including scenario patches.
-                flags = parse_old_coin_flags({"live": {"coin_flags": {"input": value}}})
-                reference = flags["input"].get("override_config_path")
-                if reference is None:
-                    continue
             else:
                 continue
             context = {
                 "coin_overrides": {"input": {"override_config_path": reference}},
-                "live": {
-                    "base_config_path": base_config_path
-                    or config.get("live", {}).get("base_config_path", "")
-                },
+                "live": {"base_config_path": base_config_path or config.get("live", {}).get("base_config_path", "")},
             }
-            authored = load_override_config(
-                context, "input", config_loader=load_raw_config
-            )
-            if _requires_hsl_migration(authored):
-                raise ValueError(message)
-    logging.warning(
-        "Legacy HSL settings loaded with HSL disabled; retired engine selection and "
-        "restart authorization are ignored. Migrate with passivbot tool migrate-hsl "
-        "and re-backtest before enabling HSL."
-    )
-    for node in inputs:
-        clear_legacy_hsl_authorization(node)
+            try:
+                authored = load_override_config(context, "input", config_loader=load_raw_config)
+                require_v9_runtime_config(config, additional_inputs=(authored,))
+                _validated_file_patch(
+                    authored, config=config, coin="input", source=path,
+                    resolved_path=_resolve_override_config_path(context, "input"),
+                )
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(f"{path} not found: {reference!r}") from exc
+            except OSError as exc:
+                raise type(exc)(f"{path} {reference!r} could not be read: {exc}") from exc
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"{path} {reference!r} is invalid: {exc}") from exc
 
 
 def clear_legacy_hsl_authorization(node, path=""):
@@ -134,21 +110,21 @@ def engine(config):
     value = config["live"]["hsl_engine"]
     if isinstance(value, str) and value.strip().lower() == "legacy":
         raise ValueError(
-            "legacy HSL has been removed; migrate this config with passivbot tool migrate-hsl and re-backtest before use"
+            "legacy HSL has been removed; migrate this config with passivbot tool migrate-config-v9 and re-backtest before use"
         )
     raise ValueError(
-        "live.hsl_engine is obsolete; migrate this config with passivbot tool migrate-hsl and re-backtest before use"
+        "live.hsl_engine is obsolete; migrate this config with passivbot tool migrate-config-v9 and re-backtest before use"
     )
 
 
 def _mode(config):
-    value = config.get("live", {}).get("hsl_signal_mode", "coin")
+    value = config.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
     if not isinstance(value, str) or value.strip().lower() not in {
         "coin",
         "pside",
-        "unified",
+        "portfolio",
     }:
-        raise ValueError("live.hsl_signal_mode must be coin, pside or unified")
+        raise ValueError("bot.risk.hsl.scope must be coin, pside or portfolio")
     return value.strip().lower()
 
 
@@ -162,8 +138,7 @@ def normalization_template(template, config):
         block = result["bot"][side]["hsl"]
         for key in REMOVED_FIELDS:
             block.pop(key, None)
-        block["restart_after_red_policy"] = None
-        if _mode(config) == "unified":
+        if _mode(config) == "portfolio":
             result["optimize"]["bounds"].get(side, {}).pop("hsl", None)
     # Inherited optimizer policy defaults cannot satisfy explicit migration.
     overrides = result["optimize"]["fixed_runtime_overrides"]
@@ -174,25 +149,15 @@ def normalization_template(template, config):
 
 
 def generated_template(template, mode="coin"):
-    """Explicitly generate a new HSL config with authored restart choices."""
+    """Generate an explicit v9 HSL configuration."""
     config = deepcopy(template)
-    config["live"].update(hsl_signal_mode=mode)
+    config["bot"]["risk"]["hsl"]["scope"] = mode
     config = normalization_template(config, config)
-    for side in ("long", "short"):
-        config["bot"][side]["hsl"]["restart_after_red_policy"] = "always"
-    if mode == "unified":
-        config["bot"]["hsl"] = deepcopy(config["bot"]["long"]["hsl"])
-        config["optimize"]["bounds"]["hsl"] = deepcopy(
+    if mode == "portfolio":
+        config["bot"]["risk"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
+        config["optimize"]["bounds"].setdefault("risk", {})["hsl"] = deepcopy(
             template["optimize"]["bounds"]["long"]["hsl"]
         )
-        config["optimize"]["fixed_runtime_overrides"][
-            "bot.hsl.restart_after_red_policy"
-        ] = "always"
-    else:
-        for side in ("long", "short"):
-            config["optimize"]["fixed_runtime_overrides"][
-                f"bot.{side}.hsl.restart_after_red_policy"
-            ] = "always"
     return config
 
 
@@ -219,7 +184,7 @@ def normalize_block(
     if not isinstance(block, dict):
         raise TypeError(f"{path} must be a mapping")
     if portfolio:
-        required = FIELDS - {"restart_after_red_policy", "scale_budget_with_excess_allowance"}
+        required = FIELDS - {"scale_budget_with_excess_allowance"}
         missing = required - block.keys()
         if missing:
             raise ValueError(
@@ -232,38 +197,26 @@ def normalize_block(
                     "%s.%s is removed in HSL and has no trading effect", path, key
                 )
             del block[key]
-    unknown = block.keys() - FIELDS
+    unknown = block.keys() - FIELDS - ({"scope"} if portfolio else set())
     if unknown:
         raise ValueError(f"{path} has unknown fields: {', '.join(sorted(unknown))}")
-    # All ordinary defaults are canonical; restart needs an explicit choice.
-    for key in FIELDS - {"restart_after_red_policy"}:
+    # All ordinary defaults are canonical.
+    for key in FIELDS:
         if key not in block:
             block[key] = (
                 False if key == "scale_budget_with_excess_allowance"
                 else deepcopy(defaults[key])
             )
-    block.setdefault("restart_after_red_policy", None)
     if type(block["enabled"]) is not bool:
         raise TypeError(f"{path}.enabled must be a boolean")
     if type(block["scale_budget_with_excess_allowance"]) is not bool:
         raise TypeError(f"{path}.scale_budget_with_excess_allowance must be a boolean")
-    policy = block["restart_after_red_policy"]
-    if isinstance(policy, str):
-        policy = policy.strip().lower()
-    if policy is not None and not isinstance(policy, str):
-        raise ValueError(f"{path}.restart_after_red_policy must be always or never")
-    if active and block["enabled"] and policy not in {"always", "never"}:
-        raise ValueError(
-            f"{path}.restart_after_red_policy requires an explicit choice of always or never; threshold is removed"
+    from .risk_memory import normalize_memory_ema_span_minutes
+
+    for field in ("drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes"):
+        block[field] = normalize_memory_ema_span_minutes(
+            block[field], field=f"{path}.{field}"
         )
-    if policy == "threshold":
-        policy = None
-    if policy not in {None, "always", "never"}:
-        raise ValueError(f"{path}.restart_after_red_policy must be always or never")
-    block["restart_after_red_policy"] = policy
-    block["ema_span_minutes"] = _number(
-        block["ema_span_minutes"], f"{path}.ema_span_minutes", minimum=1
-    )
     block["red_threshold"] = _number(
         block["red_threshold"],
         f"{path}.red_threshold",
@@ -290,25 +243,24 @@ def _is_hsl_path(path):
 
 
 def validate_parameter_path(path, mode):
-    if "scale_budget_with_excess_allowance" in path and "coin_overrides" in path:
-        raise ValueError(
-            f"{path} is global per-side HSL policy and cannot be overridden per coin"
-        )
     if "hsl_position_during_cooldown_policy" in path:
         raise ValueError(f"{path} is removed in HSL; exposure clears cooldown")
     if any(key in path for key in REMOVED_LIVE_FIELDS):
         raise ValueError(
             f"{path} is a removed HSL recovery control; remove this bound/override"
         )
+    if ("restart_after_red_policy" in path or "pnls_max_lookback_days" in path
+            or "realized_loss_gate_lookback_minutes" in path):
+        raise ValueError(f"{path} is removed in v9; use passivbot tool migrate-config-v9")
     if not _is_hsl_path(path):
         return
     if any(key in path for key in REMOVED_FIELDS):
         raise ValueError(
             f"{path} targets a removed HSL parameter; remove this bound/override"
         )
-    if mode == "unified" and re.search(r"(^|[._])(long|short)[._]hsl([._]|$)", path):
+    if mode == "portfolio" and re.search(r"(^|[._])(long|short)[._]hsl([._]|$)", path):
         raise ValueError(
-            f"{path} is inactive in unified mode; use explicit bot.hsl portfolio parameter paths"
+            f"{path} is inactive in portfolio mode; use explicit bot.risk.hsl portfolio parameter paths"
         )
 
 
@@ -352,8 +304,10 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
         raise ValueError(
             "live.hsl_engine is a startup selector, not a scenario or optimizer override"
         )
-    selected = {"live": dict(config.get("live", {}))}
-    for key in ("hsl_engine", "hsl_signal_mode"):
+    selected = deepcopy(config)
+    if "bot.risk.hsl.scope" in leaves:
+        selected.setdefault("bot", {}).setdefault("risk", {}).setdefault("hsl", {})["scope"] = leaves["bot.risk.hsl.scope"]
+    for key in ("hsl_engine",):
         if f"live.{key}" in leaves:
             selected["live"][key] = leaves[f"live.{key}"]
     # CLI mutation precedes the schema gate: an explicit disable must be able
@@ -369,13 +323,23 @@ def normalize_hsl(config, template, *, verbose=True):
     """Run before hydration, and again for effective CLI/scenario configurations."""
     engine(config)
     config.setdefault("live", {}).pop("hsl_engine", None)
-    mode = _mode(config)
-    config["live"]["hsl_signal_mode"] = mode
+    from .risk_memory import normalize_risk_memory_config
+
+    config["live"].setdefault("risk_bootstrap_max_lookback_minutes", deepcopy(template["live"]["risk_bootstrap_max_lookback_minutes"]))
     bot = config.setdefault("bot", {})
-    if mode == "unified" and "hsl" not in bot:
-        raise ValueError(
-            "unified HSL requires an explicit bot.hsl block; supply it or select pside for separate side controllers"
-        )
+    bot.setdefault("risk", deepcopy(template["bot"]["risk"]))
+    bot["risk"].setdefault("hsl", {"scope": "coin"})
+    bot["risk"].setdefault("loss_gate", deepcopy(template["bot"]["risk"]["loss_gate"]))
+    bot.setdefault("unstuck", deepcopy(template["bot"]["unstuck"]))
+    for name, block in (("unstuck", bot["unstuck"]), ("risk.loss_gate", bot["risk"]["loss_gate"])):
+        defaults = template["bot"]["unstuck"] if name == "unstuck" else template["bot"]["risk"]["loss_gate"]
+        for key, value in defaults.items():
+            block.setdefault(key, deepcopy(value))
+    normalize_risk_memory_config(config)
+    mode = _mode(config)
+    bot["risk"]["hsl"]["scope"] = mode
+    if mode != "portfolio" and set(bot["risk"]["hsl"]) - {"scope"}:
+        raise ValueError("bot.risk.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/pside scope")
     validate_hsl_paths(config)
     enabled = False
     for side in ("long", "short"):
@@ -394,24 +358,24 @@ def normalize_hsl(config, template, *, verbose=True):
             side_cfg["hsl"],
             template["bot"][side]["hsl"],
             f"bot.{side}.hsl",
-            active=mode != "unified",
+            active=mode != "portfolio",
             verbose=verbose,
         )
         if mode != "coin" and side_cfg["hsl"]["scale_budget_with_excess_allowance"]:
             raise ValueError(f"bot.{side}.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
-        enabled |= mode != "unified" and side_cfg["hsl"]["enabled"]
-    if "hsl" in bot:
+        enabled |= mode != "portfolio" and side_cfg["hsl"]["enabled"]
+    if mode == "portfolio":
         normalize_block(
-            bot["hsl"],
+            bot["risk"]["hsl"],
             {},
-            "bot.hsl",
-            active=mode == "unified",
+            "bot.risk.hsl",
+            active=mode == "portfolio",
             portfolio=True,
             verbose=verbose,
         )
-        if bot["hsl"]["scale_budget_with_excess_allowance"]:
-            raise ValueError("bot.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
-        enabled |= mode == "unified" and bot["hsl"]["enabled"]
+        if bot["risk"]["hsl"]["scale_budget_with_excess_allowance"]:
+            raise ValueError("bot.risk.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
+        enabled |= mode == "portfolio" and bot["risk"]["hsl"]["enabled"]
     for coin, patch in config.get("coin_overrides", {}).items():
         for side, values in patch.get("bot", {}).items():
             if side not in {"long", "short"} or not isinstance(values, dict):
@@ -448,17 +412,44 @@ def normalize_hsl(config, template, *, verbose=True):
                 "live.hsl_position_during_cooldown_policy is removed in HSL; exposure clears cooldown"
             )
         del config["live"]["hsl_position_during_cooldown_policy"]
-    if enabled:
-        value = config["live"].get(
-            "pnls_max_lookback_days", template["live"]["pnls_max_lookback_days"]
-        )
-        config["live"]["pnls_max_lookback_days"] = _number(
-            value, "enabled HSL lookback days [1,90]", minimum=1, maximum=90
-        )
+
+
+def require_live_runtime_support(config):
+    """Validate live replay capability and return the required cooldown horizon."""
+    from .risk_memory import normalize_risk_bootstrap_max_lookback_minutes
+
+    cap = normalize_risk_bootstrap_max_lookback_minutes(
+        config["live"]["risk_bootstrap_max_lookback_minutes"]
+    )
+    mode = _mode(config)
+    policies = []
+    if mode == "portfolio":
+        policies.append(("bot.risk.hsl", config["bot"]["risk"]["hsl"]))
+    else:
+        for side in ("long", "short"):
+            base = config["bot"][side]["hsl"]
+            policies.append((f"bot.{side}.hsl", base))
+            if mode == "coin":
+                for coin, patch in config.get("coin_overrides", {}).items():
+                    hsl = patch.get("bot", {}).get(side, {}).get("hsl", {})
+                    if hsl:
+                        policies.append((f"coin_overrides.{coin}.bot.{side}.hsl", {**base, **hsl}))
+    required = 0.0
+    for path, policy in policies:
+        if not policy["enabled"]:
+            continue
+        required = max(required, policy["cooldown_minutes_after_red"])
+        if policy["cooldown_minutes_after_red"] > cap:
+            raise ValueError(
+                f"{path}.cooldown_minutes_after_red exceeds live.risk_bootstrap_max_lookback_minutes; "
+                "live cannot reconstruct its full finite cooldown within this history cap"
+            )
+    return required
 
 
 def require_live_balance_support(config, override=None):
     """Reject unsupported live account-level replay before account acquisition."""
+    require_live_runtime_support(config)
     mode = _mode(config)
     if mode == "coin":
         return
@@ -469,8 +460,8 @@ def require_live_balance_support(config, override=None):
     )
     bot = config.get("bot", {})
     enabled = (
-        bot.get("hsl", {}).get("enabled", False)
-        if mode == "unified"
+        bot["risk"]["hsl"]["enabled"]
+        if mode == "portfolio"
         else any(
             bot.get(side, {}).get("hsl", {}).get("enabled", False)
             for side in ("long", "short")
@@ -478,7 +469,7 @@ def require_live_balance_support(config, override=None):
     )
     if enabled and value not in (None, ""):
         raise ValueError(
-            "enabled unified/pside HSL does not support live.balance_override; remove the override, select coin mode, or disable HSL"
+            "enabled portfolio/pside HSL does not support live.balance_override; remove the override, select coin mode, or disable HSL"
         )
 
 
@@ -544,9 +535,9 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
             or name.startswith("drawdown_worst_mean_1pct_ema_strategy_eq")
         )
         side_signal = signal and name.endswith(("_long", "_short"))
-        if _mode(config) == "unified" and side_signal:
+        if _mode(config) == "portfolio" and side_signal:
             raise ValueError(
-                f"{metric} has no side controller in unified HSL; use the portfolio metric"
+                f"{metric} has no side controller in portfolio HSL; use the portfolio metric"
             )
         if side_signal and not _side_has_enabled_policy(
             config, name.rsplit("_", 1)[1], markets_by_exchange
@@ -556,8 +547,8 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
             )
         if signal and not side_signal:
             enabled = (
-                config["bot"]["hsl"]["enabled"]
-                if _mode(config) == "unified"
+                config["bot"]["risk"]["hsl"]["enabled"]
+                if _mode(config) == "portfolio"
                 else any(
                     _side_has_enabled_policy(config, side, markets_by_exchange)
                     for side in ("long", "short")

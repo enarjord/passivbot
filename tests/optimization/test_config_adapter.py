@@ -19,77 +19,67 @@ def _get_path(mapping, path):
     return current
 
 
+def _canonical_config_with_bounds(bounds, *, strategy_kind="trailing_martingale"):
+    config = get_template_config()
+    config["live"]["strategy_kind"] = strategy_kind
+    config["optimize"]["bounds"] = bounds
+    for side in ("long", "short"):
+        config["bot"][side]["risk"].update(max_positions=1.0, total_wallet_exposure_limit=1.0)
+    return config
+
+
 class TestConfigAdapter:
     """Test configuration adapter functions."""
 
+    def test_existing_bot_does_not_construct_a_fallback_template(self, monkeypatch):
+        import optimization.config_adapter as adapter
+
+        config = get_template_config()
+        expected = get_optimization_key_paths(config)
+
+        def unexpected_template():
+            raise AssertionError("existing bot config must not request fallback defaults")
+
+        monkeypatch.setattr(adapter, "get_template_config", unexpected_template)
+        assert get_optimization_key_paths(config) == expected
+
     def test_extract_bounds_tuple_list_from_config(self):
-        config = {
-            "optimize": {
-                "bounds": {
-                    "long_n_positions": [1.0, 1.0],
-                    "long_total_wallet_exposure_limit": [0.1, 0.1],
-                    "short_n_positions": [0.0, 0.0],
-                    "short_total_wallet_exposure_limit": [0.0, 0.0],
-                }
-            }
-        }
-        from config_utils import get_template_config
-
-        template = get_template_config()
-        for pside in template["bot"]:
-            for key in template["bot"][pside]:
-                value = template["bot"][pside][key]
-                if isinstance(value, dict) or isinstance(value, bool) or not isinstance(value, (int, float)):
-                    continue
-                bound_key = f"{pside}_{key}"
-                if bound_key not in config["optimize"]["bounds"]:
-                    if bound_key == "short_unstuck_ema_dist":
-                        config["optimize"]["bounds"][bound_key] = [0.0, 0.99]
-                    else:
-                        config["optimize"]["bounds"][bound_key] = [0.0, 1.0]
-
+        config = _canonical_config_with_bounds({
+            "long": {"risk": {"max_positions": [1.0, 1.0],
+                              "total_wallet_exposure_limit": [0.1, 0.1]},
+                     "unstuck": {"close_pct": [0.01, 0.12]}},
+            "short": {"risk": {"max_positions": [0.0, 0.0],
+                               "total_wallet_exposure_limit": [0.0, 0.0]},
+                      "unstuck": {"close_pct": [0.01, 0.12]}},
+        })
         bounds = extract_bounds_tuple_list_from_config(config)
         key_paths = get_optimization_key_paths(config)
         assert len(bounds) > 0
         assert isinstance(bounds[0], Bound)
 
         short_param_idx = next(
-            idx for idx, (_, path) in enumerate(key_paths) if path[:2] == ("bot", "short")
+            idx for idx, (key, _) in enumerate(key_paths) if key == "short_unstuck_close_pct"
         )
-        assert bounds[short_param_idx].low == bounds[short_param_idx].high
+        assert bounds[short_param_idx].low == bounds[short_param_idx].high == 0.01
+        long_param_idx = next(idx for idx, (key, _) in enumerate(key_paths)
+                              if key == "long_unstuck_close_pct")
+        assert bounds[long_param_idx].high == 0.12
 
     def test_get_optimization_key_paths_includes_pside_hsl_keys_when_bounded(self):
-        config = {
-            "bot": {
-                "long": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "hsl_red_threshold": 0.25,
-                    "hsl_ema_span_minutes": 60.0,
-                },
-                "short": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "hsl_red_threshold": 0.25,
-                    "hsl_ema_span_minutes": 60.0,
-                },
-            },
-            "optimize": {
-                "bounds": {
-                    "long_n_positions": [1.0, 2.0, 1.0],
-                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "short_n_positions": [1.0, 2.0, 1.0],
-                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
-                    "short_hsl_ema_span_minutes": [30.0, 180.0, 5.0],
-                }
-            },
-        }
+        config = _canonical_config_with_bounds({
+            "long": {"hsl": {"red_threshold": [0.15, 0.35, 0.01],
+                             "memory_ema_span_minutes": [100.0, 200.0, 1.0]}},
+            "short": {"hsl": {"drawdown_ratio_ema_span_minutes": [30.0, 180.0, 5.0]}},
+        })
+        config["bot"]["risk"]["hsl"]["scope"] = "pside"
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl_red_threshold")) in key_paths
-        assert ("short_hsl_ema_span_minutes", ("bot", "short", "hsl_ema_span_minutes")) in key_paths
+        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "red_threshold")) in key_paths
+        assert ("long_hsl_memory_ema_span_minutes",
+                ("bot", "long", "hsl", "memory_ema_span_minutes")) in key_paths
+        assert ("short_hsl_drawdown_ratio_ema_span_minutes",
+                ("bot", "short", "hsl", "drawdown_ratio_ema_span_minutes")) in key_paths
 
     def test_get_optimization_key_paths_rejects_empty_bounds(self):
         config = {
@@ -129,29 +119,8 @@ class TestConfigAdapter:
     def test_get_optimization_key_paths_rejects_invalid_unstuck_ema_dist_bounds(
         self, bound_key, bound_value, expected
     ):
-        config = {
-            "bot": {
-                "long": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "unstuck_ema_dist": -0.2,
-                },
-                "short": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "unstuck_ema_dist": -0.2,
-                },
-            },
-            "optimize": {
-                "bounds": {
-                    "long_n_positions": [1.0, 2.0, 1.0],
-                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "short_n_positions": [1.0, 2.0, 1.0],
-                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    bound_key: bound_value,
-                }
-            },
-        }
+        side = bound_key.split("_", 1)[0]
+        config = _canonical_config_with_bounds({side: {"unstuck": {"ema_dist": bound_value}}})
 
         with pytest.raises(ValueError, match=expected):
             get_optimization_key_paths(config)
@@ -208,43 +177,14 @@ class TestConfigAdapter:
         )
 
     def test_get_optimization_key_paths_routes_strategy_fields_to_strategy_section(self):
-        config = {
-            "live": {"strategy_kind": "trailing_martingale"},
-            "bot": {
-                "long": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "hsl_red_threshold": 0.25,
-                    "strategy": {
-                        "trailing_martingale": {
-                            "ema_span_0": 10.0,
-                            "entry": {"threshold_base_pct": 0.02},
-                        }
-                    },
-                },
-                "short": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "strategy": {
-                        "trailing_martingale": {
-                            "ema_span_0": 11.0,
-                            "entry": {"threshold_base_pct": 0.03},
-                        }
-                    },
-                },
-            },
-            "optimize": {
-                "bounds": {
-                    "long_n_positions": [1.0, 2.0, 1.0],
-                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "short_n_positions": [1.0, 2.0, 1.0],
-                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "long_ema_span_0": [200.0, 1440.0, 10.0],
-                    "short_entry_threshold_base_pct": [0.01, 0.04, 1e-05],
-                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
-                }
-            },
-        }
+        config = _canonical_config_with_bounds({
+            "long": {"strategy": {"trailing_martingale": {"entry": {
+                "ema_span_0": [200.0, 1440.0, 10.0],
+            }}}, "hsl": {"red_threshold": [0.15, 0.35, 0.01]}},
+            "short": {"strategy": {"trailing_martingale": {"entry": {
+                "threshold_base_pct": [0.01, 0.04, 1e-5],
+            }}}},
+        })
 
         key_paths = get_optimization_key_paths(config)
 
@@ -263,59 +203,16 @@ class TestConfigAdapter:
                 "threshold_base_pct",
             ),
         ) in key_paths
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl_red_threshold")) in key_paths
+        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "red_threshold")) in key_paths
 
     def test_get_optimization_key_paths_routes_ema_anchor_fields_to_strategy_section(self):
-        config = {
-            "live": {"strategy_kind": "ema_anchor"},
-            "bot": {
-                "long": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "strategy": {
-                        "ema_anchor": {
-                            "base_qty_pct": 0.01,
-                            "ema_span_0": 55.0,
-                            "ema_span_1": 144.0,
-                            "offset": 0.002,
-                            "offset_volatility_ema_span_1m": 30.0,
-                            "offset_volatility_1m_weight": 2.0,
-                            "offset_volatility_ema_span_1h": 12.0,
-                            "offset_volatility_1h_weight": 1.5,
-                            "offset_psize_weight": 0.1,
-                        }
-                    },
-                },
-                "short": {
-                    "n_positions": 1.0,
-                    "total_wallet_exposure_limit": 1.0,
-                    "strategy": {
-                        "ema_anchor": {
-                            "base_qty_pct": 0.02,
-                            "ema_span_0": 34.0,
-                            "ema_span_1": 89.0,
-                            "offset": 0.003,
-                            "offset_volatility_ema_span_1m": 45.0,
-                            "offset_volatility_1m_weight": 3.0,
-                            "offset_volatility_ema_span_1h": 18.0,
-                            "offset_volatility_1h_weight": 0.5,
-                            "offset_psize_weight": 0.2,
-                        }
-                    },
-                },
-            },
-            "optimize": {
-                "bounds": {
-                    "long_n_positions": [1.0, 2.0, 1.0],
-                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "short_n_positions": [1.0, 2.0, 1.0],
-                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
-                    "long_base_qty_pct": [0.001, 0.05, 0.0001],
-                    "long_offset_volatility_1m_weight": [0.0, 10.0, 0.1],
-                    "short_offset": [0.0, 0.05, 0.0001],
-                }
-            },
-        }
+        config = _canonical_config_with_bounds({
+            "long": {"strategy": {"ema_anchor": {
+                "base_qty_pct": [0.001, 0.05, 0.0001],
+                "offset_volatility_1m_weight": [0.0, 10.0, 0.1],
+            }}},
+            "short": {"strategy": {"ema_anchor": {"offset": [0.0, 0.05, 0.0001]}}},
+        }, strategy_kind="ema_anchor")
 
         key_paths = get_optimization_key_paths(config)
 

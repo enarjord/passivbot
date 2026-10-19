@@ -1,9 +1,9 @@
+#[cfg(test)]
+#[path = "backtest_equity_reference.rs"]
+mod equity_reference;
+
 #[path = "backtest_hsl_analysis.rs"]
 mod hsl_analysis;
-#[path = "backtest_hsl_cache.rs"]
-mod hsl_cache;
-#[path = "backtest_hsl.rs"]
-mod hsl_inputs;
 #[path = "backtest_hsl_report.rs"]
 mod hsl_report;
 #[path = "backtest_hsl_runtime.rs"]
@@ -32,8 +32,8 @@ use crate::types::{
     StrategyParamsPairValue, TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
-    calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn, round_up,
+    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_wallet_exposure, hysteresis,
+    qty_to_cost, round_, round_dn, round_up,
 };
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -62,7 +62,6 @@ const DEBUG_TRACE_WINDOW: Option<(usize, usize)> = None;
 const DEBUG_TRACE_COIN_FILTER: Option<&str> = None;
 use ndarray::{ArrayView1, ArrayView3};
 use serde_json;
-use std::collections::VecDeque;
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -76,6 +75,10 @@ struct UnstuckCalcDebug {
     side: usize,
     balance: f64,
     balance_bits: u64,
+    balance_raw: f64,
+    balance_raw_bits: u64,
+    realized_pnl_drawdown: f64,
+    realized_pnl_drawdown_bits: u64,
     allowance: f64,
     allowance_bits: u64,
     position_size: f64,
@@ -223,17 +226,10 @@ struct OrchestratorM1LogRangeSlots {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct OrchestratorH1LogRangeSlots {
-    long: Option<usize>,
-    short: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
 struct OrchestratorEmaSlots {
     m1_volume_long: usize,
     m1_volume_short: usize,
     m1_log_range: OrchestratorM1LogRangeSlots,
-    h1_log_range: OrchestratorH1LogRangeSlots,
 }
 
 fn make_orchestrator_ema_slots(
@@ -262,23 +258,6 @@ fn make_orchestrator_ema_slots(
             None
         };
 
-    let mut next_h1_log_range = 0usize;
-    let h1_long =
-        if strategy_entry_volatility_span_hours(&strategy_params.long).unwrap_or(0.0) > 0.0 {
-            let idx = next_h1_log_range;
-            next_h1_log_range += 1;
-            Some(idx)
-        } else {
-            None
-        };
-    let h1_short =
-        if strategy_entry_volatility_span_hours(&strategy_params.short).unwrap_or(0.0) > 0.0 {
-            let idx = next_h1_log_range;
-            Some(idx)
-        } else {
-            None
-        };
-
     OrchestratorEmaSlots {
         m1_volume_long: 0,
         m1_volume_short: 1,
@@ -288,10 +267,36 @@ fn make_orchestrator_ema_slots(
             offset_long,
             offset_short,
         },
-        h1_log_range: OrchestratorH1LogRangeSlots {
-            long: h1_long,
-            short: h1_short,
-        },
+    }
+}
+
+fn refresh_orchestrator_hourly_log_ranges(
+    values: &mut Vec<(f64, f64)>,
+    strategies: &StrategyParamsPair,
+    emas: &EMAs,
+) {
+    // Unknown hourly state has no observation basis. Omit it so only an
+    // actual consumer takes the orchestrator's existing missing-input path.
+    // Rebuild this small vector because either side can gain a basis later;
+    // fixed slots would overwrite the other side when only one was present.
+    values.clear();
+    for (strategy, value, denominator) in [
+        (
+            &strategies.long,
+            emas.volatility_ema_1h_long,
+            emas.volatility_ema_1h_long_den,
+        ),
+        (
+            &strategies.short,
+            emas.volatility_ema_1h_short,
+            emas.volatility_ema_1h_short_den,
+        ),
+    ] {
+        if let Some(span) = strategy_entry_volatility_span_hours(strategy) {
+            if span > 0.0 && denominator > 0.0 && value.is_finite() {
+                values.push((span, value));
+            }
+        }
     }
 }
 
@@ -344,6 +349,11 @@ fn update_adjusted_ema(value: f64, alpha: f64, numerator: &mut f64, denominator:
             value
         };
     }
+    if *denominator <= 0.0 {
+        *numerator = value;
+        *denominator = 1.0;
+        return value;
+    }
     let one_minus_alpha = 1.0 - alpha;
     let new_num = alpha * value + one_minus_alpha * *numerator;
     let new_den = alpha + one_minus_alpha * *denominator;
@@ -373,20 +383,6 @@ pub struct OpenOrderBundle {
 pub struct BacktestOrder {
     pub order: Order,
     pub execution_type: orchestrator::ExecutionType,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RollingPnlEvent {
-    k: usize,
-    pnl: f64,
-    abs_cumulative_after: f64,
-    seq: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RollingPnlPeakCandidate {
-    seq: usize,
-    abs_cumulative_after: f64,
 }
 
 #[derive(Default, Debug)]
@@ -505,13 +501,6 @@ pub struct StrategyEquityMetrics {
     pub strategy_eq_recovery_days_max: f64,
     pub peak_recovery_hours_strategy_eq: f64,
     pub peak_recovery_days_strategy_eq: f64,
-    pub adg_strategy_eq_w: f64,
-    pub mdg_strategy_eq_w: f64,
-    pub sharpe_ratio_strategy_eq_w: f64,
-    pub sortino_ratio_strategy_eq_w: f64,
-    pub omega_ratio_strategy_eq_w: f64,
-    pub calmar_ratio_strategy_eq_w: f64,
-    pub sterling_ratio_strategy_eq_w: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -523,6 +512,8 @@ pub struct StrategyEquityMetricsBundle {
 
 #[derive(Debug, Clone, Copy)]
 struct OrderFillExecution {
+    /// Forced delisting is a bar-close event; ordinary fills precede that close.
+    at_bar_close: bool,
     price: f64,
     fee_rate: f64,
     liquidity: &'static str,
@@ -530,7 +521,11 @@ struct OrderFillExecution {
 
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
 
-pub struct Backtest<'a> {
+pub type Backtest<'a> = BacktestEngine<'a, false>;
+
+pub struct BacktestEngine<'a, const ORGANILLO: bool> {
+    pub eligibility: Option<ndarray::ArrayView2<'a, u8>>,
+    pub eligibility_rows: Option<ArrayView1<'a, i32>>,
     hlcvs: ArrayView3<'a, f64>,
     btc_usd_prices: ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
     active_coin_indices: Vec<usize>,
@@ -549,6 +544,7 @@ pub struct Backtest<'a> {
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
+    ordinary_ema_bootstrapped: Vec<bool>,
     unilateralness: Vec<Vec<(f64, crate::unilateralness::RollingRms)>>,
     unilateralness_step: Option<usize>,
     orchestrator_ema_slots: Vec<OrchestratorEmaSlots>,
@@ -578,17 +574,7 @@ pub struct Backtest<'a> {
     pnl_cumsum_running: f64,
     pnl_cumsum_max: f64,
     pnl_cumsum_running_net: f64,
-    pnl_cumsum_max_net: f64,
     pnl_cumsum_running_net_pside: [f64; 2],
-    pnl_cumsum_running_net_coin_pside: [Vec<f64>; 2],
-    pnl_cumsum_max_net_coin_pside: [Vec<f64>; 2],
-    pnl_lookback_bars: usize,
-    pnl_events: VecDeque<RollingPnlEvent>,
-    pnl_event_seq: usize,
-    rolling_pnl_peak_candidates: VecDeque<RollingPnlPeakCandidate>,
-    coin_pnl_events: [Vec<VecDeque<RollingPnlEvent>>; 2],
-    coin_pnl_event_seq: usize,
-    coin_rolling_pnl_peak_candidates: [Vec<VecDeque<RollingPnlPeakCandidate>>; 2],
     fills: Vec<Fill>,
     trading_enabled: TradingEnabled,
     trailing_enabled: Vec<TrailingEnabled>,
@@ -601,6 +587,7 @@ pub struct Backtest<'a> {
     last_increase_fill_timestamp_long: Vec<Option<u64>>,
     last_increase_fill_timestamp_short: Vec<Option<u64>>,
     pub total_wallet_exposures: Vec<f64>,
+    pub exposure_rms: crate::exposure_rms::ExposureRms,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
     debug_writer: Option<DebugOrderWriter>,
@@ -610,8 +597,12 @@ pub struct Backtest<'a> {
     orch_profile: Option<OrchProfile>,
     max_tradable_coins_seen: EffectiveNPositions,
     hsl_scopes: Vec<hsl_runtime::Scope>,
-    hsl_cutoffs: hsl_cache::Cutoffs,
-    hsl_traces: hsl_cache::Traces,
+    hsl_initialized: bool,
+    hsl_marks: Vec<f64>,
+    unstuck_memory: crate::hsl_decay::RealizedMemory,
+    loss_gate_memory: crate::hsl_decay::RealizedMemory,
+    unstuck_memory_enabled: bool,
+    loss_gate_memory_enabled: bool,
     hsl_report: hsl_report::Report,
     btc_collateral_initialized: bool,
     strategy_equity_series: Vec<f64>,
@@ -899,7 +890,7 @@ fn test_strategy_params_pair_value_from_flat(
     }
 }
 
-impl<'a> Backtest<'a> {
+impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     #[inline]
     fn snapshot_balance(&self) -> BalanceSnapshot {
         BalanceSnapshot {
@@ -911,15 +902,31 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn debug_dump_unstuck_calc(&mut self, k: usize, idx: usize, side: usize) {
+    fn unstuck_allowance_for_position(&self, idx: usize, side: usize) -> Result<f64, String> {
+        let bp = self.bp(idx, side);
+        if !bp.unstuck_enabled
+            || bp.unstuck_loss_allowance_pct <= 0.0
+            || bp.total_wallet_exposure_limit <= 0.0
+        {
+            return Ok(0.0);
+        }
+        crate::hsl_decay::allowance_for(
+            self.balance.usd_total_balance,
+            bp.unstuck_loss_allowance_pct,
+            bp.total_wallet_exposure_limit,
+            self.unstuck_memory.drawdown(),
+        )
+    }
+
+    fn debug_dump_unstuck_calc(&mut self, k: usize, idx: usize, side: usize) -> Result<(), String> {
         if !DEBUG_DUMP_UNSTUCK_CALC {
-            return;
+            return Ok(());
         }
         if DEBUG_UNSTUCK_WINDOW
             .map(|(start, end)| k < start || k > end)
             .unwrap_or(true)
         {
-            return;
+            return Ok(());
         }
 
         let coin = self
@@ -930,50 +937,24 @@ impl<'a> Backtest<'a> {
             .unwrap_or_else(|| format!("idx_{idx}"));
         if let Some(want) = DEBUG_UNSTUCK_COIN_FILTER {
             if coin != want {
-                return;
+                return Ok(());
             }
         }
 
         let position = match side {
             LONG => self.positions.long[idx],
             SHORT => self.positions.short[idx],
-            _ => return,
+            _ => return Ok(()),
         };
         if position.size == 0.0 || !position.price.is_finite() || position.price <= 0.0 {
-            return;
+            return Ok(());
         }
 
         let balance = self.balance.usd_total_balance_rounded;
         let balance_raw = self.balance.usd_total_balance;
-        let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
+        let realized_pnl_drawdown = self.unstuck_memory.drawdown();
+        let allowance = self.unstuck_allowance_for_position(idx, side)?;
         let bp = self.bp(idx, side);
-        let allowance = match side {
-            LONG => {
-                if bp.unstuck_enabled && bp.unstuck_loss_allowance_pct > 0.0 {
-                    calc_auto_unstuck_allowance(
-                        balance_raw,
-                        bp.unstuck_loss_allowance_pct * bp.total_wallet_exposure_limit,
-                        effective_cumsum_max,
-                        effective_cumsum_last,
-                    )
-                } else {
-                    0.0
-                }
-            }
-            SHORT => {
-                if bp.unstuck_enabled && bp.unstuck_loss_allowance_pct > 0.0 {
-                    calc_auto_unstuck_allowance(
-                        balance_raw,
-                        bp.unstuck_loss_allowance_pct * bp.total_wallet_exposure_limit,
-                        effective_cumsum_max,
-                        effective_cumsum_last,
-                    )
-                } else {
-                    0.0
-                }
-            }
-            _ => 0.0,
-        };
 
         let runtime_budget = self.runtime_budget(idx, side);
         let ema_bands = self.emas[idx].compute_unstuck_bands(side);
@@ -1053,6 +1034,10 @@ impl<'a> Backtest<'a> {
             side,
             balance,
             balance_bits: balance.to_bits(),
+            balance_raw,
+            balance_raw_bits: balance_raw.to_bits(),
+            realized_pnl_drawdown,
+            realized_pnl_drawdown_bits: realized_pnl_drawdown.to_bits(),
             allowance,
             allowance_bits: allowance.to_bits(),
             position_size: position.size,
@@ -1104,6 +1089,7 @@ impl<'a> Backtest<'a> {
             let _ = serde_json::to_writer_pretty(&mut f, &payload);
             let _ = writeln!(f);
         }
+        Ok(())
     }
 
     fn record_balance_trace(
@@ -1198,34 +1184,9 @@ impl<'a> Backtest<'a> {
     {
         let balance = self.balance.usd_total_balance_rounded;
         let balance_raw = self.balance.usd_total_balance;
-        let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
 
-        let long_allowance = if self.bot_params_master.long.unstuck_enabled
-            && self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0
-        {
-            calc_auto_unstuck_allowance(
-                balance_raw,
-                self.bot_params_master.long.unstuck_loss_allowance_pct
-                    * self.bot_params_master.long.total_wallet_exposure_limit,
-                effective_cumsum_max,
-                effective_cumsum_last,
-            )
-        } else {
-            0.0
-        };
-        let short_allowance = if self.bot_params_master.short.unstuck_enabled
-            && self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0
-        {
-            calc_auto_unstuck_allowance(
-                balance_raw,
-                self.bot_params_master.short.unstuck_loss_allowance_pct
-                    * self.bot_params_master.short.total_wallet_exposure_limit,
-                effective_cumsum_max,
-                effective_cumsum_last,
-            )
-        } else {
-            0.0
-        };
+        let long_allowance = self.unstuck_allowance_diagnostic(LONG);
+        let short_allowance = self.unstuck_allowance_diagnostic(SHORT);
 
         let symbols: Vec<orchestrator::SymbolInput> = indices
             .into_iter()
@@ -1291,6 +1252,7 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
+                self.apply_organillo_modes(idx, k, &mut mode_long, &mut mode_short);
                 if self.backtest_params.filter_by_min_effective_cost {
                     if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                         mode_long = Some(orchestrator::TradingMode::GracefulStop);
@@ -1392,22 +1354,11 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
-                if let Some(span) =
-                    strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
-                {
-                    if span > 0.0 {
-                        h1.log_range
-                            .push((span, self.emas[idx].volatility_ema_1h_long));
-                    }
-                }
-                if let Some(span) =
-                    strategy_entry_volatility_span_hours(&self.strategy_params[idx].short)
-                {
-                    if span > 0.0 {
-                        h1.log_range
-                            .push((span, self.emas[idx].volatility_ema_1h_short));
-                    }
-                }
+                refresh_orchestrator_hourly_log_ranges(
+                    &mut h1.log_range,
+                    &self.strategy_params[idx],
+                    &self.emas[idx],
+                );
 
                 let emas = OrchestratorEmaBundle { m1, h1 };
 
@@ -1470,8 +1421,8 @@ impl<'a> Backtest<'a> {
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
                 max_realized_loss_pct: self.backtest_params.max_realized_loss_pct,
-                realized_pnl_cumsum_max: effective_cumsum_max,
-                realized_pnl_cumsum_last: effective_cumsum_last,
+                unstuck_realized_pnl_drawdown: self.unstuck_memory.drawdown(),
+                loss_gate_realized_pnl_drawdown: self.loss_gate_memory.drawdown(),
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
@@ -1498,37 +1449,11 @@ impl<'a> Backtest<'a> {
         input.balance_raw = self.balance.usd_total_balance;
         input.timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
 
-        let balance_raw = input.balance_raw;
-        let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
-        input.global.unstuck_allowance_long = if self.bot_params_master.long.unstuck_enabled
-            && self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0
-        {
-            calc_auto_unstuck_allowance(
-                balance_raw,
-                self.bot_params_master.long.unstuck_loss_allowance_pct
-                    * self.bot_params_master.long.total_wallet_exposure_limit,
-                effective_cumsum_max,
-                effective_cumsum_last,
-            )
-        } else {
-            0.0
-        };
-        input.global.unstuck_allowance_short = if self.bot_params_master.short.unstuck_enabled
-            && self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0
-        {
-            calc_auto_unstuck_allowance(
-                balance_raw,
-                self.bot_params_master.short.unstuck_loss_allowance_pct
-                    * self.bot_params_master.short.total_wallet_exposure_limit,
-                effective_cumsum_max,
-                effective_cumsum_last,
-            )
-        } else {
-            0.0
-        };
+        input.global.unstuck_allowance_long = self.unstuck_allowance_diagnostic(LONG);
+        input.global.unstuck_allowance_short = self.unstuck_allowance_diagnostic(SHORT);
         input.global.max_realized_loss_pct = self.backtest_params.max_realized_loss_pct;
-        input.global.realized_pnl_cumsum_max = effective_cumsum_max;
-        input.global.realized_pnl_cumsum_last = effective_cumsum_last;
+        input.global.unstuck_realized_pnl_drawdown = self.unstuck_memory.drawdown();
+        input.global.loss_gate_realized_pnl_drawdown = self.loss_gate_memory.drawdown();
 
         input.peek_hints = peek_hints;
         input.forager_hysteresis = forager_hysteresis;
@@ -1602,6 +1527,7 @@ impl<'a> Backtest<'a> {
                 }
             }
 
+            self.apply_organillo_modes(idx, k, &mut mode_long, &mut mode_short);
             if self.backtest_params.filter_by_min_effective_cost {
                 if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                     mode_long = Some(orchestrator::TradingMode::GracefulStop);
@@ -1620,14 +1546,6 @@ impl<'a> Backtest<'a> {
 
             sym.long.mode = mode_long;
             sym.short.mode = mode_short;
-            if self.hsl_enabled() {
-                let long = self.hsl_order_params(LONG, idx);
-                let short = self.hsl_order_params(SHORT, idx);
-                sym.long.bot_params.hsl_enabled = long.hsl_enabled;
-                sym.long.bot_params.hsl_panic_close_order_type = long.hsl_panic_close_order_type;
-                sym.short.bot_params.hsl_enabled = short.hsl_enabled;
-                sym.short.bot_params.hsl_panic_close_order_type = short.hsl_panic_close_order_type;
-            }
 
             sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
             sym.unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);
@@ -1674,16 +1592,11 @@ impl<'a> Backtest<'a> {
                     sym.emas.m1.log_range[slot].1 = self.emas[idx].volatility_ema_1m_short;
                 }
             }
-            if let Some(slot) = slots.h1_log_range.long {
-                if sym.emas.h1.log_range.len() > slot {
-                    sym.emas.h1.log_range[slot].1 = self.emas[idx].volatility_ema_1h_long;
-                }
-            }
-            if let Some(slot) = slots.h1_log_range.short {
-                if sym.emas.h1.log_range.len() > slot {
-                    sym.emas.h1.log_range[slot].1 = self.emas[idx].volatility_ema_1h_short;
-                }
-            }
+            refresh_orchestrator_hourly_log_ranges(
+                &mut sym.emas.h1.log_range,
+                &self.strategy_params[idx],
+                &self.emas[idx],
+            );
         }
 
         input
@@ -2017,9 +1930,12 @@ impl<'a> Backtest<'a> {
         let btc_collateral_initialized = !balance.use_btc_collateral;
 
         let rms_enabled = crate::unilateralness::backtest_enabled_sides(
-            &bot_params, backtest_params.dynamic_wel_by_tradability,
+            &bot_params,
+            backtest_params.dynamic_wel_by_tradability,
         );
-        Backtest {
+        BacktestEngine {
+            eligibility: None,
+            eligibility_rows: None,
             hlcvs,
             btc_usd_prices,
             active_coin_indices,
@@ -2038,6 +1954,7 @@ impl<'a> Backtest<'a> {
             n_coins,
             ema_alphas,
             emas: initial_emas,
+            ordinary_ema_bootstrapped: vec![false; n_coins],
             unilateralness: bot_params
                 .iter()
                 .zip(rms_enabled.iter())
@@ -2045,12 +1962,16 @@ impl<'a> Backtest<'a> {
                     let mut trackers = Vec::new();
                     for (bp, enabled) in [&pair.long, &pair.short].iter().zip(enabled) {
                         if *enabled
-                            && !trackers.iter().any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
+                            && !trackers
+                                .iter()
+                                .any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
                         {
                             trackers.push((
                                 bp.unilateralness_ema_span_1m,
-                                crate::unilateralness::RollingRms::new(bp.unilateralness_ema_span_1m)
-                                    .expect("validated unilateralness span"),
+                                crate::unilateralness::RollingRms::new(
+                                    bp.unilateralness_ema_span_1m,
+                                )
+                                .expect("validated unilateralness span"),
                             ));
                         }
                     }
@@ -2059,14 +1980,12 @@ impl<'a> Backtest<'a> {
                 .collect(),
             unilateralness_step: None,
             orchestrator_ema_slots,
-            needs_volume_ema_long: bot_params.iter().any(|bp| {
-                bp.long.forager_volume_drop_pct != 0.0
-                    || bp.long.forager_score_weights.volume != 0.0
-            }),
-            needs_volume_ema_short: bot_params.iter().any(|bp| {
-                bp.short.forager_volume_drop_pct != 0.0
-                    || bp.short.forager_score_weights.volume != 0.0
-            }),
+            needs_volume_ema_long: bot_params
+                .iter()
+                .any(|bp| bp.long.forager_score_weights.volume != 0.0),
+            needs_volume_ema_short: bot_params
+                .iter()
+                .any(|bp| bp.short.forager_score_weights.volume != 0.0),
             needs_log_range_long,
             needs_log_range_short,
             needs_volatility_ema_1m_long,
@@ -2088,30 +2007,7 @@ impl<'a> Backtest<'a> {
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
             pnl_cumsum_running_net: 0.0,
-            pnl_cumsum_max_net: 0.0,
             pnl_cumsum_running_net_pside: [0.0, 0.0],
-            pnl_cumsum_running_net_coin_pside: [vec![0.0; n_coins], vec![0.0; n_coins]],
-            pnl_cumsum_max_net_coin_pside: [vec![0.0; n_coins], vec![0.0; n_coins]],
-            pnl_lookback_bars: if backtest_params.pnls_max_lookback_days < 0.0 {
-                usize::MAX
-            } else {
-                let minutes = backtest_params.pnls_max_lookback_days * 24.0 * 60.0;
-                (minutes / backtest_params.candle_interval_minutes.max(1) as f64)
-                    .ceil()
-                    .max(1.0) as usize
-            },
-            pnl_events: VecDeque::new(),
-            pnl_event_seq: 0,
-            rolling_pnl_peak_candidates: VecDeque::new(),
-            coin_pnl_events: [
-                (0..n_coins).map(|_| VecDeque::new()).collect(),
-                (0..n_coins).map(|_| VecDeque::new()).collect(),
-            ],
-            coin_pnl_event_seq: 0,
-            coin_rolling_pnl_peak_candidates: [
-                (0..n_coins).map(|_| VecDeque::new()).collect(),
-                (0..n_coins).map(|_| VecDeque::new()).collect(),
-            ],
             fills: Vec::new(),
             trading_enabled: TradingEnabled {
                 long: bot_params
@@ -2133,6 +2029,7 @@ impl<'a> Backtest<'a> {
             last_increase_fill_timestamp_long: vec![None; n_coins],
             last_increase_fill_timestamp_short: vec![None; n_coins],
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
+            exposure_rms: Default::default(),
             equity_tracking_active: false,
             debug_writer: if DEBUG_DUMP_ORDERS {
                 DebugOrderWriter::new_for_mode()
@@ -2156,8 +2053,32 @@ impl<'a> Backtest<'a> {
                 }),
             max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
             hsl_scopes: Vec::new(),
-            hsl_cutoffs: std::collections::BTreeMap::new(),
-            hsl_traces: std::collections::BTreeMap::new(),
+            hsl_initialized: false,
+            hsl_marks: vec![f64::NAN; n_coins],
+            loss_gate_memory_enabled: backtest_params.max_realized_loss_pct.is_finite()
+                && backtest_params.max_realized_loss_pct >= 0.0
+                && backtest_params.max_realized_loss_pct < 1.0,
+            unstuck_memory_enabled: bot_params.iter().any(|pair| {
+                [&pair.long, &pair.short].iter().any(|p| {
+                    p.unstuck_enabled
+                        && p.unstuck_loss_allowance_pct > 0.0
+                        && p.unstuck_close_pct > 0.0
+                        && p.unstuck_threshold > 0.0
+                        && p.total_wallet_exposure_limit > 0.0
+                })
+            }),
+            unstuck_memory: crate::hsl_decay::RealizedMemory::new(
+                backtest_params.unstuck_memory_ema_span_minutes,
+                i64::try_from(backtest_params.first_timestamp_ms)
+                    .expect("risk timestamp exceeds i64"),
+            )
+            .expect("invalid unstuck memory span"),
+            loss_gate_memory: crate::hsl_decay::RealizedMemory::new(
+                backtest_params.loss_gate_memory_ema_span_minutes,
+                i64::try_from(backtest_params.first_timestamp_ms)
+                    .expect("risk timestamp exceeds i64"),
+            )
+            .expect("invalid loss-gate memory span"),
             hsl_report: hsl_report::Report::new(
                 backtest_params.hsl_detailed_report && !backtest_params.metrics_only,
                 !backtest_params.metrics_only,
@@ -2229,6 +2150,7 @@ impl<'a> Backtest<'a> {
 
     pub fn run(&mut self) -> Result<(Vec<Fill>, Equities), String> {
         self.validate_candle_coverage()?;
+        self.initialize_hsl()?;
         self.update_unilateralness(0)?;
         let n_timesteps = self.hlcvs.shape()[0];
 
@@ -2266,6 +2188,15 @@ impl<'a> Backtest<'a> {
                 }
             }
             self.check_for_fills(k)?;
+            let risk_close_timestamp =
+                i64::try_from(self.first_timestamp_ms + (k as u64 + 1) * self.interval_ms)
+                    .map_err(|_| "risk close timestamp overflow")?;
+            if self.unstuck_memory_enabled {
+                self.unstuck_memory.advance_to(risk_close_timestamp)?;
+            }
+            if self.loss_gate_memory_enabled {
+                self.loss_gate_memory.advance_to(risk_close_timestamp)?;
+            }
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
@@ -2275,6 +2206,13 @@ impl<'a> Backtest<'a> {
                     || (self.fills.last().is_some_and(|fill| fill.index == k)
                         && self.hsl_fill_is_terminal(k)))
             {
+                let at_fill_boundary = self.balance.usd_total_balance <= 0.0;
+                if !at_fill_boundary {
+                    // A positive-balance terminal equity can only be known
+                    // after this bar completes. Retain that final economic
+                    // observation before recording metrics and stopping.
+                    self.update_hsl(k)?;
+                }
                 self.update_equities(k);
                 if !self.check_and_apply_liquidation(k) {
                     return Err(format!(
@@ -2282,11 +2220,12 @@ impl<'a> Backtest<'a> {
                         k, self.balance.usd_total_balance
                     ));
                 }
-                self.record_hsl_analysis(k, true);
+                self.record_hsl_analysis(k, at_fill_boundary);
                 break;
             }
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
+                self.bootstrap_ordinary_emas(k);
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
                 }
@@ -2355,6 +2294,34 @@ impl<'a> Backtest<'a> {
         true
     }
 
+    #[inline(always)]
+    fn organillo_allowed(&self, idx: usize, k: usize) -> bool {
+        if ORGANILLO {
+            self.eligibility.unwrap()[[
+                self.eligibility_rows.unwrap()[k] as usize,
+                self.active_coin_indices[idx],
+            ]] != 0
+        } else {
+            true
+        }
+    }
+
+    fn apply_organillo_modes(
+        &self,
+        idx: usize,
+        k: usize,
+        long: &mut Option<orchestrator::TradingMode>,
+        short: &mut Option<orchestrator::TradingMode>,
+    ) {
+        if ORGANILLO && !self.organillo_allowed(idx, k) {
+            for mode in [long, short] {
+                if matches!(*mode, None | Some(orchestrator::TradingMode::Normal)) {
+                    *mode = Some(orchestrator::TradingMode::GracefulStop);
+                }
+            }
+        }
+    }
+
     fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) -> bool {
         let eligible: Vec<usize> = (0..self.n_coins)
             .filter(|&idx| self.coin_is_tradeable_at(idx, k))
@@ -2381,8 +2348,22 @@ impl<'a> Backtest<'a> {
             })
             .collect();
 
-        let tradable_long_now = eligible_long.len();
-        let tradable_short_now = eligible_short.len();
+        let tradable_long_now = if ORGANILLO {
+            eligible_long
+                .iter()
+                .filter(|&&i| self.organillo_allowed(i, k))
+                .count()
+        } else {
+            eligible_long.len()
+        };
+        let tradable_short_now = if ORGANILLO {
+            eligible_short
+                .iter()
+                .filter(|&&i| self.organillo_allowed(i, k))
+                .count()
+        } else {
+            eligible_short.len()
+        };
         let tradable_long_for_denom = if self.backtest_params.dynamic_wel_by_tradability {
             // Grow-only tradable universe: once a coin has been tradable, later delistings
             // do not reduce the denominator.
@@ -2416,9 +2397,15 @@ impl<'a> Backtest<'a> {
             self.configured_n_positions.short
         };
 
-        // avoid division by zero (possible directly after a delisting)
+        // A zero eligibility mask pauses entries, not the accounting clock.
+        // Preserve ordinary no-capacity behavior when the mask is not the cause.
         if self.effective_n_positions.long == 0 && self.effective_n_positions.short == 0 {
-            return false;
+            if !ORGANILLO
+                || ((self.configured_n_positions.long == 0 || eligible_long.is_empty())
+                    && (self.configured_n_positions.short == 0 || eligible_short.is_empty()))
+            {
+                return false;
+            }
         }
 
         // ---------- 3. dynamic WELs ----------
@@ -2590,140 +2577,6 @@ impl<'a> Backtest<'a> {
         projected_cost >= min_cost
     }
 
-    fn prune_rolling_pnl_window(&mut self, k: usize) {
-        if self.pnl_lookback_bars == 0 || self.pnl_lookback_bars == usize::MAX {
-            return;
-        }
-        while let Some(event) = self.pnl_events.front().copied() {
-            if k.saturating_sub(event.k) > self.pnl_lookback_bars {
-                self.pnl_events.pop_front();
-                if self
-                    .rolling_pnl_peak_candidates
-                    .front()
-                    .map(|candidate| candidate.seq == event.seq)
-                    .unwrap_or(false)
-                {
-                    self.rolling_pnl_peak_candidates.pop_front();
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn record_rolling_pnl(&mut self, k: usize, pnl: f64) {
-        if self.pnl_lookback_bars == 0 || self.pnl_lookback_bars == usize::MAX {
-            return;
-        }
-        self.prune_rolling_pnl_window(k);
-        let abs_cumulative_after = self.pnl_cumsum_running_net;
-        let seq = self.pnl_event_seq;
-        self.pnl_event_seq = self.pnl_event_seq.saturating_add(1);
-        self.pnl_events.push_back(RollingPnlEvent {
-            k,
-            pnl,
-            abs_cumulative_after,
-            seq,
-        });
-        while let Some(candidate) = self.rolling_pnl_peak_candidates.back().copied() {
-            if candidate.abs_cumulative_after <= abs_cumulative_after {
-                self.rolling_pnl_peak_candidates.pop_back();
-            } else {
-                break;
-            }
-        }
-        self.rolling_pnl_peak_candidates
-            .push_back(RollingPnlPeakCandidate {
-                seq,
-                abs_cumulative_after,
-            });
-    }
-
-    fn prune_coin_rolling_pnl_window(&mut self, k: usize, idx: usize, pside: usize) {
-        if self.pnl_lookback_bars == 0 || self.pnl_lookback_bars == usize::MAX {
-            return;
-        }
-        while let Some(event) = self.coin_pnl_events[pside][idx].front().copied() {
-            if k.saturating_sub(event.k) > self.pnl_lookback_bars {
-                self.coin_pnl_events[pside][idx].pop_front();
-                if self.coin_rolling_pnl_peak_candidates[pside][idx]
-                    .front()
-                    .map(|candidate| candidate.seq == event.seq)
-                    .unwrap_or(false)
-                {
-                    self.coin_rolling_pnl_peak_candidates[pside][idx].pop_front();
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn record_coin_rolling_pnl(&mut self, k: usize, idx: usize, pside: usize, pnl: f64) {
-        self.pnl_cumsum_running_net_coin_pside[pside][idx] += pnl;
-        self.pnl_cumsum_max_net_coin_pside[pside][idx] = self.pnl_cumsum_max_net_coin_pside[pside]
-            [idx]
-            .max(self.pnl_cumsum_running_net_coin_pside[pside][idx]);
-        if self.pnl_lookback_bars == 0 || self.pnl_lookback_bars == usize::MAX {
-            return;
-        }
-        self.prune_coin_rolling_pnl_window(k, idx, pside);
-        let abs_cumulative_after = self.pnl_cumsum_running_net_coin_pside[pside][idx];
-        let seq = self.coin_pnl_event_seq;
-        self.coin_pnl_event_seq = self.coin_pnl_event_seq.saturating_add(1);
-        self.coin_pnl_events[pside][idx].push_back(RollingPnlEvent {
-            k,
-            pnl,
-            abs_cumulative_after,
-            seq,
-        });
-        while let Some(candidate) = self.coin_rolling_pnl_peak_candidates[pside][idx]
-            .back()
-            .copied()
-        {
-            if candidate.abs_cumulative_after <= abs_cumulative_after {
-                self.coin_rolling_pnl_peak_candidates[pside][idx].pop_back();
-            } else {
-                break;
-            }
-        }
-        self.coin_rolling_pnl_peak_candidates[pside][idx].push_back(RollingPnlPeakCandidate {
-            seq,
-            abs_cumulative_after,
-        });
-    }
-
-    #[inline]
-    fn effective_pnl_cumsum(&mut self, k: usize) -> (f64, f64) {
-        if self.pnl_lookback_bars == usize::MAX {
-            return (self.pnl_cumsum_max_net, self.pnl_cumsum_running_net);
-        }
-        if self.pnl_lookback_bars > 0 {
-            self.prune_rolling_pnl_window(k);
-            if self.pnl_events.is_empty() {
-                return (0.0, 0.0);
-            }
-            // Match the live contract exactly: filter fills inside the active lookback window,
-            // then compute cumsum.max() / cumsum[-1] over just that filtered sequence.
-            // We keep the state incrementally for speed, but derive both values from the same
-            // absolute cumulative basis so the rolling peak can never fall below the current sum.
-            let base_abs_cumsum = self
-                .pnl_events
-                .front()
-                .map(|event| event.abs_cumulative_after - event.pnl)
-                .unwrap_or(0.0);
-            let rolling_peak = self
-                .rolling_pnl_peak_candidates
-                .front()
-                .map(|candidate| candidate.abs_cumulative_after - base_abs_cumsum)
-                .unwrap_or(0.0)
-                .max(0.0);
-            let rolling_current = self.pnl_cumsum_running_net - base_abs_cumsum;
-            return (rolling_peak, rolling_current);
-        }
-        (self.pnl_cumsum_max_net, self.pnl_cumsum_running_net)
-    }
-
     fn apply_hard_stop_mode_overrides(
         &mut self,
         idx: usize,
@@ -2880,8 +2733,34 @@ impl<'a> Backtest<'a> {
 
     fn record_total_wallet_exposure(&mut self) {
         // For analysis time series we record the net TWE (long + short, where short is negative).
-        let (_, _, twe_net) = self.compute_twe_components();
-        self.total_wallet_exposures.push(twe_net);
+        let limits = [
+            self.bot_params_master.long.total_wallet_exposure_limit,
+            self.bot_params_master.short.total_wallet_exposure_limit,
+        ];
+        let mut exposure = [0.0; 2];
+        let mut position_moments = [0.0; 2];
+        for (side, positions) in [&self.positions.long, &self.positions.short]
+            .iter()
+            .enumerate()
+        {
+            for (idx, position) in positions.iter().enumerate() {
+                if position.size == 0.0 {
+                    continue;
+                }
+                let e =
+                    position.size.abs() * position.price * self.exchange_params_list[idx].c_mult
+                        / self.balance.usd_total_balance;
+                let wel = self
+                    .runtime_budget(idx, side)
+                    .effective_wallet_exposure_limit;
+                exposure[side] += e;
+                position_moments[side] +=
+                    crate::exposure_rms::position_moment(e, wel, limits[side]);
+            }
+        }
+        self.total_wallet_exposures.push(exposure[0] - exposure[1]);
+        self.exposure_rms
+            .record_moments(exposure, position_moments, limits);
     }
 
     fn compute_twe_components(&self) -> (f64, f64, f64) {
@@ -2946,15 +2825,21 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for (order, exec) in entries_to_process {
+                        if ORGANILLO
+                            && !self.organillo_allowed(idx, k)
+                            && self.positions.long[idx].size == 0.0
+                        {
+                            continue;
+                        }
                         if self.hsl_enabled()
-                            && self.hsl_action(LONG, idx) != crate::hsl_controller::Action::Normal
+                            && self.hsl_action(LONG, idx) != crate::hsl_intent::Action::Normal
                         {
                             continue;
                         }
                         self.did_fill_long[idx] = true;
                         self.last_increase_fill_timestamp_long[idx] =
                             Some(self.first_timestamp_ms + (k as u64) * self.interval_ms);
-                        self.process_entry_fill_long(k, idx, &order, exec);
+                        self.process_entry_fill_long(k, idx, &order, exec)?;
                     }
                 }
             }
@@ -2991,15 +2876,21 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for (order, exec) in entries_to_process {
+                        if ORGANILLO
+                            && !self.organillo_allowed(idx, k)
+                            && self.positions.short[idx].size == 0.0
+                        {
+                            continue;
+                        }
                         if self.hsl_enabled()
-                            && self.hsl_action(SHORT, idx) != crate::hsl_controller::Action::Normal
+                            && self.hsl_action(SHORT, idx) != crate::hsl_intent::Action::Normal
                         {
                             continue;
                         }
                         self.did_fill_short[idx] = true;
                         self.last_increase_fill_timestamp_short[idx] =
                             Some(self.first_timestamp_ms + (k as u64) * self.interval_ms);
-                        self.process_entry_fill_short(k, idx, &order, exec);
+                        self.process_entry_fill_short(k, idx, &order, exec)?;
                     }
                 }
             }
@@ -3007,18 +2898,40 @@ impl<'a> Backtest<'a> {
         Ok(())
     }
 
-    /// Consume an exact fill boundary before another fill can reopen its scope.
-    /// Account for a scope flattening before a possible same-bar re-entry.
-    fn finish_hard_stop_episode_at_fill(
-        &mut self,
-        k: usize,
-        idx: usize,
-        filled_pside: usize,
-    ) -> Result<(), String> {
-        if !self.balance.usd_total_balance.is_finite() {
-            return Err(format!("non-finite balance at HSL fill boundary: k {}", k));
+    fn fill_timestamp_ms(&self, k: usize, exec: OrderFillExecution) -> Result<u64, String> {
+        let index = (k as u64)
+            .checked_add(u64::from(exec.at_bar_close))
+            .ok_or("fill index overflow")?;
+        self.first_timestamp_ms
+            .checked_add(
+                index
+                    .checked_mul(self.interval_ms)
+                    .ok_or("fill timestamp overflow")?,
+            )
+            .ok_or_else(|| "fill timestamp overflow".into())
+    }
+
+    fn unstuck_allowance_diagnostic(&self, side: usize) -> f64 {
+        let p = if side == LONG {
+            &self.bot_params_master.long
+        } else {
+            &self.bot_params_master.short
+        };
+        if !p.unstuck_enabled
+            || p.unstuck_loss_allowance_pct <= 0.0
+            || p.total_wallet_exposure_limit <= 0.0
+        {
+            return 0.0;
         }
-        self.finish_hsl_flat(k, idx, filled_pside)
+        // A malformed diagnostic remains explicitly invalid; orchestrator input
+        // validation rejects it before any order construction.
+        crate::hsl_decay::allowance_for(
+            self.balance.usd_total_balance,
+            p.unstuck_loss_allowance_pct,
+            p.total_wallet_exposure_limit,
+            self.unstuck_memory.drawdown(),
+        )
+        .unwrap_or(f64::NAN)
     }
 
     fn process_close_fill_long(
@@ -3028,6 +2941,7 @@ impl<'a> Backtest<'a> {
         close_fill: &Order,
         exec: OrderFillExecution,
     ) -> Result<(), String> {
+        self.hsl_before_fill(k, idx, exec)?;
         let current_position = self.positions.long[idx];
         let mut new_psize = round_(
             current_position.size + close_fill.qty,
@@ -3057,10 +2971,7 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
-        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[LONG] += pnl + fee_paid;
-        self.record_rolling_pnl(k, pnl + fee_paid);
-        self.record_coin_rolling_pnl(k, idx, LONG, pnl + fee_paid);
         if matches!(close_fill.order_type, OrderType::ClosePanicLong) {
             self.record_hard_stop_panic_close_loss(LONG, idx, k, pnl + fee_paid);
         }
@@ -3086,7 +2997,7 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.long[idx].size = new_psize;
         }
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
+        let timestamp_ms = self.fill_timestamp_ms(k, exec)?;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3119,9 +3030,7 @@ impl<'a> Backtest<'a> {
             twe_short,
             twe_net,
         });
-        if new_psize == 0.0 && current_position.size != 0.0 {
-            self.finish_hard_stop_episode_at_fill(k, idx, LONG)?;
-        }
+        self.hsl_after_fill(k, idx, LONG, exec, pnl + fee_paid)?;
         Ok(())
     }
 
@@ -3132,6 +3041,7 @@ impl<'a> Backtest<'a> {
         order: &Order,
         exec: OrderFillExecution,
     ) -> Result<(), String> {
+        self.hsl_before_fill(k, idx, exec)?;
         let current_position = self.positions.short[idx];
         let mut new_psize = round_(
             current_position.size + order.qty,
@@ -3160,10 +3070,7 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
-        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[SHORT] += pnl + fee_paid;
-        self.record_rolling_pnl(k, pnl + fee_paid);
-        self.record_coin_rolling_pnl(k, idx, SHORT, pnl + fee_paid);
         if matches!(order.order_type, OrderType::ClosePanicShort) {
             self.record_hard_stop_panic_close_loss(SHORT, idx, k, pnl + fee_paid);
         }
@@ -3189,7 +3096,7 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.short[idx].size = new_psize;
         }
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
+        let timestamp_ms = self.fill_timestamp_ms(k, exec)?;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3222,9 +3129,7 @@ impl<'a> Backtest<'a> {
             twe_short,
             twe_net,
         });
-        if new_psize == 0.0 && current_position.size != 0.0 {
-            self.finish_hard_stop_episode_at_fill(k, idx, SHORT)?;
-        }
+        self.hsl_after_fill(k, idx, SHORT, exec, pnl + fee_paid)?;
         Ok(())
     }
 
@@ -3234,15 +3139,13 @@ impl<'a> Backtest<'a> {
         idx: usize,
         order: &Order,
         exec: OrderFillExecution,
-    ) {
+    ) -> Result<(), String> {
+        self.hsl_before_fill(k, idx, exec)?;
         // long entry fill
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_rate;
         self.pnl_cumsum_running_net += fee_paid;
-        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[LONG] += fee_paid;
-        self.record_rolling_pnl(k, fee_paid);
-        self.record_coin_rolling_pnl(k, idx, LONG, fee_paid);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3268,7 +3171,7 @@ impl<'a> Backtest<'a> {
         );
         self.positions.long[idx].size = new_psize;
         self.positions.long[idx].price = new_pprice;
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
+        let timestamp_ms = self.fill_timestamp_ms(k, exec)?;
         let wallet_exposure = if new_psize != 0.0 {
             calc_wallet_exposure(
                 self.exchange_params_list[idx].c_mult,
@@ -3301,6 +3204,8 @@ impl<'a> Backtest<'a> {
             twe_short,
             twe_net,
         });
+        self.hsl_after_fill(k, idx, LONG, exec, fee_paid)?;
+        Ok(())
     }
 
     fn process_entry_fill_short(
@@ -3309,15 +3214,13 @@ impl<'a> Backtest<'a> {
         idx: usize,
         order: &Order,
         exec: OrderFillExecution,
-    ) {
+    ) -> Result<(), String> {
+        self.hsl_before_fill(k, idx, exec)?;
         // short entry fill
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_rate;
         self.pnl_cumsum_running_net += fee_paid;
-        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[SHORT] += fee_paid;
-        self.record_rolling_pnl(k, fee_paid);
-        self.record_coin_rolling_pnl(k, idx, SHORT, fee_paid);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3355,7 +3258,7 @@ impl<'a> Backtest<'a> {
         let (twe_long, twe_short, twe_net) = self.compute_twe_components();
         self.fills.push(Fill {
             index: k,
-            timestamp_ms: self.first_timestamp_ms + (k as u64) * self.interval_ms,
+            timestamp_ms: self.fill_timestamp_ms(k, exec)?,
             coin: self.backtest_params.coins[idx].clone(),
             pnl: 0.0,
             fee_paid,
@@ -3374,6 +3277,8 @@ impl<'a> Backtest<'a> {
             twe_short,
             twe_net,
         });
+        self.hsl_after_fill(k, idx, SHORT, exec, fee_paid)?;
+        Ok(())
     }
 
     fn update_trailing_prices(&mut self, k: usize) {
@@ -3478,6 +3383,7 @@ impl<'a> Backtest<'a> {
                         order_type: OrderType::ClosePanicLong,
                     };
                     let exec = OrderFillExecution {
+                        at_bar_close: true,
                         price,
                         fee_rate: self.exchange_params_list[idx].taker_fee,
                         liquidity: "taker",
@@ -3498,6 +3404,7 @@ impl<'a> Backtest<'a> {
                         order_type: OrderType::ClosePanicShort,
                     };
                     let exec = OrderFillExecution {
+                        at_bar_close: true,
                         price,
                         fee_rate: self.exchange_params_list[idx].taker_fee,
                         liquidity: "taker",
@@ -3616,6 +3523,7 @@ impl<'a> Backtest<'a> {
             return self
                 .market_fill_price(k, idx, &order.order)
                 .map(|price| OrderFillExecution {
+                    at_bar_close: false,
                     price,
                     fee_rate: self.exchange_params_list[idx].taker_fee,
                     liquidity: "taker",
@@ -3623,6 +3531,7 @@ impl<'a> Backtest<'a> {
         }
         if self.order_filled(k, idx, &order.order) {
             return Some(OrderFillExecution {
+                at_bar_close: false,
                 price: order.order.price,
                 fee_rate: self.exchange_params_list[idx].maker_fee,
                 liquidity: "maker",
@@ -3668,54 +3577,45 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_all_orchestrator(&mut self, k: usize) -> Result<(), String> {
-        let total_t0 = Instant::now();
+        let profiling = self.orch_profile.is_some();
+        let total_t0 = profiling.then(Instant::now);
         if let Some(p) = self.orch_profile.as_mut() {
             p.steps = p.steps.saturating_add(1);
         }
 
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         let forager_hysteresis = self.forager_hysteresis_state_from_open_orders();
         self.open_orders.clear_all();
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.clear_orders_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.clear_orders_ns, started.elapsed());
         }
 
         // Backtest-only peek: if next order will fill next candle, expand the full grid.
         // The orchestrator can do this internally when provided `next_candle` in the input.
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         let peek_hints: Option<EntryPeekHints> = None;
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.peek_hints_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.peek_hints_ns, started.elapsed());
         }
 
         // Debug: dump exact unstuck calculation inputs/components for parity investigations.
-        let long_position_keys: Vec<usize> = self
-            .positions
-            .long
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, position)| (position.size != 0.0).then_some(idx))
-            .collect();
-        for idx in long_position_keys {
-            self.debug_dump_unstuck_calc(k, idx, LONG);
+        for idx in 0..self.positions.long.len() {
+            if self.positions.long[idx].size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, LONG)?;
+            }
         }
-        let short_position_keys: Vec<usize> = self
-            .positions
-            .short
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, position)| (position.size != 0.0).then_some(idx))
-            .collect();
-        for idx in short_position_keys {
-            self.debug_dump_unstuck_calc(k, idx, SHORT);
+        for idx in 0..self.positions.short.len() {
+            if self.positions.short[idx].size != 0.0 {
+                self.debug_dump_unstuck_calc(k, idx, SHORT)?;
+            }
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {
-            let t0 = Instant::now();
+            let t0 = profiling.then(Instant::now);
             let input = self.get_orchestrator_input_cached(k, peek_hints, Some(forager_hysteresis));
-            let input_update_elapsed = t0.elapsed();
+            let input_update_elapsed = t0.map(|started| started.elapsed());
 
-            let t1 = Instant::now();
+            let t1 = profiling.then(Instant::now);
             let mut res = orchestrator::compute_ideal_orders_with_workspace(
                 &input,
                 &mut self.orchestrator_workspace,
@@ -3728,20 +3628,24 @@ impl<'a> Backtest<'a> {
                     } else {
                         SHORT
                     };
-                    self.hsl_action(side, order.symbol_idx) == crate::hsl_controller::Action::Normal
+                    self.hsl_action(side, order.symbol_idx) == crate::hsl_intent::Action::Normal
                 });
                 res.orders.extend(self.hsl_protective_orders(k)?);
             }
-            let compute_elapsed = t1.elapsed();
+            let compute_elapsed = t1.map(|started| started.elapsed());
             self.orchestrator_input_cache = Some(input);
             (res, input_update_elapsed, compute_elapsed)
         };
-        if let Some(p) = self.orch_profile.as_mut() {
+        if let (Some(p), Some(input_update_elapsed), Some(compute_elapsed)) = (
+            self.orch_profile.as_mut(),
+            input_update_elapsed,
+            compute_elapsed,
+        ) {
             OrchProfile::add_ns(&mut p.input_update_ns, input_update_elapsed);
             OrchProfile::add_ns(&mut p.compute_ns, compute_elapsed);
         }
 
-        let t0 = Instant::now();
+        let t0 = profiling.then(Instant::now);
         for o in res.orders {
             let order = Order {
                 qty: o.qty,
@@ -3771,8 +3675,8 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.distribute_ns, t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
+            OrchProfile::add_ns(&mut p.distribute_ns, started.elapsed());
         }
 
         // The orchestrator guarantees deterministic per-symbol entry/close ordering; we preserve
@@ -3780,8 +3684,8 @@ impl<'a> Backtest<'a> {
 
         self.record_debug_orders_stage(k, "orch_final");
 
-        if let Some(p) = self.orch_profile.as_mut() {
-            OrchProfile::add_ns(&mut p.total_ns, total_t0.elapsed());
+        if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), total_t0) {
+            OrchProfile::add_ns(&mut p.total_ns, started.elapsed());
         }
         Ok(())
     }
@@ -3913,7 +3817,8 @@ impl<'a> Backtest<'a> {
         let Some((start, end)) = self.coin_valid_range(idx) else {
             return Vec::new();
         };
-        self.unilateralness[idx].iter()
+        self.unilateralness[idx]
+            .iter()
             .filter(|(span, _)| {
                 k <= end
                     && k < start.saturating_add(
@@ -3969,6 +3874,247 @@ impl<'a> Backtest<'a> {
             out.push((span, score));
         }
         out
+    }
+
+    fn bootstrap_market_ema(
+        &self,
+        coin: usize,
+        k: usize,
+        alpha: f64,
+        metric: usize,
+        span_samples: f64,
+    ) -> f64 {
+        if alpha <= 0.0 {
+            return 0.0;
+        }
+        let count = crate::utils::ema_bootstrap_count(span_samples, usize::MAX as u64) as usize;
+        let first = self.coin_first_valid_idx[coin];
+        let start = k.saturating_add(1).saturating_sub(count).max(first);
+        crate::utils::ema_bootstrap_f64(
+            (start..=k).map(|j| {
+                let close = self.hlcvs_value(j, coin, CLOSE);
+                let high = self.hlcvs_value(j, coin, HIGH);
+                let low = self.hlcvs_value(j, coin, LOW);
+                if !(close.is_finite() && high.is_finite() && low.is_finite()) {
+                    return f64::NAN;
+                }
+                match metric {
+                    0 => close,
+                    1 => self.hlcvs_value(j, coin, VOLUME).max(0.0) * (high + low + close) / 3.0,
+                    _ if high > 0.0 && low > 0.0 => (high / low).ln(),
+                    _ => f64::NAN,
+                }
+            }),
+            alpha,
+        )
+    }
+
+    fn bootstrap_hour_ema(&self, coin: usize, k: usize, alpha: f64, span_hours: f64) -> f64 {
+        if alpha <= 0.0 {
+            return 0.0;
+        }
+        // Replay update_emas's observed hour boundaries, not nominal buckets:
+        // floor-based windows overlap crossing candles, the first one-candle
+        // window is skipped, and an empty segment retains the latest bucket.
+        // Jump directly between boundary observations and keep no sample series.
+        let ranges = || {
+            let mut last_boundary = self.first_timestamp_ms / 3_600_000 * 3_600_000;
+            let mut latest = HourBucket::default();
+            std::iter::from_fn(move || loop {
+                let next_boundary = last_boundary.checked_add(3_600_000)?;
+                let boundary_k =
+                    (next_boundary - self.first_timestamp_ms).div_ceil(self.interval_ms) as usize;
+                if boundary_k > k {
+                    return None;
+                }
+                let current_ts = self.first_timestamp_ms + boundary_k as u64 * self.interval_ms;
+                let window_start = self.first_timestamp_ms.max(last_boundary);
+                last_boundary = current_ts / 3_600_000 * 3_600_000;
+                let (coin_start, coin_end) = self.coin_valid_range(coin)?;
+                if current_ts > window_start + self.interval_ms {
+                    let start =
+                        ((window_start - self.first_timestamp_ms) / self.interval_ms) as usize;
+                    let start = start.max(coin_start);
+                    let end = (boundary_k - 1).min(coin_end);
+                    if start <= end {
+                        let mut high = f64::MIN;
+                        let mut low = f64::MAX;
+                        let mut seen = false;
+                        for j in start..=end {
+                            let h = self.hlcvs_value(j, coin, HIGH);
+                            let l = self.hlcvs_value(j, coin, LOW);
+                            if h.is_finite() && l.is_finite() {
+                                high = high.max(h);
+                                low = low.min(l);
+                                seen = true;
+                            }
+                        }
+                        if seen {
+                            latest = HourBucket { high, low };
+                        }
+                    }
+                }
+                if latest.high > 0.0 && latest.low > 0.0 {
+                    let value = (latest.high / latest.low).ln();
+                    if value.is_finite() {
+                        return Some(value);
+                    }
+                }
+            })
+        };
+        // The first pass preserves a latest bucket originating before the
+        // retained suffix. The second folds only the bounded observed samples.
+        let available = ranges().count();
+        let count = crate::utils::ema_bootstrap_count(span_hours, available as u64) as usize;
+        crate::utils::ema_bootstrap_f64(ranges().skip(available - count), alpha)
+    }
+
+    /// The first usable planning boundary owns bootstrap. Warmup never reads future bars.
+    fn bootstrap_ordinary_emas(&mut self, k: usize) {
+        for i in 0..self.n_coins {
+            if self.ordinary_ema_bootstrapped[i] || !self.coin_is_tradeable_at(i, k) {
+                continue;
+            }
+            let alphas = self.ema_alphas[i];
+            let interval = self.backtest_params.candle_interval_minutes as f64;
+            let strategies = &self.strategy_params[i];
+            let bots = &self.bot_params[i];
+            let price_spans = |strategy: &StrategyParams| {
+                let (a, b) = strategy_ema_spans(strategy);
+                let mut spans = [a, b, (a * b).sqrt()];
+                spans.sort_by(f64::total_cmp);
+                spans
+            };
+            let band = |rates: [f64; 3], spans: [f64; 3]| {
+                std::array::from_fn(|z| {
+                    self.bootstrap_market_ema(i, k, rates[z], 0, spans[z] / interval)
+                })
+            };
+            let long = band(alphas.long.alphas, price_spans(&strategies.long));
+            let short = band(alphas.short.alphas, price_spans(&strategies.short));
+            let unstuck_long = band(alphas.unstuck_long.alphas, unstuck_spans(&bots.long));
+            let unstuck_short = band(alphas.unstuck_short.alphas, unstuck_spans(&bots.short));
+            let scalars = [
+                self.bootstrap_market_ema(
+                    i,
+                    k,
+                    alphas.vol_alpha_long,
+                    1,
+                    bots.long.filter_volume_ema_span_1m / interval,
+                ),
+                self.bootstrap_market_ema(
+                    i,
+                    k,
+                    alphas.vol_alpha_short,
+                    1,
+                    bots.short.filter_volume_ema_span_1m / interval,
+                ),
+                self.bootstrap_market_ema(
+                    i,
+                    k,
+                    alphas.log_range_alpha_long,
+                    2,
+                    bots.long.filter_volatility_ema_span_1m / interval,
+                ),
+                self.bootstrap_market_ema(
+                    i,
+                    k,
+                    alphas.log_range_alpha_short,
+                    2,
+                    bots.short.filter_volatility_ema_span_1m / interval,
+                ),
+                self.bootstrap_market_ema(
+                    i,
+                    k,
+                    alphas.volatility_ema_1m_alpha_long,
+                    2,
+                    strategy_offset_volatility_span_minutes(&strategies.long).unwrap_or(0.0)
+                        / interval,
+                ),
+                self.bootstrap_market_ema(
+                    i,
+                    k,
+                    alphas.volatility_ema_1m_alpha_short,
+                    2,
+                    strategy_offset_volatility_span_minutes(&strategies.short).unwrap_or(0.0)
+                        / interval,
+                ),
+                self.bootstrap_hour_ema(
+                    i,
+                    k,
+                    alphas.volatility_ema_1h_alpha_long,
+                    strategy_entry_volatility_span_hours(&strategies.long).unwrap_or(0.0),
+                ),
+                self.bootstrap_hour_ema(
+                    i,
+                    k,
+                    alphas.volatility_ema_1h_alpha_short,
+                    strategy_entry_volatility_span_hours(&strategies.short).unwrap_or(0.0),
+                ),
+            ];
+            let ema = &mut self.emas[i];
+            macro_rules! band {
+                ($field:ident, $num:ident, $den:ident, $value:expr) => {
+                    ema.$field = $value;
+                    ema.$num = $value;
+                    ema.$den = [1.0; 3];
+                };
+            }
+            band!(long, long_num, long_den, long);
+            band!(short, short_num, short_den, short);
+            band!(
+                unstuck_long,
+                unstuck_long_num,
+                unstuck_long_den,
+                unstuck_long
+            );
+            band!(
+                unstuck_short,
+                unstuck_short_num,
+                unstuck_short_den,
+                unstuck_short
+            );
+            macro_rules! scalar {
+                ($field:ident, $num:ident, $den:ident, $index:expr) => {
+                    if scalars[$index].is_finite() {
+                        ema.$field = scalars[$index];
+                        ema.$num = scalars[$index];
+                        ema.$den = 1.0;
+                    } else {
+                        ema.$den = 0.0;
+                    }
+                };
+            }
+            scalar!(vol_long, vol_long_num, vol_long_den, 0);
+            scalar!(vol_short, vol_short_num, vol_short_den, 1);
+            scalar!(log_range_long, log_range_long_num, log_range_long_den, 2);
+            scalar!(log_range_short, log_range_short_num, log_range_short_den, 3);
+            scalar!(
+                volatility_ema_1m_long,
+                volatility_ema_1m_long_num,
+                volatility_ema_1m_long_den,
+                4
+            );
+            scalar!(
+                volatility_ema_1m_short,
+                volatility_ema_1m_short_num,
+                volatility_ema_1m_short_den,
+                5
+            );
+            scalar!(
+                volatility_ema_1h_long,
+                volatility_ema_1h_long_num,
+                volatility_ema_1h_long_den,
+                6
+            );
+            scalar!(
+                volatility_ema_1h_short,
+                volatility_ema_1h_short_num,
+                volatility_ema_1h_short_den,
+                7
+            );
+            self.ordinary_ema_bootstrapped[i] = true;
+        }
     }
 
     fn update_emas(&mut self, k: usize) {
@@ -4322,9 +4468,7 @@ impl<'a> Backtest<'a> {
         let recovery = calc_strategy_eq_recovery_days(series, timestamps);
         let peak_recovery_days_strategy_eq = recovery.max;
         let peak_recovery_hours_strategy_eq = peak_recovery_days_strategy_eq * 24.0;
-        let n = sample_count;
-        let mut subset_metrics = Vec::with_capacity(10);
-        subset_metrics.push(StrategyEquityMetrics {
+        StrategyEquityMetrics {
             strategy_eq_recovery_days_mean: recovery.mean,
             strategy_eq_recovery_days_median: recovery.median,
             strategy_eq_recovery_days_p95: recovery.p95,
@@ -4334,81 +4478,6 @@ impl<'a> Backtest<'a> {
             strategy_eq_recovery_days_max: recovery.max,
             peak_recovery_hours_strategy_eq,
             peak_recovery_days_strategy_eq,
-            ..full
-        });
-        for i in 1..10 {
-            let fraction = 1.0 / (1.0 + i as f64);
-            let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
-            let subset_series = &series[start_idx..];
-            if subset_series.is_empty() {
-                break;
-            }
-            let subset_timestamps = &timestamps[start_idx..];
-            let subset_daily_metric_timestamps = &daily_metric_timestamps[start_idx..];
-            let subset_drawdowns = &drawdowns[start_idx..];
-            let mut subset_metric = compute_metrics(
-                subset_series,
-                subset_timestamps,
-                subset_daily_metric_timestamps,
-                subset_drawdowns,
-                // Only the full-window EMA metrics are returned; weighted metrics
-                // below consume no EMA fields. Avoid sorting unused suffix samples.
-                None,
-            );
-            subset_metric.peak_recovery_days_strategy_eq =
-                calc_strategy_eq_recovery_days(subset_series, subset_timestamps).max;
-            subset_metric.peak_recovery_hours_strategy_eq =
-                subset_metric.peak_recovery_days_strategy_eq * 24.0;
-            subset_metrics.push(subset_metric);
-        }
-
-        StrategyEquityMetrics {
-            strategy_eq_recovery_days_mean: subset_metrics[0].strategy_eq_recovery_days_mean,
-            strategy_eq_recovery_days_median: subset_metrics[0].strategy_eq_recovery_days_median,
-            strategy_eq_recovery_days_p95: subset_metrics[0].strategy_eq_recovery_days_p95,
-            strategy_eq_recovery_days_p99: subset_metrics[0].strategy_eq_recovery_days_p99,
-            strategy_eq_recovery_days_mean_worst_5pct: subset_metrics[0]
-                .strategy_eq_recovery_days_mean_worst_5pct,
-            strategy_eq_recovery_days_mean_worst_1pct: subset_metrics[0]
-                .strategy_eq_recovery_days_mean_worst_1pct,
-            strategy_eq_recovery_days_max: subset_metrics[0].strategy_eq_recovery_days_max,
-            peak_recovery_hours_strategy_eq: subset_metrics[0].peak_recovery_hours_strategy_eq,
-            peak_recovery_days_strategy_eq: subset_metrics[0].peak_recovery_days_strategy_eq,
-            adg_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.adg_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
-            mdg_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.mdg_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
-            sharpe_ratio_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.sharpe_ratio_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
-            sortino_ratio_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.sortino_ratio_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
-            omega_ratio_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.omega_ratio_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
-            calmar_ratio_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.calmar_ratio_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
-            sterling_ratio_strategy_eq_w: subset_metrics
-                .iter()
-                .map(|m| m.sterling_ratio_strategy_eq)
-                .sum::<f64>()
-                / 10.0,
             ..full
         }
     }
@@ -4764,7 +4833,6 @@ fn calc_ema_alphas(
 mod tests {
     use super::*;
     use crate::strategies::{
-        TrailingGridV7CloseParams, TrailingGridV7EntryParams, TrailingGridV7Params,
         TrailingMartingaleCloseParams, TrailingMartingaleEntryParams, TrailingMartingaleParams,
     };
     use crate::types::EquityHardStopLossConfig;
@@ -4811,6 +4879,521 @@ mod tests {
         }
     }
 
+    fn ordinary_ema_fixture_params(n: usize, interval: u64) -> BacktestParams {
+        BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![n - 1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 1,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            ew_half_life_days: None,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            forager_score_hysteresis_pct: 0.0,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
+            candle_interval_minutes: interval,
+        }
+    }
+
+    #[test]
+    fn ordinary_ema_bootstrap_is_causal_then_consumes_each_suffix_once() {
+        let mut data = Array3::from_elem((4, 1, 4), 1.0);
+        for (k, close) in [2.0, 4.0, 8.0, 999.0].into_iter().enumerate() {
+            for metric in [HIGH, LOW, CLOSE] {
+                data[[k, 0, metric]] = close;
+            }
+        }
+        let btc = Array1::from_elem(4, 20_000.0);
+        let mut pair = BotParamsPair::default();
+        pair.long.ema_span_0 = 3.0;
+        pair.long.ema_span_1 = 3.0;
+        pair.long.unstuck_ema_span_0 = 3.0;
+        pair.long.unstuck_ema_span_1 = 3.0;
+        let params = ordinary_ema_fixture_params(4, 1);
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair.clone()],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        bt.bootstrap_ordinary_emas(1);
+        assert!((bt.emas[0].long[0] - 10.0 / 3.0).abs() < 1e-12);
+        assert_eq!(bt.emas[0].long, bt.emas[0].unstuck_long);
+        bt.update_emas(2);
+        assert!((bt.emas[0].long[0] - 17.0 / 3.0).abs() < 1e-12);
+        bt.bootstrap_ordinary_emas(2);
+        assert!((bt.emas[0].long[0] - 17.0 / 3.0).abs() < 1e-12);
+        let mut run = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        run.run().unwrap();
+        // The normal first planning boundary is k=2. It uses the three
+        // completed samples and cannot see the future 999-valued candle.
+        assert!(run.ordinary_ema_bootstrapped[0]);
+        assert!((run.emas[0].long[0] - 6.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ordinary_hour_ema_bootstrap_preserves_completed_bucket_cadence() {
+        let n = 182;
+        let mut data = Array3::from_elem((n, 1, 4), 1.0);
+        for k in 0..n {
+            data[[k, 0, HIGH]] = if k < 60 {
+                2.0
+            } else if k < 120 {
+                4.0
+            } else if k < 180 {
+                128.0
+            } else {
+                256.0
+            };
+        }
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 1);
+        let mut pair = BotParamsPair::default();
+        pair.long.entry_volatility_ema_span_1h = 3.0;
+        pair.long.entry_weight_volatility_1h = 1.0;
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        for k in 1..=120 {
+            bt.update_emas(k);
+        }
+        bt.bootstrap_ordinary_emas(120);
+        let seed = 5.0 / 3.0 * 2.0_f64.ln();
+        assert!((bt.emas[0].volatility_ema_1h_long - seed).abs() < 1e-12);
+        for k in 121..180 {
+            bt.update_emas(k);
+        }
+        assert_eq!(bt.emas[0].volatility_ema_1h_long, seed);
+        bt.update_emas(180);
+        assert!((bt.emas[0].volatility_ema_1h_long - 13.0 / 3.0 * 2.0_f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ordinary_hour_bootstrap_preserves_crossing_candle_overlap_and_cutoff() {
+        let n = 20;
+        let mut data = Array3::from_elem((n, 1, 4), 1.0);
+        for j in 0..n {
+            data[[j, 0, HIGH]] = 101.0;
+            data[[j, 0, LOW]] = 99.0;
+        }
+        // The 00:56 candle belongs to both native observation windows ending
+        // at 01:03 and 02:06; aggregated candles cannot be split at 01:00.
+        data[[8, 0, HIGH]] = 200.0;
+        data[[8, 0, LOW]] = 50.0;
+        // Neither the current boundary candle nor a future candle is hourly input.
+        data[[18, 0, HIGH]] = 1.0e8;
+        data[[19, 0, HIGH]] = 1.0e12;
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 7);
+        let mut pair = BotParamsPair::default();
+        pair.long.entry_volatility_ema_span_1h = 1.0;
+        pair.long.entry_weight_volatility_1h = 1.0;
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        for j in 1..=18 {
+            bt.update_emas(j);
+        }
+        assert_eq!(bt.latest_hour[0].high, 200.0);
+        assert_eq!(bt.latest_hour[0].low, 50.0);
+        assert!((bt.emas[0].volatility_ema_1h_long - 4.0_f64.ln()).abs() < 1e-12);
+        assert!((bt.bootstrap_hour_ema(0, 18, 0.5, 3.0) - 4.0_f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ordinary_hour_bootstrap_preserves_initial_single_candle_skip() {
+        for (interval, first_timestamp_ms, k) in [(1, 59 * 60_000, 2), (60, 0, 3)] {
+            let n = k + 2;
+            let mut data = Array3::from_elem((n, 1, 4), 1.0);
+            for j in 0..n {
+                data[[j, 0, HIGH]] = 110.0;
+                data[[j, 0, LOW]] = 90.0;
+            }
+            let btc = Array1::from_elem(n, 20_000.0);
+            let mut params = ordinary_ema_fixture_params(n, interval);
+            params.first_timestamp_ms = first_timestamp_ms;
+            let mut pair = BotParamsPair::default();
+            pair.long.entry_volatility_ema_span_1h = 3.0;
+            pair.long.entry_weight_volatility_1h = 1.0;
+            let mut bt = Backtest::new(
+                data.view(),
+                btc.view(),
+                vec![pair],
+                vec![ExchangeParams::default()],
+                &params,
+            );
+            for j in 1..=k {
+                bt.update_emas(j);
+            }
+            assert_eq!(bt.latest_hour[0].high, 0.0);
+            assert!(bt.bootstrap_hour_ema(0, k, 0.5, 3.0).is_nan());
+        }
+    }
+
+    fn hour_basis_fixture_pair() -> BotParamsPair {
+        let mut pair = BotParamsPair::default();
+        pair.long.n_positions = 1;
+        pair.long.total_wallet_exposure_limit = 1.0;
+        pair.long.wallet_exposure_limit = 1.0;
+        pair.long.ema_span_0 = 1.0;
+        pair.long.ema_span_1 = 1.0;
+        pair.long.entry_initial_qty_pct = 0.1;
+        pair.long.entry_grid_spacing_pct = 0.02;
+        pair.long.entry_volatility_ema_span_1h = 3.0;
+        pair.long.entry_weight_volatility_1h = 1.0;
+        pair.long.close_grid_qty_pct = 1.0;
+        pair.long.close_trailing_threshold_pct = 0.01;
+        pair
+    }
+
+    fn hour_basis_fixture_data(n: usize) -> Array3<f64> {
+        let mut data = Array3::from_elem((n, 1, 4), 1.0);
+        for k in 0..n {
+            data[[k, 0, HIGH]] = 110.0;
+            data[[k, 0, LOW]] = 90.0;
+            data[[k, 0, CLOSE]] = 100.0;
+        }
+        data
+    }
+
+    #[test]
+    fn ordinary_hour_basis_missing_reaches_planner_in_both_snapshot_paths() {
+        let n = 6;
+        let data = hour_basis_fixture_data(n);
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 60);
+        for cached in [false, true] {
+            let mut bt = Backtest::new(
+                data.view(),
+                btc.view(),
+                vec![hour_basis_fixture_pair()],
+                vec![ExchangeParams::default()],
+                &params,
+            );
+            // Exercise a previously populated cache as well as the fresh builder.
+            if cached {
+                bt.orchestrator_input_cache =
+                    Some(bt.build_orchestrator_input_iter(0, None, None, 0..1));
+            }
+            for k in 1..=3 {
+                bt.update_emas(k);
+            }
+            bt.bootstrap_ordinary_emas(3);
+            assert_eq!(bt.emas[0].volatility_ema_1h_long_den, 0.0);
+            let input = if cached {
+                bt.get_orchestrator_input_cached(3, None, None)
+            } else {
+                bt.build_orchestrator_input_iter(3, None, None, 0..1)
+            };
+            assert!(
+                matches!(
+                    orchestrator::compute_ideal_orders(&input),
+                    Err(orchestrator::OrchestratorError::MissingEma { symbol_idx: 0 })
+                ),
+                "cached={cached}: an unobserved hourly range must not become a zero-valued input"
+            );
+            assert!(input.symbols[0].emas.h1.log_range.is_empty());
+        }
+    }
+
+    #[test]
+    fn ordinary_hour_basis_aligned_hour_candles_fail_at_actual_planning_boundary() {
+        let n = 6;
+        let data = hour_basis_fixture_data(n);
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 60);
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![hour_basis_fixture_pair()],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        let error = bt
+            .run()
+            .err()
+            .expect("no native hourly bucket can be observed at this cadence");
+        assert!(error.contains("MissingEma"), "{error}");
+    }
+
+    #[test]
+    fn ordinary_hour_basis_recovers_after_real_bucket_in_both_snapshot_paths() {
+        let n = 64;
+        let data = hour_basis_fixture_data(n);
+        let btc = Array1::from_elem(n, 20_000.0);
+        let mut params = ordinary_ema_fixture_params(n, 1);
+        params.first_timestamp_ms = 59 * 60_000;
+        let mut pair = hour_basis_fixture_pair();
+        // Equal spans must keep their established lookup ordering on cache refresh.
+        pair.short = pair.long.clone();
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        for k in 1..=2 {
+            bt.update_emas(k);
+        }
+        bt.bootstrap_ordinary_emas(2);
+        let first = bt.get_orchestrator_input_cached(2, None, None);
+        assert!(matches!(
+            orchestrator::compute_ideal_orders(&first),
+            Err(orchestrator::OrchestratorError::MissingEma { symbol_idx: 0 })
+        ));
+        assert!(first.symbols[0].emas.h1.log_range.is_empty());
+        bt.orchestrator_input_cache = Some(first);
+        for k in 3..=61 {
+            bt.update_emas(k);
+        }
+        let expected = (110.0_f64 / 90.0).ln();
+        assert!(bt.emas[0].volatility_ema_1h_long_den > 0.0);
+        let fresh = bt.build_orchestrator_input_iter(61, None, None, 0..1);
+        let cached = bt.get_orchestrator_input_cached(61, None, None);
+        for input in [&fresh, &cached] {
+            let hourly = &input.symbols[0].emas.h1.log_range;
+            assert_eq!(hourly.len(), 2);
+            assert_eq!(hourly[0].0, 3.0);
+            assert_eq!(hourly[1].0, 3.0);
+            assert!((hourly[0].1 - expected).abs() < 1e-12);
+            assert!((hourly[1].1 - expected).abs() < 1e-12);
+            assert!(!orchestrator::compute_ideal_orders(input)
+                .unwrap()
+                .orders
+                .is_empty());
+        }
+        assert_eq!(
+            fresh.symbols[0].emas.h1.log_range,
+            cached.symbols[0].emas.h1.log_range
+        );
+        bt.orchestrator_input_cache = Some(cached);
+        let repeat = bt.get_orchestrator_input_cached(61, None, None);
+        assert_eq!(
+            repeat.symbols[0].emas.h1.log_range,
+            fresh.symbols[0].emas.h1.log_range
+        );
+    }
+
+    #[test]
+    fn ordinary_hour_basis_cache_keeps_spans_when_only_one_side_has_known_state() {
+        let n = 62;
+        // A measured zero range is valid and must remain distinct from no basis.
+        let data = Array3::from_elem((n, 1, 4), 100.0);
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 1);
+        let mut pair = hour_basis_fixture_pair();
+        pair.short = pair.long.clone();
+        pair.short.entry_volatility_ema_span_1h = 5.0;
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        for k in 1..=60 {
+            bt.update_emas(k);
+        }
+        bt.bootstrap_ordinary_emas(60);
+        let known_denominator = bt.emas[0].volatility_ema_1h_long_den;
+        assert!(known_denominator > 0.0);
+        assert_eq!(bt.emas[0].volatility_ema_1h_long, 0.0);
+        let initial = bt.get_orchestrator_input_cached(60, None, None);
+        assert_eq!(
+            initial.symbols[0].emas.h1.log_range,
+            vec![(3.0, 0.0), (5.0, 0.0)]
+        );
+        bt.orchestrator_input_cache = Some(initial);
+        // The transport must not attach the short value to the long span when
+        // one state is unavailable, or leave stale tuples in an existing cache.
+        for (denominator, value, known) in [
+            (0.0, 0.0, false),
+            (known_denominator, 0.0, true),
+            (known_denominator, f64::NAN, false),
+        ] {
+            bt.emas[0].volatility_ema_1h_long_den = denominator;
+            bt.emas[0].volatility_ema_1h_long = value;
+            let fresh = bt.build_orchestrator_input_iter(60, None, None, 0..1);
+            let cached = bt.get_orchestrator_input_cached(60, None, None);
+            let expected = if known {
+                vec![(3.0, 0.0), (5.0, 0.0)]
+            } else {
+                vec![(5.0, 0.0)]
+            };
+            for input in [&fresh, &cached] {
+                assert_eq!(input.symbols[0].emas.h1.log_range, expected);
+                let result = orchestrator::compute_ideal_orders(input);
+                if known {
+                    assert!(!result.unwrap().orders.is_empty());
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(orchestrator::OrchestratorError::MissingEma { symbol_idx: 0 })
+                    ));
+                }
+            }
+            bt.orchestrator_input_cache = Some(cached);
+        }
+    }
+
+    #[test]
+    fn ordinary_hour_basis_absence_preserves_unconsumed_close_and_disabled_side() {
+        let n = 6;
+        let data = hour_basis_fixture_data(n);
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 60);
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![hour_basis_fixture_pair()],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        for k in 1..=3 {
+            bt.update_emas(k);
+        }
+        bt.bootstrap_ordinary_emas(3);
+        for cached in [false, true] {
+            let mut input = if cached {
+                bt.get_orchestrator_input_cached(3, None, None)
+            } else {
+                bt.build_orchestrator_input_iter(3, None, None, 0..1)
+            };
+            input.symbols[0].long.mode = Some(orchestrator::TradingMode::Manual);
+            assert!(orchestrator::compute_ideal_orders(&input)
+                .unwrap()
+                .orders
+                .is_empty());
+            input.symbols[0].long.mode = Some(orchestrator::TradingMode::TpOnly);
+            input.symbols[0].long.position = Position {
+                size: 1.0,
+                price: 100.0,
+            };
+            let output = orchestrator::compute_ideal_orders(&input).unwrap();
+            assert!(output.orders.iter().any(|order| order.qty < 0.0));
+            bt.orchestrator_input_cache = Some(input);
+        }
+    }
+
+    #[test]
+    fn ordinary_hour_bootstrap_retains_latest_across_missing_discarded_prefix() {
+        let n = 242;
+        let mut data = Array3::from_elem((n, 1, 4), f64::NAN);
+        for j in 0..60 {
+            data[[j, 0, HIGH]] = 8.0;
+            data[[j, 0, LOW]] = 1.0;
+        }
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 1);
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![BotParamsPair::default()],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        // Three retained observations all carry the bucket from before that suffix.
+        for j in 1..=240 {
+            bt.update_emas(j);
+        }
+        assert_eq!(bt.latest_hour[0].high, 8.0);
+        assert!((bt.bootstrap_hour_ema(0, 240, 0.8, 1.5) - 8.0_f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ordinary_hour_bootstrap_respects_coin_range_and_available_observations() {
+        let n = 182;
+        let mut data = Array3::from_elem((n, 1, 4), 1.0);
+        for j in 0..n {
+            data[[j, 0, HIGH]] = if j < 70 || j > 89 { 1.0e6 } else { 4.0 };
+        }
+        let btc = Array1::from_elem(n, 20_000.0);
+        let mut params = ordinary_ema_fixture_params(n, 1);
+        params.first_valid_indices[0] = 70;
+        params.last_valid_indices[0] = 89;
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![BotParamsPair::default()],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        assert!(bt.bootstrap_hour_ema(0, 60, 0.5, 3.0).is_nan());
+        for j in 1..=180 {
+            bt.update_emas(j);
+        }
+        assert_eq!(bt.latest_hour[0].high, 4.0);
+        assert!((bt.bootstrap_hour_ema(0, 180, 0.5, 3.0) - 4.0_f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ordinary_hour_bootstrap_bounds_suffix_from_original_float_span() {
+        let n = 542;
+        let mut data = Array3::from_elem((n, 1, 4), 1.0);
+        for j in 0..n {
+            data[[j, 0, HIGH]] = if j < 120 {
+                1.0e6
+            } else if j < 180 {
+                1024.0
+            } else {
+                2.0
+            };
+        }
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 1);
+        let bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![BotParamsPair::default()],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        // Nine completed observations exist. Span 3 retains six buckets with
+        // range ln(2); the next float also retains the seventh bucket ln(1024).
+        assert!((bt.bootstrap_hour_ema(0, 540, 0.5, 3.0) - 2.0_f64.ln()).abs() < 1e-12);
+        let span = f64::from_bits(3.0_f64.to_bits() + 1);
+        let alpha = 2.0 / (span + 1.0);
+        let expected = 136.0 / 127.0 * 2.0_f64.ln();
+        assert!((bt.bootstrap_hour_ema(0, 540, alpha, span) - expected).abs() < 1e-12);
+    }
+
     #[test]
     fn effective_min_cost_uses_executable_min_qty() {
         let exchange = ExchangeParams {
@@ -4851,6 +5434,7 @@ mod tests {
             btc_collateral_cap: 0.9,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4858,7 +5442,8 @@ mod tests {
             forager_score_hysteresis_pct: 0.0,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -4927,6 +5512,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4934,7 +5520,8 @@ mod tests {
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -4991,6 +5578,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -4998,7 +5586,8 @@ mod tests {
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5092,13 +5681,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_orders_allowed: false,
@@ -5174,13 +5765,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_orders_allowed: false,
@@ -5257,13 +5850,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5349,13 +5944,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -5429,13 +6026,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -5521,13 +6120,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -5602,268 +6203,6 @@ mod tests {
                 .limit_order_fill_buffer_pct,
             0.0001
         );
-    }
-
-    #[test]
-    fn trailing_grid_v7_zero_cooldown_fills_multiple_grid_entries_in_one_candle() {
-        let hlcvs = Array3::from_shape_vec(
-            (2, 1, 4),
-            vec![
-                101.0, 99.0, 100.0, 1.0, //
-                101.0, 80.0, 90.0, 1.0,
-            ],
-        )
-        .unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.wallet_exposure_limit = 1.0;
-        bp_pair.long.risk_entry_cooldown_minutes = 0.0;
-        bp_pair.short.n_positions = 0;
-        bp_pair.short.total_wallet_exposure_limit = 0.0;
-        bp_pair.short.wallet_exposure_limit = 0.0;
-
-        let strategy = TrailingGridV7Params {
-            ema_span_0: 1.0,
-            ema_span_1: 1.0,
-            entry: TrailingGridV7EntryParams {
-                grid_double_down_factor: 1.0,
-                grid_spacing_pct: 0.02,
-                initial_qty_pct: 0.1,
-                trailing_double_down_factor: 1.0,
-                trailing_grid_ratio: -0.072114,
-                trailing_retracement_pct: 0.037427,
-                trailing_threshold_pct: 0.01,
-                volatility_ema_span_hours: 1.0,
-                ..Default::default()
-            },
-            close: TrailingGridV7CloseParams::default(),
-        };
-        let strategy_params = StrategyParamsPairValue {
-            long: serde_json::to_value(strategy).unwrap(),
-            short: serde_json::to_value(strategy).unwrap(),
-        };
-        let backtest_params = BacktestParams {
-            starting_balance: 1_000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![1],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: false,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
-        };
-        let exchange = ExchangeParams {
-            qty_step: 0.01,
-            price_step: 0.01,
-            min_qty: 0.0,
-            min_cost: 0.0,
-            c_mult: 1.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-        };
-
-        let mut bt = Backtest::new_with_strategy_params(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            crate::strategies::StrategyKind::TrailingGridV7,
-            vec![bp_pair],
-            vec![strategy_params],
-            vec![exchange],
-            &backtest_params,
-        );
-
-        bt.bot_params[0].long.risk_entry_cooldown_minutes = 0.05;
-        bt.orchestrator_input_cache = None;
-        bt.update_open_orders_all(0).unwrap();
-        assert_eq!(
-            bt.open_orders.long[0].entries.len(),
-            1,
-            "positive cooldown must still stage only one v7 add order"
-        );
-
-        bt.bot_params[0].long.risk_entry_cooldown_minutes = 0.0;
-        bt.orchestrator_input_cache = None;
-        bt.update_open_orders_all(0).unwrap();
-        let staged_entry_count = bt.open_orders.long[0].entries.len();
-        assert!(
-            staged_entry_count >= 2,
-            "expected the v7 grid leg to stage multiple entries, got {staged_entry_count}"
-        );
-
-        bt.check_for_fills(1).unwrap();
-
-        let same_candle_entries: Vec<&Fill> = bt
-            .fills
-            .iter()
-            .filter(|fill| fill.index == 1 && fill.fill_qty > 0.0)
-            .collect();
-        assert_eq!(same_candle_entries.len(), staged_entry_count);
-        assert!(same_candle_entries.len() >= 2);
-        assert!(same_candle_entries
-            .iter()
-            .all(|fill| fill.timestamp_ms == 60_000));
-    }
-
-    #[test]
-    fn trailing_grid_v7_fills_unstuck_and_trailing_close_in_same_candle() {
-        let hlcvs = Array3::from_shape_vec(
-            (2, 1, 4),
-            vec![
-                100.0, 100.0, 100.0, 1.0, //
-                102.0, 99.0, 100.0, 1.0,
-            ],
-        )
-        .unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 10.0;
-        bp_pair.long.wallet_exposure_limit = 10.0;
-        bp_pair.long.risk_wel_enforcer_enabled = false;
-        bp_pair.long.risk_twel_enforcer_enabled = false;
-        bp_pair.long.unstuck_enabled = true;
-        bp_pair.long.unstuck_ema_gating_enabled = false;
-        bp_pair.long.unstuck_close_pct = 0.0195;
-        bp_pair.long.unstuck_threshold = 0.9;
-        bp_pair.long.unstuck_loss_allowance_pct = 0.01;
-        bp_pair.short.n_positions = 0;
-        bp_pair.short.total_wallet_exposure_limit = 0.0;
-        bp_pair.short.wallet_exposure_limit = 0.0;
-
-        let strategy = TrailingGridV7Params {
-            ema_span_0: 1.0,
-            ema_span_1: 1.0,
-            entry: TrailingGridV7EntryParams::default(),
-            close: TrailingGridV7CloseParams {
-                trailing_grid_ratio: 1.0,
-                trailing_qty_pct: 0.2624,
-                trailing_retracement_pct: 0.005,
-                trailing_threshold_pct: 0.01,
-                ..Default::default()
-            },
-        };
-        let strategy_params = StrategyParamsPairValue {
-            long: serde_json::to_value(strategy).unwrap(),
-            short: serde_json::to_value(strategy).unwrap(),
-        };
-        let backtest_params = BacktestParams {
-            starting_balance: 1_000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![1],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: false,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
-        };
-        let exchange = ExchangeParams {
-            qty_step: 0.01,
-            price_step: 0.01,
-            min_qty: 0.0,
-            min_cost: 0.0,
-            c_mult: 1.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-        };
-
-        let mut bt = Backtest::new_with_strategy_params(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            crate::strategies::StrategyKind::TrailingGridV7,
-            vec![bp_pair],
-            vec![strategy_params],
-            vec![exchange],
-            &backtest_params,
-        );
-        bt.positions.long[0] = Position {
-            size: 95.6,
-            price: 100.0,
-        };
-        bt.trailing_prices.long[0] = TrailingPriceBundle {
-            min_since_open: 99.0,
-            max_since_min: 102.0,
-            max_since_open: 102.0,
-            min_since_max: 100.0,
-        };
-        bt.orchestrator_input_cache = None;
-        bt.update_open_orders_all(0).unwrap();
-
-        let staged_closes = &bt.open_orders.long[0].closes;
-        assert_eq!(staged_closes.len(), 2);
-        assert!(staged_closes.iter().any(|order| {
-            order.order.order_type == OrderType::CloseUnstuckLong
-                && (order.order.qty + 1.95).abs() < 1e-12
-        }));
-        assert!(staged_closes.iter().any(|order| {
-            order.order.order_type == OrderType::CloseTrailingLong
-                && (order.order.qty + 26.24).abs() < 1e-12
-        }));
-
-        bt.check_for_fills(1).unwrap();
-
-        let same_candle_closes: Vec<&Fill> = bt
-            .fills
-            .iter()
-            .filter(|fill| fill.index == 1 && fill.fill_qty < 0.0)
-            .collect();
-        assert_eq!(same_candle_closes.len(), 2);
-        assert!(same_candle_closes
-            .iter()
-            .any(|fill| fill.order_type == OrderType::CloseUnstuckLong));
-        assert!(same_candle_closes
-            .iter()
-            .any(|fill| fill.order_type == OrderType::CloseTrailingLong));
-        assert!(same_candle_closes
-            .iter()
-            .all(|fill| fill.timestamp_ms == 60_000));
     }
 
     #[test]
@@ -6050,13 +6389,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 365.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
@@ -6137,6 +6478,43 @@ mod tests {
 
         assert!((actual.drawdown_worst_mean_1pct_strategy_eq - 0.85).abs() < 1e-9);
         assert!((legacy_tail_aligned.drawdown_worst_mean_1pct_strategy_eq - 0.50).abs() < 1e-9);
+
+        bt.backtest_params.metrics_only = false;
+        let standalone =
+            bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
+        assert_eq!(standalone.adg_strategy_eq, actual.adg_strategy_eq);
+        assert_eq!(
+            standalone.drawdown_worst_strategy_eq,
+            actual.drawdown_worst_strategy_eq
+        );
+        assert_eq!(
+            standalone.strategy_eq_recovery_days_max,
+            actual.strategy_eq_recovery_days_max
+        );
+        bt.backtest_params.metrics_only = true;
+
+        // Public overall EMA tails retain simultaneous signal observations.
+        // The two largest stresses occur on different sides and different bars:
+        // tail(max(long, short)) = 0.9, but max(tail(long), tail(short)) = 0.6.
+        bt.equities.timestamps_ms = (0..200).map(|k| k * 60_000).collect();
+        bt.strategy_equity_series = vec![100.0; 200];
+        for side in [LONG, SHORT] {
+            bt.strategy_equity_series_pside[side] = vec![100.0; 200];
+            bt.strategy_equity_timestamps_ms_pside[side] = bt.equities.timestamps_ms.clone();
+        }
+        bt.hsl_report.signal_emas = [vec![0.0; 200], vec![0.0; 200], vec![0.0; 200]];
+        bt.hsl_report.signal_emas[1][0] = 1.0;
+        bt.hsl_report.signal_emas[1][1] = 0.2;
+        bt.hsl_report.signal_emas[2][2] = 0.8;
+        bt.hsl_report.signal_emas[2][3] = 0.1;
+        for k in 0..200 {
+            bt.hsl_report.signal_emas[0][k] =
+                bt.hsl_report.signal_emas[1][k].max(bt.hsl_report.signal_emas[2][k]);
+        }
+        let observed = bt.hsl_strategy_metrics();
+        assert!((observed.overall.drawdown_worst_mean_1pct_ema_strategy_eq - 0.9).abs() < 1e-12);
+        assert!((observed.long.drawdown_worst_mean_1pct_ema_strategy_eq - 0.6).abs() < 1e-12);
+        assert!((observed.short.drawdown_worst_mean_1pct_ema_strategy_eq - 0.45).abs() < 1e-12);
     }
 
     #[test]
@@ -6165,13 +6543,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6225,13 +6605,15 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                ew_half_life_days: None,
                 hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
                 dynamic_wel_by_tradability: true,
                 hedge_mode: true,
                 max_realized_loss_pct: 1.0,
-                pnls_max_lookback_days: 30.0,
+                unstuck_memory_ema_span_minutes: 43_200.0,
+                loss_gate_memory_ema_span_minutes: 43_200.0,
                 liquidation_threshold: 0.05,
                 equity_hard_stop_loss: EquityHardStopLossConfig::default(),
                 market_orders_allowed: false,
@@ -6293,13 +6675,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: hs,
             market_orders_allowed: false,
@@ -6365,13 +6749,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6443,13 +6829,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6516,13 +6904,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6577,6 +6967,7 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit = 0.5;
         bp_pair.long.unstuck_loss_allowance_pct = 0.2;
+        bp_pair.long.unstuck_enabled = true;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -6596,13 +6987,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: -1.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6625,8 +7018,8 @@ mod tests {
         bt.balance.usd_total_balance_rounded = 100.0;
         bt.pnl_cumsum_max = 10.0;
         bt.pnl_cumsum_running = 0.0;
-        bt.pnl_cumsum_max_net = 10.0;
         bt.pnl_cumsum_running_net = 0.0;
+        bt.unstuck_memory.fill(0, -10.0).unwrap();
 
         let input = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
@@ -6638,19 +7031,10 @@ mod tests {
             "expected raw balance to route to input.balance_raw"
         );
 
-        let allowance_pct = 0.2 * 0.5;
-        let expected_from_raw = calc_auto_unstuck_allowance(
-            200.0,
-            allowance_pct,
-            bt.pnl_cumsum_max_net,
-            bt.pnl_cumsum_running_net,
-        );
-        let expected_from_snapped = calc_auto_unstuck_allowance(
-            100.0,
-            allowance_pct,
-            bt.pnl_cumsum_max_net,
-            bt.pnl_cumsum_running_net,
-        );
+        let expected_from_raw =
+            crate::hsl_decay::allowance_for(200.0, 0.2, 0.5, bt.unstuck_memory.drawdown()).unwrap();
+        let expected_from_snapped =
+            crate::hsl_decay::allowance_for(100.0, 0.2, 0.5, bt.unstuck_memory.drawdown()).unwrap();
         assert!(
             (input.global.unstuck_allowance_long - expected_from_raw).abs() < 1e-12,
             "expected unstuck allowance to use raw balance"
@@ -6659,6 +7043,17 @@ mod tests {
             (input.global.unstuck_allowance_long - expected_from_snapped).abs() > 1e-9,
             "allowance should differ from snapped-balance path in this scenario"
         );
+
+        // Debug allowance must use effective coin settings and continuous D,
+        // independently of side-master settings.
+        bt.bot_params[0].long.unstuck_loss_allowance_pct = 0.125;
+        bt.bot_params[0].long.total_wallet_exposure_limit = 2.0;
+        assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 42.5);
+        assert_ne!(bt.unstuck_allowance_diagnostic(LONG), 42.5);
+        bt.bot_params[0].long.unstuck_loss_allowance_pct = f64::NAN;
+        assert!(bt.unstuck_allowance_for_position(0, LONG).is_err());
+        bt.bot_params[0].long.unstuck_enabled = false;
+        assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 0.0);
     }
 
     #[test]
@@ -6691,13 +7086,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 0.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6721,7 +7118,6 @@ mod tests {
         bt.balance.usd_total_balance_rounded = 1000.0;
         bt.pnl_cumsum_max = 0.0;
         bt.pnl_cumsum_running = 0.0;
-        bt.pnl_cumsum_max_net = 0.0;
         bt.pnl_cumsum_running_net = 0.0;
 
         let input1 = bt.get_orchestrator_input_cached(1, None, None);
@@ -6741,7 +7137,6 @@ mod tests {
         bt.balance.usd_total_balance_rounded = 1000.0; // snapped stays (hysteresis)
         bt.pnl_cumsum_max = 50.0;
         bt.pnl_cumsum_running = 50.0;
-        bt.pnl_cumsum_max_net = 50.0;
         bt.pnl_cumsum_running_net = 50.0;
 
         let input2 = bt.get_orchestrator_input_cached(1, None, None);
@@ -6755,8 +7150,9 @@ mod tests {
         );
 
         // Verify the unstuck allowance used the new raw balance, not the old one
-        let allowance_pct = 0.2 * 0.5;
-        let expected_allowance = calc_auto_unstuck_allowance(1050.0, allowance_pct, 50.0, 50.0);
+        let expected_allowance =
+            crate::hsl_decay::allowance_for(1050.0, 0.2, 0.5, bt.unstuck_memory.drawdown())
+                .unwrap();
         assert!(
             (input2.global.unstuck_allowance_long - expected_allowance).abs() < 1e-12,
             "unstuck allowance should use updated raw balance (1050), got {}",
@@ -6765,442 +7161,279 @@ mod tests {
     }
 
     #[test]
-    fn rolling_effective_pnl_cumsum_uses_true_window_and_expires_without_new_fills() {
-        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
+    fn organillo_rotation_counts_peaks_modes_and_retired_budgets() {
+        let hlcvs = Array3::from_shape_vec((6, 4, 4), vec![1.0; 6 * 4 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
 
         let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.n_positions = 4;
+        bp_pair.long.total_wallet_exposure_limit = 1.2;
+        bp_pair.long.wallet_exposure_limit = -1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.short.n_positions = 4;
+        bp_pair.short.total_wallet_exposure_limit = 2.0;
+        bp_pair.short.wallet_exposure_limit = -1.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+
+        bp_pair.long.wallet_exposure_limit = 0.2;
+        let mut short_only = bp_pair.clone();
+        short_only.long.entry_eligible = false;
+        short_only.long.n_positions = 0;
+        short_only.long.total_wallet_exposure_limit = 0.0;
+        short_only.long.wallet_exposure_limit = 0.0;
 
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
+            coins: vec![
+                "A".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "D".to_string(),
+            ],
             active_coin_indices: None,
             first_timestamp_ms: 0,
             requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![3],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
+            first_valid_indices: vec![0, 0, 0, 0],
+            last_valid_indices: vec![5, 5, 5, 5],
+            warmup_minutes: vec![0, 0, 0, 0],
+            trade_start_indices: vec![0, 0, 0, 0],
             global_warmup_bars: 0,
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 1.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
+            candle_interval_minutes: 1,
         };
 
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        record_realized_pnl_for_test(&mut bt, 0, 100.0);
-        record_realized_pnl_for_test(&mut bt, 1, -90.0);
-
-        let (peak1, current1) = bt.effective_pnl_cumsum(1);
-        assert!((peak1 - 100.0).abs() < 1e-12);
-        assert!((current1 - 10.0).abs() < 1e-12);
-
-        let (peak2, current2) = bt.effective_pnl_cumsum(2);
-        assert!(
-            peak2.abs() < 1e-12,
-            "expected stale positive peak to expire to the zero baseline"
-        );
-        assert!(
-            (current2 - -90.0).abs() < 1e-12,
-            "expected only the k=1 fill to remain active at k=2"
-        );
-
-        let (peak3, current3) = bt.effective_pnl_cumsum(3);
-        assert!(
-            peak3.abs() < 1e-12 && current3.abs() < 1e-12,
-            "expected rolling pnl window to decay to zero after all fills expire"
-        );
-    }
-
-    #[test]
-    fn rolling_pnl_window_expiry_restores_unstuck_allowance_after_stale_peak_ages_out() {
-        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.unstuck_loss_allowance_pct = 0.02;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
-
-        let backtest_params = BacktestParams {
-            starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![3],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 1.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
-        };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        bt.balance.usd_total_balance = 1000.0;
-        bt.balance.usd_total_balance_rounded = 1000.0;
-
-        record_realized_pnl_for_test(&mut bt, 0, 100.0);
-        record_realized_pnl_for_test(&mut bt, 1, -90.0);
-
-        let input1 = bt.get_orchestrator_input_cached(1, None, None);
-        assert!(
-            input1.global.unstuck_allowance_long.abs() < 1e-12,
-            "expected stale positive peak to suppress allowance while still in-window"
-        );
-
-        let input2 = bt.get_orchestrator_input_cached(2, None, None);
-        assert!(
-            input2.global.realized_pnl_cumsum_max.abs() < 1e-12,
-            "expected rolling peak to decay to the zero baseline after the old positive fill expires"
-        );
-        assert!(
-            (input2.global.realized_pnl_cumsum_last - -90.0).abs() < 1e-12,
-            "expected rolling current pnl to keep only the still-active fill"
-        );
-        assert!(
-            input2.global.unstuck_allowance_long.abs() < 1e-12,
-            "expected allowance to stay exhausted while current realized PnL is below the zero baseline"
-        );
-    }
-
-    fn naive_live_style_effective_pnl_cumsum(
-        events: &[(usize, f64)],
-        k: usize,
-        lookback_bars: usize,
-    ) -> (f64, f64) {
-        let active: Vec<f64> = events
-            .iter()
-            .filter(|(event_k, _)| {
-                lookback_bars == usize::MAX || k.saturating_sub(*event_k) <= lookback_bars
-            })
-            .map(|(_, pnl)| *pnl)
-            .collect();
-        if active.is_empty() {
-            return (0.0, 0.0);
-        }
-        let mut cumsum = 0.0;
-        let mut peak: f64 = 0.0;
-        for pnl in active {
-            cumsum += pnl;
-            peak = peak.max(cumsum);
-        }
-        (peak, cumsum)
-    }
-
-    fn record_realized_pnl_for_test(bt: &mut Backtest, k: usize, pnl: f64) {
-        bt.pnl_cumsum_running += pnl;
-        bt.pnl_cumsum_max = bt.pnl_cumsum_max.max(bt.pnl_cumsum_running);
-        bt.pnl_cumsum_running_net += pnl;
-        bt.pnl_cumsum_max_net = bt.pnl_cumsum_max_net.max(bt.pnl_cumsum_running_net);
-        bt.record_rolling_pnl(k, pnl);
-    }
-
-    #[test]
-    fn rolling_effective_pnl_cumsum_keeps_peak_at_or_above_current_after_window_slide() {
-        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
-
-        let backtest_params = BacktestParams {
-            starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![3],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 2.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
-        };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        // True in-window sequence at k=3 with a 2-bar lookback:
-        // k=1: +50
-        // k=2: -120
-        // k=3: +190
-        // current rolling pnl = 120, and the in-window peak should also be 120.
-        record_realized_pnl_for_test(&mut bt, 0, 100.0);
-        record_realized_pnl_for_test(&mut bt, 1, 50.0);
-        record_realized_pnl_for_test(&mut bt, 2, -120.0);
-        record_realized_pnl_for_test(&mut bt, 3, 190.0);
-
-        let (peak, current) = bt.effective_pnl_cumsum(3);
-
-        assert!(
-            peak >= current - 1e-12,
-            "rolling peak must never fall below current rolling pnl: peak={}, current={}",
-            peak,
-            current
-        );
-        assert!(
-            (peak - 120.0).abs() < 1e-12,
-            "expected in-window rolling peak to track the later high after the old base expired"
-        );
-        assert!(
-            (current - 120.0).abs() < 1e-12,
-            "expected in-window rolling current pnl to equal the surviving 3-event sum"
-        );
-    }
-
-    #[test]
-    fn rolling_pnl_rebase_bug_does_not_inflate_unstuck_allowance() {
-        let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.unstuck_loss_allowance_pct = 0.01;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
-
-        let backtest_params = BacktestParams {
-            starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![3],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 2.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
-        };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        bt.balance.usd_total_balance = 1000.0;
-        bt.balance.usd_total_balance_rounded = 1000.0;
-
-        record_realized_pnl_for_test(&mut bt, 0, 100.0);
-        record_realized_pnl_for_test(&mut bt, 1, 50.0);
-        record_realized_pnl_for_test(&mut bt, 2, -120.0);
-        record_realized_pnl_for_test(&mut bt, 3, 190.0);
-
-        let input = bt.get_orchestrator_input_cached(3, None, None);
-
-        assert!(
-            input.global.realized_pnl_cumsum_max >= input.global.realized_pnl_cumsum_last - 1e-12,
-            "realized pnl peak must not be below current: peak={}, current={}",
-            input.global.realized_pnl_cumsum_max,
-            input.global.realized_pnl_cumsum_last
-        );
-        assert!(
-            (input.global.realized_pnl_cumsum_max - 120.0).abs() < 1e-12,
-            "expected current window peak to equal the current rolling pnl at the new high"
-        );
-        assert!(
-            (input.global.realized_pnl_cumsum_last - 120.0).abs() < 1e-12,
-            "expected current rolling pnl to equal the surviving 3-event sum"
-        );
-        assert!(
-            (input.global.unstuck_allowance_long - 10.0).abs() < 1e-12,
-            "expected allowance to remain anchored to balance when current rolling pnl is at the window peak"
-        );
-    }
-
-    #[test]
-    fn rolling_effective_pnl_cumsum_matches_naive_live_style_reference() {
-        let hlcvs = Array3::from_shape_vec((7, 1, 4), vec![1.0; 7 * 1 * 4]).unwrap();
-        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 7]);
-
-        let mut bp_pair = BotParamsPair::default();
-        bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.unstuck_loss_allowance_pct = 0.01;
-        bp_pair.long.ema_span_0 = 10.0;
-        bp_pair.long.ema_span_1 = 20.0;
-
-        let backtest_params = BacktestParams {
-            starting_balance: 1000.0,
-            maker_fee: 0.0,
-            taker_fee: 0.00055,
-            coins: vec!["TEST".to_string()],
-            active_coin_indices: None,
-            first_timestamp_ms: 0,
-            requested_start_timestamp_ms: 0,
-            first_valid_indices: vec![0],
-            last_valid_indices: vec![6],
-            warmup_minutes: vec![0],
-            trade_start_indices: vec![0],
-            global_warmup_bars: 0,
-            btc_collateral_cap: 0.0,
-            btc_collateral_ltv_cap: None,
-            metrics_only: true,
-            hsl_detailed_report: false,
-            skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
-            dynamic_wel_by_tradability: true,
-            hedge_mode: true,
-            max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 2.0,
-            liquidation_threshold: 0.05,
-            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            market_orders_allowed: false,
-            market_order_near_touch_threshold: 0.001,
-            market_order_slippage_pct: 0.0005,
-            limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
-        };
-
-        let mut bt = Backtest::new(
-            hlcvs.view(),
-            btc_usd_prices.view(),
-            vec![bp_pair],
-            vec![ExchangeParams::default()],
-            &backtest_params,
-        );
-
-        let events = [
-            (0usize, 100.0),
-            (1, 50.0),
-            (2, -120.0),
-            (3, 190.0),
-            (5, -30.0),
+        let eligibility = ndarray::array![
+            [1u8, 0, 0, 0],
+            [0, 1, 0, 0],
+            [1, 1, 1, 1],
+            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+            [1, 1, 1, 1]
         ];
-        let mut next_event_idx = 0usize;
+        let rows = Array1::from_vec(vec![0i32, 1, 2, 3, 4, 5]);
+        let mut bt = BacktestEngine::<true>::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair.clone(), bp_pair.clone(), bp_pair, short_only],
+            vec![
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+            ],
+            &backtest_params,
+        );
 
-        for k in 0..=6 {
-            while next_event_idx < events.len() && events[next_event_idx].0 == k {
-                let pnl = events[next_event_idx].1;
-                record_realized_pnl_for_test(&mut bt, k, pnl);
-                next_event_idx += 1;
-            }
-            let expected = naive_live_style_effective_pnl_cumsum(&events[..next_event_idx], k, 2);
-            let actual = bt.effective_pnl_cumsum(k);
-            assert!(
-                (actual.0 - expected.0).abs() < 1e-12 && (actual.1 - expected.1).abs() < 1e-12,
-                "expected live-style rolling pnl stats at k={} to be {:?}, got {:?}",
-                k,
-                expected,
-                actual
+        let initial_zero = ndarray::Array2::<u8>::zeros((6, 4));
+        bt.eligibility = Some(initial_zero.view());
+        bt.eligibility_rows = Some(rows.view());
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert_eq!(bt.effective_n_positions.long, 0);
+        assert_eq!(bt.effective_n_positions.short, 0);
+        assert_eq!(
+            bt.runtime_budget[1].short.effective_wallet_exposure_limit,
+            0.0
+        );
+        assert_eq!(
+            bt.runtime_budget[0].long.effective_wallet_exposure_limit,
+            0.2
+        );
+        let configured = (
+            bt.configured_n_positions.long,
+            bt.configured_n_positions.short,
+        );
+        bt.configured_n_positions.long = 0;
+        bt.configured_n_positions.short = 0;
+        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        (
+            bt.configured_n_positions.long,
+            bt.configured_n_positions.short,
+        ) = configured;
+        bt.coin_trade_start_idx.fill(2);
+        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        bt.coin_trade_start_idx.fill(0);
+
+        bt.eligibility = Some(eligibility.view());
+        for (k, long, short) in [(0, 1, 1), (1, 1, 1), (2, 3, 4), (3, 3, 4), (4, 3, 4)] {
+            bt.update_n_positions_and_wallet_exposure_limits(k);
+            assert_eq!(bt.effective_n_positions.long, long);
+            assert_eq!(bt.effective_n_positions.short, short);
+            // An explicit per-coin WEL remains authoritative when retired.
+            assert_eq!(
+                bt.runtime_budget[0].long.effective_wallet_exposure_limit,
+                0.2
             );
-            let input = bt.get_orchestrator_input_cached(k, None, None);
-            let expected_allowance =
-                calc_auto_unstuck_allowance(1000.0, 0.01, expected.0, expected.1);
             assert!(
-                (input.global.unstuck_allowance_long - expected_allowance).abs() < 1e-12,
-                "expected unstuck allowance at k={} to match live-style reference",
-                k
+                (bt.runtime_budget[1].short.effective_wallet_exposure_limit - 2.0 / short as f64)
+                    .abs()
+                    < 1e-12
             );
         }
+        let initial = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(initial.symbols[0].long.mode, None);
+        assert_eq!(
+            initial.symbols[1].long.mode,
+            Some(orchestrator::TradingMode::GracefulStop)
+        );
+        bt.orchestrator_input_cache = Some(initial);
+        let rotated = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(
+            rotated.symbols[0].long.mode,
+            Some(orchestrator::TradingMode::GracefulStop)
+        );
+        assert_eq!(rotated.symbols[1].long.mode, None);
+        let mut long = Some(orchestrator::TradingMode::Panic);
+        let mut short = Some(orchestrator::TradingMode::Normal);
+        bt.apply_organillo_modes(0, 1, &mut long, &mut short);
+        assert_eq!(long, Some(orchestrator::TradingMode::Panic));
+        assert_eq!(short, Some(orchestrator::TradingMode::GracefulStop));
+    }
+
+    #[test]
+    fn organillo_execution_candle_blocks_flat_but_manages_held_on_both_sides() {
+        let hlcvs = Array3::from_shape_vec(
+            (3, 1, 4),
+            vec![
+                100.005,
+                99.995,
+                100.0,
+                1.0,
+                100.0 * (1.0 + 0.0001),
+                100.0 * (1.0 - 0.0001),
+                100.0,
+                1.0,
+                100.02,
+                99.98,
+                100.0,
+                1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        bp_pair.short = bp_pair.long.clone();
+        bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
+        bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.00099,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            ew_half_life_days: None,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: true,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0001,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let eligibility = ndarray::array![[1u8], [0], [1]];
+        let rows = Array1::from_vec(vec![0i32, 1, 2]);
+        let mut bt = BacktestEngine::<true>::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams {
+                maker_fee: 0.0002,
+                ..Default::default()
+            }],
+            &backtest_params,
+        );
+        bt.eligibility = Some(eligibility.view());
+        bt.eligibility_rows = Some(rows.view());
+        let order = |qty, order_type| BacktestOrder {
+            order: Order {
+                qty,
+                price: 100.0,
+                order_type,
+            },
+            execution_type: orchestrator::ExecutionType::Market,
+        };
+        bt.open_orders.long[0]
+            .entries
+            .push(order(1.0, OrderType::EntryGridNormalLong));
+        bt.open_orders.short[0]
+            .entries
+            .push(order(-1.0, OrderType::EntryGridNormalShort));
+        // These orders were admitted at k=0 but execute on a newly ineligible candle.
+        bt.check_for_fills(1).unwrap();
+        assert_eq!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.positions.short[0].size, 0.0);
+        // Held coins can still increase (configured DCA) while ineligible.
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+        bt.positions.short[0] = Position {
+            size: -1.0,
+            price: 100.0,
+        };
+        bt.check_for_fills(1).unwrap();
+        assert_eq!(bt.positions.long[0].size, 2.0);
+        assert_eq!(bt.positions.short[0].size, -2.0);
+        bt.open_orders.long[0]
+            .closes
+            .push(order(-2.0, OrderType::CloseGridLong));
+        bt.open_orders.short[0]
+            .closes
+            .push(order(2.0, OrderType::CloseGridShort));
+        // Closes execute first; stale entries cannot reopen in the same candle.
+        bt.check_for_fills(1).unwrap();
+        assert_eq!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.positions.short[0].size, 0.0);
+        bt.check_for_fills(2).unwrap();
+        assert_eq!(bt.positions.long[0].size, 1.0);
+        assert_eq!(bt.positions.short[0].size, -1.0);
     }
 
     #[test]
@@ -7231,13 +7464,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7284,6 +7519,24 @@ mod tests {
             "k=4 expected wel to remain 1.5/3 after B delists"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
+
+        // Exposure diagnostics read the retained runtime budget for a held,
+        // nontradable coin, independently of cached order-generation inputs.
+        bt.runtime_budget[1].long.effective_wallet_exposure_limit = 0.75;
+        bt.positions.long[1] = Position {
+            size: 5.0,
+            price: 100.0,
+        };
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        bt.record_total_wallet_exposure();
+        let mut analysis = crate::types::Analysis::default();
+        bt.exposure_rms.apply(&mut analysis);
+        assert!((analysis.total_wallet_exposure_rms_long - 0.5).abs() < 1e-12);
+        assert!(
+            (analysis.position_exposure_utilization_rms_long - (0.25_f64 / (1.5 * 0.75)).sqrt())
+                .abs()
+                < 1e-12
+        );
     }
 
     #[test]
@@ -7330,6 +7583,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
@@ -7337,7 +7591,8 @@ mod tests {
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7405,13 +7660,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7483,13 +7740,15 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
-            pnls_max_lookback_days: 30.0,
+            unstuck_memory_ema_span_minutes: 43_200.0,
+            loss_gate_memory_ema_span_minutes: 43_200.0,
             liquidation_threshold: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7657,7 +7916,7 @@ mod tests {
     }
 
     #[test]
-    fn test_make_orchestrator_ema_slots_assigns_fixed_positions() {
+    fn test_make_orchestrator_ema_slots_assigns_fixed_m1_positions() {
         let strategy_pair = StrategyParamsPair {
             long: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
                 offset_volatility_ema_span_1m: 30.0,
@@ -7683,8 +7942,6 @@ mod tests {
         assert_eq!(slots.m1_log_range.forager_short, 1);
         assert_eq!(slots.m1_log_range.offset_long, Some(2));
         assert_eq!(slots.m1_log_range.offset_short, Some(3));
-        assert_eq!(slots.h1_log_range.long, Some(0));
-        assert_eq!(slots.h1_log_range.short, Some(1));
     }
 
     #[test]
@@ -7747,18 +8004,12 @@ mod tests {
     #[test]
     fn test_hourly_volatility_span_below_one_hour_floors_alpha_to_one() {
         let strategy_pair = StrategyParamsPair {
-            long: StrategyParams::TrailingGridV7(TrailingGridV7Params {
-                entry: TrailingGridV7EntryParams {
-                    volatility_ema_span_hours: 0.75,
-                    ..Default::default()
-                },
+            long: StrategyParams::TrailingMartingale(TrailingMartingaleParams {
+                volatility_ema_span_1h: 0.75,
                 ..Default::default()
             }),
-            short: StrategyParams::TrailingGridV7(TrailingGridV7Params {
-                entry: TrailingGridV7EntryParams {
-                    volatility_ema_span_hours: 0.25,
-                    ..Default::default()
-                },
+            short: StrategyParams::TrailingMartingale(TrailingMartingaleParams {
+                volatility_ema_span_1h: 0.25,
                 ..Default::default()
             }),
         };

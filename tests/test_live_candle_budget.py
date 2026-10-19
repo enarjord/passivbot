@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 
 import pytest
 
@@ -5908,8 +5909,12 @@ async def test_projected_open_tail_ema_seeds_when_tail_exceeds_span(tmp_path, mo
     )
 
     assert projected["close"][2.0] == pytest.approx(100.0)
-    assert projected["qv"][2.0] == pytest.approx(0.0)
-    assert projected["log_range"][2.0] == pytest.approx(0.0)
+    # At the first usable boundary the normalized four-row bootstrap contains
+    # the source row followed by three completed zero-activity preview candles.
+    beta = 1.0 - 2.0 / 3.0
+    source_weight = beta**3 / sum(beta**i for i in range(4))
+    assert projected["qv"][2.0] == pytest.approx(200.0 * source_weight)
+    assert projected["log_range"][2.0] == pytest.approx(math.log(101.0 / 99.0) * source_weight)
     assert np.array_equal(cm._cache[symbol], seed)
     assert cm._ema_cache.get(symbol, {}) == {}
     assert cm._synthetic_timestamps.get(symbol, set()) == set()

@@ -16,11 +16,11 @@ def _write_config(path, config):
 
 def _sample_config() -> dict:
     return {
-        "config_version": "v8.0.0",
+        "config_version": "v9.0.0",
+        "_raw": {"live": {"api_key": "super-secret-api-key"}},
         "backtest": {"exchanges": ["binance"]},
         "live": {
             "user": "binance_01",
-            "hsl_signal_mode": "unified",
             "approved_coins": {
                 "long": ["BTC", "ETH", "SOL", "XMR"],
                 "short": ["BTC"],
@@ -31,33 +31,45 @@ def _sample_config() -> dict:
             "forager_score_hysteresis_pct": 0.02,
             "force_cold_startup": False,
             "max_warmup_minutes": 30,
-            "pnls_max_lookback_days": 7,
-            "api_key": "super-secret-api-key",
+            "risk_bootstrap_max_lookback_minutes": 129600.0,
         },
         "bot": {
-            "hsl": {
+            "unstuck": {"memory_ema_span_minutes": 10080.0},
+            "risk": {"loss_gate": {"memory_ema_span_minutes": 20160.0, "max_drawdown_ratio": 0.2}, "hsl": {
+                "scope": "portfolio",
                 "enabled": True,
                 "red_threshold": 0.05,
-                "restart_after_red_policy": "always",
-            },
+                "cooldown_minutes_after_red": 60.0,
+                "memory_ema_span_minutes": 43200.0,
+                "drawdown_ratio_ema_span_minutes": 120.0,
+                "scale_budget_with_excess_allowance": False,
+                "panic_close_order_type": "limit",
+            }},
             "long": {
-                "risk": {"n_positions": 3},
-                "forager": {"volume_drop_pct": 0.02},
+                "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.0},
+                "unstuck": {"enabled": True},
+                "forager": {"volume_ema_span_1m": 120.0},
                 "hsl": {
                     "enabled": True,
                     "red_threshold": 0.05,
                     "cooldown_minutes_after_red": 60,
-                    "ema_span_minutes": 120,
+                    "memory_ema_span_minutes": 43200.0,
+                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "scale_budget_with_excess_allowance": False,
                     "panic_close_order_type": "limit",
-                    "restart_after_red_policy": "always",
                 },
             },
             "short": {
-                "risk": {"n_positions": 1},
+                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.0},
+                "unstuck": {"enabled": False},
                 "hsl": {
                     "enabled": False,
                     "red_threshold": 0.04,
                     "cooldown_minutes_after_red": 30,
+                    "memory_ema_span_minutes": 43200.0,
+                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "scale_budget_with_excess_allowance": False,
+                    "panic_close_order_type": "limit",
                 },
             },
         },
@@ -83,7 +95,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "user": "binance_01",
         "user_exchange_hint": "binance",
     }
-    assert report["hsl"]["signal_mode"] == "unified"
+    assert report["hsl"]["signal_mode"] == "portfolio"
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
@@ -107,8 +119,8 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "sample": ["BTC", "ETH"],
         "truncated": 2,
     }
-    assert report["forager"]["sides"]["long"]["n_positions"] == 3
-    assert report["forager"]["total_configured_n_positions"] == 4.0
+    assert report["forager"]["sides"]["long"]["max_positions"] == 3
+    assert report["forager"]["total_configured_max_positions"] == 4.0
     assert report["risk"]["balance_hysteresis_snap_pct"] == {
         "basis": (
             "snapped balance is used for sizing/gating surfaces where hysteresis "
@@ -120,7 +132,10 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "status": "defaulted",
         "warning_threshold": 0.05,
     }
-    assert report["cache"]["live_settings"]["pnls_max_lookback_days"] == 7
+    fill_evidence = {row["code"]: row for row in report["cache"]["readiness"]["surfaces"]["fills"]["evidence"]}
+    assert fill_evidence["unstuck_memory_ema_span_minutes_configured"]["value"] == 10080.0
+    assert fill_evidence["loss_gate_memory_ema_span_minutes_configured"]["value"] == 20160.0
+    assert "realized_loss_gate_lookback_minutes" not in report["cache"]["live_settings"]
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
         "attention_count": 7,
@@ -143,6 +158,39 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
+
+
+def test_live_preflight_requires_explicit_v8_migration(tmp_path):
+    config = _sample_config()
+    config["config_version"] = "v8.0.0"
+    path = tmp_path / "old.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    assert not report["ok"]
+    assert any(row["code"] == "config_migration_required" and "migrate-config-v9" in row["message"]
+               for row in report["issues"])
+
+
+def test_live_preflight_rejects_unknown_secret_field_without_rendering_value(tmp_path):
+    config = _sample_config()
+    config["live"]["api_key"] = "unknown-field-secret"
+    path = tmp_path / "unknown.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    assert report["ok"] is False
+    assert any(issue["code"] == "config_schema_invalid" and "live.api_key" in issue["message"]
+               for issue in report["issues"])
+    assert "unknown-field-secret" not in json.dumps(report)
+
+
+def test_live_preflight_rejects_cooldown_beyond_reconstructable_bootstrap_cap(tmp_path):
+    config = _sample_config()
+    config["live"]["risk_bootstrap_max_lookback_minutes"] = 30.0
+    path = tmp_path / "bound.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    assert not report["ok"]
+    assert any(row["code"] == "hsl_bootstrap_capability_invalid" for row in report["issues"])
 
 
 def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
@@ -254,7 +302,7 @@ def test_live_config_preflight_flags_account_hsl_with_config_balance_override(tm
     report = live_config_preflight.build_live_config_preflight_report(config_path)
 
     assert report["ok"] is False
-    assert report["hsl"]["effective_signal_mode"] == "unified"
+    assert report["hsl"]["effective_signal_mode"] == "portfolio"
     assert report["hsl"]["balance_override"] == {
         "active": True,
         "present": True,
@@ -313,7 +361,7 @@ def test_live_config_preflight_blocks_invalid_runtime_override_with_account_hsl(
 
 def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     config = _sample_config()
-    config["live"]["hsl_signal_mode"] = "coin"
+    config["bot"]["risk"]["hsl"]["scope"] = "coin"
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -336,7 +384,7 @@ def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(
     tmp_path,
 ):
     config = _sample_config()
-    del config["live"]["hsl_signal_mode"]
+    del config["bot"]["risk"]["hsl"]["scope"]
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -355,17 +403,31 @@ def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(
     ]
 
 
-def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
+def test_sparse_canonical_preflight_cli_serializes_absent_hsl_scope(tmp_path, capsys):
+    path = tmp_path / "sparse.json"
+    _write_config(path, {
+        "config_version": "v9.0.0", "bot": {}, "live": {}, "backtest": {},
+    })
+    assert live_config_preflight.main([str(path), "--compact"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["hsl"]["signal_mode"] is None
+    assert report["hsl"]["effective_signal_mode"] == "coin"
+
+
+def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
-        "n_positions": 3,
-        "forager_volume_drop_pct": 0.02,
-        "hsl_enabled": True,
-        "hsl_red_threshold": 0.05,
-        "hsl_cooldown_minutes_after_red": 60,
-        "hsl_ema_span_minutes": 120,
-        "hsl_panic_close_order_type": "limit",
-        "hsl_restart_after_red_policy": "always",
+        "risk": {"max_positions": 3},
+        "forager": {"volume_ema_span_1m": 120.0},
+        "hsl": {
+            "enabled": True,
+            "red_threshold": 0.05,
+            "cooldown_minutes_after_red": 60,
+            "memory_ema_span_minutes": 43200.0,
+            "drawdown_ratio_ema_span_minutes": 120.0,
+            "panic_close_order_type": "limit",
+        },
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -376,25 +438,25 @@ def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
     assert report["hsl"]["sides"]["long"]["present"] is True
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
-    assert report["hsl"]["sides"]["long"]["restart_after_red_policy"] == "always"
-    assert report["forager"]["sides"]["long"]["n_positions"] == 3
+    assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
+    assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
-    assert report["forager"]["sides"]["long"]["settings"] == {"volume_drop_pct": 0.02}
+    assert report["forager"]["sides"]["long"]["settings"] == {"volume_ema_span_1m": 120.0}
 
 
 def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):
     baseline = _sample_config()
     target = _sample_config()
     target["live"]["user"] = "okx_01"
-    target["live"]["exchange"] = "okx"
-    target["live"]["hsl_signal_mode"] = "per_side"
+    target["backtest"]["exchanges"] = ["okx"]
+    target["bot"]["risk"]["hsl"]["scope"] = "pside"
     target["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
     target["live"]["ignored_coins"]["short"] = ["DOGE", "XRP"]
     target["live"]["max_forager_candle_staleness_minutes"] = 20
     target["live"]["max_warmup_minutes"] = 45
-    target["live"]["api_key"] = "new-secret-api-key"
+    target["_raw"]["live"]["api_key"] = "new-secret-api-key"
     target["bot"]["long"]["hsl"]["enabled"] = False
-    target["bot"]["short"]["risk"] = {"n_positions": 2}
+    target["bot"]["short"]["risk"]["max_positions"] = 2
 
     baseline_path = tmp_path / "baseline.json"
     target_path = tmp_path / "target.json"
@@ -416,10 +478,10 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         "present": True,
         "value": "binance_01",
     }
-    assert changes["live.exchange"]["after"] == {"present": True, "value": "okx"}
-    assert changes["live.hsl_signal_mode"]["after"] == {
+    assert changes["backtest.exchanges"]["after"] == {"present": True, "value": ["okx"]}
+    assert changes["bot.risk.hsl.scope"]["after"] == {
         "present": True,
-        "value": "per_side",
+        "value": "pside",
     }
     assert changes["bot.long.hsl.enabled"]["after"] == {
         "present": True,
@@ -454,12 +516,12 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     assert "api_key" not in rendered
 
 
-def test_live_config_preflight_compare_resolves_flat_shared_bot_keys(tmp_path):
+def test_live_config_preflight_compare_resolves_canonical_shared_bot_keys(tmp_path):
     baseline = _sample_config()
     target = _sample_config()
     target["bot"]["short"] = {
-        "n_positions": 2,
-        "hsl_enabled": True,
+        "risk": {"max_positions": 2},
+        "hsl": {"enabled": True},
     }
     baseline_path = tmp_path / "baseline.json"
     target_path = tmp_path / "target.json"
@@ -481,11 +543,11 @@ def test_live_config_preflight_compare_resolves_flat_shared_bot_keys(tmp_path):
         "present": True,
         "value": True,
     }
-    assert changes["bot.short.risk.n_positions"]["before"] == {
+    assert changes["bot.short.risk.max_positions"]["before"] == {
         "present": True,
         "value": 1,
     }
-    assert changes["bot.short.risk.n_positions"]["after"] == {
+    assert changes["bot.short.risk.max_positions"]["after"] == {
         "present": True,
         "value": 2,
     }
@@ -500,17 +562,19 @@ def test_live_config_preflight_handles_all_and_invalid_coin_shapes(tmp_path):
 
     report = live_config_preflight.build_live_config_preflight_report(config_path)
 
-    assert report["ok"] is True
+    assert report["ok"] is False
     assert report["universe"]["approved_coins"]["long"]["mode"] == "all"
     assert report["universe"]["approved_coins"]["short"]["mode"] == "all"
     assert report["universe"]["ignored_coins"]["long"]["mode"] == "invalid"
-    assert report["summary"] == {"error_count": 0, "warning_count": 1}
-    assert report["issues"][0]["code"] == "coin_list_shape_invalid"
+    assert report["summary"] == {"error_count": 1, "warning_count": 1}
+    assert [issue["code"] for issue in report["issues"]] == [
+        "config_schema_invalid", "coin_list_shape_invalid",
+    ]
 
 
 def test_live_config_preflight_malformed_structure_returns_nonzero(tmp_path, capsys):
     config_path = tmp_path / "bad.json"
-    _write_config(config_path, {"live": []})
+    _write_config(config_path, {"config_version": "v9.0.0", "live": []})
 
     assert live_config_preflight.main([str(config_path), "--compact"]) == 1
     report = json.loads(capsys.readouterr().out)
@@ -519,6 +583,7 @@ def test_live_config_preflight_malformed_structure_returns_nonzero(tmp_path, cap
     assert [issue["code"] for issue in report["issues"]] == [
         "required_section_invalid",
         "required_section_invalid",
+        "config_schema_invalid",
     ]
     assert "required config section" in report["issues"][0]["message"]
 
@@ -663,10 +728,10 @@ def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(
 
 
 @pytest.mark.parametrize("portfolio_enabled", [False, True])
-def test_unified_preflight_uses_only_portfolio_policy(tmp_path, portfolio_enabled):
+def test_portfolio_preflight_uses_only_portfolio_policy(tmp_path, portfolio_enabled):
     config = _sample_config()
     config["live"]["balance_override"] = 1000
-    config["bot"]["hsl"]["enabled"] = portfolio_enabled
+    config["bot"]["risk"]["hsl"]["enabled"] = portfolio_enabled
     for side in ("long", "short"):
         config["bot"][side]["hsl"]["enabled"] = not portfolio_enabled
     path = tmp_path / "config.json"

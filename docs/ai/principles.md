@@ -20,12 +20,17 @@ Canonical repository-wide invariants; task documents link here instead of restat
 
 ## Statelessness
 
-- Trading decisions must be reproducible after restart from exchange state and config.
-- Do not add decision-changing local state that cannot be rederived. HSL permissions and
-  cooldown are reconstructed from retained exchange facts and current configuration; no local
-  journal preserves a prior panic decision.
-- Performance caches are allowed only when cache loss, rejection, or rebuild does not change the
-  intended decision.
+- Trading decisions must be reproducible from the same exchange facts, configuration and
+  declared initialization. Bounded live HSL reconstruction is an explicit exception to exact
+  restart equivalence when the discarded historical prefix is unknown; see the HSL contract.
+- HSL may retain a compact native accounting/lifecycle boundary plus bounded factual history.
+  Routine pruning and derived-cache rebuilding preserve D/M and known cooldown deadlines.
+  Restart, owner loss or unsupported correction declares approximate reconstruction; no local
+  journal or persisted panic latch preserves a prior permission.
+- Ordinary market EMA startup/cache loss may use the available completed bounded bootstrap;
+  it need not reproduce an unknown infinite prefix. See `features/candlestick_manager.md`.
+- Other performance caches may not change intent when lost, rejected or rebuilt. These explicit
+  approximation exceptions do not change the independent realized-memory origin contract.
 - A reviewed RAM-only economy gate may reset only toward current Rust intent. It must not preserve
   or synthesize orders, weaken readiness/risk/mode checks, or hide resets. Test reset behavior.
 

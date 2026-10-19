@@ -63,11 +63,16 @@ class FetchLogRecord:
 
 
 class OhlcvCatalog:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, read_only: bool = False):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
         self._local = threading.local()
-        self._init_db()
+        if read_only:
+            if not self.db_path.is_file():
+                raise FileNotFoundError(self.db_path)
+        else:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
         # One connection per instance per thread: catalog operations run in
@@ -77,7 +82,8 @@ class OhlcvCatalog:
         # never close, so reuse is safe.
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = (sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)
+                    if self.read_only else sqlite3.connect(str(self.db_path)))
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
         return conn

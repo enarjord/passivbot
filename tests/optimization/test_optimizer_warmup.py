@@ -11,6 +11,7 @@ import pytest
 
 from backtest_universe import effective_backtest_data_coins
 from config_utils import get_template_config
+from config.optimize_bounds import set_flat_optimize_bound
 from optimization.warmup import (
     _apply_config_overrides,
     build_optimizer_data_config,
@@ -20,6 +21,12 @@ from optimization.warmup import (
     validate_optimizer_effective_configs,
 )
 from warmup_utils import compute_per_coin_warmup_minutes
+
+
+def _set_bounds(config, entries):
+    """Author nested config bounds using the optimizer gene-path writer."""
+    for key, value in entries.items():
+        set_flat_optimize_bound(config["optimize"]["bounds"], config["live"]["strategy_kind"], key, value)
 
 
 def _make_optimizer_config() -> dict:
@@ -56,21 +63,21 @@ def _make_optimizer_config() -> dict:
     short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1m"] = 0.0
 
     bounds = config["optimize"]["bounds"]
-    bounds["long_ema_span_0"] = [1, 100, 1]
-    bounds["long_ema_span_1"] = [1, 100, 1]
-    bounds["long_forager_volatility_ema_span_1m"] = [0, 0]
-    bounds["long_forager_volume_ema_span_1m"] = [0, 0]
-    bounds["long_volatility_ema_span_1h"] = [0, 0]
-    bounds["long_volatility_ema_span_1m"] = [0, 0]
-    bounds["short_ema_span_0"] = [1, 100, 1]
-    bounds["short_ema_span_1"] = [1, 100, 1]
-    bounds["short_forager_volatility_ema_span_1m"] = [0, 0]
-    bounds["short_forager_volume_ema_span_1m"] = [0, 0]
-    bounds["short_volatility_ema_span_1h"] = [0, 0]
-    bounds["short_volatility_ema_span_1m"] = [0, 0]
+    _set_bounds(config, {"long_ema_span_0": [1, 100, 1]})
+    _set_bounds(config, {"long_ema_span_1": [1, 100, 1]})
+    _set_bounds(config, {"long_forager_volatility_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"long_forager_volume_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"long_volatility_ema_span_1h": [0, 0]})
+    _set_bounds(config, {"long_volatility_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"short_ema_span_0": [1, 100, 1]})
+    _set_bounds(config, {"short_ema_span_1": [1, 100, 1]})
+    _set_bounds(config, {"short_forager_volatility_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"short_forager_volume_ema_span_1m": [0, 0]})
+    _set_bounds(config, {"short_volatility_ema_span_1h": [0, 0]})
+    _set_bounds(config, {"short_volatility_ema_span_1m": [0, 0]})
     for side in ("long", "short"):
         for i in (0, 1):
-            bounds[f"{side}_unstuck_ema_span_{i}"] = [1, 100, 1]
+            _set_bounds(config, {f"{side}_unstuck_ema_span_{i}": [1, 100, 1]})
     return config
 
 
@@ -114,10 +121,10 @@ def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
     config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
-    config["optimize"]["bounds"]["long_n_positions"] = [1, 3, 1]
-    config["optimize"]["bounds"]["long_total_wallet_exposure_limit"] = [0.5, 1.5, 0.01]
-    config["optimize"]["bounds"]["short_n_positions"] = [1, 3, 1]
-    config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0.0]
+    _set_bounds(config, {"long_n_positions": [1, 3, 1]})
+    _set_bounds(config, {"long_total_wallet_exposure_limit": [0.5, 1.5, 0.01]})
+    _set_bounds(config, {"short_n_positions": [1, 3, 1]})
+    _set_bounds(config, {"short_total_wallet_exposure_limit": [0.0]})
 
     data_config = build_optimizer_data_config(config)
 
@@ -129,8 +136,8 @@ def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
 def test_optimizer_data_config_enables_template_disabled_side_when_bounds_reach_it():
     config = get_template_config()
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
-    config["optimize"]["bounds"]["short_n_positions"] = [1, 3, 1]
-    config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0.5, 1.5, 0.01]
+    _set_bounds(config, {"short_n_positions": [1, 3, 1]})
+    _set_bounds(config, {"short_total_wallet_exposure_limit": [0.5, 1.5, 0.01]})
 
     data_config = build_optimizer_data_config(config)
 
@@ -161,7 +168,7 @@ def test_stamp_optimizer_warmup_respects_last_valid_index_cap():
     bounds-derived warmup would push it past the end of the data."""
 
     config = _make_optimizer_config()
-    config["optimize"]["bounds"]["long_ema_span_0"] = [1, 100000, 1]
+    _set_bounds(config, {"long_ema_span_0": [1, 100000, 1]})
     mss = {"HYPE": {"first_valid_index": 0, "last_valid_index": 10}}
 
     stamp_warmup_metadata(mss, ["HYPE"], compute_optimizer_per_coin_warmup_minutes(config))
@@ -211,13 +218,13 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     from optimize import _stamp_optimizer_warmup
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
-    cfg = _ema_anchor_config(True)
+    cfg = _ema_anchor_config(True, include_dataset=False)
     cfg["live"]["max_warmup_minutes"] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
     bounds = cfg["optimize"]["bounds"]["long"]
     bounds["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
     if consumer == "forager":
-        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+        bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 10.0]}
     cfg = prepare_config(cfg, verbose=False)
@@ -272,7 +279,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     cfg = get_template_config()
     cfg["live"]["warmup_ratio"] = 0.0
     cfg["optimize"]["bounds"] = {}
-    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     weight_path = (["forager", "score_weights", "unilateralness"] if consumer == "forager"
                    else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
@@ -281,10 +288,10 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     span_path = ["forager", "unilateralness_ema_span_1m"]
     bounds = cfg["optimize"]["bounds"]
     for pside in ("long", "short"):
-        bounds[f"{pside}_n_positions"] = [1.0]
-        bounds[f"{pside}_total_wallet_exposure_limit"] = [float(pside == side)]
-    bounds[f"{side}_{weight_key}"] = [0.0, 1.0]
-    bounds[f"{side}_unilateralness_ema_span_1m"] = [1.0, 100000.0]
+        _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
+        _set_bounds(cfg, {f"{pside}_total_wallet_exposure_limit": [float(pside == side)]})
+    _set_bounds(cfg, {f"{side}_{weight_key}": [0.0, 1.0]})
+    _set_bounds(cfg, {f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0]})
     key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
     path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
     value = 0.0 if pin == "weight" else 2.5
@@ -339,13 +346,13 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     cfg["optimize"]["bounds"] = {}
     for s in ("long", "short"):
-        cfg["bot"][s]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(s == side))
-        cfg["optimize"]["bounds"].update({f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
+        cfg["bot"][s]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(s == side))
+        _set_bounds(cfg, {f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
     if searched:
-        cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+        _set_bounds(cfg, {f"{side}_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 1.0]})
     cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {
         "weights_minutes": {"adverse_directionality": 0.0}, "max_duration_minutes": None,
     }}}} for coin in ("BTC", "ETH")}
@@ -378,13 +385,13 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     cfg["optimize"]["bounds"] = {}
     cfg["coin_overrides"] = {}
     for side, coin in (("long", "BTC"), ("short", "ETH")):
-        cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+        cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
         cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
         cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
-        cfg["optimize"]["bounds"].update({f"{side}_n_positions": [1.0], f"{side}_total_wallet_exposure_limit": [1.0]})
+        _set_bounds(cfg, {f"{side}_n_positions": [1.0], f"{side}_total_wallet_exposure_limit": [1.0]})
         if searched:
-            cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+            _set_bounds(cfg, {f"{side}_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 1.0]})
         cfg["coin_overrides"][coin] = {"bot": {side: {"entry_cooldown": {
             "weights_minutes": {"adverse_directionality": 0.0}, "max_duration_minutes": None,
         }}}}
@@ -419,13 +426,13 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     cfg["backtest"]["coins"] = {"binance": [coin]}
     cfg["optimize"]["bounds"] = {}
     for s in ("long", "short"):
-        cfg["bot"][s]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(s == side))
-        cfg["optimize"]["bounds"].update({f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
+        cfg["bot"][s]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(s == side))
+        _set_bounds(cfg, {f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 2.5
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not override_enabled)
     if searched:
-        cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+        _set_bounds(cfg, {f"{side}_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 1.0]})
     patch = {"bot": {side: {"entry_cooldown": {
         "weights_minutes": {"adverse_directionality": float(override_enabled)},
         "max_duration_minutes": 60.0 if override_enabled else None,
@@ -457,10 +464,11 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
     cfg = get_template_config()
     cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=dynamic)
-    cfg["optimize"]["bounds"] = {f"{side}_n_positions": [slots]}
+    cfg["optimize"]["bounds"] = {}
+    _set_bounds(cfg, {f"{side}_n_positions": [slots]})
     for s in ("long", "short"):
-        cfg["bot"][s]["risk"].update(n_positions=slots, total_wallet_exposure_limit=float(s == side))
-        cfg["optimize"]["bounds"].update({
+        cfg["bot"][s]["risk"].update(max_positions=slots, total_wallet_exposure_limit=float(s == side))
+        _set_bounds(cfg, {
             f"{s}_n_positions": [slots],
             f"{s}_total_wallet_exposure_limit": [float(s == side)],
         })
@@ -469,7 +477,7 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
         score_weights=dict(volume=0, volatility=0, ema_readiness=0, unilateralness=float(not searched)),
     )
     if searched:
-        cfg["optimize"]["bounds"].update({
+        _set_bounds(cfg, {
             f"{side}_forager_score_weights_unilateralness": [0.0, 1.0],
             f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
             f"{side}_n_positions": [slots],
@@ -494,10 +502,10 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": []})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
     cfg["optimize"]["bounds"] = {}
-    cfg["bot"]["long"]["risk"].update(n_positions=2, total_wallet_exposure_limit=1)
+    cfg["bot"]["long"]["risk"].update(max_positions=2, total_wallet_exposure_limit=1)
     cfg["bot"]["long"]["forager"].update(unilateralness_ema_span_1m=100000)
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1
-    cfg["optimize"]["bounds"]["long_n_positions"] = [1, 2]
+    _set_bounds(cfg, {"long_n_positions": [1, 2]})
     assert compute_backtest_warmup_minutes(cfg) == 2000001
     cfg["live"]["approved_coins"]["long"] = ["BTC"]
     assert compute_backtest_warmup_minutes(cfg) == 0

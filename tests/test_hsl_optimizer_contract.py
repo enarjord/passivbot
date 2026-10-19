@@ -14,9 +14,11 @@ from test_hsl_backtest_config import inputs, payload, run
 
 def fixed_side_bounds(cfg):
     cfg["optimize"]["bounds"] = {
-        side: {"risk": {"n_positions": [1, 1], "total_wallet_exposure_limit": [1, 1]}}
+        side: {"risk": {"max_positions": [1, 1], "total_wallet_exposure_limit": [1, 1]}}
         for side in ("long", "short")
     }
+    if cfg["bot"]["risk"]["hsl"]["scope"] == "portfolio":
+        cfg["optimize"]["bounds"]["risk"] = {"hsl": {}}
 
 
 def threshold_vector(shape, threshold):
@@ -26,13 +28,13 @@ def threshold_vector(shape, threshold):
     ]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_candidate_threshold_reaches_native_hsl_signal(mode):
     cfg, markets, _ = inputs(mode)
     fixed_side_bounds(cfg)
     target = (
-        cfg["optimize"]["bounds"]
-        if mode == "unified"
+        cfg["optimize"]["bounds"]["risk"]
+        if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
     target["hsl"] = {"red_threshold": [0.01, 0.9]}
@@ -53,7 +55,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         )
         args = payload(mode, cfg=candidate, mss=markets)
         hsl = args[-1]["equity_hard_stop_loss"]
-        policy = hsl["portfolio"] if mode == "unified" else hsl["sides"][0]
+        policy = hsl["portfolio"] if mode == "portfolio" else hsl["sides"][0]
         assert policy["red_threshold"] == threshold
         result = run(args)
         counts.append(result[2]["hard_stop_triggers"])
@@ -73,21 +75,22 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
     ],
 )
 def test_unified_rejects_inactive_side_signal_objectives(metric):
-    cfg, _, _ = inputs("unified")
+    cfg, _, _ = inputs("portfolio")
     with pytest.raises(ValueError, match="no side controller"):
         validate_optimizer_metrics(cfg, [metric])
     for side in ["long", "short"]:
         cfg["bot"][side]["hsl"]["enabled"] = True
     for mode in ["coin", "pside"]:
-        cfg["live"]["hsl_signal_mode"] = mode
+        cfg["bot"]["risk"]["hsl"]["scope"] = mode
         validate_optimizer_metrics(cfg, [metric])
-    cfg["live"].update(hsl_engine="legacy", hsl_signal_mode="unified")
+    cfg["live"]["hsl_engine"] = "legacy"
+    cfg["bot"]["risk"]["hsl"]["scope"] = "portfolio"
     with pytest.raises(ValueError, match="legacy HSL has been removed"):
         validate_optimizer_metrics(cfg, [metric])
 
 
 def test_unified_keeps_general_side_performance_and_portfolio_signal_metrics():
-    cfg, _, _ = inputs("unified")
+    cfg, _, _ = inputs("portfolio")
     validate_optimizer_metrics(
         cfg,
         [
@@ -107,9 +110,9 @@ def test_hsl_runtime_boundary_rejects_removed_metrics(tier):
 
 
 def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
-    cfg, _, _ = inputs("unified")
+    cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
-    cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [0.01, 0.9]}
+    cfg["optimize"]["bounds"].setdefault("risk", {})["hsl"] = {"red_threshold": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["drawdown_worst_ema_hsl_long"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)
@@ -135,8 +138,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
             ),
         )
     ]
-    portfolio, _, _ = inputs("unified")
-    cfg["bot"]["hsl"] = deepcopy(portfolio["bot"]["hsl"])
+    portfolio, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     contexts = [
@@ -146,8 +148,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
             config=portfolio,
             msss={},
             overrides={
-                "live.hsl_signal_mode": "unified",
-                "bot.hsl": portfolio["bot"]["hsl"],
+                "bot.risk.hsl": portfolio["bot"]["risk"]["hsl"],
             },
         ),
     ]
@@ -157,32 +158,10 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
     evaluator.build_scenario_candidate_config(cfg, contexts[0])
     if scenario == "side":
         result = evaluator.build_scenario_candidate_config(cfg, contexts[1])
-        assert result["live"]["hsl_signal_mode"] == "unified"
+        assert result["bot"]["risk"]["hsl"]["scope"] == "portfolio"
     else:
         with pytest.raises(ValueError, match="no side controller"):
             evaluator.build_scenario_candidate_config(cfg, contexts[1])
-
-
-def test_gpu_rejects_coarse_hsl_candles_before_loading_gpu_runtime(monkeypatch):
-    from optimization.backends.gpu_backend import run_backend
-
-    cfg, _, _ = inputs()
-    cfg["backtest"]["candle_interval_minutes"] = 5
-    monkeypatch.setitem(sys.modules, "optimization.gpu.service", None)
-    with pytest.raises(ValueError, match="GPU HSL requires 1m candles"):
-        run_backend(
-            config=cfg,
-            evaluator=None,
-            evaluator_for_pool=None,
-            recorder=None,
-            overrides_list=None,
-            duplicate_counter=None,
-            starting_configs_path=None,
-            constraint_fitness_cls=None,
-            ignore_sigint_in_worker=None,
-            get_starting_configs=None,
-            configs_to_individuals=None,
-        )
 
 
 @pytest.mark.parametrize("through_cli", [False, True])
@@ -190,17 +169,22 @@ def test_gpu_preparation_rejects_coarse_hsl_candles_before_torch_probe(
     monkeypatch, through_cli
 ):
     from optimize import _run_gpu_preparation_preflight
-    from optimization.backends.gpu_backend import validate_gpu_preparation_scope
+    from config.gpu import validate_gpu_backtest_config
 
     cfg, _, _ = inputs()
     fixed_side_bounds(cfg)
     cfg["optimize"]["backend"] = "gpu"
-    cfg["backtest"]["candle_interval_minutes"] = 5
+    cfg["backtest"]["candle_interval_minutes"] = 1 if through_cli else 5
+    if through_cli:
+        cfg["optimize"]["fixed_runtime_overrides"] = {
+            "backtest.candle_interval_minutes": 5,
+        }
     monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "optimization.gpu.native", None)
     preflight = (
         _run_gpu_preparation_preflight
         if through_cli
-        else validate_gpu_preparation_scope
+        else lambda cfg, _suite: validate_gpu_backtest_config(cfg)
     )
     with pytest.raises(ValueError, match="GPU HSL requires 1m candles"):
         preflight(cfg, {"enabled": False})
@@ -280,7 +264,7 @@ def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
     assert evaluator.shared_hlcvs_np == {}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize(
     "metric",
     [
@@ -295,14 +279,14 @@ def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
     cfg, markets, _ = inputs(mode)
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["enabled"] = False
-    if mode == "unified":
-        cfg["bot"]["hsl"]["enabled"] = False
+    if mode == "portfolio":
+        cfg["bot"]["risk"]["hsl"]["enabled"] = False
     with pytest.raises(ValueError, match="no enabled controller"):
         validate_optimizer_metrics(
             cfg, [metric], markets_by_exchange={"binance": markets}
         )
     validate_optimizer_metrics(cfg, ["drawdown_worst_strategy_eq", "adg"])
-    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    policy = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     policy["enabled"] = True
     validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
 
@@ -330,7 +314,7 @@ def test_portfolio_metric_uses_effective_combined_coin_policies(override_enabled
 @pytest.mark.parametrize("section", ["scoring", "limits"])
 @pytest.mark.parametrize("scenario", ["active", "inactive", None])
 def test_suite_portfolio_metrics_only_require_the_consumed_scenarios(section, scenario):
-    cfg, _, _ = inputs("unified")
+    cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     cfg["optimize"]["scoring"] = ["adg"]
@@ -348,7 +332,7 @@ def test_suite_portfolio_metrics_only_require_the_consumed_scenarios(section, sc
     ]
     active = SimpleNamespace(label="active", config=cfg, overrides={}, msss={})
     inactive = SimpleNamespace(
-        label="inactive", config=cfg, overrides={"bot.hsl.enabled": False}, msss={}
+        label="inactive", config=cfg, overrides={"bot.risk.hsl.enabled": False}, msss={}
     )
     suite = SuiteEvaluator(
         Evaluator({}, {}, {}, cfg), [active, inactive], {"default": "mean"}
@@ -369,9 +353,7 @@ def test_combined_suite_validates_actual_source_market_policy(
 ):
     cfg, markets, _ = inputs("coin")
     fixed_side_bounds(cfg)
-    cfg["bot"]["short"]["hsl"].update(
-        enabled=base_enabled, restart_after_red_policy="always"
-    )
+    cfg["bot"]["short"]["hsl"].update(enabled=base_enabled)
     cfg["backtest"]["coins"] = {"combined": ["AAA"]}
     cfg["coin_overrides"] = {
         "AAA": {
@@ -379,7 +361,6 @@ def test_combined_suite_validates_actual_source_market_policy(
                 "short": {
                     "hsl": {
                         "enabled": override_enabled,
-                        "restart_after_red_policy": "always",
                     }
                 }
             }

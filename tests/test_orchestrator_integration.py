@@ -150,7 +150,6 @@ def bot_params(**overrides):
         "filter_volatility_ema_span_1m": 10.0,
         "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span_1m": 10.0,
-        "filter_volume_drop_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -311,6 +310,9 @@ def make_input(*, balance: float, global_bp=None, symbols):
         "balance": balance,
         "balance_raw": balance,
         "global": {
+            # Explicit known-empty continuous realized memory for these order fixtures.
+            "unstuck_realized_pnl_drawdown": 0.0,
+            "loss_gate_realized_pnl_drawdown": 0.0,
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
@@ -520,7 +522,7 @@ class TestOrchestratorOrderAccuracy:
 
         # The allowance input fields are legacy/diagnostic: omitting them
         # entirely parses (serde defaults) and emission is governed by the
-        # explicit flag plus the realized-pnl cumsum facts alone.
+        # explicit flag plus the continuous realized-drawdown fact.
         omitted_input = stuck_input()
         del omitted_input["global"]["unstuck_allowance_long"]
         del omitted_input["global"]["unstuck_allowance_short"]
@@ -746,34 +748,32 @@ class TestOrchestratorMultiSymbol:
         # Should compute without errors
         assert isinstance(out["orders"], list)
 
-    def test_coin_selection_volume_filter(self):
-        """Test volume-based coin filtering."""
+    def test_coin_selection_preserves_volume_ranking(self):
+        """A one-slot forager ranks both eligible candidates by measured volume."""
         import passivbot_rust as pbr
 
-        # Symbol with low volume (should be filtered)
+        weights = {"volume": 1.0, "ema_readiness": 0.0,
+                   "volatility": 0.0, "unilateralness": 0.0}
         inp = make_input(
             balance=1_000.0,
+            global_bp=bot_params_pair({"forager_score_weights": weights}),
             symbols=[
                 make_symbol(
-                    0,
-                    bid=100.0,
-                    ask=100.0,
-                    emas=ema_bundle(
-                        m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
-                        m1_volume=[[10.0, 100.0]],  # Low volume
-                    ),
-                    long_bp={
-                        "filter_volume_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volume_ema_span_1m": 10.0,
-                    },
+                    index, bid=100.0, ask=100.0,
+                    emas=ema_bundle(m1_volume=[[10.0, volume]]),
+                    long_bp={"forager_score_weights": weights,
+                             "filter_volume_ema_span_1m": 10.0},
                 )
+                for index, volume in [(0, 100.0), (1, 1000.0)]
             ],
         )
-
         out = compute(pbr, inp)
+        assert out["orders"]
+        assert {order["symbol_idx"] for order in out["orders"]} == {1}
+        selection = out["diagnostics"]["forager_selections"][0]
+        assert selection["ranking_required"] is True
+        assert selection["selected_symbol_indices"] == [1]
 
-        # Should compute without errors
-        assert isinstance(out["orders"], list)
 
 
 # ============================================================================

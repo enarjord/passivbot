@@ -141,7 +141,6 @@ async def test_combined_candidate_frames_are_released_after_normalization(monkey
         force_refetch_gaps=False,
         catalog=None,
         store=None,
-        legacy_root=None,
         use_v2_local=False,
     )
 

@@ -78,13 +78,22 @@ def migrate_unstuck_ema_spans(
             str(key).startswith(("long_", "short_")) for key in bounds
         ):
             return bounds
-        grouped = {}
-        for key, value in flatten_optimize_bounds(bounds, strategy_kind=kind).items():
+        grouped = deepcopy(bounds)
+        nested = flatten_optimize_bounds(bounds, strategy_kind=kind)
+        for key, value in bounds.items():
+            if not str(key).startswith(("long_", "short_")):
+                continue
+            if key in nested and nested[key] != value:
+                raise ValueError(f"optimize.bounds.{key} conflicts with its grouped bound")
+            grouped.pop(key)
             set_flat_optimize_bound(grouped, kind, key, value)
         return grouped
 
-    if isinstance(config.get("optimize", {}).get("bounds"), dict):
-        config["optimize"]["bounds"] = grouped_bounds(config["optimize"]["bounds"])
+    # Even an omitted search policy must record fixed new dimensions before
+    # canonical defaults can hydrate independent tunable unstuck ranges.
+    bounds = config.setdefault("optimize", {}).setdefault("bounds", {})
+    if isinstance(bounds, dict):
+        config["optimize"]["bounds"] = grouped_bounds(bounds)
     if explicit_bounds is not None:
         explicit_bounds = grouped_bounds(explicit_bounds)
 

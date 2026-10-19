@@ -95,11 +95,11 @@ def _fixture(side, coin_count, entry_kind):
 
 def _evaluate(side, inputs):
     from backtest import run_backtest
-    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import SharedAccountReplay
 
     config, candles, mss, btc, timestamps = inputs
     coin_count = candles.shape[1]
-    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    cls = SharedAccountReplay
     proxy = cls(
         config=config,
         hlcvs=candles,
@@ -111,7 +111,7 @@ def _evaluate(side, inputs):
         needed_metrics={"adg_strategy_eq"},
     )
     outputs = []
-    runner = proxy.runner if coin_count == 1 else proxy.runners[side]
+    runner = proxy.runners[side]
     original = runner.run
 
     def capture(*args, **kwargs):
@@ -149,7 +149,6 @@ def test_flat_selection_tracks_readiness_without_fills(side):
     bot["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
     bot["forager"].update(
         score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 1.0},
-        volume_drop_pct=0.0,
     )
     bot["strategy"]["trailing_martingale"]["entry"].update(
         ema_gate_mode="all",
@@ -222,7 +221,6 @@ def test_partial_initial_top_up_preserves_venue_steps(side, coin_count, retracem
     assert out[size_key].item() == pytest.approx(case["initial_qty"] * coin_count, abs=1e-6)
 
 @pytest.mark.parametrize("source_name", [
-    "mps_trailing_martingale_source_py",
     "mps_trailing_martingale_multicoin_source_py",
 ])
 def test_partial_top_up_recovers_counts_without_snapping_off_grid(source_name):
@@ -379,7 +377,6 @@ def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hyster
 
 
 @pytest.mark.parametrize("source_name", [
-    "mps_trailing_martingale_source_py",
     "mps_trailing_martingale_multicoin_source_py",
 ])
 def test_partial_top_up_at_power_of_two_checks_inward_spacing(source_name):
@@ -410,7 +407,6 @@ kernel void inward_spacing_probe(constant float* values, device float* output,
 
 
 @pytest.mark.parametrize("source_name", [
-    "mps_trailing_martingale_source_py",
     "mps_trailing_martingale_multicoin_source_py",
 ])
 @pytest.mark.parametrize("short", [False, True])
@@ -421,16 +417,10 @@ def test_positive_retracement_close_forms_one_relative_distance(source_name, sho
 
     verify_loaded_runtime_extension()
     source = getattr(passivbot_rust, source_name)()
-    if source_name == "mps_trailing_martingale_source_py":
-        branch = source.index("} else if (cr > 0.0f)", source.index("float close_target ="))
-        first = source.index("close_target =", branch)
-        last = source.index(";", first) + 1
-        expression = source[first:last].replace("s.pprice", "price").replace("is_long", "!short_side")
-    else:
-        branch = source.index("} else if (close_retracement > 0.0f)", source.index("float close_target ="))
-        first = source.index("close_target =", branch)
-        last = source.index(";", first) + 1
-        expression = source[first:last].replace("pprice[c]", "price").replace("close_threshold", "ct").replace("close_retracement", "cr")
+    branch = source.index("} else if (close_retracement > 0.0f)", source.index("float close_target ="))
+    first = source.index("close_target =", branch)
+    last = source.index(";", first) + 1
+    expression = source[first:last].replace("pprice[c]", "price").replace("close_threshold", "ct").replace("close_retracement", "cr")
     probe = """#include <metal_stdlib>
 using namespace metal;
 kernel void retracement_close_probe(constant float* values, device float* output,
@@ -620,7 +610,7 @@ def test_decimal_metadata_device_proofs_preserve_large_and_near_half_products():
     from rust_utils import verify_loaded_runtime_extension
 
     verify_loaded_runtime_extension()
-    source = passivbot_rust.mps_trailing_martingale_source_py()
+    source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     first = source.index("struct GpuDecimal {")
     last = source.index("// PASSIVBOT_DECIMAL_ROUNDING_END", first)
     probe = "#include <metal_stdlib>\nusing namespace metal;\n" + source[first:last] + """
@@ -646,10 +636,10 @@ kernel void decimal_proof_probe(constant float* cases, constant float* metadata,
 
 def test_tm_decimal_packing_declines_original_nonzero_modifiers():
     from optimization.gpu.mps_kernel import _pack_tm_parameter_matrix, _TM_DECIMAL_WORDS
-    from optimization.gpu.model import TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS as keys
-    from test_gpu_mps import _tm_single_row
+    from optimization.gpu.model import TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS as keys
+    from test_gpu_mps import _tm_parameter_row
 
-    params = np.asarray([_tm_single_row() * 2], dtype=np.float64)
+    params = np.asarray([_tm_parameter_row() * 2], dtype=np.float64)
     for side in range(2):
         for column, key in enumerate(keys):
             if key.endswith("_weight"):
@@ -668,13 +658,13 @@ def test_decimal_device_masks_apply_zero_pins_before_static_price_proof():
     import passivbot_rust
     from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
 
-    directional = passivbot_rust.mps_trailing_martingale_source_py()
+    directional = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     first = directional.index("struct GpuDecimal {")
     last = directional.index("// PASSIVBOT_DECIMAL_ROUNDING_END", first)
     multicoin = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     start = multicoin.index("inline bool tm_static_decimal_distance(")
     end = multicoin.index("inline GpuDecimal tm_decimal_override(", start)
-    probe = ("#include <metal_stdlib>\nusing namespace metal;\nconstant int OVERRIDE_COLS = 73;\n"
+    probe = ("#include <metal_stdlib>\nusing namespace metal;\nconstant int OVERRIDE_COLS = 75;\n"
              + directional[first:last] + multicoin[start:end] + """
 kernel void zero_pin_probe(constant float* overrides, constant float* metadata,
     device float* output, uint b [[thread_position_in_grid]]) {
@@ -684,8 +674,8 @@ kernel void zero_pin_probe(constant float* overrides, constant float* metadata,
 }
 """)
     device = gpu_device()
-    overrides = np.zeros((3, 73), dtype=np.float32)
-    overrides[:, 69] = [0, 3, 39]  # Inherited, pinned zero, pinned tiny nonzero.
+    overrides = np.zeros((3, 75), dtype=np.float32)
+    overrides[:, 71] = [0, 3, 39]  # Inherited, pinned zero, pinned tiny nonzero.
     packed = torch.tensor(overrides, device=device)
     metadata = torch.tensor(passivbot_rust.gpu_decimal_metadata_py([.044]),
                             dtype=torch.float32, device=device)
@@ -699,7 +689,7 @@ def test_compound_cancellation_declines_unproven_decimal_corrections():
     import passivbot_rust
     from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
 
-    source = passivbot_rust.mps_trailing_martingale_source_py()
+    source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     first = source.index("struct GpuDecimal {")
     last = source.index("// PASSIVBOT_DECIMAL_ROUNDING_END", first)
     probe = ("#include <metal_stdlib>\nusing namespace metal;\n" + source[first:last] + """

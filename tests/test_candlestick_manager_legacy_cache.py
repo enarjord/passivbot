@@ -23,7 +23,7 @@ def test_dangling_legacy_ohlcv_symlink_is_repaired(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_loads_legacy_historical_data_shard_when_primary_missing(tmp_path, monkeypatch):
+async def test_historical_data_shard_is_not_read_or_imported_implicitly(tmp_path, monkeypatch):
     # Work in an isolated cwd so relative historical_data/ paths are inside tmp_path
     monkeypatch.chdir(tmp_path)
 
@@ -55,14 +55,13 @@ async def test_loads_legacy_historical_data_shard_when_primary_missing(tmp_path,
     )
 
     assert out.dtype == CANDLE_DTYPE
-    assert out.shape[0] == 2
-    assert int(out[0]["ts"]) == start_ts
-    assert float(out[0]["o"]) == pytest.approx(1.0)
-    assert float(out[0]["c"]) == pytest.approx(1.5)
+    assert out.shape[0] == 0
+    np.testing.assert_array_equal(np.load(legacy_path), legacy)
+    assert not os.path.exists(cm._shard_path("BTC/USDT:USDT", day, tf="1m"))
 
 
 @pytest.mark.asyncio
-async def test_legacy_leading_minutes_are_not_backfilled_by_default(tmp_path, monkeypatch):
+async def test_current_cache_leading_minutes_are_not_backfilled_by_default(tmp_path, monkeypatch):
     """By default, leading gaps (before the first real candle) are NOT filled to avoid fake data."""
     monkeypatch.chdir(tmp_path)
     day = "2021-03-01"
@@ -83,6 +82,9 @@ async def test_legacy_leading_minutes_are_not_backfilled_by_default(tmp_path, mo
     cm = CandlestickManager(
         exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
     )
+    canonical = np.array([tuple(row) for row in legacy], dtype=CANDLE_DTYPE)
+    cm._save_shard("BTC/USDT:USDT", day, canonical, tf="1m")
+
     out = await cm.get_candles(
         "BTC/USDT:USDT",
         start_ts=day_start,
@@ -97,7 +99,7 @@ async def test_legacy_leading_minutes_are_not_backfilled_by_default(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_legacy_leading_minutes_are_backfilled_when_requested(tmp_path, monkeypatch):
+async def test_current_cache_leading_minutes_are_backfilled_when_requested(tmp_path, monkeypatch):
     """When fill_leading_gaps=True is explicitly passed to standardize_gaps, leading gaps are filled."""
     monkeypatch.chdir(tmp_path)
     day = "2021-03-01"
@@ -117,6 +119,9 @@ async def test_legacy_leading_minutes_are_backfilled_when_requested(tmp_path, mo
     cm = CandlestickManager(
         exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
     )
+    canonical = np.array([tuple(row) for row in legacy], dtype=CANDLE_DTYPE)
+    cm._save_shard("BTC/USDT:USDT", day, canonical, tf="1m")
+
 
     # First get the raw candles
     raw = await cm.get_candles(
@@ -189,8 +194,8 @@ def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(
     assert os.path.exists(cm._shard_path(symbol, day, tf="1m"))
 
 
-def test_global_legacy_migration_covers_all_exchanges(tmp_path, monkeypatch):
-    """Global migration should migrate legacy shards for all exchanges on first init."""
+def test_startup_does_not_import_historical_shards_for_any_exchange(tmp_path, monkeypatch):
+    """Startup leaves historical sources available for explicit offline import."""
     monkeypatch.chdir(tmp_path)
 
     day = "2021-03-01"
@@ -218,8 +223,10 @@ def test_global_legacy_migration_covers_all_exchanges(tmp_path, monkeypatch):
     binance_target = tmp_path / "caches" / "ohlcv" / "binance" / "1m" / binance_symbol / f"{day}.npy"
     bybit_target = tmp_path / "caches" / "ohlcv" / "bybit" / "1m" / bybit_symbol / f"{day}.npy"
 
-    assert binance_target.exists()
-    assert bybit_target.exists()
+    assert not binance_target.exists()
+    assert not bybit_target.exists()
+    np.testing.assert_array_equal(np.load(legacy_binance / f"{day}.npy"), legacy)
+    np.testing.assert_array_equal(np.load(legacy_bybit / f"{day}.npy"), legacy)
 
 
 def test_quarantines_invalid_root_level_timeframe_cache_artifacts(tmp_path, monkeypatch):

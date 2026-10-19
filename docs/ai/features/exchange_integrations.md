@@ -9,18 +9,8 @@ The supported production live connectors are Binance, Bybit, Bitget, Bitunix, OK
 KuCoin, Hyperliquid, WEEX, and Lighter. The fake connector is an offline deterministic test harness, not an
 exchange.
 
-Defx is deliberately unsupported. `src/exchanges/defx.py` and the `setup_bot()` routing branch are
-stale legacy placeholders retained only until a separate cleanup removes them. Their presence does
-not make Defx a supported connector and must not expand feature coverage, implementation matrices,
-regression requirements, or live-testing scope. The canonical live fill-event factory rejects Defx
-because required realized-PnL, unstuck, and HSL reconstruction support is absent. Do not use the Defx adapter
-for live operation or authenticated probes.
-
-Paradex is experimental and outside the supported production boundary. Its adapter and
-`setup_bot()` routing branch may be used as comparative implementation or rate-limit research, but
-required live fill/PnL, unstuck, and HSL reconstruction contracts are incomplete. Do not infer production
-support, implementation coverage, regression requirements, or live-testing scope from its runtime
-routing branch or comparative documentation.
+Defx and Paradex are retired. Runtime routing and offline connector inspection reject
+these identifiers before generic CCXT fallback; no adapter implementation remains.
 
 The generic `CCXTBot` fallback for arbitrary exchange names is also outside the supported
 production boundary. It preserves compatibility for unaudited CCXT venues, but a feature requiring

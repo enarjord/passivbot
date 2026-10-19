@@ -228,14 +228,10 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         "backtest": {"gap_tolerance_ohlcvs_minutes": 120},
         "bot": {
             "long": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0,
+                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
             },
         },
         "live": {
@@ -260,7 +256,6 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     assert mss[exact_coin]["exchange"] == "bybit"
@@ -325,14 +320,10 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         },
         "bot": {
             "long": {
-                "n_positions": 2,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 0.5,
+                "risk": {"max_positions": 2, "total_wallet_exposure_limit": 1.0},
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
             },
         },
         "live": {
@@ -357,7 +348,6 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         ohlcv_exchanges=["binanceusdm", "bybit"],
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     assert values["BTC"][:, 3].sum() == pytest.approx(30.0)
@@ -424,9 +414,7 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
                 "wallet_exposure_limit": 1.0 / 3.0,
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
             },
         },
         "live": {
@@ -455,7 +443,6 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
         normalization_candidate_exchanges=["binanceusdm", "bybit"],
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     assert mss["BTC"]["exchange"] == "bybit"

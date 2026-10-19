@@ -321,7 +321,7 @@ LIVE_COMMAND_EQ_PREFIXES = {
     "--live.balance_override=": "balance_override",
     "--live.balance-override=": "balance_override",
 }
-ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"unified", "pside", "per_side"}
+ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"portfolio", "pside", "per_side"}
 HSL_BALANCE_OVERRIDE_UNSAFE_CODE = "hsl_balance_override_account_level_replay_unsafe"
 
 
@@ -7013,11 +7013,9 @@ def _smoke_hsl_enabled_scopes(config: dict[str, Any]) -> list[str]:
     bot = config.get("bot")
     if not isinstance(bot, dict):
         return enabled
-    if (
-        _normalize_smoke_hsl_signal_mode(config.get("live", {}).get("hsl_signal_mode"))
-        == "unified"
-    ):
-        policy = bot.get("hsl")
+    risk = bot.get("risk") if isinstance(bot.get("risk"), dict) else {}
+    policy = risk.get("hsl") if isinstance(risk.get("hsl"), dict) else {}
+    if _normalize_smoke_hsl_signal_mode(policy.get("scope")) == "portfolio":
         return (
             ["portfolio"]
             if isinstance(policy, dict) and _truthy_config_flag(policy.get("enabled"))
@@ -7031,21 +7029,15 @@ def _smoke_hsl_enabled_scopes(config: dict[str, Any]) -> list[str]:
         nested_enabled = (
             hsl_config.get("enabled") if isinstance(hsl_config, dict) else None
         )
-        flat_enabled = side_config.get("hsl_enabled")
-        if _truthy_config_flag(nested_enabled) or _truthy_config_flag(flat_enabled):
+        if _truthy_config_flag(nested_enabled):
             enabled.append(pside)
     return enabled
 
 
 def _normalize_smoke_hsl_signal_mode(value: Any) -> str:
     text = str(value if value not in (None, "") else "coin").strip().lower()
-    aliases = {
-        "per_side": "pside",
-        "side": "pside",
-        "symbol": "coin",
-        "coins": "coin",
-    }
-    return aliases.get(text, text)
+    return text
+
 
 
 def _balance_override_active(value: Any) -> bool:
@@ -7094,7 +7086,8 @@ def _smoke_config_check_records(
             )
             continue
         live = config.get("live") if isinstance(config.get("live"), dict) else {}
-        signal_mode = _normalize_smoke_hsl_signal_mode(live.get("hsl_signal_mode"))
+        global_hsl = config.get("bot", {}).get("risk", {}).get("hsl", {})
+        signal_mode = _normalize_smoke_hsl_signal_mode(global_hsl.get("scope"))
         config_balance_override = live.get("balance_override")
         launch_balance_override = record.get("balance_override")
         balance_override_source = None

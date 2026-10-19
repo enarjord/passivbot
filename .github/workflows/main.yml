@@ -79,7 +79,7 @@ jobs:
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
           PYTHONPATH: src
         run: |
-          .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v7', '--help']))"
+          .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v9', '--help']))"
           .venv/bin/python src/tools/run_fake_live.py \
             configs/examples/fake_live_hsl.json \
             scenarios/fake_live/hsl_long_red_restart.hjson \

@@ -4,6 +4,8 @@ import pytest
 import passivbot
 from backtest import _get_backtest_coin_override
 from config_utils import parse_overrides
+from config import prepare_config
+from config.schema import CONFIG_SCHEMA_VERSION
 from passivbot import Passivbot
 
 
@@ -24,7 +26,7 @@ def test_coin_override_forced_mode_manual(monkeypatch):
         },
     }
 
-    config = parse_overrides(deepcopy(base_config), verbose=False)
+    config = parse_overrides(prepare_config({"config_version": CONFIG_SCHEMA_VERSION, **base_config}, verbose=False), verbose=False)
     assert "DOGEUSDT" in config["coin_overrides"]
 
     bot = Passivbot.__new__(Passivbot)
@@ -120,7 +122,7 @@ def test_forced_mode_shorthand_expansion(monkeypatch):
         "coin_overrides": {},
     }
 
-    config = parse_overrides(deepcopy(base_config), verbose=False)
+    config = parse_overrides(prepare_config({"config_version": CONFIG_SCHEMA_VERSION, **base_config}, verbose=False), verbose=False)
 
     bot = Passivbot.__new__(Passivbot)
     bot.config = config

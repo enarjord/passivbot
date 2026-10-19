@@ -75,6 +75,21 @@ def _unit_config(patch):
     return config
 
 
+def _gate_history_config(patch, *, memory_span_minutes=None):
+    """Exercise explicit independent memories with auto-unstuck disabled."""
+    patch = deepcopy(patch)
+    policy = patch.setdefault("bot", {}).setdefault("risk", {})
+    policy.setdefault("loss_gate", {}).setdefault("max_drawdown_ratio", 0.5)
+    if memory_span_minutes is not None:
+        policy["loss_gate"]["memory_ema_span_minutes"] = memory_span_minutes
+        patch["bot"].setdefault("unstuck", {})["memory_ema_span_minutes"] = memory_span_minutes
+        for side in ("long", "short"):
+            patch["bot"].setdefault(side, {}).setdefault("hsl", {})["memory_ema_span_minutes"] = memory_span_minutes
+    for side in ("long", "short"):
+        patch.setdefault("bot", {}).setdefault(side, {}).setdefault("unstuck", {})["enabled"] = False
+    return _unit_config(patch)
+
+
 def _unit_bot():
     bot = Passivbot.__new__(Passivbot)
     bot.config = _unit_config({})
@@ -608,7 +623,7 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
-    bot.config = _unit_config({"live": {"pnls_max_lookback_days": 1.0}})
+    bot.config = _gate_history_config({"live": { "risk_bootstrap_max_lookback_minutes": 1440.0}}, memory_span_minutes=288.0)
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
     sink = ListEventSink()
@@ -704,7 +719,7 @@ async def test_init_pnls_emits_quarantine_event_when_doctor_repairs_legacy_cache
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
-    bot.config = _unit_config({"live": {"pnls_max_lookback_days": 1.0}})
+    bot.config = _gate_history_config({"live": { "risk_bootstrap_max_lookback_minutes": 1440.0}}, memory_span_minutes=288.0)
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
     sink = ListEventSink()
@@ -768,7 +783,7 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
     bot.exchange = "binance"
     bot.user = "binance_01"
     bot.bot_id = "bot_1"
-    bot.config = _unit_config({"live": {"pnls_max_lookback_days": "all"}})
+    bot.config = _gate_history_config({"live": {}})
     bot._pnls_initialized = False
     bot._live_event_current_cycle_id = "cy_init_fills"
     bot._live_event_pipeline = LiveEventPipeline(
@@ -833,7 +848,7 @@ async def test_init_pnls_failure_logs_bounded_classification_and_reraises(
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
-    bot.config = _unit_config({"live": {"pnls_max_lookback_days": "all"}})
+    bot.config = _gate_history_config({"live": {}})
     bot._pnls_initialized = False
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
@@ -875,7 +890,7 @@ async def test_init_pnls_history_scope_failure_is_bounded_and_cache_remains_read
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
-    bot.config = _unit_config({"live": {"pnls_max_lookback_days": "all"}})
+    bot.config = _gate_history_config({"live": {}})
     bot._pnls_initialized = False
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
@@ -2791,13 +2806,6 @@ async def test_background_candle_warmup_bounds_failure_diagnostic(caplog):
     assert "Traceback" not in caplog.text
 
 
-def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
-    bot.config = _unit_config(
-        {"live": {"pnls_max_lookback_days": float(lookback_days)}}
-    )
-    bot.get_exchange_time = lambda: now_ms
-
-
 def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
     bot = _unit_bot()
     bot.execution_scheduled = False
@@ -3333,18 +3341,17 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
     times = iter([1_000_000, 1_030_000])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_030_000))
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -3415,18 +3422,17 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     times = iter([1_000_000, 1_001_000])
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_001_000))
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._request_authoritative_confirmation = MagicMock()
@@ -3550,11 +3556,10 @@ async def test_update_pnls_confirms_only_structural_enrichment(
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -4573,12 +4578,11 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     bot = _unit_bot()
     bot._pnls_manager = object()
     bot.coin_overrides = {
-        "HYPE/USDT:USDT": {"bot": {"long": {"unstuck_loss_allowance_pct": 0.005}}},
+        "HYPE/USDT:USDT": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.005}}}},
         "BTC/USDT:USDT": {"bot": {"long": {}}},
     }
     bot.get_raw_balance = lambda: 2_000.0
-    bot._get_effective_pnl_events = lambda: [SimpleNamespace(pnl=0.0, fee_paid=0.0)]
-    bot._assert_no_pending_pnl_events = lambda events, context: None
+    bot._get_realized_memories = lambda: {"unstuck": {"drawdown": 0.0}, "loss_gate": None}
 
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit":
@@ -4845,16 +4849,33 @@ def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
+async def test_update_pnls_shared_memory_backfills_bounded_origin_when_coverage_is_unknown():
     bot = _unit_bot()
+    bot.config = _gate_history_config({"live": {}})
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
 
+    class _Cache:
+        covered_start_ms = 0
+
+        def get_known_gaps(self):
+            return []
+
+        def mark_covered_start(self, start_ms):
+            self.covered_start_ms = start_ms
+
+        def load_metadata(self):
+            return {"covered_start_ms": self.covered_start_ms,
+                    "oldest_event_ts": cached_events[0].timestamp,
+                    "newest_event_ts": cached_events[0].timestamp,
+                    "history_scope": "window", "known_gaps": []}
+
     class _Manager:
         def __init__(self, events, *, history_scope="unknown"):
             self._events = list(events)
+            self.cache = _Cache()
             self.refresh = AsyncMock()
             self.refresh_latest = AsyncMock()
             self.history_scope = history_scope
@@ -4873,7 +4894,7 @@ async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower()
         _Manager(cached_events, history_scope="window")
     )
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -4884,13 +4905,18 @@ async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower()
     result = await bot.update_pnls()
 
     assert result is True
-    bot._pnls_manager.refresh.assert_awaited_once_with(start_ms=None, end_ms=None)
+    bot._pnls_manager.refresh.assert_awaited_once_with(
+        start_ms=1_700_000_060_000 - 129600 * 60_000, end_ms=None
+    )
     bot._pnls_manager.refresh_latest.assert_not_awaited()
-    assert bot._pnls_manager.history_scope == "all"
+    assert bot._pnls_manager.history_scope == "window"
+    assert bot._pnls_manager.cache.covered_start_ms == (
+        1_700_000_060_000 - 129600 * 60_000
+    )
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_full_history():
+async def test_update_pnls_shared_memory_uses_incremental_refresh_when_cache_is_full_history():
     bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
@@ -4914,11 +4940,10 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -4926,7 +4951,7 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
         _Manager(cached_events, history_scope="all")
     )
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -4985,11 +5010,10 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -5044,37 +5068,51 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("pnl_required", "cooldown_minutes", "expected_lookback_minutes"),
+    ("pnl_required", "cooldown_minutes", "expected_lookback_minutes", "memory_minutes",
+     "old_pnl_status", "old_pnl_source"),
     [
-        (True, 0.0, 30 * 24 * 60),
-        (False, 2.5, 4),
+        (True, 0.0, 30 * 24 * 60, 30 * 24 * 60, "complete", "authoritative"),
+        (False, 2.5, 4, 30 * 24 * 60, "complete", "authoritative"),
+        (True, 720.0, 721, 15, "pending", "unknown"),
+        (True, 720.0, 721, 15, "complete", fem.PNL_SOURCE_SYNTHETIC_DEGRADED),
+        (True, 2.5, 15, 15, "complete", "authoritative"),
     ],
-    ids=["pnl_risk", "entry_cooldown"],
+    ids=["pnl_risk", "entry_cooldown", "long_cooldown_pending_old_pnl",
+         "long_cooldown_degraded_old_pnl", "pnl_horizon_longer"],
 )
 async def test_update_pnls_bootstraps_required_consumer_lookback(
-    pnl_required, cooldown_minutes, expected_lookback_minutes
+    pnl_required, cooldown_minutes, expected_lookback_minutes, memory_minutes,
+    old_pnl_status, old_pnl_source
 ):
     bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: pnl_required
     bot._max_configured_entry_cooldown_minutes = lambda: cooldown_minutes
     now_ms = 1_800_000_000_000
-    lookback_days = 30.0
     start_ms = now_ms - int(expected_lookback_minutes * 60_000)
+    memory_start_ms = now_ms - int(memory_minutes * 60_000)
     cached_events = [
         SimpleNamespace(
-            timestamp=start_ms - 60_000,
+            timestamp=(start_ms + 60_000 if start_ms < memory_start_ms else start_ms - 60_000),
             id="old-fill",
             source_ids=["old-fill"],
             symbol="BTC/USDT:USDT",
             position_side="long",
             side="sell",
-            qty=0.1,
+            qty=-0.1,
             price=10.0,
             pnl=1.0,
             fee_paid=0.0,
-            pnl_status="complete",
+            pnl_status=old_pnl_status,
+            pnl_source=old_pnl_source,
         )
     ]
+    increase = SimpleNamespace(
+        timestamp=now_ms - int(cooldown_minutes * 60_000 / 2),
+        id="still-relevant-increase", source_ids=["still-relevant-increase"],
+        symbol="BTC/USDT:USDT", position_side="long", side="buy", qty=0.1,
+        price=10.0, pnl=0.0, fee_paid=0.0, pnl_status="complete",
+        pnl_source="authoritative",
+    )
 
     class _Cache:
         def __init__(self):
@@ -5109,6 +5147,8 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
             self.history_scope = "window"
 
         async def _refresh_for_lookback(self, *, start_ms):
+            if cooldown_minutes > 0 and start_ms <= increase.timestamp:
+                self._events.append(increase)
             self.cache.mark_covered_start(start_ms)
             return True
 
@@ -5124,13 +5164,15 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": lookback_days,
-            }
-        }
+
+                "risk_bootstrap_max_lookback_minutes": memory_minutes,
+            },
+            "bot": {"long": {"entry_cooldown": {"base_duration_minutes": cooldown_minutes}}},
+        }, memory_span_minutes=memory_minutes / 5.0
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
@@ -5151,6 +5193,21 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._pnls_manager.cache.get_covered_start_ms() == start_ms
     assert bot._pnls_manager.history_scope == "window"
+    if cooldown_minutes > 0:
+        assert bot._get_last_increase_fill_timestamps(
+            [increase.symbol], now_ms=now_ms
+        )[increase.symbol]["long"] == increase.timestamp
+    if pnl_required:
+        assert bot._realized_memory_origin_ms == memory_start_ms
+        assert bot._required_pnl_history_start_ms(now_ms, pnl_start_ms=start_ms) == (
+            True, memory_start_ms
+        )
+        if start_ms < memory_start_ms:
+            # Older structural facts do not become realized-PnL quality blockers.
+            assert bot._required_pnl_events(
+                bot._pnls_manager.get_events(), now_ms, pnl_start_ms=start_ms,
+                required=True, required_start_ms=memory_start_ms,
+            ) == []
 
 
 @pytest.mark.asyncio
@@ -5185,11 +5242,10 @@ async def test_update_pnls_empty_cache_uses_bounded_recent_fetch_without_history
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -5278,13 +5334,14 @@ async def test_update_pnls_rechecks_hsl_requirement_after_delayed_flat_fill():
 
     manager = _with_fill_coverage_api(_Manager())
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": 30.0,
+
+                "risk_bootstrap_max_lookback_minutes": 43200.0,
             }
-        }
+        }, memory_span_minutes=8640.0
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = manager
@@ -5395,13 +5452,14 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": lookback_days,
+
+                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
             }
-        }
+        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
     )
     bot._authoritative_pending_confirmations = {}
     bot._trailing_fill_fetch_generation = 7
@@ -5516,13 +5574,14 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": lookback_days,
+
+                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
             }
-        }
+        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
@@ -5604,13 +5663,14 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": lookback_days,
+
+                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
             }
-        }
+        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
     )
     bot._authoritative_pending_confirmations = {}
     sink = ListEventSink()
@@ -5755,13 +5815,14 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": lookback_days,
+
+                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
             }
-        }
+        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -5895,13 +5956,14 @@ async def test_update_pnls_ignores_pnl_without_an_active_consumer(
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": lookback_days,
+
+                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
             }
-        }
+        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -5971,12 +6033,11 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_confirmation_overlap_minutes": 60.0,
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -5985,7 +6046,7 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
         _Manager(cached_events, history_scope="all")
     )
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -6037,12 +6098,11 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_confirmation_overlap_minutes": 60.0,
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -6119,12 +6179,11 @@ async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_confirmation_overlap_minutes": 60.0,
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -6207,11 +6266,10 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -6228,7 +6286,7 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
         _Manager(cached_events, history_scope="all")
     )
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -6336,17 +6394,16 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -6392,11 +6449,10 @@ async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation
             pass
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -6450,11 +6506,10 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
@@ -6471,7 +6526,7 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
         _Manager(cached_events, history_scope="all")
     )
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -6532,17 +6587,16 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
 
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
-    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
@@ -7704,50 +7758,21 @@ def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
     assert wel == pytest.approx(0.2)
 
 
-def test_balance_peak_uses_raw_not_snapped():
-    """Core bug regression: balance_peak must be derived from raw balance, not snapped.
-
-    After a profit fill, raw balance advances (e.g. 1010) but snapped balance
-    may remain stale (e.g. 1000) due to hysteresis. The peak calculation must
-    use raw balance so that balance_peak is correct.
-
-    balance_peak = balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
-
-    With raw=1010, cumsum_max=100, cumsum_last=100:
-        peak_from_raw = 1010 + (100 - 100) = 1010  ← correct
-        peak_from_snap = 1000 + (100 - 100) = 1000  ← WRONG (stale)
-    """
-    import types
-    from unittest.mock import MagicMock
-
-    import numpy as np
-
+def test_unstuck_allowance_uses_raw_not_snapped_balance():
+    """Hysteresis lag must not change the balance passed to v9 risk arithmetic."""
     bot = _unit_bot()
     bot.balance = 1000.0  # snapped (stale)
     bot.balance_raw = 1010.0  # raw (advanced after profit fill)
-    bot._pnls_manager = MagicMock()
-    bot._pnls_manager.get_events.return_value = [
-        types.SimpleNamespace(pnl=100.0, timestamp=1.0),
-    ]
-
-    # Simulate the calc_auto_unstuck_allowance_from_scratch peak calculation
-    events = bot._pnls_manager.get_events()
-    pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
-    pnls_cumsum_max = float(pnls_cumsum.max())
-    pnls_cumsum_last = float(pnls_cumsum[-1])
-
-    # Using raw balance (correct)
-    balance_peak_raw = bot.get_raw_balance() + (pnls_cumsum_max - pnls_cumsum_last)
-    assert balance_peak_raw == pytest.approx(1010.0)
-
-    # Using snapped balance (would be wrong)
-    balance_peak_snapped = bot.get_hysteresis_snapped_balance() + (
-        pnls_cumsum_max - pnls_cumsum_last
+    drawdown = 10.0
+    raw_allowance = passivbot_module.pbr.calc_auto_unstuck_allowance_v9(
+        bot.get_raw_balance(), 0.125, 1.0, drawdown
     )
-    assert balance_peak_snapped == pytest.approx(1000.0)
-
-    # The raw-based peak is correct and higher
-    assert balance_peak_raw > balance_peak_snapped
+    snapped_allowance = passivbot_module.pbr.calc_auto_unstuck_allowance_v9(
+        bot.get_hysteresis_snapped_balance(), 0.125, 1.0, drawdown
+    )
+    assert raw_allowance == 117.5
+    assert snapped_allowance == 116.25
+    assert raw_allowance > snapped_allowance
 
 
 def test_effective_min_cost_filter_uses_snapped_balance():
@@ -7822,7 +7847,7 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
 
 
 def test_open_unstuck_order_does_not_gate_live_unstuck_configuration():
-    # Rust owns auto-unstuck emission from the realized-PnL cumsum facts. A
+    # Rust owns auto-unstuck emission from continuous realized-loss memory. A
     # resting unstuck order must not add a Python-only suppression path; any
     # duplicate-order risk rides normal order reconciliation.
     bot = _unit_bot()
@@ -8012,20 +8037,14 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
     }
 
 
-def test_live_max_realized_loss_pct_preserves_zero_and_defaults_none():
-    import passivbot as pb_mod
-
-    class FakeBot:
-        def __init__(self, value):
-            self.value = value
-
-        def live_value(self, key):
-            assert key == "max_realized_loss_pct"
-            return self.value
-
-    helper = pb_mod.Passivbot._live_max_realized_loss_pct
-    assert helper(FakeBot(0.0)) == pytest.approx(0.0)
-    assert helper(FakeBot(None)) == pytest.approx(1.0)
+def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
+    bot = _unit_bot()
+    assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
+    bot.config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.0
+    assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
+    del bot.config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"]
+    with pytest.raises(KeyError, match="max_drawdown_ratio"):
+        bot._live_max_realized_loss_pct()
 
 
 def test_orchestrator_exchange_params_require_live_fee_metadata():
@@ -8042,8 +8061,8 @@ def test_orchestrator_exchange_params_require_live_fee_metadata():
         Passivbot._orchestrator_exchange_params(bot, symbol)
 
 
-def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_pnl():
-    """Regression for peak drift: peak must not decay when profits increase pnl_last and balance_raw."""
+def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown():
+    """Profit changes actual balance and repays D without hysteresis peak drift."""
     bot = _unit_bot()
     bot.balance = 100.0  # stale snapped value to simulate hysteresis lag
 
@@ -8056,25 +8075,17 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
 
     bot.bot_value = bot_value
 
-    # State A: peak = 100 + (100 - 0) = 200
+    # State A: remembered loss is 100, so actual B + D is 200.
     bot.balance_raw = 100.0
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda **kwargs: [
-            types.SimpleNamespace(pnl=100.0),
-            types.SimpleNamespace(pnl=-100.0),
-        ]
-    )
+    bot._pnls_manager = object()
+    memory = {"drawdown": 100.0}
+    bot._get_realized_memories = lambda: {"unstuck": dict(memory), "loss_gate": None}
     info_a = bot._calc_unstuck_allowance_for_logging("long")
 
-    # State B (after net +50 realized since trough): peak should still be 200
-    # If snapped balance were incorrectly used here, peak would drift down to 150.
+    # State B: a +50 profit in the same minute repays half the remembered loss.
+    # Snapped balance remains 100; the factual B + D is still 200.
     bot.balance_raw = 150.0
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda **kwargs: [
-            types.SimpleNamespace(pnl=100.0),
-            types.SimpleNamespace(pnl=-50.0),
-        ]
-    )
+    memory["drawdown"] = 50.0
     info_b = bot._calc_unstuck_allowance_for_logging("long")
 
     assert info_a["status"] == "ok"
@@ -8083,12 +8094,12 @@ def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_
     assert info_b["peak"] == pytest.approx(200.0)
 
 
-def test_unstuck_logging_uses_only_configured_pnl_lookback():
-    now_ms = 10 * 86_400_000
+def test_unstuck_logging_uses_its_independent_realized_memory():
+    from v9_risk_reference import allowance, f32, mul
+
     bot = _unit_bot()
     bot.balance = 1000.0
     bot.balance_raw = 1000.0
-    _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
 
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit":
@@ -8098,24 +8109,15 @@ def test_unstuck_logging_uses_only_configured_pnl_lookback():
         return 0.0
 
     bot.bot_value = bot_value
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
-            ev
-            for ev in [
-                types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
-                types.SimpleNamespace(pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
-                types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
-            ]
-            if start_ms is None or ev.timestamp >= start_ms
-        ]
-    )
+    bot._pnls_manager = object()
+    bot._get_realized_memories = lambda: {"unstuck": {"drawdown": 5.0}, "loss_gate": None}
 
     info = bot._calc_unstuck_allowance_for_logging("long")
 
     assert info["status"] == "ok"
-    assert info["peak"] == pytest.approx(1000.0)
-    assert info["pct_from_peak"] == pytest.approx(0.0)
-    assert info["allowance"] == pytest.approx(10.0)
+    assert info["peak"] == 1005.0
+    assert info["pct_from_peak"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
+    assert info["allowance"] == allowance(1000.0, mul(f32(0.01), f32(1.0)), 5.0)
 
 
 @pytest.mark.asyncio
@@ -8270,19 +8272,26 @@ def test_authoritative_barrier_waits_for_next_epoch_confirmation():
 
 
 @pytest.mark.parametrize(
-    ("pnl_required", "cooldown_minutes", "pnl_start_ms", "expected"),
+    ("pnl_required", "cooldown_minutes", "pnl_start_ms", "span_minutes", "origin_ms", "expected"),
     [
-        (True, 720.0, None, (True, None)),
-        (True, 720.0, 1_000_000, (True, 1_000_000)),
-        (False, 2.5, 1_000_000, (True, 9_760_000)),
-        (False, 0.0, 1_000_000, (False, None)),
+        (True, 720.0, None, 43200.0, None, (True, 0)),
+        (True, 720.0, 1_000_000, 3.0, None, (True, 0)),
+        (True, 720.0, None, 3.0, 1_000_000, (True, 0)),
+        (True, 2.5, None, 3.0, 1_000_000, (True, 1_000_000)),
+        (True, 0.0, None, 3.0, None, (True, 9_100_000)),
+        (False, 2.5, 1_000_000, 3.0, None, (True, 9_760_000)),
+        (False, 0.0, 1_000_000, 3.0, None, (False, None)),
     ],
-    ids=["pnl_all", "pnl_window", "cooldown_only", "routine_only"],
+    ids=["shared_origin_zero", "cooldown_before_new_origin", "cooldown_before_retained_origin",
+         "shared_origin_before_cooldown", "shared_origin_only", "cooldown_only", "routine_only"],
 )
 def test_required_fill_history_start_follows_enabled_consumer(
-    pnl_required, cooldown_minutes, pnl_start_ms, expected
+    pnl_required, cooldown_minutes, pnl_start_ms, span_minutes, origin_ms, expected
 ):
     bot = _unit_bot()
+    bot.config = _gate_history_config({"live": {}}, memory_span_minutes=span_minutes)
+    if origin_ms is not None:
+        bot._realized_memory_origin_ms = origin_ms
     bot._orchestrator_uses_realized_pnl = lambda: pnl_required
     bot._equity_hard_stop_required_fill_history_start_ms = (
         lambda now_ms, *, pnl_start_ms: (False, None)
@@ -8434,7 +8443,7 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
             get_history_scope=lambda: "window",
         )
     )
-    bot.config = _unit_config({"live": {"pnls_max_lookback_days": 1.0}})
+    bot.config = _gate_history_config({"live": { "risk_bootstrap_max_lookback_minutes": 1440.0}}, memory_span_minutes=288.0)
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
@@ -12002,7 +12011,7 @@ async def test_hyperliquid_normal_partial_fill_self_echo_invalidates_account(
     )
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_missing_history_does_not_block_current_hsl_protection(mode):
     from test_hsl_runtime import bot as make_bot, run
 
@@ -12025,7 +12034,7 @@ def test_current_fact_outage_revokes_hsl_and_recovery_does_not_retain_panic(fail
     assert run(bot)[0][0].action == "panic"
     for _ in range(12):
         if failure == "current_balance":
-            bot.get_raw_balance = lambda: 0.0
+            bot.get_raw_balance = lambda: float("nan")
         else:
             surface = failure.removeprefix("stale_")
             bot._ensure_freshness_ledger().surfaces[surface].updated_ms = NOW - 10001
@@ -12038,6 +12047,21 @@ def test_current_fact_outage_revokes_hsl_and_recovery_does_not_retain_panic(fail
     decisions, unavailable = run(bot)
     assert not unavailable
     assert decisions[0].action == "normal"
+
+
+@pytest.mark.parametrize("balance", [0.0, -1.0])
+def test_finite_nonpositive_balance_is_valid_direct_red_not_current_fact_outage(balance):
+    from test_hsl_runtime import bot as make_bot, run
+
+    bot = make_bot()
+    bot.get_raw_balance = lambda: balance
+    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, red_threshold=0.99)
+    decisions, unavailable = run(bot)
+    assert not unavailable
+    assert decisions[0].action == "panic"
+    payload = json.loads(decisions[0].payload)
+    assert payload["decision"]["raw"] == 1.0
+    assert payload["decision"]["ema"] == 1.0
 
 
 @pytest.mark.asyncio
@@ -12112,16 +12136,15 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(
     bot = _unit_bot()
     bot.stop_signal_received = False
     bot._live_risk_uses_authoritative_pnl = lambda: True
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": "all",
             }
         }
     )
     if failure == "config_value":
-        bot.config["live"]["pnls_max_lookback_days"] = "invalid"
+        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -12178,14 +12201,15 @@ async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pendi
     )
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.stop_signal_received = False
-    bot.config = _unit_config(
+    bot.config = _gate_history_config(
         {
             "live": {
                 "fills_recent_overlap_minutes": 10.0,
-                "pnls_max_lookback_days": 1.0,
+
+                "risk_bootstrap_max_lookback_minutes": 129600.0,
                 "hsl_signal_mode": "coin",
             }
-        }
+        }, memory_span_minutes=288.0
     )
     bot.config["bot"]["long"]["hsl"].update(
         enabled=True, restart_after_red_policy="always"

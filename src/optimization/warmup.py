@@ -8,7 +8,7 @@ from backtest_universe import backtest_side_enabled
 from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path
-from config.shared_bot import flatten_shared_bot_side
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
 from optimizer_overrides import optimizer_overrides, materialize_coupled_scenario_spans
 from optimization.bounds import Bound, enforce_bounds
 from optimization.config_adapter import (
@@ -19,18 +19,6 @@ from optimization.config_adapter import (
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY, get_anchor_plan
 from optimization.shape import build_optimization_shape
 from warmup_utils import compute_per_coin_warmup_minutes
-
-
-def _refresh_shared_bot_runtime_aliases(config: dict) -> None:
-    bot_cfg = config.get("bot")
-    if not isinstance(bot_cfg, dict):
-        return
-    for pside in ("long", "short"):
-        pside_cfg = bot_cfg.get(pside)
-        if not isinstance(pside_cfg, dict):
-            continue
-        for key, value in flatten_shared_bot_side(pside_cfg).items():
-            pside_cfg[key] = deepcopy(value)
 
 
 def _apply_config_overrides(config: dict, overrides: dict) -> None:
@@ -48,7 +36,7 @@ def _apply_config_overrides(config: dict, overrides: dict) -> None:
         for part in parts[:-1]:
             target = target[part]
         target[parts[-1]] = value
-    _refresh_shared_bot_runtime_aliases(config)
+    # Public fixed/scenario patches stay canonical until explicit runtime lowering.
 
 
 def _set_path(config: dict, path: Sequence[str], value) -> None:
@@ -155,6 +143,18 @@ def canonicalize_dead_optimizer_params(config: dict) -> None:
 
 
 def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict:
+    # Internal templates may retain derived aliases while genes and anchors
+    # update canonical leaves. Consume aliases before pins and mirroring, with
+    # existing canonical values taking precedence over stale transport copies.
+    for pside in ("long", "short"):
+        side_cfg = config.get("bot", {}).get(pside)
+        if not isinstance(side_cfg, dict):
+            continue
+        for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+            group_cfg = side_cfg.get(group_name)
+            if isinstance(group_cfg, dict) and local_key in group_cfg:
+                side_cfg.pop(flat_key, None)
+        canonicalize_shared_bot_side(side_cfg, path_prefix=("bot", pside))
     config.pop(ANCHOR_PLAN_KEY, None)
     _apply_config_overrides(
         config,
@@ -163,21 +163,19 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
     if overrides_list is None:
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
     config = optimizer_overrides(overrides_list or [], config, None)
-    _refresh_shared_bot_runtime_aliases(config)
+    # File and scenario materialization validates canonical configuration trees.
+    # Runtime transport aliases are produced later by explicit compilation.
     for pside in (side for side in ("long", "short") if side in config.get("bot", {})):
         config = optimizer_overrides(overrides_list or [], config, pside)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
-        if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
+        forager_cfg = pside_cfg.get("forager") if isinstance(pside_cfg, dict) else None
+        if not isinstance(forager_cfg, dict) or "score_weights" not in forager_cfg:
             continue
-        normalized = normalize_forager_score_weights(
-            pside_cfg["forager_score_weights"],
-            path=f"bot.{pside}.forager_score_weights",
+        forager_cfg["score_weights"] = normalize_forager_score_weights(
+            forager_cfg["score_weights"],
+            path=f"bot.{pside}.forager.score_weights",
         )
-        pside_cfg["forager_score_weights"] = normalized
-        forager_cfg = pside_cfg.get("forager")
-        if isinstance(forager_cfg, dict):
-            forager_cfg["score_weights"] = deepcopy(normalized)
     canonicalize_dead_optimizer_params(config)
     materialize_coupled_scenario_spans(config)
     from config.hsl import normalize_hsl
@@ -279,7 +277,7 @@ def _build_optimizer_boundary_configs(config: dict, *, rms_consumer_corner: bool
         for i, ((_, path), bound) in enumerate(zip(shape.key_paths, shape.bounds)):
             if path and path[-1] in ("base_duration_minutes", "min_duration_minutes"):
                 vector[i] = bound.low
-            if path and path[-1] == "n_positions":
+            if path and path[-1] == "max_positions":
                 value = bound.quantize(max(1.0, bound.low))
                 if round(value) <= 0 and bound.is_stepped and bound.max_index > 0:
                     value = bound.quantize(bound.low + bound.step)
@@ -375,7 +373,6 @@ def build_optimizer_data_config(config: dict) -> dict:
                     f"optimizer data side gate is missing from boundary config: {'.'.join(path)}"
                 )
             _set_path(data_config, path, deepcopy(value))
-    _refresh_shared_bot_runtime_aliases(data_config)
     return data_config
 
 

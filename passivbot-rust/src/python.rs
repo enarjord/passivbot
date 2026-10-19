@@ -1,8 +1,7 @@
 use crate::analysis::{
-    analyze_backtest_pair, analyze_backtest_pair_with_profile, analyze_backtest_usd_with_profile,
-    FillActivityMetrics,
+    analyze_backtest_pair_with_options, analyze_backtest_usd_with_profile, FillActivityMetrics,
 };
-use crate::backtest::Backtest;
+use crate::backtest::BacktestEngine;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     calc_trailing_martingale_close_diagnostic,
@@ -17,10 +16,9 @@ use crate::risk::{
 };
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_kind_names, strategy_spec};
-use crate::strategies::trailing_grid_v7::calc_trailing_grid_v7_diagnostics;
 use crate::strategies::{
-    EmaAnchorParams, EmaGateMode, StrategySide, TrailingGridV7Params,
-    TrailingMartingaleCloseParams, TrailingMartingaleEntryParams,
+    EmaAnchorParams, EmaGateMode, StrategySide, TrailingMartingaleCloseParams,
+    TrailingMartingaleEntryParams,
 };
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
@@ -32,9 +30,12 @@ use crate::types::{
     OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
     TrailingPriceBundle, TwelEnforcerPolicy,
 };
-use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
-use pyo3::exceptions::PyValueError;
+use ndarray::{Array2, Array3};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
+    PyReadonlyArray3,
+};
+use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3::PyObject;
@@ -44,6 +45,96 @@ use std::str::FromStr;
 use std::time::Instant;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
+
+/// Native CPU market execution counts, SELL lane0 and BUY lane1.
+///
+/// The borrowed f64 input may be strided. Windows use global inclusive row
+/// indices; only cells outside a declared window receive the zero sentinel.
+#[pyfunction]
+#[pyo3(signature = (closes_f64_2d_strided, price_steps_f64_list, slippage_f64, first_valid_indices_list, last_valid_indices_list, row_offset_int=0))]
+pub fn prepare_gpu_market_execution_ticks<'py>(
+    py: Python<'py>,
+    closes_f64_2d_strided: PyReadonlyArray2<'py, f64>,
+    price_steps_f64_list: Vec<f64>,
+    slippage_f64: f64,
+    first_valid_indices_list: Vec<i64>,
+    last_valid_indices_list: Vec<i64>,
+    row_offset_int: i64,
+) -> PyResult<Bound<'py, PyArray3<i32>>> {
+    let closes = closes_f64_2d_strided.as_array();
+    let (rows, coins) = closes.dim();
+    if coins == 0
+        || price_steps_f64_list.len() != coins
+        || first_valid_indices_list.len() != coins
+        || last_valid_indices_list.len() != coins
+    {
+        return Err(PyValueError::new_err(
+            "GPU market closes require a nonempty coin axis and one step/window per coin",
+        ));
+    }
+    if !slippage_f64.is_finite() || slippage_f64 < 0.0 {
+        return Err(PyValueError::new_err(
+            "GPU market slippage must be finite and nonnegative",
+        ));
+    }
+    let row_count = i64::try_from(rows)
+        .map_err(|_| PyValueError::new_err("GPU market row count exceeds int64"))?;
+    if row_offset_int < 0 || row_offset_int.checked_add(row_count).is_none() {
+        return Err(PyValueError::new_err(
+            "GPU market row offset must be nonnegative and its chunk end must fit int64",
+        ));
+    }
+    for coin in 0..coins {
+        let step = price_steps_f64_list[coin];
+        if !step.is_finite() || step < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "GPU market price step must be finite and nonnegative for coin {coin}"
+            )));
+        }
+        let first = first_valid_indices_list[coin];
+        let last = last_valid_indices_list[coin];
+        if first <= last && first < 0 {
+            return Err(PyValueError::new_err(format!(
+                "Active GPU market window must use nonnegative indices for coin {coin}"
+            )));
+        }
+    }
+    let count = rows
+        .checked_mul(coins)
+        .and_then(|cells| cells.checked_mul(2))
+        .filter(|count| *count <= isize::MAX as usize / std::mem::size_of::<i32>())
+        .ok_or_else(|| {
+            PyValueError::new_err("GPU market output shape overflows addressable size")
+        })?;
+    let mut values = Vec::<i32>::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| PyMemoryError::new_err("Unable to allocate GPU market tick output"))?;
+    values.resize(count, 0);
+    for row in 0..rows {
+        let global_row = row_offset_int + row as i64;
+        for coin in 0..coins {
+            if global_row < first_valid_indices_list[coin]
+                || global_row > last_valid_indices_list[coin]
+            {
+                continue;
+            }
+            let ticks = crate::utils::gpu_market_execution_tick_counts(
+                closes[(row, coin)],
+                price_steps_f64_list[coin],
+                slippage_f64,
+            )
+            .map_err(|message| {
+                PyValueError::new_err(format!("{message}; global row {global_row}, coin {coin}"))
+            })?;
+            let start = (row * coins + coin) * 2;
+            values[start..start + 2].copy_from_slice(&ticks);
+        }
+    }
+    let output = Array3::from_shape_vec((rows, coins, 2), values)
+        .map_err(|_| PyValueError::new_err("Invalid GPU market tick output shape"))?;
+    Ok(output.into_pyarray_bound(py))
+}
 
 const OPTIMIZE_PROFILE_ENV: &str = "PASSIVBOT_OPTIMIZE_PROFILE";
 const RUST_PROFILE_KEY: &str = "_rust_profile";
@@ -90,6 +181,52 @@ fn profile_to_py_dict(
     }
     Ok(py_profile.unbind())
 }
+
+#[pyfunction(signature = (equity, timestamps_ms, half_life_days, candle_interval_minutes=1))]
+pub fn calculate_ew_metrics(
+    py: Python<'_>,
+    equity: Vec<f64>,
+    timestamps_ms: Vec<u64>,
+    half_life_days: f64,
+    candle_interval_minutes: u64,
+) -> PyResult<PyObject> {
+    let result = crate::ew::analyze_ew_equity(
+        &equity,
+        &timestamps_ms,
+        half_life_days,
+        candle_interval_minutes,
+    )
+    .map_err(PyValueError::new_err)?;
+    Ok(struct_to_py_dict(py, &result)?.into_py(py))
+}
+
+fn attach_ew_analysis(
+    py: Python<'_>,
+    dict: &Py<PyDict>,
+    curve_name: &str,
+    curve: &crate::ew::EwAnalysis,
+    strategy: &crate::ew::EwAnalysis,
+) -> PyResult<()> {
+    for (analysis, suffix) in [(curve, "_ew"), (strategy, "_strategy_eq_ew")] {
+        if let Some(metrics) = analysis.metrics {
+            for (key, value) in [
+                ("adg", metrics.adg),
+                ("sharpe_ratio", metrics.sharpe_ratio),
+                ("sortino_ratio", metrics.sortino_ratio),
+                ("omega_ratio", metrics.omega_ratio),
+            ] {
+                dict.bind(py).set_item(format!("{key}{suffix}"), value)?;
+            }
+        }
+    }
+    let metadata = PyDict::new_bound(py);
+    metadata.set_item(curve_name, struct_to_py_dict(py, &curve.metadata)?)?;
+    metadata.set_item("strategy_eq", struct_to_py_dict(py, &strategy.metadata)?)?;
+    dict.bind(py).set_item("_ew_metadata", metadata)?;
+    Ok(())
+}
+
+
 
 fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
     analysis.fills_active_days_count = metrics.fills_active_days_count;
@@ -162,12 +299,14 @@ pub struct HlcvsBundlePy {
 #[pymethods]
 impl HlcvsBundlePy {
     #[new]
-    #[pyo3(signature = (hlcvs, btc_usd, timestamps, meta))]
+    #[pyo3(signature = (hlcvs, btc_usd, timestamps, meta, eligibility=None, eligibility_rows=None))]
     pub fn new(
         hlcvs: Py<PyArray3<f64>>,
         btc_usd: Py<PyArray1<f64>>,
         timestamps: Py<PyArray1<i64>>,
         meta: &Bound<'_, PyAny>,
+        eligibility: Option<Py<PyArray2<u8>>>,
+        eligibility_rows: Option<Py<PyArray1<i32>>>,
     ) -> PyResult<Self> {
         let parsed_meta = hlcvs_meta_from_py(meta)?;
         let bundle = HlcvsBundle {
@@ -175,6 +314,8 @@ impl HlcvsBundlePy {
             btc_usd,
             timestamps,
             meta: parsed_meta,
+            eligibility,
+            eligibility_rows,
         };
         Python::with_gil(|py| bundle.validate_shapes(py))?;
         Ok(Self { inner: bundle })
@@ -193,6 +334,21 @@ impl HlcvsBundlePy {
     #[getter]
     pub fn timestamps<'py>(&self, py: Python<'py>) -> PyObject {
         self.inner.timestamps.clone_ref(py).into_py(py)
+    }
+
+    #[getter]
+    pub fn eligibility(&self, py: Python<'_>) -> Option<PyObject> {
+        self.inner
+            .eligibility
+            .as_ref()
+            .map(|a| a.clone_ref(py).into_py(py))
+    }
+    #[getter]
+    pub fn eligibility_rows(&self, py: Python<'_>) -> Option<PyObject> {
+        self.inner
+            .eligibility_rows
+            .as_ref()
+            .map(|a| a.clone_ref(py).into_py(py))
     }
 
     #[getter]
@@ -990,6 +1146,212 @@ mod tests {
     use pyo3::types::{PyDict, PyList};
 
     #[test]
+    fn strategy_bindings_reject_unknown_and_non_string_keys_before_projection() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            for kind in ["trailing_martingale", "ema_anchor"] {
+                let value = if kind == "trailing_martingale" {
+                    serde_json::to_value(crate::strategies::TrailingMartingaleParams::default())
+                        .unwrap()
+                } else {
+                    serde_json::to_value(EmaAnchorParams::default()).unwrap()
+                };
+                let mut paths = vec![vec![], vec!["long"], vec!["short"]];
+                if kind == "trailing_martingale" {
+                    paths.extend([
+                        vec!["long", "entry"],
+                        vec!["long", "close"],
+                        vec!["short", "entry"],
+                        vec!["short", "close"],
+                    ]);
+                }
+                for path in paths {
+                    for non_string in [false, true] {
+                        let raw = serde_json::json!({"long":value,"short":value});
+                        let object = json_value_to_py(py, &raw).unwrap();
+                        let dict = object.bind(py).downcast::<PyDict>().unwrap();
+                        let mut target = dict.as_gil_ref();
+                        for part in &path {
+                            target = target
+                                .get_item(part)
+                                .unwrap()
+                                .unwrap()
+                                .downcast::<PyDict>()
+                                .unwrap();
+                        }
+                        if non_string {
+                            target.set_item(7, 1.0).unwrap();
+                        } else {
+                            target.set_item("typo_unknown_key", 1.0).unwrap();
+                        }
+                        let error = strategy_params_pair_from_dict(dict.as_gil_ref(), kind)
+                            .expect_err(&format!("{kind} {path:?} non_string={non_string}"));
+                        let expected = if non_string {
+                            "non-string key"
+                        } else {
+                            "typo_unknown_key"
+                        };
+                        assert!(error.to_string().contains(expected), "{error}");
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn strategy_binding_optional_defaults_remain_unchanged() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let value = crate::strategies::TrailingMartingaleParams::default();
+            let object = struct_to_py_dict(py, &value).unwrap();
+            let dict = object.bind(py);
+            dict.get_item("entry")
+                .unwrap()
+                .unwrap()
+                .downcast::<PyDict>()
+                .unwrap()
+                .del_item("ema_gate_mode")
+                .unwrap();
+            let parsed = trailing_martingale_strategy_params_from_dict(dict.as_gil_ref()).unwrap();
+            assert_eq!(parsed["entry"]["ema_gate_mode"], "initial");
+
+            let object = struct_to_py_dict(py, &EmaAnchorParams::default()).unwrap();
+            let dict = object.bind(py);
+            let optional = [
+                "entry_double_down_factor",
+                "offset_volatility_ema_span_1m",
+                "offset_volatility_1m_weight",
+                "offset_volatility_ema_span_1h",
+                "offset_volatility_1h_weight",
+            ];
+            for key in optional {
+                dict.del_item(key).unwrap();
+            }
+            let parsed = ema_anchor_strategy_params_from_dict(dict.as_gil_ref()).unwrap();
+            for key in optional {
+                assert_eq!(parsed[key], 0.0, "{key}");
+            }
+        });
+    }
+
+    #[test]
+    fn strategy_bindings_reject_nonfinite_values_before_json_null_reaches_backtest() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            for kind in ["trailing_martingale", "ema_anchor"] {
+                let value = if kind == "trailing_martingale" {
+                    serde_json::to_value(crate::strategies::TrailingMartingaleParams::default())
+                        .unwrap()
+                } else {
+                    serde_json::to_value(EmaAnchorParams::default()).unwrap()
+                };
+                let fields = if kind == "trailing_martingale" {
+                    vec![
+                        (None, "volatility_ema_span_1m"),
+                        (Some("entry"), "double_down_factor"),
+                        (Some("close"), "qty_pct"),
+                    ]
+                } else {
+                    vec![(None, "offset")]
+                };
+                for pside in ["long", "short"] {
+                    for (section, field) in &fields {
+                        for nonfinite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                            let raw = serde_json::json!({"long":value,"short":value});
+                            let object = json_value_to_py(py, &raw).unwrap();
+                            let dict = object.bind(py).downcast::<PyDict>().unwrap();
+                            let mut target = dict
+                                .get_item(pside)
+                                .unwrap()
+                                .unwrap()
+                                .downcast_into::<PyDict>()
+                                .unwrap();
+                            if let Some(section) = section {
+                                target = target
+                                    .get_item(section)
+                                    .unwrap()
+                                    .unwrap()
+                                    .downcast_into::<PyDict>()
+                                    .unwrap();
+                            }
+                            target.set_item(field, nonfinite).unwrap();
+                            let error = strategy_params_pair_from_dict(dict.as_gil_ref(), kind)
+                                .expect_err("nonfinite input must fail at the Python binding");
+                            assert!(error.to_string().contains(field), "{error}");
+                            assert!(error.to_string().contains("must be finite"), "{error}");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn native_backtest_rejects_retired_rolling_gate_horizon() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            for horizon in [-1.0, 0.0, 43_200.0] {
+                let input = PyDict::new_bound(py);
+                input
+                    .set_item("realized_loss_gate_lookback_minutes", horizon)
+                    .unwrap();
+                let error = backtest_params_from_dict(input.as_gil_ref()).unwrap_err();
+                assert!(error
+                    .to_string()
+                    .contains("realized_loss_gate_lookback_minutes is retired"));
+            }
+        });
+    }
+
+    #[test]
+    fn martingale_close_diagnostic_keeps_its_shared_bot_input_reader() {
+        let exchange = ExchangeParams::default();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: OrderBook {
+                bid: 110.0,
+                ask: 110.1,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            n_positions: 1,
+            ..Default::default()
+        };
+        let close = TrailingMartingaleCloseParams {
+            qty_pct: 0.25,
+            threshold_base_pct: 0.01,
+            ..Default::default()
+        };
+        let trailing = TrailingPriceBundle::default();
+        let runtime = RuntimeOrderContext {
+            effective_wallet_exposure_limit: 1.0,
+        };
+        for (side, name, size) in [
+            (StrategySide::Long, "long", 5.0),
+            (StrategySide::Short, "short", -5.0),
+        ] {
+            let position = Position { size, price: 100.0 };
+            let input = serde_json::json!({
+                "pside": name, "exchange": exchange, "state": state,
+                "position": position, "trailing": trailing, "close_params": close,
+                "bot_params": {"wallet_exposure_limit":1.0,"total_wallet_exposure_limit":1.0,"n_positions":1},
+                "runtime": {"effective_wallet_exposure_limit":1.0},
+            });
+            let actual: Value = serde_json::from_str(
+                &calc_trailing_martingale_close_diagnostic_py(&input.to_string()).unwrap(),
+            )
+            .unwrap();
+            let expected = calc_trailing_martingale_close_diagnostic(
+                side, &exchange, &state, &bot, &runtime, &close, &position, &trailing,
+            );
+            assert_eq!(actual, serde_json::to_value(expected).unwrap());
+        }
+    }
+
+    #[test]
     fn test_gate_entries_blocks_when_twe_if_filled_exceeds() {
         prepare_freethreaded_python();
         Python::with_gil(|py| {
@@ -1069,13 +1431,15 @@ pub fn run_backtest(
     exchange_params_list: &Bound<'_, PyAny>,
     backtest_params_dict: &Bound<'_, PyDict>,
 ) -> PyResult<BacktestPyResult> {
-    run_backtest_core(
+    run_backtest_core::<false>(
         hlcvs,
         btc_usd,
         bot_params,
         strategy_params,
         exchange_params_list,
         backtest_params_dict,
+        None,
+        None,
     )
 }
 
@@ -1090,23 +1454,43 @@ pub fn run_backtest_bundle(
     let py = bot_params.py();
     let hlcvs = bundle.inner.hlcvs.bind(py).readonly();
     let btc = bundle.inner.btc_usd.bind(py).readonly();
-    run_backtest_core(
-        hlcvs,
-        btc,
-        bot_params,
-        strategy_params,
-        exchange_params_list,
-        backtest_params_dict,
-    )
+    if let (Some(values), Some(rows)) = (&bundle.inner.eligibility, &bundle.inner.eligibility_rows)
+    {
+        let values = values.bind(py).readonly();
+        let rows = rows.bind(py).readonly();
+        run_backtest_core::<true>(
+            hlcvs,
+            btc,
+            bot_params,
+            strategy_params,
+            exchange_params_list,
+            backtest_params_dict,
+            Some(values),
+            Some(rows),
+        )
+    } else {
+        run_backtest_core::<false>(
+            hlcvs,
+            btc,
+            bot_params,
+            strategy_params,
+            exchange_params_list,
+            backtest_params_dict,
+            None,
+            None,
+        )
+    }
 }
 
-fn run_backtest_core<'py>(
+fn run_backtest_core<'py, const ORGANILLO: bool>(
     hlcvs: PyReadonlyArray3<'py, f64>,
     btc_usd: PyReadonlyArray1<'py, f64>,
     bot_params: &Bound<'py, PyAny>,
     strategy_params: &Bound<'py, PyAny>,
     exchange_params_list: &Bound<'py, PyAny>,
     backtest_params_dict: &Bound<'py, PyDict>,
+    eligibility: Option<PyReadonlyArray2<'py, u8>>,
+    eligibility_rows: Option<PyReadonlyArray1<'py, i32>>,
 ) -> PyResult<BacktestPyResult> {
     let profile_enabled = rust_profile_enabled();
     let profile_total_start = profile_start(profile_enabled);
@@ -1162,8 +1546,12 @@ fn run_backtest_core<'py>(
     }
     if backtest_params.candle_interval_minutes != 1
         && crate::unilateralness::backtest_enabled_sides(
-            &bot_params_vec, backtest_params.dynamic_wel_by_tradability,
-        ).iter().flatten().any(|enabled| *enabled)
+            &bot_params_vec,
+            backtest_params.dynamic_wel_by_tradability,
+        )
+        .iter()
+        .flatten()
+        .any(|enabled| *enabled)
     {
         return Err(PyValueError::new_err(
             "RMS unilateralness requires completed one-minute candles",
@@ -1208,7 +1596,7 @@ fn run_backtest_core<'py>(
         && backtest_params.skip_btc_analysis
         && backtest_params.btc_collateral_cap <= 0.0;
     let init_start = profile_start(profile_enabled);
-    let mut backtest = Backtest::new_with_strategy_params(
+    let mut backtest = BacktestEngine::<ORGANILLO>::new_with_strategy_params(
         hlcvs_rust,
         btc_usd_rust,
         strategy_kind,
@@ -1217,6 +1605,8 @@ fn run_backtest_core<'py>(
         exchange_params,
         &backtest_params,
     );
+    backtest.eligibility = eligibility.as_ref().map(|a| a.as_array());
+    backtest.eligibility_rows = eligibility_rows.as_ref().map(|a| a.as_array());
     profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
@@ -1243,12 +1633,13 @@ fn run_backtest_core<'py>(
             (analysis_usd, Analysis::default())
         } else if profile_enabled {
             let ((analysis_usd, analysis_btc), analysis_profile) =
-                analyze_backtest_pair_with_profile(
+                analyze_backtest_pair_with_options(
                     &fills,
                     &equities,
                     backtest.balance.use_btc_collateral,
                     &backtest.total_wallet_exposures,
                     backtest.liquidated(),
+                    true,
                 );
             rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
             rust_profile.push((
@@ -1259,14 +1650,18 @@ fn run_backtest_core<'py>(
             rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
             (analysis_usd, analysis_btc)
         } else {
-            analyze_backtest_pair(
+            analyze_backtest_pair_with_options(
                 &fills,
                 &equities,
                 backtest.balance.use_btc_collateral,
                 &backtest.total_wallet_exposures,
                 backtest.liquidated(),
+                false,
             )
+            .0
         };
+        backtest.exposure_rms.apply(&mut analysis_usd);
+        backtest.exposure_rms.apply(&mut analysis_btc);
         analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
@@ -1397,13 +1792,6 @@ fn run_backtest_core<'py>(
             strategy.overall.expected_shortfall_1pct_strategy_eq;
         analysis_usd.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
         analysis_usd.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
-        analysis_usd.adg_strategy_eq_w = strategy.overall.adg_strategy_eq_w;
-        analysis_usd.mdg_strategy_eq_w = strategy.overall.mdg_strategy_eq_w;
-        analysis_usd.sharpe_ratio_strategy_eq_w = strategy.overall.sharpe_ratio_strategy_eq_w;
-        analysis_usd.sortino_ratio_strategy_eq_w = strategy.overall.sortino_ratio_strategy_eq_w;
-        analysis_usd.omega_ratio_strategy_eq_w = strategy.overall.omega_ratio_strategy_eq_w;
-        analysis_usd.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
-        analysis_usd.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
         analysis_btc.hard_stop_triggers = hs.triggers;
         analysis_btc.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_btc.hard_stop_triggers_long = hs.triggers_long;
@@ -1496,13 +1884,6 @@ fn run_backtest_core<'py>(
             strategy.overall.expected_shortfall_1pct_strategy_eq;
         analysis_btc.calmar_ratio_strategy_eq = strategy.overall.calmar_ratio_strategy_eq;
         analysis_btc.sterling_ratio_strategy_eq = strategy.overall.sterling_ratio_strategy_eq;
-        analysis_btc.adg_strategy_eq_w = strategy.overall.adg_strategy_eq_w;
-        analysis_btc.mdg_strategy_eq_w = strategy.overall.mdg_strategy_eq_w;
-        analysis_btc.sharpe_ratio_strategy_eq_w = strategy.overall.sharpe_ratio_strategy_eq_w;
-        analysis_btc.sortino_ratio_strategy_eq_w = strategy.overall.sortino_ratio_strategy_eq_w;
-        analysis_btc.omega_ratio_strategy_eq_w = strategy.overall.omega_ratio_strategy_eq_w;
-        analysis_btc.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
-        analysis_btc.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
 
         if backtest_params.equity_hard_stop_loss.hsl.is_some() {
             for analysis in [&mut analysis_usd, &mut analysis_btc] {
@@ -1519,6 +1900,29 @@ fn run_backtest_core<'py>(
         } else {
             struct_to_py_dict(py, &analysis_btc)?
         };
+        if let Some(half_life_days) = backtest_params.ew_half_life_days {
+            let calc = |series: &[f64]| -> PyResult<crate::ew::EwAnalysis> {
+                let mut result = crate::ew::analyze_ew_equity(
+                    series,
+                    &equities.timestamps_ms,
+                    half_life_days,
+                    backtest_params.candle_interval_minutes,
+                )
+                .map_err(PyValueError::new_err)?;
+                if backtest.liquidated() {
+                    result.metrics = None;
+                    result.metadata.status = "liquidated";
+                }
+                Ok(result)
+            };
+            let strategy_ew = calc(backtest.strategy_equity_series_for_artifacts())?;
+            let usd_ew = calc(&equities.usd_total_equity)?;
+            attach_ew_analysis(py, &py_analysis_usd, "usd", &usd_ew, &strategy_ew)?;
+            if !skip_btc_analysis {
+                let btc_ew = calc(&equities.btc_total_equity)?;
+                attach_ew_analysis(py, &py_analysis_btc, "btc", &btc_ew, &strategy_ew)?;
+            }
+        }
         let hsl_report = hsl_report_to_py(py, &backtest)?;
         profile_add(
             &mut rust_profile,
@@ -1623,9 +2027,9 @@ fn run_backtest_core<'py>(
 
 /// Preserve the public report schema while avoiding a huge intermediate JSON tree.
 /// Static field names and enum strings are shared; each row/list remains independent.
-pub(crate) fn hsl_report_to_py(
+pub(crate) fn hsl_report_to_py<const ORGANILLO: bool>(
     py: Python<'_>,
-    backtest: &Backtest<'_>,
+    backtest: &BacktestEngine<'_, ORGANILLO>,
 ) -> PyResult<Option<PyObject>> {
     let Some(metadata) = backtest
         .hsl_report_metadata()
@@ -1649,9 +2053,9 @@ pub(crate) fn hsl_report_to_py(
             pyo3::types::PyString::intern_bound(py, row.phase),
         )?;
         let action = row.action.map(|action| match action {
-            crate::hsl_controller::Action::Normal => pyo3::intern!(py, "normal"),
-            crate::hsl_controller::Action::Panic => pyo3::intern!(py, "panic"),
-            crate::hsl_controller::Action::Halted => pyo3::intern!(py, "halted"),
+            crate::hsl_intent::Action::Normal => pyo3::intern!(py, "normal"),
+            crate::hsl_intent::Action::Panic => pyo3::intern!(py, "panic"),
+            crate::hsl_intent::Action::Halted => pyo3::intern!(py, "halted"),
         });
         dict.set_item(pyo3::intern!(py, "action"), action)?;
         samples.append(dict)?;
@@ -1746,9 +2150,9 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
                 "enabled",
                 "scale_budget_with_excess_allowance",
                 "red_threshold",
-                "ema_span_minutes",
+                "memory_ema_span_minutes",
+                "drawdown_ratio_ema_span_minutes",
                 "cooldown_minutes_after_red",
-                "restart_after_red_policy",
                 "panic_close_order_type",
             ],
         )?;
@@ -1761,9 +2165,12 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
                 None => false,
             },
             red_threshold: extract_value(dict, "red_threshold")?,
-            ema_span_minutes: extract_value(dict, "ema_span_minutes")?,
+            memory_ema_span_minutes: extract_value(dict, "memory_ema_span_minutes")?,
+            drawdown_ratio_ema_span_minutes: extract_value(
+                dict,
+                "drawdown_ratio_ema_span_minutes",
+            )?,
             cooldown_minutes_after_red: extract_value(dict, "cooldown_minutes_after_red")?,
-            restart_after_red_policy: extract_value(dict, "restart_after_red_policy")?,
             panic_close_order_type: extract_value(dict, "panic_close_order_type")?,
         })
     }
@@ -1792,6 +2199,20 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
+    if dict.contains("calculate_legacy_w")? {
+        return Err(PyValueError::new_err("calculate_legacy_w is retired; only ordinary and explicit _ew metrics remain"));
+    }
+
+    if dict.contains("lookback_ema_span_minutes")? {
+        return Err(PyValueError::new_err(
+            "lookback_ema_span_minutes is retired; supply independent risk memory spans",
+        ));
+    }
+    if dict.contains("realized_loss_gate_lookback_minutes")? {
+        return Err(PyValueError::new_err(
+            "realized_loss_gate_lookback_minutes is retired; use loss_gate_memory_ema_span_minutes",
+        ));
+    }
     let parse_hsl_cfg = |parent: &PyDict, key: &str| -> PyResult<EquityHardStopLossConfig> {
         let item = parent
             .get_item(key)?
@@ -1839,6 +2260,18 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        ew_half_life_days: match dict.get_item("ew_half_life_days")? {
+            Some(item) if !item.is_none() => {
+                let value = item.extract::<f64>()?;
+                if !value.is_finite() || value < 1.0 {
+                    return Err(PyValueError::new_err(
+                        "ew_half_life_days must be finite and at least 1 day",
+                    ));
+                }
+                Some(value)
+            }
+            _ => None,
+        },
         hsl_detailed_report: dict
             .get_item("hsl_detailed_report")?
             .map(|item| item.extract::<bool>())
@@ -1865,7 +2298,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(1.0),
-        pnls_max_lookback_days: extract_value(dict, "pnls_max_lookback_days")?,
+        unstuck_memory_ema_span_minutes: extract_value(dict, "unstuck_memory_ema_span_minutes")?,
+        loss_gate_memory_ema_span_minutes: extract_value(
+            dict,
+            "loss_gate_memory_ema_span_minutes",
+        )?,
         liquidation_threshold: dict
             .get_item("liquidation_threshold")?
             .map(|item| item.extract::<f64>())
@@ -1905,15 +2342,22 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(1), // default to 1m candles
     };
+    for span in [
+        params.unstuck_memory_ema_span_minutes,
+        params.loss_gate_memory_ema_span_minutes,
+    ] {
+        crate::hsl_decay::RealizedMemory::new(
+            span,
+            i64::try_from(params.first_timestamp_ms)
+                .map_err(|_| PyValueError::new_err("risk timestamp exceeds i64"))?,
+        )
+        .map_err(PyValueError::new_err)?;
+    }
     crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
         .map_err(PyValueError::new_err)?;
     if let Some(hsl) = &params.equity_hard_stop_loss.hsl {
-        hsl.validate(
-            &params.coins,
-            params.pnls_max_lookback_days,
-            params.candle_interval_minutes,
-        )
-        .map_err(PyValueError::new_err)?;
+        hsl.validate(&params.coins, params.candle_interval_minutes)
+            .map_err(PyValueError::new_err)?;
     }
     Ok(params)
 }
@@ -1942,8 +2386,7 @@ fn bot_params_pair_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParamsPair
 fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
     let entry = extract_value::<&PyDict>(dict, "entry")?;
     let close = extract_value::<&PyDict>(dict, "close")?;
-    Ok(serde_json::json!({
-
+    let params = serde_json::json!({
         "volatility_ema_span_1h": extract_value::<f64>(dict, "volatility_ema_span_1h")?,
         "volatility_ema_span_1m": extract_value::<f64>(dict, "volatility_ema_span_1m")?,
         "entry": {
@@ -1972,11 +2415,13 @@ fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Valu
             "retracement_volatility_1h_weight": extract_value::<f64>(close, "retracement_volatility_1h_weight")?,
             "retracement_volatility_1m_weight": extract_value::<f64>(close, "retracement_volatility_1m_weight")?,
         },
-    }))
+    });
+    validate_strategy_py_dict_keys(dict, "strategy_params.trailing_martingale", &params)?;
+    Ok(params)
 }
 
 fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
-    Ok(serde_json::json!({
+    let params = serde_json::json!({
         "base_qty_pct": extract_value::<f64>(dict, "base_qty_pct")?,
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
@@ -1987,7 +2432,9 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
         "offset_volatility_ema_span_1h": extract_optional_f64(dict, "offset_volatility_ema_span_1h")?,
         "offset_volatility_1h_weight": extract_optional_f64(dict, "offset_volatility_1h_weight")?,
         "offset_psize_weight": extract_value::<f64>(dict, "offset_psize_weight")?,
-    }))
+    });
+    validate_strategy_py_dict_keys(dict, "strategy_params.ema_anchor", &params)?;
+    Ok(params)
 }
 
 fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyResult<()> {
@@ -2005,84 +2452,37 @@ fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyRe
     Ok(())
 }
 
-fn trailing_grid_v7_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
-    validate_py_dict_keys(
-        dict,
-        "trailing_grid_v7 strategy params",
-        &["ema_span_0", "ema_span_1", "entry", "close"],
-    )?;
-    let entry = extract_value::<&PyDict>(dict, "entry")?;
-    let close = extract_value::<&PyDict>(dict, "close")?;
-    validate_py_dict_keys(
-        entry,
-        "trailing_grid_v7 entry params",
-        &[
-            "grid_double_down_factor",
-            "grid_spacing_pct",
-            "grid_spacing_we_weight",
-            "grid_spacing_volatility_weight",
-            "initial_ema_dist",
-            "initial_qty_pct",
-            "trailing_double_down_factor",
-            "trailing_grid_ratio",
-            "trailing_retracement_pct",
-            "trailing_retracement_we_weight",
-            "trailing_retracement_volatility_weight",
-            "trailing_threshold_pct",
-            "trailing_threshold_we_weight",
-            "trailing_threshold_volatility_weight",
-            "volatility_ema_span_hours",
-        ],
-    )?;
-    validate_py_dict_keys(
-        close,
-        "trailing_grid_v7 close params",
-        &[
-            "grid_markup_start",
-            "grid_markup_end",
-            "grid_qty_pct",
-            "trailing_grid_ratio",
-            "trailing_qty_pct",
-            "trailing_retracement_pct",
-            "trailing_threshold_pct",
-        ],
-    )?;
-    Ok(serde_json::json!({
-        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
-        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
-        "entry": {
-            "grid_double_down_factor": extract_value::<f64>(entry, "grid_double_down_factor")?,
-            "grid_spacing_pct": extract_value::<f64>(entry, "grid_spacing_pct")?,
-            "grid_spacing_we_weight": extract_value::<f64>(entry, "grid_spacing_we_weight")?,
-            "grid_spacing_volatility_weight": extract_value::<f64>(entry, "grid_spacing_volatility_weight")?,
-            "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
-            "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
-            "trailing_double_down_factor": extract_value::<f64>(entry, "trailing_double_down_factor")?,
-            "trailing_grid_ratio": extract_value::<f64>(entry, "trailing_grid_ratio")?,
-            "trailing_retracement_pct": extract_value::<f64>(entry, "trailing_retracement_pct")?,
-            "trailing_retracement_we_weight": extract_value::<f64>(entry, "trailing_retracement_we_weight")?,
-            "trailing_retracement_volatility_weight": extract_value::<f64>(entry, "trailing_retracement_volatility_weight")?,
-            "trailing_threshold_pct": extract_value::<f64>(entry, "trailing_threshold_pct")?,
-            "trailing_threshold_we_weight": extract_value::<f64>(entry, "trailing_threshold_we_weight")?,
-            "trailing_threshold_volatility_weight": extract_value::<f64>(entry, "trailing_threshold_volatility_weight")?,
-            "volatility_ema_span_hours": extract_value::<f64>(entry, "volatility_ema_span_hours")?,
-        },
-        "close": {
-            "grid_markup_start": extract_value::<f64>(close, "grid_markup_start")?,
-            "grid_markup_end": extract_value::<f64>(close, "grid_markup_end")?,
-            "grid_qty_pct": extract_value::<f64>(close, "grid_qty_pct")?,
-            "trailing_grid_ratio": extract_value::<f64>(close, "trailing_grid_ratio")?,
-            "trailing_qty_pct": extract_value::<f64>(close, "trailing_qty_pct")?,
-            "trailing_retracement_pct": extract_value::<f64>(close, "trailing_retracement_pct")?,
-            "trailing_threshold_pct": extract_value::<f64>(close, "trailing_threshold_pct")?,
-        },
-    }))
+fn validate_strategy_py_dict_keys(dict: &PyDict, context: &str, recognized: &Value) -> PyResult<()> {
+    // Compare the original input with the fields this binding actually
+    // transports. Do not let projection erase a typo before strict Rust serde.
+    let object = recognized
+        .as_object()
+        .ok_or_else(|| PyValueError::new_err("strategy binding must construct an object"))?;
+    let allowed: Vec<&str> = object.keys().map(String::as_str).collect();
+    validate_py_dict_keys(dict, context, &allowed)?;
+    for (key, child) in object {
+        if child.is_object() {
+            validate_strategy_py_dict_keys(
+                extract_value::<&PyDict>(dict, key)?,
+                &format!("{context}.{key}"),
+                child,
+            )?;
+        } else if child.is_null() {
+            // All numeric fields were extracted as f64 above. json! maps
+            // NaN/infinity to null; reject it before backtest serde can panic.
+            return Err(PyValueError::new_err(format!(
+                "{context}.{key} must be finite"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn strategy_params_pair_from_dict(
     dict: &PyDict,
     strategy_kind: &str,
 ) -> PyResult<StrategyParamsPairValue> {
+    validate_py_dict_keys(dict, "strategy_params", &["long", "short"])?;
     let long_dict = dict
         .get_item("long")?
         .ok_or_else(|| PyValueError::new_err("missing required key: long"))?
@@ -2101,10 +2501,6 @@ fn strategy_params_pair_from_dict(
         "ema_anchor" => (
             ema_anchor_strategy_params_from_dict(long_dict)?,
             ema_anchor_strategy_params_from_dict(short_dict)?,
-        ),
-        "trailing_grid_v7" => (
-            trailing_grid_v7_strategy_params_from_dict(long_dict)?,
-            trailing_grid_v7_strategy_params_from_dict(short_dict)?,
         ),
         _ => {
             return Err(PyValueError::new_err(format!(
@@ -2157,6 +2553,17 @@ fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcer
 }
 
 fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
+    for key in [
+        "forager_volume_drop_pct",
+        "filter_volume_drop_pct",
+        "risk_twel_entry_gate_enabled",
+    ] {
+        if dict.contains(key)? {
+            return Err(PyValueError::new_err(format!(
+                "{key} is retired in canonical v9 inputs"
+            )));
+        }
+    }
     // Retired producer fields must not silently change native risk semantics.
     for key in ["risk_we_excess_allowance_mode", "we_excess_allowance_mode"] {
         if dict.contains(key)? {
@@ -2244,11 +2651,6 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             "filter_volume_ema_span_1m",
         )?,
         _legacy_filter_volatility_drop_pct: 0.0,
-        forager_volume_drop_pct: extract_value_with_fallback(
-            dict,
-            "forager_volume_drop_pct",
-            "filter_volume_drop_pct",
-        )?,
         forager_score_weights: dict
             .get_item("forager_score_weights")
             .ok()
@@ -2292,11 +2694,6 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         wallet_exposure_limit,
         risk_wel_enforcer_enabled: extract_optional_bool(dict, "risk_wel_enforcer_enabled", true)?,
         risk_wel_enforcer_threshold,
-        risk_twel_entry_gate_enabled: extract_optional_bool(
-            dict,
-            "risk_twel_entry_gate_enabled",
-            true,
-        )?,
         risk_twel_enforcer_enabled: extract_optional_bool(
             dict,
             "risk_twel_enforcer_enabled",
@@ -2546,25 +2943,6 @@ fn validate_orchestrator_account_risk_inputs(
         None,
         true,
     )?;
-    for (path, value) in [
-        (
-            "global.realized_pnl_cumsum_max",
-            input.global.realized_pnl_cumsum_max,
-        ),
-        (
-            "global.realized_pnl_cumsum_last",
-            input.global.realized_pnl_cumsum_last,
-        ),
-    ] {
-        if !value.is_finite() {
-            return Err(PyValueError::new_err(format!("{path} must be finite")));
-        }
-    }
-    if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
-        return Err(PyValueError::new_err(
-            "global.realized_pnl_cumsum_max must be >= global.realized_pnl_cumsum_last",
-        ));
-    }
     validate_finite_range(
         "global.unstuck_allowance_long",
         input.global.unstuck_allowance_long,
@@ -2688,7 +3066,7 @@ fn json_bool(value: &Value, key: &str, default: bool) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
-fn bot_params_from_trailing_grid_v7_diagnostic_json(value: &Value) -> PyResult<BotParams> {
+fn bot_params_for_close_diagnostic_json(value: &Value) -> PyResult<BotParams> {
     let mut bot = BotParams::default();
     bot.wallet_exposure_limit = json_f64(value, "wallet_exposure_limit", 0.0);
     bot.total_wallet_exposure_limit = json_f64(value, "total_wallet_exposure_limit", 0.0);
@@ -2697,74 +3075,6 @@ fn bot_params_from_trailing_grid_v7_diagnostic_json(value: &Value) -> PyResult<B
     bot.risk_wel_enforcer_enabled = json_bool(value, "risk_wel_enforcer_enabled", true);
     bot.risk_wel_enforcer_threshold = json_f64(value, "risk_wel_enforcer_threshold", 0.0);
     Ok(bot)
-}
-
-#[pyfunction]
-pub fn calc_trailing_grid_v7_diagnostic_py(input_json: &str) -> PyResult<String> {
-    let input: Value = serde_json::from_str(input_json).map_err(|err| {
-        PyValueError::new_err(format!("invalid trailing_grid_v7 diagnostic json: {err}"))
-    })?;
-    let side = match input.get("pside").and_then(Value::as_str).unwrap_or("long") {
-        "long" => StrategySide::Long,
-        "short" => StrategySide::Short,
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "pside must be long or short; got {other:?}"
-            )))
-        }
-    };
-    let exchange: ExchangeParams = serde_json::from_value(
-        input
-            .get("exchange")
-            .cloned()
-            .ok_or_else(|| PyValueError::new_err("missing exchange"))?,
-    )
-    .map_err(|err| PyValueError::new_err(format!("invalid exchange: {err}")))?;
-    let state: StateParams = serde_json::from_value(
-        input
-            .get("state")
-            .cloned()
-            .ok_or_else(|| PyValueError::new_err("missing state"))?,
-    )
-    .map_err(|err| PyValueError::new_err(format!("invalid state: {err}")))?;
-    let position: Position = serde_json::from_value(
-        input
-            .get("position")
-            .cloned()
-            .ok_or_else(|| PyValueError::new_err("missing position"))?,
-    )
-    .map_err(|err| PyValueError::new_err(format!("invalid position: {err}")))?;
-    let trailing: TrailingPriceBundle = serde_json::from_value(
-        input
-            .get("trailing")
-            .cloned()
-            .ok_or_else(|| PyValueError::new_err("missing trailing"))?,
-    )
-    .map_err(|err| PyValueError::new_err(format!("invalid trailing: {err}")))?;
-    let params: TrailingGridV7Params = serde_json::from_value(
-        input
-            .get("strategy_params")
-            .cloned()
-            .ok_or_else(|| PyValueError::new_err("missing strategy_params"))?,
-    )
-    .map_err(|err| PyValueError::new_err(format!("invalid strategy_params: {err}")))?;
-    let bot = bot_params_from_trailing_grid_v7_diagnostic_json(
-        input
-            .get("bot_params")
-            .ok_or_else(|| PyValueError::new_err("missing bot_params"))?,
-    )?;
-    let runtime = RuntimeOrderContext {
-        effective_wallet_exposure_limit: input
-            .get("runtime")
-            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit"))
-            .and_then(Value::as_f64)
-            .unwrap_or(bot.wallet_exposure_limit),
-    };
-    let out = calc_trailing_grid_v7_diagnostics(
-        side, &exchange, &state, &bot, &runtime, &params, &position, &trailing,
-    );
-    serde_json::to_string(&out)
-        .map_err(|err| PyValueError::new_err(format!("failed to serialize diagnostic: {err}")))
 }
 
 #[pyfunction]
@@ -2818,7 +3128,7 @@ pub fn calc_trailing_martingale_close_diagnostic_py(input_json: &str) -> PyResul
             .ok_or_else(|| PyValueError::new_err("missing close_params"))?,
     )
     .map_err(|err| PyValueError::new_err(format!("invalid close_params: {err}")))?;
-    let bot = bot_params_from_trailing_grid_v7_diagnostic_json(
+    let bot = bot_params_for_close_diagnostic_json(
         input
             .get("bot_params")
             .ok_or_else(|| PyValueError::new_err("missing bot_params"))?,

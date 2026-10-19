@@ -100,7 +100,7 @@ class CoinFilterHarness(Passivbot):
 
     def bot_value(self, pside, key):
         if key == "filter_volume_drop_pct":
-            return self._clip_pct
+            raise AssertionError("retired volume filter must never be read")
         if key == "filter_volatility_drop_pct":
             return self._volatility_drop_pct
         if key == "n_positions":
@@ -144,7 +144,7 @@ async def test_forager_prefers_highest_volatility():
 
 
 @pytest.mark.asyncio
-async def test_volume_clip_applied_before_volatility_sort():
+async def test_volume_does_not_drop_candidates_before_volatility_sort():
     approved = {"long": ["AAA", "BBB", "CCC", "DDD"], "short": []}
     volumes = {"AAA": 100.0, "BBB": 80.0, "CCC": 10.0, "DDD": 5.0}
     log_ranges = {"AAA": 0.3, "BBB": 0.2, "CCC": 0.9, "DDD": 0.8}
@@ -155,9 +155,9 @@ async def test_volume_clip_applied_before_volatility_sort():
         max_positions={"long": 2, "short": 0},
         clip_pct=0.5,
     )
-    # clip removes bottom 50% by volume -> keep AAA,BBB
+    # Low-volume candidates remain eligible for the configured volatility ranking.
     coins = await bot.get_filtered_coins("long")
-    assert coins == ["AAA", "BBB"]
+    assert coins == ["CCC", "DDD"]
 
 
 @pytest.mark.asyncio

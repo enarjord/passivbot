@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import hjson
 
-from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name
+from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name, reject_retired_metric
 from .reducers import (
     LIMIT_REDUCER_ALIASES,
     REDUCER_ALIASES,
@@ -294,6 +294,7 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     metric = payload.get("metric") or payload.get("name")
     if not metric:
         raise ValueError("Limit entries must include a 'metric' field.")
+    reject_retired_metric(metric, path="config.optimize.limits.metric")
     metric = canonicalize_metric_name(str(metric))
     enabled = payload.get("enabled")
     enabled = True if enabled is None else bool(enabled)

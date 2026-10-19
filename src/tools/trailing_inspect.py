@@ -152,7 +152,11 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
-    hsl = _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
+    global_risk = _require_mapping(bot.get("risk"), "bot.risk")
+    hsl_policy = _require_mapping(global_risk.get("hsl"), "bot.risk.hsl")
+    hsl_scope = hsl_policy["scope"]
+    hsl = hsl_policy if hsl_scope == "portfolio" else _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
+    loss_gate = _require_mapping(global_risk.get("loss_gate"), "bot.risk.loss_gate")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
     unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
@@ -166,7 +170,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         risk.get("total_wallet_exposure_limit"),
         f"bot.{pside}.risk.total_wallet_exposure_limit",
     )
-    n_positions = int(_finite_float(risk.get("n_positions"), f"bot.{pside}.risk.n_positions"))
+    max_positions = int(_finite_float(risk.get("max_positions"), f"bot.{pside}.risk.max_positions"))
     forced_mode_raw = str(live.get(f"forced_mode_{pside}", "") or "").strip()
     try:
         forced_mode = expand_PB_mode(forced_mode_raw) if forced_mode_raw else "normal"
@@ -223,19 +227,19 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         ceiling is None or clamped_base < ceiling
     )
     return {
-        "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
+        "active": total_wallet_exposure_limit > 0.0 and max_positions > 0,
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
-        "n_positions": n_positions,
+        "max_positions": max_positions,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled_global or bool(hsl_enabled_override_symbols),
         "hsl_enabled_global": hsl_enabled_global,
         "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
-        "hsl_signal_mode": str(live.get("hsl_signal_mode", "unknown")),
+        "hsl_scope": hsl_scope,
         "hedge_mode": bool(live.get("hedge_mode", False)),
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
-        "max_realized_loss_pct": _finite_float(
-            live.get("max_realized_loss_pct", 1.0), "live.max_realized_loss_pct"
+        "loss_gate_max_drawdown_ratio": _finite_float(
+            loss_gate["max_drawdown_ratio"], "bot.risk.loss_gate.max_drawdown_ratio"
         ),
         "position_exposure_enforcer_enabled": bool(
             risk.get("position_exposure_enforcer_enabled", False)
@@ -243,9 +247,6 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "position_exposure_enforcer_threshold": _finite_float(
             risk.get("position_exposure_enforcer_threshold", 0.0),
             f"bot.{pside}.risk.position_exposure_enforcer_threshold",
-        ),
-        "total_exposure_entry_gate_enabled": bool(
-            risk.get("total_exposure_entry_gate_enabled", False)
         ),
         "total_exposure_enforcer_enabled": bool(
             risk.get("total_exposure_enforcer_enabled", False)
@@ -268,8 +269,8 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "unstuck_ema_gating_enabled": bool(
             unstuck.get("ema_gating_enabled", False)
         ),
-        "unstuck_threshold": _finite_float(
-            unstuck.get("threshold", 0.0), f"bot.{pside}.unstuck.threshold"
+        "unstuck_exposure_trigger_ratio": _finite_float(
+            unstuck.get("exposure_trigger_ratio", 0.0), f"bot.{pside}.unstuck.exposure_trigger_ratio"
         ),
         "entry_cooldown_minutes": None if state_dependent else clamped_base,
         "entry_cooldown": deepcopy(cooldown),
@@ -675,7 +676,7 @@ def _unstuck_active(context: Mapping[str, Any] | None) -> bool:
         and context.get("unstuck_enabled", False)
         and context.get("unstuck_close_pct", 0.0) > 0.0
         and context.get("unstuck_loss_allowance_pct", 0.0) > 0.0
-        and context.get("unstuck_threshold", 0.0) > 0.0
+        and context.get("unstuck_exposure_trigger_ratio", 0.0) > 0.0
     )
 
 
@@ -870,13 +871,13 @@ def _classify_side(
             overall.append(
                 f"{pside.capitalize()} is enabled: total exposure limit "
                 f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
-                f"{context['n_positions']} configured position slot(s)."
+                f"{context['max_positions']} configured position slot(s)."
             )
         elif context.get("hsl_enabled", False):
             overall.append(
                 f"Global forced mode {forced_mode!r} is the fallback for this config, but HSL runtime "
-                "state has precedence. ORANGE or RED may replace that static mode with graceful-stop, "
-                "tp-only, or panic behavior, so the table paths remain HSL-dependent rather than wholly "
+                "state has precedence. RED may require panic closing and a qualified flattening may "
+                "hold new exposure through finite cooldown, so the table paths remain HSL-dependent rather than wholly "
                 "dormant."
             )
         elif forced_mode == "panic":
@@ -963,9 +964,8 @@ def _classify_side(
                     "Position-exposure enforcement is configured, but the disabled side or current "
                     "forced mode keeps that close path dormant."
                 )
-        if context.get("total_exposure_entry_gate_enabled", False):
-            overall.append(
-                "The account-wide total-exposure entry gate is enabled. Eligible RE-ENTRY / ADD "
+        overall.append(
+                "The side total-exposure entry cap applies unconditionally. Eligible RE-ENTRY / ADD "
                 "rows are marked 'portfolio-dependent': after strategy calculation, the orchestrator "
                 "may crop or remove the order based on exposure consumed by all positions on this side."
             )
@@ -997,7 +997,7 @@ def _classify_side(
                 "Auto-unstuck is active with close quantity "
                 f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
                 f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
-                f"{context['unstuck_threshold'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
+                f"{context['unstuck_exposure_trigger_ratio'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
                 "WE / effective WEL threshold are marked unstuck-dependent: "
                 "Rust may contribute a globally selected unstuck candidate based on realized PnL and "
                 f"portfolio/position state. {unstuck_ema_note}"
@@ -1007,26 +1007,26 @@ def _classify_side(
                 "Auto-unstuck is enabled but inactive because its close quantity, loss allowance, "
                 "or position threshold is non-positive."
             )
-        if context.get("max_realized_loss_pct", 1.0) < 1.0:
+        if context.get("loss_gate_max_drawdown_ratio", 1.0) < 1.0:
             overall.append(
                 "The realized-loss gate is active at "
-                f"{context['max_realized_loss_pct'] * 100.0:g}% of peak balance. CLOSE rows are "
-                "PnL-gated: Rust may remove losing strategy closes or protective reducers after "
+                f"a maximum remembered drawdown ratio of {context['loss_gate_max_drawdown_ratio'] * 100.0:g}%. CLOSE rows are "
+                "PnL-gated: Rust may remove losing non-panic strategy closes or protective reducers after "
                 "evaluating projected batch PnL, fees, and account-wide realized-loss allowance."
             )
         if context.get("hsl_enabled", False):
             hsl_scope = (
-                "globally for this side"
+                ("for the portfolio" if context.get("hsl_scope") == "portfolio" else "globally for this side")
                 if context.get("hsl_enabled_global", False)
                 else "through coin overrides for "
                 + ", ".join(context.get("hsl_enabled_override_symbols", ()))
             )
             overall.append(
-                f"Equity hard stop loss is enabled {hsl_scope} with signal mode "
-                f"{context.get('hsl_signal_mode', 'unknown')!r}. Active rows are HSL-dependent: "
-                "the current account/position PnL drawdown tier may block entries at ORANGE or RED, "
-                "replace strategy closes with panic closes at RED, or leave the strategy path unchanged. "
-                "An offline config report cannot know the live HSL tier."
+                f"Equity hard stop loss is enabled {hsl_scope} with scope "
+                f"{context.get('hsl_scope', 'unknown')!r}. Active rows are HSL-dependent: "
+                "current RED permission may block entries and require panic closes; "
+                "a qualified flattening may hold new exposure through finite cooldown. "
+                "An offline config report cannot know the current HSL permission or cooldown."
             )
         if (
             context.get("position_exposure_enforcer_enabled", False)
@@ -1476,8 +1476,7 @@ def _scenario_runtime_path(
                     if forced_mode in {"panic", "manual", "tp_only"}
                     else f"{forced_mode} fallback"
                 )
-        if context.get("total_exposure_entry_gate_enabled", False):
-            qualifiers.append("portfolio-dependent")
+        qualifiers.append("portfolio-dependent")
         return " / ".join(qualifiers) if qualifiers else "re-entry"
     if context is None:
         return "context unknown"
@@ -1490,9 +1489,9 @@ def _scenario_runtime_path(
             qualifiers.append(f"{context['forced_mode']} fallback")
     if context.get("total_exposure_enforcer_enabled", False):
         qualifiers.append("TWEL-dependent")
-    if _unstuck_active(context) and exposure_ratio > context.get("unstuck_threshold", 0.0):
+    if _unstuck_active(context) and exposure_ratio > context.get("unstuck_exposure_trigger_ratio", 0.0):
         qualifiers.append("unstuck-dependent")
-    if context.get("max_realized_loss_pct", 1.0) < 1.0:
+    if context.get("loss_gate_max_drawdown_ratio", 1.0) < 1.0:
         qualifiers.append("PnL-gated")
     if payload.get("inactive_reason") in {
         "unreachable_short_threshold",

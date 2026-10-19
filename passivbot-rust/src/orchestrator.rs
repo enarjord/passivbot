@@ -30,8 +30,8 @@ pub struct ForagerHysteresisState {
 mod core {
     use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
-        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
-        ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
+        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate,
+        ForagerPositionSide, ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
     use crate::entries::{
@@ -39,7 +39,7 @@ mod core {
         wallet_exposure_limit_with_allowance_from_base,
     };
     use crate::risk::{
-        calc_twel_enforcer_actions, calc_unstucking_action_with_position_allowances,
+        calc_twel_enforcer_actions, calc_unstucking_action_with_realized_drawdown,
         GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
     };
     use crate::strategies::{
@@ -60,9 +60,9 @@ mod core {
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
         calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure,
-        classify_close_wave_remainder, close_qty_absorbing_proven_remainder, CloseWaveRemainder,
-        qty_to_cost, round_,
+        classify_close_wave_remainder, close_qty_absorbing_proven_remainder, qty_to_cost, round_,
         round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
+        CloseWaveRemainder,
     };
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -350,7 +350,7 @@ mod core {
         #[serde(default)]
         pub auto_unstuck_allowed: Option<bool>,
         /// Legacy/diagnostic only: the unstuck decision derives its allowance
-        /// internally from realized_pnl_cumsum_max/last (risk.rs). These values
+        /// internally from unstuck_realized_pnl_drawdown. These values
         /// are consumed solely as the fallback for `auto_unstuck_allowed` when
         /// that flag is absent; explicit-flag callers may omit them.
         #[serde(default)]
@@ -360,12 +360,10 @@ mod core {
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
         /// <=0 blocks all lossy closes; >=1 disables gating.
         pub max_realized_loss_pct: f64,
-        /// Net realized pnl cumsum peak from fill history (statelessly reconstructed).
-        #[serde(default)]
-        pub realized_pnl_cumsum_max: f64,
-        /// Net realized pnl cumsum current value from fill history.
-        #[serde(default)]
-        pub realized_pnl_cumsum_last: f64,
+        /// Account-wide realized drawdown under the global unstuck memory policy.
+        pub unstuck_realized_pnl_drawdown: f64,
+        /// Account-wide realized drawdown under the independent loss-gate policy.
+        pub loss_gate_realized_pnl_drawdown: f64,
         /// If true, output orders are globally sorted by the canonical (live-bot) distance metric.
         /// Backtest does not require this global ordering and may disable it for performance.
         pub sort_global: bool,
@@ -477,8 +475,8 @@ mod core {
         pub timestamp_ms: u64,
         /// Hysteresis-snapped balance used for sizing/order-shaping logic.
         pub balance: f64,
-        /// True/raw balance used for risk/accounting gates.
-        #[serde(default = "default_balance_raw")]
+        /// True/raw balance used for risk/accounting gates. This required
+        /// account fact cannot be replaced by the snapped sizing balance.
         pub balance_raw: f64,
         pub global: OrchestratorGlobal,
         pub symbols: Vec<SymbolInput>,
@@ -490,16 +488,8 @@ mod core {
         pub forager_hysteresis: Option<super::ForagerHysteresisState>,
     }
 
-    fn default_balance_raw() -> f64 {
-        f64::NAN
-    }
-
     fn input_balance_raw(input: &OrchestratorInput) -> f64 {
-        if input.balance_raw.is_finite() {
-            input.balance_raw
-        } else {
-            input.balance
-        }
+        input.balance_raw
     }
 
     fn validate_account_risk_inputs(input: &OrchestratorInput) -> Result<(), OrchestratorError> {
@@ -524,23 +514,22 @@ mod core {
                 symbol_idx: None,
             });
         }
-        if !input.global.realized_pnl_cumsum_max.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "global.realized_pnl_cumsum_max",
-                symbol_idx: None,
-            });
-        }
-        if !input.global.realized_pnl_cumsum_last.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "global.realized_pnl_cumsum_last",
-                symbol_idx: None,
-            });
-        }
-        if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "global.realized_pnl_cumsum_max_lt_last",
-                symbol_idx: None,
-            });
+        for (drawdown, field) in [
+            (
+                input.global.unstuck_realized_pnl_drawdown,
+                "global.unstuck_realized_pnl_drawdown",
+            ),
+            (
+                input.global.loss_gate_realized_pnl_drawdown,
+                "global.loss_gate_realized_pnl_drawdown",
+            ),
+        ] {
+            if !drawdown.is_finite() || drawdown < 0.0 || !(drawdown as f32).is_finite() {
+                return Err(OrchestratorError::NonFiniteInput {
+                    field,
+                    symbol_idx: None,
+                });
+            }
         }
         if !(input.global.unstuck_allowance_long.is_finite()
             && input.global.unstuck_allowance_long >= 0.0)
@@ -1493,7 +1482,9 @@ mod core {
             let needed_q = proven_remaining_steps
                 .and_then(|steps| {
                     close_qty_absorbing_proven_remainder(
-                        closes[i].qty.abs(), steps, exchange.qty_step,
+                        closes[i].qty.abs(),
+                        steps,
+                        exchange.qty_step,
                     )
                 })
                 .unwrap_or_else(|| {
@@ -1706,35 +1697,32 @@ mod core {
         }
     }
 
-    fn realized_loss_gate_state(input: &OrchestratorInput) -> Option<RealizedLossGateState> {
-        let max_loss_pct = input.global.max_realized_loss_pct;
-        if !max_loss_pct.is_finite() || max_loss_pct >= 1.0 {
-            return None;
+    fn realized_loss_gate_state(
+        input: &OrchestratorInput,
+    ) -> Result<Option<RealizedLossGateState>, OrchestratorError> {
+        // Enablement is authored f64 policy, separate from the shared f32 graph.
+        let pct = input.global.max_realized_loss_pct;
+        if pct >= 1.0 {
+            return Ok(None);
         }
-        let pct = max_loss_pct.max(0.0);
         let balance_raw = input_balance_raw(input);
-        if !balance_raw.is_finite() || balance_raw <= 0.0 {
-            return None;
-        }
-        let pnl_max = input.global.realized_pnl_cumsum_max;
-        let pnl_last = input.global.realized_pnl_cumsum_last;
-        if !pnl_max.is_finite() || !pnl_last.is_finite() {
-            return None;
-        }
-        let balance_peak = balance_raw + (pnl_max - pnl_last);
-        if !balance_peak.is_finite() || balance_peak <= 0.0 {
-            return None;
-        }
-        let balance_floor = balance_peak * (1.0 - pct);
-        if !balance_floor.is_finite() {
-            return None;
-        }
-        Some(RealizedLossGateState {
+        let drawdown = input.global.loss_gate_realized_pnl_drawdown;
+        let allowance = crate::hsl_decay::allowance(balance_raw, pct, drawdown).map_err(|_| {
+            OrchestratorError::NonFiniteInput {
+                field: "global.realized_loss_allowance",
+                symbol_idx: None,
+            }
+        })?;
+        let balance_peak = ((balance_raw as f32) + (drawdown as f32)) as f64;
+        // Reserve the checked authored allowance in f64 without reassociating
+        // its FMA as (B + D) * (1 - r). Unfilled profits never refill this budget.
+        let balance_floor = balance_raw - allowance;
+        Ok(Some(RealizedLossGateState {
             pct,
             balance_peak,
             balance_floor,
             simulated_balance: balance_raw,
-        })
+        }))
     }
 
     fn close_passes_realized_loss_gate(
@@ -1999,13 +1987,13 @@ mod core {
         per_long: &mut [Option<PerSymbolOrders>],
         per_short: &mut [Option<PerSymbolOrders>],
         diagnostics: &mut OrchestratorDiagnostics,
-    ) {
-        let mut loss_gate = realized_loss_gate_state(input);
+    ) -> Result<(), OrchestratorError> {
+        let mut loss_gate = realized_loss_gate_state(input)?;
 
         let Some(state) = loss_gate.as_mut() else {
             select_finalized_reducers_without_loss_gate(input, per_long, PositionSide::Long);
             select_finalized_reducers_without_loss_gate(input, per_short, PositionSide::Short);
-            return;
+            return Ok(());
         };
 
         // Finalize each candidate's executable close sizing before evaluating its loss. The
@@ -2057,6 +2045,7 @@ mod core {
 
         gate_ordinary_closes_for_side(input, per_long, PositionSide::Long, state, diagnostics);
         gate_ordinary_closes_for_side(input, per_short, PositionSide::Short, state, diagnostics);
+        Ok(())
     }
 
     fn twel_repair_target(bot: &BotParams) -> Option<f64> {
@@ -2337,8 +2326,7 @@ mod core {
                     field: "forager_score_weights",
                     symbol_idx: None,
                 })?;
-        let volume_required =
-            cfg.require_forager && (cfg.volume_drop_pct > 0.0 || normalized_weights.volume != 0.0);
+        let volume_required = cfg.require_forager && normalized_weights.volume != 0.0;
         let volatility_required = cfg.require_forager && normalized_weights.volatility != 0.0;
         let ema_readiness_required = cfg.require_forager && normalized_weights.ema_readiness != 0.0;
         out.clear();
@@ -2463,8 +2451,8 @@ mod core {
             });
         }
         if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
-            let scoring_positions = forager_scoring_positions(out, cfg)
-                .map_err(map_forager_selection_error)?;
+            let scoring_positions =
+                forager_scoring_positions(out, cfg).map_err(map_forager_selection_error)?;
             let mut ranking_unavailable = false;
             for pos in scoring_positions {
                 let s = &symbols[out[pos].index];
@@ -2473,7 +2461,11 @@ mod core {
                     Ok(value) => out[pos].unilateralness_score = value.abs(),
                     Err(err) => {
                         handle_strategy_input_error(
-                            err, s, pside, StrategyInputScope::ForagerSelection, diagnostics,
+                            err,
+                            s,
+                            pside,
+                            StrategyInputScope::ForagerSelection,
+                            diagnostics,
                         )?;
                         ranking_unavailable = true;
                     }
@@ -2513,21 +2505,32 @@ mod core {
             if !input.position_size.is_finite()
                 || (input.pside == PositionSide::Long && input.position_size < 0.0)
                 || (input.pside == PositionSide::Short && input.position_size > 0.0)
-                || !input.price_step.is_finite() || input.price_step <= 0.0
-                || !input.order_book.bid.is_finite() || input.order_book.bid <= 0.0
-                || !input.order_book.ask.is_finite() || input.order_book.ask < input.order_book.bid
+                || !input.price_step.is_finite()
+                || input.price_step <= 0.0
+                || !input.order_book.bid.is_finite()
+                || input.order_book.bid <= 0.0
+                || !input.order_book.ask.is_finite()
+                || input.order_book.ask < input.order_book.bid
             {
                 return Err("invalid protective close input");
             }
             if input.position_size == 0.0 {
                 continue;
             }
-            let order = panic_close_order(input.symbol_idx, input.pside,
-                input.position_size, &input.order_book, input.price_step)
-                .ok_or("invalid protective close result")?;
+            let order = panic_close_order(
+                input.symbol_idx,
+                input.pside,
+                input.position_size,
+                &input.order_book,
+                input.price_step,
+            )
+            .ok_or("invalid protective close result")?;
             orders.push(ExecutableOrder {
-                symbol_idx: order.symbol_idx, pside: order.pside,
-                qty: order.qty, price: order.price, order_type: order.order_type,
+                symbol_idx: order.symbol_idx,
+                pside: order.pside,
+                qty: order.qty,
+                price: order.price,
+                order_type: order.order_type,
                 execution_type: input.execution_type,
                 execution_priority: ExecutionPriority::RiskCritical,
             });
@@ -2536,8 +2539,11 @@ mod core {
     }
 
     fn calc_panic_close(
-        symbol_idx: usize, pside: PositionSide, pos: &Position,
-        ob: &OrderBook, exchange: &ExchangeParams,
+        symbol_idx: usize,
+        pside: PositionSide,
+        pos: &Position,
+        ob: &OrderBook,
+        exchange: &ExchangeParams,
     ) -> Option<IdealOrder> {
         panic_close_order(symbol_idx, pside, pos.size, ob, exchange.price_step)
     }
@@ -2559,8 +2565,7 @@ mod core {
         let price = match pside {
             PositionSide::Long => {
                 let touch = tolerant_round_dn_preserve_step(ob.ask, price_step);
-                tolerant_round_dn_preserve_step(touch - price_step, price_step)
-                    .max(price_step)
+                tolerant_round_dn_preserve_step(touch - price_step, price_step).max(price_step)
             }
             PositionSide::Short => {
                 let touch = tolerant_round_up_preserve_step(ob.bid, price_step);
@@ -2684,7 +2689,6 @@ mod core {
                 }
             }
             StrategyParams::EmaAnchor(_) => wants_entries || wants_closes,
-            StrategyParams::TrailingGridV7(_) => wants_entries,
         }
     }
 
@@ -2723,10 +2727,7 @@ mod core {
         pside: PositionSide,
         runtime_budget: RuntimeBudgetState,
     ) -> Option<IdealOrder> {
-        if !matches!(
-            input.global.strategy_kind,
-            StrategyKind::TrailingMartingale | StrategyKind::TrailingGridV7
-        ) {
+        if !matches!(input.global.strategy_kind, StrategyKind::TrailingMartingale) {
             return None;
         }
         let side = match pside {
@@ -2794,12 +2795,18 @@ mod core {
                 } else {
                     &symbol.unilateralness_unavailable.current
                 };
-                if symbol.unilateralness_warmup_spans.contains(&bp.unilateralness_ema_span_1m)
+                if symbol
+                    .unilateralness_warmup_spans
+                    .contains(&bp.unilateralness_ema_span_1m)
                     || unavailable.contains(&bp.unilateralness_ema_span_1m)
                 {
-                    OrchestratorError::UnilateralnessUnavailable { symbol_idx: symbol.symbol_idx }
+                    OrchestratorError::UnilateralnessUnavailable {
+                        symbol_idx: symbol.symbol_idx,
+                    }
                 } else {
-                    OrchestratorError::MissingEma { symbol_idx: symbol.symbol_idx }
+                    OrchestratorError::MissingEma {
+                        symbol_idx: symbol.symbol_idx,
+                    }
                 }
             })?;
         if !value.is_finite() || value.abs() > 1.0 {
@@ -2890,8 +2897,10 @@ mod core {
                     resolve_runtime_budget(side, side.bot_params.n_positions),
                 ) {
                     Ok(value) => Some(value),
-                    Err(OrchestratorError::MissingEma { .. }
-                        | OrchestratorError::UnilateralnessUnavailable { .. }) => None,
+                    Err(
+                        OrchestratorError::MissingEma { .. }
+                        | OrchestratorError::UnilateralnessUnavailable { .. },
+                    ) => None,
                     Err(err) => return Err(format!("{err:?}")),
                 };
                 result.insert(format!("{}:{name}", symbol.symbol_idx), value);
@@ -3033,16 +3042,22 @@ mod core {
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
         let side = symbol_side_input(symbol, pside);
         let rms_warming = crate::entry_cooldown::uses_adverse_rms(&side.bot_params)
-            && (symbol.unilateralness_warmup_spans.contains(&side.bot_params.unilateralness_ema_span_1m)
-                || symbol.unilateralness_unavailable.current.contains(&side.bot_params.unilateralness_ema_span_1m));
-        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
-            && wants_entries
-            && wants_closes
-        {
-            [(true, false), (false, true)]
-        } else {
-            [(wants_entries, wants_closes), (false, false)]
-        };
+            && (symbol
+                .unilateralness_warmup_spans
+                .contains(&side.bot_params.unilateralness_ema_span_1m)
+                || symbol
+                    .unilateralness_unavailable
+                    .current
+                    .contains(&side.bot_params.unilateralness_ema_span_1m));
+        let requests =
+            if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
+                && wants_entries
+                && wants_closes
+            {
+                [(true, false), (false, true)]
+            } else {
+                [(wants_entries, wants_closes), (false, false)]
+            };
         let mut entries = Vec::new();
         let mut closes = Vec::new();
         let mut close_inputs_unavailable = false;
@@ -3603,7 +3618,6 @@ mod core {
                 let remaining_candidate_count = workspace.eligible_forager_indices.len();
                 let cfg = ForagerSelectionConfig {
                     slots_to_fill,
-                    volume_drop_pct: input.global.global_bot_params.long.forager_volume_drop_pct,
                     weights: input
                         .global
                         .global_bot_params
@@ -3700,7 +3714,6 @@ mod core {
                 let remaining_candidate_count = workspace.eligible_forager_indices.len();
                 let cfg = ForagerSelectionConfig {
                     slots_to_fill,
-                    volume_drop_pct: input.global.global_bot_params.short.forager_volume_drop_pct,
                     weights: input
                         .global
                         .global_bot_params
@@ -4222,12 +4235,15 @@ mod core {
             input.global.unstuck_allowance_long > 0.0 || input.global.unstuck_allowance_short > 0.0,
         );
         if auto_unstuck_allowed {
-            if let Some((idx, side, order)) = calc_unstucking_action_with_position_allowances(
+            if let Some((idx, side, order)) = calc_unstucking_action_with_realized_drawdown(
                 input_balance_raw(input),
-                input.global.realized_pnl_cumsum_max,
-                input.global.realized_pnl_cumsum_last,
+                input.global.unstuck_realized_pnl_drawdown,
                 &workspace.unstuck_inputs,
-            ) {
+            )
+            .map_err(|_| OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_realized_pnl_drawdown_or_allowance",
+                symbol_idx: None,
+            })? {
                 let ideal = IdealOrder {
                     symbol_idx: idx,
                     pside: if side == LONG {
@@ -4434,7 +4450,7 @@ mod core {
 
         // Select one loss-admissible protective reducer per symbol, cap aggregate close quantity,
         // and apply the global realized-loss gate (all close types except panic).
-        gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics);
+        gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics)?;
         push_twel_loss_gate_warnings(
             input,
             per_long,
@@ -4470,13 +4486,7 @@ mod core {
             }
         }
 
-        if enabled_long
-            && input
-                .global
-                .global_bot_params
-                .long
-                .risk_twel_entry_gate_enabled
-        {
+        if enabled_long {
             workspace.all_entries.clear();
             for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
                 workspace.all_entries.append(&mut s.entries);
@@ -4522,13 +4532,7 @@ mod core {
             }
         }
 
-        if enabled_short
-            && input
-                .global
-                .global_bot_params
-                .short
-                .risk_twel_entry_gate_enabled
-        {
+        if enabled_short {
             workspace.all_entries.clear();
             for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
                 workspace.all_entries.append(&mut s.entries);
@@ -5059,8 +5063,8 @@ mod core {
                 unstuck_allowance_long: 0.0,
                 unstuck_allowance_short: 0.0,
                 max_realized_loss_pct: 1.0,
-                realized_pnl_cumsum_max: 0.0,
-                realized_pnl_cumsum_last: 0.0,
+                unstuck_realized_pnl_drawdown: 0.0,
+                loss_gate_realized_pnl_drawdown: 0.0,
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
@@ -5191,24 +5195,50 @@ mod core {
             for pside in [PositionSide::Long, PositionSide::Short] {
                 for size in [0.0, 0.000003, 1.0] {
                     for execution_type in [ExecutionType::Limit, ExecutionType::Market] {
-                        let signed_size = if pside == PositionSide::Long { size } else { -size };
+                        let signed_size = if pside == PositionSide::Long {
+                            size
+                        } else {
+                            -size
+                        };
                         let input = ProtectiveCloseInput {
-                            symbol_idx: 7, pside, position_size: signed_size,
-                            order_book: OrderBook { bid: 99.97, ask: 100.03 },
-                            price_step: 0.1, execution_type,
+                            symbol_idx: 7,
+                            pside,
+                            position_size: signed_size,
+                            order_book: OrderBook {
+                                bid: 99.97,
+                                ask: 100.03,
+                            },
+                            price_step: 0.1,
+                            execution_type,
                         };
                         let orders = compute_protective_closes(&[input.clone()]).unwrap();
-                        if size == 0.0 { assert!(orders.is_empty()); continue; }
-                        let old = calc_panic_close(7, pside,
-                            &Position { size: signed_size, price: 123.0 },
+                        if size == 0.0 {
+                            assert!(orders.is_empty());
+                            continue;
+                        }
+                        let old = calc_panic_close(
+                            7,
+                            pside,
+                            &Position {
+                                size: signed_size,
+                                price: 123.0,
+                            },
                             &input.order_book,
-                            &ExchangeParams { price_step: 0.1, ..Default::default() }).unwrap();
+                            &ExchangeParams {
+                                price_step: 0.1,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap();
                         assert_eq!(orders.len(), 1);
                         assert_eq!(orders[0].qty, old.qty);
                         assert_eq!(orders[0].price, old.price);
                         assert_eq!(orders[0].order_type, old.order_type);
                         assert_eq!(orders[0].execution_type, execution_type);
-                        assert_eq!(orders[0].execution_priority, ExecutionPriority::RiskCritical);
+                        assert_eq!(
+                            orders[0].execution_priority,
+                            ExecutionPriority::RiskCritical
+                        );
                     }
                 }
             }
@@ -5217,9 +5247,15 @@ mod core {
         #[test]
         fn minimal_protective_close_rejects_whole_invalid_batch() {
             let good = ProtectiveCloseInput {
-                symbol_idx: 0, pside: PositionSide::Long, position_size: 1.0,
-                order_book: OrderBook { bid: 99.0, ask: 100.0 },
-                price_step: 0.1, execution_type: ExecutionType::Market,
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                position_size: 1.0,
+                order_book: OrderBook {
+                    bid: 99.0,
+                    ask: 100.0,
+                },
+                price_step: 0.1,
+                execution_type: ExecutionType::Market,
             };
             assert!(compute_protective_closes(&[good.clone(), good.clone()]).is_err());
             for bad in [f64::NAN, f64::INFINITY, -1.0] {
@@ -5502,8 +5538,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: {
                         let mut pair = BotParamsPair::default();
@@ -5538,7 +5574,6 @@ mod core {
             let mut global = make_basic_global();
             global.global_bot_params.long.n_positions = 1;
             global.global_bot_params.long.total_wallet_exposure_limit = 1.0;
-            global.global_bot_params.long.forager_volume_drop_pct = 0.5;
             global.global_bot_params.long.forager_score_weights =
                 crate::types::ForagerScoreWeights {
                     unilateralness: 0.0,
@@ -5970,8 +6005,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: {
                         let mut pair = BotParamsPair::default();
@@ -5991,7 +6026,11 @@ mod core {
             // values that JSON cannot represent.
             for buffer in [-0.001, 1.0, 2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
                 let mut invalid = input.clone();
-                invalid.symbols[0].next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = buffer;
+                invalid.symbols[0]
+                    .next_candle
+                    .as_mut()
+                    .unwrap()
+                    .limit_order_fill_buffer_pct = buffer;
                 assert!(matches!(
                     compute_ideal_orders_for_test(&invalid),
                     Err(OrchestratorError::InvalidNextCandle { symbol_idx: 0, .. })
@@ -6283,7 +6322,6 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1.0;
             global_bp.long.n_positions = 1;
-            global_bp.long.forager_volume_drop_pct = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -6299,8 +6337,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6339,8 +6377,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6388,8 +6426,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6432,8 +6470,6 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.short.total_wallet_exposure_limit = 1.0;
             global_bp.short.n_positions = 1;
-            global_bp.long.forager_volume_drop_pct = 0.0;
-            global_bp.short.forager_volume_drop_pct = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -6449,8 +6485,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6490,8 +6526,6 @@ mod core {
             global_bp.long.n_positions = 1;
             global_bp.short.total_wallet_exposure_limit = 1.0;
             global_bp.short.n_positions = 1;
-            global_bp.long.forager_volume_drop_pct = 0.0;
-            global_bp.short.forager_volume_drop_pct = 0.0;
 
             let input = OrchestratorInput {
                 balance: 1000.0,
@@ -6507,8 +6541,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
@@ -6545,7 +6579,6 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1.0;
             global_bp.long.n_positions = 1;
-            global_bp.long.forager_volume_drop_pct = 0.0;
             global_bp.long.forager_score_weights.ema_readiness = 1.0;
             global_bp.long.forager_score_weights.volume = 0.0;
             global_bp.long.forager_score_weights.volatility = 0.0;
@@ -6564,8 +6597,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6596,7 +6629,6 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1.0;
             global_bp.long.n_positions = 1;
-            global_bp.long.forager_volume_drop_pct = 0.0;
             global_bp.long.forager_score_weights.volume = 0.0;
             global_bp.long.forager_score_weights.ema_readiness = 0.0;
             global_bp.long.forager_score_weights.volatility = 0.0;
@@ -6615,8 +6647,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6666,8 +6698,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6864,7 +6896,6 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1000.0;
             global_bp.long.n_positions = 1;
-            global_bp.long.forager_volume_drop_pct = 0.0;
             global_bp.long.forager_score_weights.volume = 0.0;
             global_bp.long.forager_score_weights.ema_readiness = 0.0;
             global_bp.long.forager_score_weights.volatility = 1.0;
@@ -6885,8 +6916,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -6934,7 +6965,6 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1000.0;
             global_bp.long.n_positions = 4;
-            global_bp.long.forager_volume_drop_pct = 0.0;
             global_bp.long.filter_volume_ema_span_1m = 10.0;
             global_bp.long.filter_volatility_ema_span_1m = 10.0;
             // disable short for this test
@@ -6955,8 +6985,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -7008,8 +7038,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -7463,8 +7493,8 @@ mod core {
                 unstuck_allowance_long: 0.0,
                 unstuck_allowance_short: 0.0,
                 max_realized_loss_pct: 1.0,
-                realized_pnl_cumsum_max: 0.0,
-                realized_pnl_cumsum_last: 0.0,
+                unstuck_realized_pnl_drawdown: 0.0,
+                loss_gate_realized_pnl_drawdown: 0.0,
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
@@ -7741,7 +7771,8 @@ mod core {
                                 })
                                 .collect();
                             if case_index == 1 && remainder_steps == 1 {
-                                let raw_total = closes.iter().fold(0.0, |sum, order| sum + order.qty.abs());
+                                let raw_total =
+                                    closes.iter().fold(0.0, |sum, order| sum + order.qty.abs());
                                 assert_eq!(raw_total, position);
                             }
                             let original: Vec<f64> = closes.iter().map(|order| order.qty).collect();
@@ -7948,6 +7979,90 @@ mod core {
         }
 
         #[test]
+        fn realized_loss_gate_uses_its_own_drawdown_without_twel_scaling() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.max_realized_loss_pct = 0.05;
+            input.global.loss_gate_realized_pnl_drawdown = 40.0;
+            // Independent unstuck memory must never enter the gate allowance.
+            input.global.unstuck_realized_pnl_drawdown = 500.0;
+            let expected = 0.05_f32.mul_add(1040.0, -40.0) as f64;
+            for twel in [0.0, 0.5, 2.0, 100.0] {
+                input
+                    .global
+                    .global_bot_params
+                    .long
+                    .total_wallet_exposure_limit = twel;
+                input
+                    .global
+                    .global_bot_params
+                    .short
+                    .total_wallet_exposure_limit = twel;
+                let gate = realized_loss_gate_state(&input).unwrap().unwrap();
+                assert_eq!(gate.balance_peak, 1040.0);
+                assert_eq!(gate.balance_floor, 1000.0 - expected);
+                assert_eq!(gate.simulated_balance, 1000.0);
+            }
+            // Enablement must not be rounded to f32 alongside the percentage.
+            input.global.max_realized_loss_pct = 1.0 - f64::EPSILON;
+            assert!(realized_loss_gate_state(&input).unwrap().is_some());
+            input.global.max_realized_loss_pct = 0.0;
+            let zero = realized_loss_gate_state(&input).unwrap().unwrap();
+            assert_eq!(zero.balance_floor, 1000.0);
+        }
+
+        #[test]
+        fn realized_loss_gate_active_overflow_is_fatal_and_disabled_bypasses() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 2e38,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.max_realized_loss_pct = 0.5;
+            input.global.loss_gate_realized_pnl_drawdown = 2e38;
+            assert_eq!(
+                compute_ideal_orders_for_test(&input).unwrap_err(),
+                OrchestratorError::NonFiniteInput {
+                    field: "global.realized_loss_allowance",
+                    symbol_idx: None,
+                }
+            );
+            for pct in [1.0, 2.0, f64::MAX] {
+                input.global.max_realized_loss_pct = pct;
+                assert!(realized_loss_gate_state(&input).unwrap().is_none());
+            }
+        }
+
+        #[test]
+        fn realized_loss_gate_schema_rejects_retired_cumsum_authority() {
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            for retired in ["realized_pnl_cumsum_max", "realized_pnl_cumsum_last"] {
+                let mut payload = serde_json::to_value(&input).unwrap();
+                payload["global"][retired] = serde_json::json!(0.0);
+                assert!(serde_json::from_value::<OrchestratorInput>(payload).is_err());
+            }
+        }
+
+        #[test]
         fn realized_loss_gate_blocks_auto_reduce_orders() {
             let mut sym = make_basic_symbol(0);
             sym.long.position = Position {
@@ -7981,8 +8096,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
                     hedge_mode: true,
@@ -8019,6 +8134,22 @@ mod core {
                     .any(|b| b.order_type == OrderType::CloseAutoReduceWelLong),
                 "expected loss-gate diagnostic for blocked auto-reduce order"
             );
+
+            // Identical intent and gate percentage: only the common realized D
+            // changes whether the final reducer fits the batch loss budget.
+            let mut with_memory = input_open.clone();
+            with_memory.global.max_realized_loss_pct = 0.15;
+            let before_loss = compute_ideal_orders_for_test(&with_memory).unwrap();
+            assert!(before_loss
+                .orders
+                .iter()
+                .any(|o| { o.order_type == OrderType::CloseAutoReduceWelLong }));
+            with_memory.global.loss_gate_realized_pnl_drawdown = 100.0;
+            let after_loss = compute_ideal_orders_for_test(&with_memory).unwrap();
+            assert!(after_loss
+                .orders
+                .iter()
+                .all(|o| { o.order_type != OrderType::CloseAutoReduceWelLong }));
         }
 
         #[test]
@@ -8057,8 +8188,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8121,8 +8252,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.1,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
                     hedge_mode: true,
@@ -8168,7 +8299,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert_eq!(per_long[0].as_ref().unwrap().closes.len(), 1);
             assert_eq!(per_long[1].as_ref().unwrap().closes.len(), 0);
@@ -8212,8 +8344,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.1,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
                     hedge_mode: true,
@@ -8259,7 +8391,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert!(per_long[0].as_ref().unwrap().closes.is_empty());
             assert_eq!(per_long[1].as_ref().unwrap().closes.len(), 1);
@@ -8331,7 +8464,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             let closes = &per_long[0].as_ref().unwrap().closes;
             assert_eq!(closes.len(), 1);
@@ -8393,7 +8527,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert!(per_long[0].as_ref().unwrap().closes.is_empty());
             assert_eq!(diagnostics.loss_gate_blocks.len(), 1);
@@ -8463,7 +8598,8 @@ mod core {
                     &mut per_long,
                     &mut per_short,
                     &mut diagnostics,
-                );
+                )
+                .unwrap();
 
                 let closes = &per_long[0].as_ref().unwrap().closes;
                 assert_eq!(closes.len(), 1);
@@ -8543,7 +8679,8 @@ mod core {
                 &mut per_long,
                 &mut per_short,
                 &mut diagnostics,
-            );
+            )
+            .unwrap();
 
             assert!(per_long[0].as_ref().unwrap().closes.is_empty());
             let accepted = &per_long[1].as_ref().unwrap().closes;
@@ -8606,66 +8743,32 @@ mod core {
         }
 
         #[test]
-        fn realized_loss_gate_missing_balance_raw_falls_back_to_balance() {
-            let mut sym = make_basic_symbol(0);
-            sym.long.position = Position {
-                size: 10.0,
-                price: 100.0,
-            };
-            sym.order_book = OrderBook {
-                bid: 80.0,
-                ask: 80.0,
-            };
-            sym.long.bot_params.wallet_exposure_limit = 0.5;
-            sym.long.bot_params.risk_wel_enforcer_threshold = 1.0;
-            sym.long.bot_params.total_wallet_exposure_limit = 1.0;
-            sym.long.bot_params.n_positions = 1;
-
-            let mut global_bp = BotParamsPair::default();
-            global_bp.long.total_wallet_exposure_limit = 1.0;
-            global_bp.long.n_positions = 1;
-
-            let input = OrchestratorInput {
+        fn full_orchestrator_requires_raw_balance_even_when_sizing_balance_is_valid() {
+            let mut input = OrchestratorInput {
                 balance: 1000.0,
-                // Missing from JSON deserialization path defaults to NaN.
-                balance_raw: f64::NAN,
+                balance_raw: 900.0,
                 timestamp_ms: 0,
-                global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
-                    market_orders_allowed: false,
-                    market_order_near_touch_threshold: 0.001,
-                    market_order_slippage_pct: 0.0,
-                    panic_close_market: false,
-                    auto_unstuck_allowed: Some(true),
-                    unstuck_allowance_long: 0.0,
-                    unstuck_allowance_short: 0.0,
-                    max_realized_loss_pct: 0.01,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
-                    sort_global: true,
-                    global_bot_params: global_bp,
-                    hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingMartingale,
-                },
-                symbols: vec![sym],
+                global: make_basic_global(),
+                symbols: vec![make_basic_symbol(0)],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders_for_test(&input).unwrap();
-            assert!(
-                out.orders
-                    .iter()
-                    .all(|o| o.order_type != OrderType::CloseAutoReduceWelLong),
-                "expected missing balance_raw to fall back to snapped balance and gate closes"
-            );
-            assert!(
-                out.diagnostics
-                    .loss_gate_blocks
-                    .iter()
-                    .any(|b| b.order_type == OrderType::CloseAutoReduceWelLong
-                        && (b.balance_before - 1000.0).abs() < 1e-9),
-                "expected diagnostics to reflect snapped-balance fallback as balance_before"
-            );
+            validate_account_risk_inputs(&input).unwrap();
+            assert_eq!(input_balance_raw(&input), 900.0);
+            let mut payload = serde_json::to_value(&input).unwrap();
+            payload.as_object_mut().unwrap().remove("balance_raw");
+            let error = serde_json::from_value::<OrchestratorInput>(payload).unwrap_err();
+            assert!(error.to_string().contains("missing field `balance_raw`"));
+            for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                input.balance_raw = invalid;
+                assert_eq!(
+                    compute_ideal_orders_for_test(&input).unwrap_err(),
+                    OrchestratorError::NonFiniteInput {
+                        field: "balance_raw",
+                        symbol_idx: None
+                    },
+                );
+            }
         }
 
         #[test]
@@ -8703,8 +8806,8 @@ mod core {
                         unstuck_allowance_long: 0.0,
                         unstuck_allowance_short: 0.0,
                         max_realized_loss_pct: 0.01,
-                        realized_pnl_cumsum_max: 0.0,
-                        realized_pnl_cumsum_last: 0.0,
+                        unstuck_realized_pnl_drawdown: 0.0,
+                        loss_gate_realized_pnl_drawdown: 0.0,
                         sort_global: true,
                         global_bot_params: global_bp,
                         hedge_mode: true,
@@ -8725,26 +8828,34 @@ mod core {
         }
 
         #[test]
-        fn account_risk_validation_rejects_pnl_peak_below_current() {
-            let mut input = OrchestratorInput {
-                balance: 1000.0,
-                balance_raw: 1000.0,
-                timestamp_ms: 0,
-                global: make_basic_global(),
-                symbols: vec![make_basic_symbol(0)],
-                peek_hints: None,
-                forager_hysteresis: None,
-            };
-            input.global.realized_pnl_cumsum_max = 5.0;
-            input.global.realized_pnl_cumsum_last = 10.0;
-
-            assert_eq!(
-                compute_ideal_orders_for_test(&input).unwrap_err(),
-                OrchestratorError::NonFiniteInput {
-                    field: "global.realized_pnl_cumsum_max_lt_last",
-                    symbol_idx: None,
+        fn account_risk_validation_rejects_invalid_independent_realized_drawdowns() {
+            for drawdown in [-1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+                for unstuck in [false, true] {
+                    let mut input = OrchestratorInput {
+                        balance: 1000.0,
+                        balance_raw: 1000.0,
+                        timestamp_ms: 0,
+                        global: make_basic_global(),
+                        symbols: vec![make_basic_symbol(0)],
+                        peek_hints: None,
+                        forager_hysteresis: None,
+                    };
+                    let field = if unstuck {
+                        input.global.unstuck_realized_pnl_drawdown = drawdown;
+                        "global.unstuck_realized_pnl_drawdown"
+                    } else {
+                        input.global.loss_gate_realized_pnl_drawdown = drawdown;
+                        "global.loss_gate_realized_pnl_drawdown"
+                    };
+                    assert_eq!(
+                        compute_ideal_orders_for_test(&input).unwrap_err(),
+                        OrchestratorError::NonFiniteInput {
+                            field,
+                            symbol_idx: None
+                        },
+                    );
                 }
-            );
+            }
         }
 
         #[test]
@@ -8787,8 +8898,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8859,8 +8970,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8938,8 +9049,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -8999,8 +9110,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -9071,8 +9182,8 @@ mod core {
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
@@ -9122,8 +9233,8 @@ mod core {
                     unstuck_allowance_long: 1000.0,
                     unstuck_allowance_short: 1000.0,
                     max_realized_loss_pct: 1.0,
-                    realized_pnl_cumsum_max: 0.0,
-                    realized_pnl_cumsum_last: 0.0,
+                    unstuck_realized_pnl_drawdown: 0.0,
+                    loss_gate_realized_pnl_drawdown: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,

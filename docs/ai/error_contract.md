@@ -134,8 +134,8 @@ ranking-unavailable alert. Diagnostics may retain the gap as conditional until R
 ranking was required for that side.
 
 Approved and ignored coin state is an entry-eligibility input. Stale or unreadable eligibility
-blocks affected initial entries but not protective management. With `auto_gs=true`, removal of a
-held coin is handled as graceful stop.
+blocks affected initial entries but not protective management. With
+`live.disapproved_position_mode=graceful_stop`, removal of a held coin is handled as graceful stop.
 
 ## Fill And PnL Inputs
 

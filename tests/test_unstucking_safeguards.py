@@ -122,9 +122,12 @@ def _make_mock_pbr():
 
     module.get_strategy_kinds = _get_strategy_kinds
 
-    module.calc_auto_unstuck_allowance = (
-        lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct * balance
-    )
+    def _calc_auto_unstuck_allowance_v9(balance, loss_pct, twel, drawdown):
+        from v9_risk_reference import allowance, f32, mul
+
+        return allowance(balance, mul(f32(loss_pct), f32(twel)), f32(drawdown))
+
+    module.calc_auto_unstuck_allowance_v9 = _calc_auto_unstuck_allowance_v9
     module.calc_wallet_exposure = (
         lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-6)
     )
@@ -309,6 +312,8 @@ def mock_pbr(monkeypatch):
     stub_module = _make_mock_pbr()
     stub_module.get_strategy_spec = native_pbr.get_strategy_spec
     stub_module.get_strategy_kinds = native_pbr.get_strategy_kinds
+    stub_module.realized_memory_v9 = native_pbr.realized_memory_v9
+    stub_module.realized_memories_v9 = native_pbr.realized_memories_v9
     monkeypatch.setitem(sys.modules, "passivbot_rust", stub_module)
 
     class _DummyLockException(Exception):
@@ -356,16 +361,15 @@ def _dummy_config():
     cfg["live"]["user"] = "test_user"
     cfg["live"]["minimum_coin_age_days"] = 0
     for side in ("long", "short"):
-        cfg["bot"][side]["unstuck_loss_allowance_pct"] = 0.01
-        cfg["bot"][side]["wallet_exposure_limit"] = 1.0
-        cfg["bot"][side]["unstuck_threshold"] = 0.5
-        cfg["bot"][side]["unstuck_close_pct"] = 0.1
-        cfg["bot"][side]["unstuck_ema_dist"] = 0.0
+        cfg["bot"][side]["unstuck"].update(
+            loss_allowance_pct=0.01, exposure_trigger_ratio=0.5,
+            close_pct=0.1, ema_dist=0.0,
+        )
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
-        strategy["ema_span_0"] = 1
-        strategy["ema_span_1"] = 1
-        strategy["entry"]["grid_spacing_pct"] = 0.01
-        strategy["close"]["trailing_threshold_pct"] = 0.01
+        strategy["entry"]["ema_span_0"] = 1.0
+        strategy["entry"]["ema_span_1"] = 1.0
+        strategy["entry"]["threshold_base_pct"] = 0.01
+        strategy["close"]["threshold_base_pct"] = 0.01
     cfg = format_config(cfg, live_only=True, verbose=False)
     return cfg
 
@@ -419,10 +423,9 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.ineligible_symbols = {}
             self.approved_coins_minus_ignored_coins = {"long": [], "short": []}
             self.PB_modes = {"long": {}, "short": {}}
-            auto_gs = bool(cfg["live"]["auto_gs"])
             self.PB_mode_stop = {
-                "long": "graceful_stop" if auto_gs else "manual",
-                "short": "graceful_stop" if auto_gs else "manual",
+                side: cfg["live"]["disapproved_position_mode"]
+                for side in ("long", "short")
             }
             self._runtime_forced_modes = {"long": {}, "short": {}}
             self.inactive_coin_candle_ttl_ms = 60_000
@@ -648,8 +651,10 @@ class _DummyPnlsManager:
     def __init__(self, events):
         self._events = list(events)
 
-    def get_events(self, start_ms=None):
-        return [e for e in self._events if start_ms is None or e.timestamp >= start_ms]
+    def get_events(self, start_ms=None, end_ms=None):
+        return [e for e in self._events
+                if (start_ms is None or e.timestamp >= start_ms)
+                and (end_ms is None or e.timestamp <= end_ms)]
 
 
 def test_entry_cooldown_delta_guard_bypasses_when_disabled():
@@ -2440,6 +2445,9 @@ async def test_restart_keeps_partial_history_fill_pending_until_recovery():
 @pytest.mark.asyncio
 async def test_matching_trailing_fill_confirms_while_unrelated_pnl_is_pending():
     cfg = _dummy_config()
+    # PnL enrichment blocks authoritative fills when an enabled risk consumer
+    # needs it; trailing confirmation itself can still use the matching fill.
+    cfg["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.1
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     old_fill = _DummyFillEvent(
@@ -3021,7 +3029,7 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     cfg = _dummy_config()
     # Keep this malformed-envelope test focused on the requested diagnostic
     # failure rather than auto-GS changing the synthetic symbol-state modes.
-    cfg["live"]["auto_gs"] = False
+    cfg["live"]["disapproved_position_mode"] = "manual"
     bot = _make_dummy_bot(cfg)
     bot._bot_value_defaults["n_positions"] = 1
     bot._bot_value_defaults["total_wallet_exposure_limit"] = 1.0
@@ -3099,10 +3107,19 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     assert isinstance(returned["error"], FatalBotException)
 
 
+def _supply_known_empty_realized_risk(bot):
+    # These orchestrator-output fixtures explicitly start with no realized fills.
+    # A scenario supplying a manager must retain the actual history/memory path.
+    assert bot._pnls_manager is None
+    bot._get_realized_memory = lambda: {"drawdown": 0.0}
+
+
 def _stamp_staged_account_and_candles(bot):
     from freshness_ledger import ACCOUNT_SURFACES
     from market_snapshot import MarketSnapshot
 
+    if bot._pnls_manager is None:
+        _supply_known_empty_realized_risk(bot)
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
@@ -3219,6 +3236,7 @@ def _make_order(
 @pytest.mark.asyncio
 async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
+    cfg["live"]["max_realized_loss_pct"] = 0.02
     bot = _make_dummy_bot(cfg)
     bot._bp_defaults.update(
         {
@@ -3232,9 +3250,20 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
-    bot._pnls_manager = _DummyPnlsManager([_DummyFillEvent(symbol, "long", 120_000)])
+    fill = _DummyFillEvent(symbol, "long", 120_000, event_id="realized-loss")
+    fill.pnl = -2.0
+    fill.fee_paid = -0.5
+    bot._pnls_manager = _DummyPnlsManager([fill])
+    bot.get_exchange_time = lambda: 121_000
     monkeypatch.setattr(bot, "_pnls_lookback_start_ms", lambda: None)
     monkeypatch.setattr(bot, "_assert_pnl_history_safe_for_risk", lambda *a, **k: None)
+    memory_calls = []
+
+    def replay_realized_memory(input_json):
+        memory_calls.append(json.loads(input_json))
+        return native_pbr.realized_memories_v9(input_json)
+
+    monkeypatch.setattr(pbr, "realized_memories_v9", replay_realized_memory)
 
     # Pretend an unstuck order is already live on the exchange.
     bot.open_orders[symbol] = [
@@ -3294,8 +3323,17 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
 
     payload = json.loads(captured["input"])
     assert payload["global"]["auto_unstuck_allowed"] is True
-    # Allowance values are no longer passed: Rust derives the unstuck
-    # allowance internally from the realized-pnl cumsum facts.
+    assert len(memory_calls) == 1
+    assert [row["net"] for row in memory_calls[0]["fills"]] == [-2.5]
+    assert payload["global"]["unstuck_realized_pnl_drawdown"] == 2.5
+    assert payload["global"]["loss_gate_realized_pnl_drawdown"] == 0.0
+    assert "realized_pnl_drawdown" not in payload["global"]
+    assert memory_calls[0]["unstuck"]["enabled"] is True
+    assert memory_calls[0]["loss_gate"]["enabled"] is False
+    # Rust derives allowance from its continuous realized-loss memory, rather
+    # than an existing order. The independently disabled gate consumes no fill.
+    assert "realized_pnl_cumsum_max" not in payload["global"]
+    assert "realized_pnl_cumsum_last" not in payload["global"]
     assert "unstuck_allowance_long" not in payload["global"]
     assert "unstuck_allowance_short" not in payload["global"]
 
@@ -3405,6 +3443,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
     from freshness_ledger import ACCOUNT_SURFACES
 
+    _supply_known_empty_realized_risk(bot)
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
@@ -3510,6 +3549,7 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
 
     from freshness_ledger import ACCOUNT_SURFACES
 
+    _supply_known_empty_realized_risk(bot)
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))

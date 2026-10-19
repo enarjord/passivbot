@@ -4,9 +4,11 @@ import argparse
 import ast
 import asyncio
 import json
+import math
 import logging
 import os
 import sys
+import weakref
 from types import MethodType
 from collections import deque
 from datetime import datetime, timezone
@@ -20,7 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from candlestick_manager import CANDLE_DTYPE, sanitize_remote_fetch_diagnostic
 from config import load_prepared_config
 from config.overrides import parse_overrides
-from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.risk_memory import risk_bootstrap_horizon_minutes
+from config.hsl import require_live_runtime_support
 from config.runtime_compile import compile_runtime_config
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
@@ -436,19 +439,16 @@ def _fake_fill_cache_coverage(
     """Return the earliest fake-history start covered by the staged cache."""
     config = getattr(bot, "config", None)
     live = config.get("live") if isinstance(config, dict) else None
-    if isinstance(live, dict) and "pnls_max_lookback_days" in live:
-        lookback = parse_pnls_max_lookback_days(
-            live["pnls_max_lookback_days"],
-            field_name="live.pnls_max_lookback_days",
-        )
-        if lookback.is_all:
-            return None, "all"
+    if isinstance(live, dict) and "risk_bootstrap_max_lookback_minutes" in live:
         now_ms = int(fake_client.now_ms)
-        starts = [lookback.event_history_start_ms(now_ms)]
-        hsl_window_ms = lookback.hsl_window_ms()
-        if hsl_window_ms is not None:
-            starts.append(now_ms - int(hsl_window_ms))
-        return min(int(start) for start in starts if start is not None), "window"
+        minutes, _ = risk_bootstrap_horizon_minutes(config)
+        minutes = max(minutes, require_live_runtime_support(config))
+        start_ms = max(0, now_ms - int(math.floor(minutes * 60_000 + 0.5)))
+        # The fake cache was populated from the complete observed fixture
+        # ledger. A bootstrap reaching timestamp zero proves that origin.
+        if start_ms == 0:
+            return None, "all"
+        return start_ms, "window"
     if events:
         return min(int(event.timestamp) for event in events), "window"
     return None, None
@@ -481,6 +481,36 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
         bot.cm._tf_range_cache.pop(symbol, None)
 
 
+class _FakeHslFactClocks:
+    """Acquisition-owned transport clocks; never trading decisions or UTC TTLs."""
+
+    def __init__(self):
+        self._receipts = {}
+
+    def record(self, kind, receipt, observed_utc, event_ms):
+        if type(event_ms) is not int or event_ms <= 0:
+            raise ValueError("invalid fake fact observation time")
+        fields = tuple(observed_utc)
+        if any(type(t) is not int or t <= 0 for t in fields):
+            raise ValueError("invalid fake fact UTC field")
+        key = kind, id(receipt)
+        previous = self._receipts.get(key)
+        mapping = dict.fromkeys(fields, event_ms)
+        if previous is not None:
+            if previous[0]() is not receipt or previous[1] != mapping:
+                raise ValueError("cannot retime a fake fact receipt")
+            return
+        reference = weakref.ref(receipt, lambda _ref: self._receipts.pop(key, None))
+        self._receipts[key] = reference, mapping
+
+    def project(self, kind, receipt, observed_utc):
+        row = self._receipts.get((kind, id(receipt)))
+        if (type(observed_utc) is not int or row is None
+                or row[0]() is not receipt or observed_utc not in row[1]):
+            raise ValueError("unknown fake fact observation clock")
+        return row[1][observed_utc]
+
+
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
@@ -493,13 +523,110 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
 
         # Retry cadence follows scenario time, while acquisition timestamps,
         # TTLs and bounded I/O waits remain on the actual observation clock.
-        hsl_live.owner(bot)._schedule_clock = lambda: fake_client.now_ms / 1000.0
+        instance = hsl_live.owner(bot)
+        instance._schedule_clock = settle_clock
+        # Synthetic events use scenario time while acquisition/TTL use UTC.
+        # This is an explicit harness receipt-phase estimate, not execution proof.
+        bot._hsl_observation_clock_offset = (
+            lambda observed_utc: int(fake_client.now_ms) - observed_utc
+        )
+        instance._observation_clock_offset = bot._hsl_observation_clock_offset
+        # UTC freshness and scenario causality are distinct. Record each
+        # successful account receipt once; later captures cannot move it across
+        # a fill boundary merely because a wall-clock millisecond elapsed.
+        account_clocks = {}
+        record_surface = bot._record_authoritative_surface
+
+        def record_fake_surface(surface, signature):
+            changed = record_surface(surface, signature)
+            if surface in {"balance", "positions"}:
+                ledger = bot._ensure_freshness_ledger()
+                state = ledger.surfaces[surface]
+                account_clocks[(id(ledger), surface, state.revision)] = (
+                    state.updated_ms, int(fake_client.now_ms)
+                )
+            return changed
+
+        def project_account_clock(surface, revision, observed_utc):
+            ledger = bot._ensure_freshness_ledger()
+            fact = account_clocks.get((id(ledger), surface, revision))
+            if fact is None or fact[0] != observed_utc:
+                raise ValueError("unknown fake account observation clock")
+            return fact[1]
+
+        bot._record_authoritative_surface = record_fake_surface
+        bot._hsl_account_clock_projector = project_account_clock
+        instance._account_clock_projector = project_account_clock
+        fact_clocks = _FakeHslFactClocks()
+        bot._hsl_fact_clock_projector = fact_clocks.project
+        bot._hsl_candle_receipt_observer = lambda tape: fact_clocks.record(
+            "candle", tape, (c.available_at for c in tape.candles), int(fake_client.now_ms)
+        )
+        provider = getattr(bot, "market_snapshot_provider", None)
+        if provider is not None:
+            snapshot_from_ticker = provider._snapshot_from_ticker
+
+            def observed_snapshot(*args, **kwargs):
+                snapshot = snapshot_from_ticker(*args, **kwargs)
+                if snapshot is not None:
+                    fact_clocks.record("quote", snapshot, (snapshot.fetched_ms,), int(fake_client.now_ms))
+                return snapshot
+
+            provider._snapshot_from_ticker = observed_snapshot
+            get_cached = provider.get_cached
+
+            def cached_snapshot(symbol, *, now_ms, max_age_ms):
+                snapshot = get_cached(symbol, now_ms=now_ms, max_age_ms=max_age_ms)
+                if snapshot is not None:
+                    captured = fact_clocks.project("quote", snapshot, snapshot.fetched_ms)
+                    age = int(fake_client.now_ms) - captured
+                    if age < 0:
+                        raise ValueError("fake cached quote precedes its receipt")
+                    if age > max_age_ms:
+                        return None
+                return snapshot
+
+            provider.get_cached = cached_snapshot
+
+        retry_bar, retry_started = [None], [0.0]
+
+        def retry_limit():
+            bar = int(fake_client.now_ms)
+            if retry_bar[0] != bar:
+                retry_bar[0], retry_started[0] = bar, settle_clock()
+            return retry_started[0] + position_fill_sync.MAX_WAIT_SECONDS
+
+        def advance_to(deadline):
+            settle_offset[0] += max(0.0, min(deadline, retry_limit()) - settle_clock())
+
+        def advance_readiness(instance):
+            limit = retry_limit()
+            sync = position_fill_sync.state(bot)
+            deadlines = [
+                min(p.changed + position_fill_sync.SETTLE_SECONDS,
+                    p.first + position_fill_sync.MAX_WAIT_SECONDS)
+                for p in sync.pending.values()
+                if not sync.fetch_ready()
+            ]
+            fill_task = getattr(instance, "_fill_task", None)
+            if fill_task is None or fill_task.done():
+                required = instance.required_fill_facts()
+                failed = fill_task is not None and fill_task.result() is False
+                if failed or (required is not None and not required[1]):
+                    deadlines.append(instance._next_history)
+            upcoming = [t for t in deadlines if settle_clock() < t <= limit]
+            if upcoming:
+                advance_to(min(upcoming))
+
+        bot._advance_fake_hsl_readiness = advance_readiness
         bot.get_exchange_time = lambda: int(fake_client.now_ms)
         update_pnls = getattr(bot, "update_pnls", None)
         if callable(update_pnls):
             original_update_pnls = update_pnls
 
             async def update_fake_pnls(self, *, source="direct", since_ms=None):
+                started_bar = int(fake_client.now_ms)
+                previous = getattr(self, "_hsl_fill_observation", None)
                 sync = position_fill_sync.state(self)
                 if sync.clock is settle_clock and not sync.fetch_ready():
                     # Simulate the finite settling wait inside this market bar.
@@ -512,17 +639,109 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
                         )
                         for p in sync.pending.values()
                     )
-                    settle_offset[0] += max(0.0, deadline - settle_clock())
+                    advance_to(deadline)
                 # Cache refresh watermarks use wall time, while scenarios can
                 # replay any date. Fetch the finite fake tape explicitly so a
                 # wall-clock overlap cannot skip scenario closing fills.
-                return await original_update_pnls(
+                ready = await original_update_pnls(
                     source=source, since_ms=0 if since_ms is None else since_ms
                 )
+                receipt = getattr(self, "_hsl_fill_observation", None)
+                if receipt is not None and receipt is not previous:
+                    if int(fake_client.now_ms) != started_bar:
+                        raise ValueError("fake fill acquisition crossed an unsettled market bar")
+                    fact_clocks.record("fill_start", receipt, (receipt.interval[0],), started_bar)
+                    fact_clocks.record("fill_end", receipt, (receipt.interval[1],), started_bar)
+                return ready
 
             bot.update_pnls = MethodType(update_fake_pnls, bot)
         if hasattr(bot, "cm"):
             bot.cm._now_ms_callback = lambda: int(fake_client.now_ms)
+
+
+def _refuse_unsettled_fake_bar(result, summaries, snapshot_dir):
+    reason = (
+        "input_acquisition_pending" if result.get("input_acquisition_pending", False)
+        else "confirmation_pending" if result.get("confirmation_pending", False)
+        else None
+    )
+    if reason is None:
+        return
+    if snapshot_dir is not None:
+        _dump_json(snapshot_dir.parent / "incomplete.json", {
+            "reason": reason, "step_summaries": summaries,
+            "market_clock_advanced_after_pending": False,
+        })
+    raise RuntimeError(f"fake market bar cannot advance with {reason.replace('_', ' ')}")
+
+
+def _fake_quote_input_tasks(bot, instance):
+    provider = getattr(bot, "market_snapshot_provider", None)
+    return [task for task in (
+        *instance._quote_tasks.values(), *instance._discard_quote_tasks,
+        getattr(provider, "_fetch_task", None),
+        *getattr(provider, "_symbol_fetch_tasks", {}).values(),
+    ) if task is not None]
+
+
+def _fake_input_tasks(bot, instance):
+    reader = getattr(instance, "_reader", None)
+    return list(dict.fromkeys(task for task in (
+        getattr(instance, "_fill_task", None),
+        getattr(instance, "_source_task", None),
+        *_fake_quote_input_tasks(bot, instance),
+        *getattr(reader, "_pending", {}).values(),
+    ) if task is not None))
+
+
+def _raise_fake_input_failures(bot, instance, tasks):
+    from live.market_snapshot import MarketSnapshotUnavailable
+    from ccxt.base.errors import NetworkError
+
+    quote_tasks = set(instance._quote_tasks.values()) | instance._discard_quote_tasks
+    direct = quote_tasks | {
+        getattr(instance, "_fill_task", None), getattr(instance, "_source_task", None)
+    }
+    for task in tasks:
+        if not task.done() or task not in direct or (task.cancelled() and task in quote_tasks):
+            continue
+        try:
+            task.result()
+        except (NetworkError, MarketSnapshotUnavailable):
+            if task not in quote_tasks:
+                raise
+            # Same scoped quote-outage boundary as Owner.acquire_quotes;
+            # never manufacture a successful quote or swallow a producer bug.
+    # Cancellation-resistant underlying reads retain their existing owner's
+    # result/error contract; they still block advancing the fake market bar.
+    provider = getattr(bot, "market_snapshot_provider", None)
+    reader = getattr(instance, "_reader", None)
+    for consumer in (getattr(provider, "raise_pending_failure", None),
+                     getattr(reader, "_raise_late_failure", None)):
+        if consumer is not None:
+            consumer()
+
+
+async def _settle_fake_startup_inputs(bot, summaries, snapshot_dir):
+    from live.hsl_live import owner
+
+    instance = owner(bot)
+    # Skipping the initial trading cycle does not permit acquisitions started
+    # during bot preparation to straddle the first scenario-clock advance.
+    for _ in range(8):
+        tasks = _fake_input_tasks(bot, instance)
+        _raise_fake_input_failures(bot, instance, tasks)
+        pending = [task for task in tasks if not task.done()]
+        if not pending:
+            break
+        await asyncio.wait(pending, timeout=0.25)
+        _raise_fake_input_failures(bot, instance, tasks)
+    tasks = _fake_input_tasks(bot, instance)
+    _raise_fake_input_failures(bot, instance, tasks)
+    _refuse_unsettled_fake_bar(
+        dict(input_acquisition_pending=any(not task.done() for task in tasks)),
+        summaries, snapshot_dir,
+    )
 
 
 async def _run_fake_bot(
@@ -559,10 +778,13 @@ async def _run_fake_bot(
                 },
             )
         steps_run += 1
+        _refuse_unsettled_fake_bar(result, summaries, snapshot_dir)
 
     while fake_client.has_next_step():
         if max_steps is not None and steps_run >= max_steps:
             break
+        if not run_initial_cycle and steps_run == 0:
+            await _settle_fake_startup_inputs(bot, summaries, snapshot_dir)
         fake_client.advance_time()
         _prime_fake_candles(bot, fake_client)
         result = await _run_fake_cycle(bot)
@@ -586,6 +808,7 @@ async def _run_fake_bot(
                 },
             )
         steps_run += 1
+        _refuse_unsettled_fake_bar(result, summaries, snapshot_dir)
 
     return summaries
 
@@ -594,38 +817,54 @@ async def _run_fake_cycle(bot):
     return await _run_fake_cycle_ready(bot)
 
 
+def _fake_confirmation_pending(bot, instance):
+    pending = getattr(bot, "_authoritative_pending_confirmations", {})
+    account_minima = {surface: pending[surface] for surface in
+                      ("balance", "positions", "open_orders") if surface in pending}
+    if account_minima:
+        ledger = bot._ensure_freshness_ledger()
+        if any(ledger.surfaces[surface].epoch < minimum
+               for surface, minimum in account_minima.items()):
+            return True
+    # Stored optional fill debt does not make fills a required ordinary input.
+    required = instance.required_fill_facts()
+    return required is not None and not required[1]
+
+
 async def _run_fake_cycle_ready(bot):
     from live import hsl_live
 
     instance = hsl_live.owner(bot)
+
+    def inputs():
+        return _fake_input_tasks(bot, instance)
+
+    def raise_finished_failures(tasks):
+        _raise_fake_input_failures(bot, instance, tasks)
+
     # Settle fast fake reads/planning at one scenario timestamp. An outage
     # remains pending after a bounded number of production passes; never
     # await arbitrary ordinary work to completion before protection.
     for attempt in range(8):
+        advance = getattr(bot, "_advance_fake_hsl_readiness", None)
+        if advance is not None:
+            advance(instance)
         # poll_inputs() runs at the start of cycle(). A read completing
         # during that cycle still needs a subsequent consuming pass.
-        completed_before = {
-            task
-            for task in (
-                getattr(instance, "_fill_task", None),
-                getattr(instance, "_source_task", None),
-            )
-            if task is not None and task.done()
-        }
+        before = inputs()
+        raise_finished_failures(before)
+        completed_before = {task for task in before if task.done()}
         result = await instance.cycle()
-        input_tasks = [
-            task
-            for task in (
-                getattr(instance, "_fill_task", None),
-                getattr(instance, "_source_task", None),
-            )
-            if task is not None
-        ]
-        for task in input_tasks:
-            if task.done():
-                task.result()  # Never relegate a final-step failure to shutdown.
+        input_tasks = inputs()
+        raise_finished_failures(input_tasks)
         inputs_consumed = all(task in completed_before for task in input_tasks)
-        if not result["updated"] or (result["ordinary_executed"] and inputs_consumed):
+        in_flight = any(not task.done() for task in input_tasks)
+        confirmation_pending = (
+            result["updated"] and _fake_confirmation_pending(bot, instance)
+        )
+        if ((not result["updated"] and not in_flight)
+                or (result["updated"] and result["ordinary_executed"]
+                    and inputs_consumed and not confirmation_pending)):
             return dict(result, engine="hsl", passes=attempt + 1)
         # A completed ordinary plan does not settle newly scheduled history
         # reads. Give them the same bounded opportunity before advancing the
@@ -637,10 +876,19 @@ async def _run_fake_cycle_ready(bot):
         ]
         if pending:
             await asyncio.wait(pending, timeout=0.25)
-            for task in input_tasks:
-                if task.done():
-                    task.result()  # Includes completion during the final bounded wait.
-    return dict(result, engine="hsl", passes=8, preparation_pending=True)
+            raise_finished_failures(input_tasks)
+        # A wrapper may start a cancellation-resistant provider/reader child
+        # during the wait, then finish itself. Inspect current ownership before
+        # deciding whether the final pass may advance the fake market clock.
+        input_tasks = inputs()
+        raise_finished_failures(input_tasks)
+    return dict(
+        result, engine="hsl", passes=8, preparation_pending=True,
+        input_acquisition_pending=any(not task.done() for task in input_tasks),
+        confirmation_pending=(
+            result["updated"] and _fake_confirmation_pending(bot, instance)
+        ),
+    )
 
 
 def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:

@@ -2036,7 +2036,6 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         selected_symbols=["BTC/USDT:USDT"],
         slots_open=True,
         max_n_positions=3,
-        clip_pct=0.1,
         volatility_drop_pct=0.25,
         max_age_ms=300_000,
         fetch_budget=1,
@@ -2399,7 +2398,6 @@ def test_forager_debug_profile_adds_bounded_selection_shape():
         selected_symbols=["BTC/USDT:USDT"],
         slots_open=True,
         max_n_positions=4,
-        clip_pct=0.1,
         volatility_drop_pct=0.25,
         max_age_ms=300_000,
         fetch_budget=2,
@@ -3350,7 +3348,6 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
             selected_symbols=["BTC/USDT:USDT"],
             slots_open=True,
             max_n_positions=1,
-            clip_pct=0.0,
             volatility_drop_pct=0.0,
             max_age_ms=60_000,
             fetch_budget=1,
@@ -6649,8 +6646,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "volatility": 0.5,
                     "ema_readiness": 0.25,
                 },
-                ("long", "forager_volume_drop_pct"): 0.1,
-                ("short", "forager_volume_drop_pct"): 0.1,
                 ("long", "wallet_exposure_limit"): 0.2,
                 ("short", "wallet_exposure_limit"): 0.2,
                 ("long", "risk_we_excess_allowance_pct"): 0.5,
@@ -7473,114 +7468,20 @@ async def test_monitor_snapshot_maintainer_is_registered_when_enabled():
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def test_monitor_trailing_section_includes_trailing_grid_v7_diagnostics():
+def test_monitor_trailing_section_marks_retired_strategy_unsupported():
     import passivbot as pb_mod
 
-    class FakeBot:
-        _build_monitor_trailing_section = (
-            pb_mod.Passivbot._build_monitor_trailing_section
-        )
-
-        def __init__(self):
-            self.config = {"live": {"strategy_kind": "trailing_grid_v7"}}
-            self.positions = {
-                "BTC/USDT:USDT": {
-                    "long": {"size": 0.1, "price": 100.0},
-                    "short": {"size": 0.0, "price": 0.0},
-                }
-            }
-            self.qty_steps = {"BTC/USDT:USDT": 0.001}
-            self.price_steps = {"BTC/USDT:USDT": 0.1}
-            self.min_qtys = {"BTC/USDT:USDT": 0.001}
-            self.min_costs = {"BTC/USDT:USDT": 1.0}
-            self.effective_min_cost = {"BTC/USDT:USDT": 1.0}
-            self.c_mults = {"BTC/USDT:USDT": 1.0}
-            self._monitor_runtime_h1_log_range_emas = {"BTC/USDT:USDT": {24.0: 0.0}}
-
-        def _strategy_params_to_rust_dict(self, pside, symbol=None):
-            assert pside in {"long", "short"}
-            return {
-                "ema_span_0": 10.0,
-                "ema_span_1": 20.0,
-                "entry": {
-                    "grid_double_down_factor": 1.0,
-                    "grid_spacing_pct": 0.01,
-                    "grid_spacing_we_weight": 0.0,
-                    "grid_spacing_volatility_weight": 0.0,
-                    "initial_ema_dist": 0.0,
-                    "initial_qty_pct": 0.01,
-                    "trailing_double_down_factor": 1.0,
-                    "trailing_grid_ratio": 1.0,
-                    "trailing_retracement_pct": 0.005,
-                    "trailing_retracement_we_weight": 0.0,
-                    "trailing_retracement_volatility_weight": 0.0,
-                    "trailing_threshold_pct": 0.01,
-                    "trailing_threshold_we_weight": 0.0,
-                    "trailing_threshold_volatility_weight": 0.0,
-                    "volatility_ema_span_hours": 24.0,
-                },
-                "close": {
-                    "grid_markup_start": 0.01,
-                    "grid_markup_end": 0.02,
-                    "grid_qty_pct": 0.1,
-                    "trailing_grid_ratio": 1.0,
-                    "trailing_qty_pct": 0.1,
-                    "trailing_retracement_pct": 0.01,
-                    "trailing_threshold_pct": 0.02,
-                },
-            }
-
-        def bp(self, pside, key, symbol=None):
-            values = {
-                "n_positions": 1,
-                "wallet_exposure_limit": 0.2,
-                "risk_we_excess_allowance_pct": 0.0,
-                "risk_wel_enforcer_threshold": 0.0,
-            }
-            return values[key]
-
-        def bot_value(self, pside, key):
-            if key == "total_wallet_exposure_limit":
-                return 0.2
-            raise KeyError(key)
-
-        def get_max_n_positions(self, pside):
-            return 1
-
-    bot = FakeBot()
-
-    payload = bot._build_monitor_trailing_section(
-        balance_raw=1000.0,
-        market={
-            "BTC/USDT:USDT": {
-                "last_price": 100.0,
-                "ema_bands": {"long": {"lower": 100.0, "upper": 100.0}},
-                "trailing": {
-                    "long": {
-                        "min_since_open": 98.5,
-                        "max_since_min": 98.7,
-                        "max_since_open": 101.0,
-                        "min_since_max": 100.0,
-                    }
-                },
-            }
-        },
+    # A passive monitor must not fabricate trailing diagnostics for an
+    # unsupported strategy name found in an older snapshot.
+    bot = SimpleNamespace(config={"live": {"strategy_kind": "trailing_grid_v7"}})
+    payload = pb_mod.Passivbot._build_monitor_trailing_section(
+        bot, balance_raw=1000.0, market={"BTC/USDT:USDT": {"last_price": 100.0}}
     )
-
-    entry = payload["BTC/USDT:USDT"]["long"]["entry"]
-    assert entry["selected_mode"] == "trailing"
-    assert entry["status"] == "waiting_retracement"
-    assert entry["threshold_pct"] == pytest.approx(0.01)
-    assert entry["threshold_price"] == pytest.approx(99.0)
-    assert entry["threshold_met"] is True
-    assert entry["retracement_pct"] == pytest.approx(0.005)
-    assert entry["retracement_price"] == pytest.approx(98.5 * 1.005)
-    assert entry["projected_retracement_price"] == pytest.approx(99.0 * 1.005)
-    close = payload["BTC/USDT:USDT"]["long"]["close"]
-    assert close["selected_mode"] == "trailing"
-    assert close["status"] == "waiting_threshold"
-    assert close["threshold_price"] == pytest.approx(102.0)
-    assert close["projected_retracement_price"] == pytest.approx(102.0 * 0.99)
+    assert payload == {"_meta": {
+        "diagnostics_supported": False,
+        "strategy_kind": "trailing_grid_v7",
+        "reason": "strategy_not_supported_by_trailing_monitor",
+    }}
 
 
 def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
@@ -7811,8 +7712,8 @@ def test_unstuck_monitor_renderer_uses_independent_bounds(pside, strategy_availa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("volume_weight", [0.0, 0.2])
-@pytest.mark.parametrize("drop_pct", [0.0, 0.34])
-async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weight, drop_pct):
+@pytest.mark.parametrize("volatility_drop_pct", [0.0, 0.34])
+async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weight, volatility_drop_pct):
     from types import SimpleNamespace
     import passivbot_rust as pbr
     import passivbot_monitor as monitor
@@ -7829,7 +7730,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         "n_positions": 1,
         "total_wallet_exposure_limit": 1.0,
         "forager_score_weights": weights,
-        "filter_volume_drop_pct": drop_pct,
+        "filter_volatility_drop_pct": volatility_drop_pct,
         "unilateralness_ema_span_1m": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
@@ -7881,7 +7782,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "unilateralness_ema_span_1m" else drop_pct)
+            else (60.0 if key == "unilateralness_ema_span_1m" else volatility_drop_pct)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,

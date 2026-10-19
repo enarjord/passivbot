@@ -16,15 +16,17 @@ from config.load import prepare_config
 from config.project import project_config
 from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
 from config_utils import sanitize_prepared_config_for_dump
-from json_utils import reformat_json_text
+from json_utils import json_dumps_streamlined, reformat_json_text
 from passivbot_cli.main import main as cli_main
 from tools.clean_config import (
     atomic_write,
     cleanup_config,
     discover_files,
     main,
+    normalize_export_numbers,
     render_source,
 )
+from tools.migrate_config_v9 import main as migrate_config_v9_main
 
 EXAMPLE_CONFIGS = sorted(
     (Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.json")
@@ -66,14 +68,17 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     cfg["live"]["ignored_coins"] = "missing-ignored-list.json"
     cfg["backtest"]["end_date"] = "now"
     cfg["backtest"]["filter_by_min_effective_cost"] = None
-    cfg["bot"]["long"]["risk"]["n_positions"] = 3.5
-    cfg["bot"]["long"]["risk"]["dead"] = 777
-    cfg["backtest"]["metrics"] = {"adg": 1.0}
+    cfg["bot"]["long"]["risk"]["max_positions"] = 3.5
+    cfg["metrics"] = {"adg_strategy_eq": 1.0}
+    cfg["suite_metrics"] = {"base": {"adg_strategy_eq": 1.0}}
+    cfg["optimizer_anchor"] = {"seed": 7}
+    cfg["optimizer_evaluation_contract"] = {"version": 5}
+    cfg["backtest"]["coins"] = {"binance": ["BTCUSDT"]}
     cfg["live"]["base_config_path"] = "old-runtime-path"
     cfg["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.risk.total_wallet_exposure_limit": 2.5
     }
-    cfg["coin_overrides"] = {"BTC": {"live": {"leverage": 3.0}, "_note": "private"}}
+    cfg["coin_overrides"] = {"BTC": {"live": {"leverage": 3.0}}}
     cfg["_raw"] = {"bad": "metadata"}
     wrapper = {"config": cfg, "analysis": {"adg": 123}, "timestamp": 456}
     original = deepcopy(wrapper)
@@ -94,9 +99,9 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     assert result["live"]["ignored_coins"] == "missing-ignored-list.json"
     assert result["backtest"]["end_date"] == "now"
     assert result["backtest"]["filter_by_min_effective_cost"] is None
-    assert result["bot"]["long"]["risk"]["n_positions"] == 4
-    assert "dead" not in result["bot"]["long"]["risk"]
+    assert result["bot"]["long"]["risk"]["max_positions"] == 4
     assert "metrics" not in result["backtest"]
+    assert "coins" not in result["backtest"]
     assert "base_config_path" not in result["live"]
     assert set(result["bot"]["long"]["strategy"]) == {"trailing_martingale"}
     assert result["coin_overrides"]["BTC"] == {"live": {"leverage": 3.0}}
@@ -111,10 +116,387 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     assert cleanup_config(result) == result
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("path,value", [
+    (("typo",), 1),
+    (("bot", "long", "risk", "dead"), 777),
+    (("bot", "long", "risk", "_raw"), {"ignored": 1}),
+    (("bot", "long", "risk", "excess_allowance_mode"), "bounded"),
+    (("backtest", "metrics"), {"adg_strategy_eq": 1.0}),
+    (("coin_overrides", "BTC", "_note"), "unknown"),
+    (("optimize", "backend"), "deap"),
+    (("live", "strategy_kind"), "trailing_grid_v7"),
+])
+def test_cleanup_rejects_unsupported_authored_fields_without_mutation(wrapped, path, value):
+    cfg = get_template_config()
+    target = cfg
+    for part in path[:-1]:
+        target = target.setdefault(part, {})
+    target[path[-1]] = value
+    source = {"config": cfg, "analysis": {}} if wrapped else cfg
+    original = deepcopy(source)
+    with pytest.raises((ValueError, TypeError)):
+        cleanup_config(source)
+    assert source == original
+
+
+def test_cleanup_extracts_prepared_membership_only_from_result_records():
+    cfg = get_template_config()
+    cfg["backtest"]["coins"] = {"binance": ["BTCUSDT"]}
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        cleanup_config(cfg)
+    cfg["optimizer_evaluation_contract"] = {"version": 5}
+    original = deepcopy(cfg)
+    assert "coins" not in cleanup_config(cfg)["backtest"]
+    assert cfg == original
+
+
+@pytest.mark.parametrize("selector", [
+    "bot.long.unstuck_ema_span_0", "long.unstuck_ema_span_0",
+    "bot.long.n_positions", "bot.long.strategy.trailing_martingale.ema_span_0",
+])
+@pytest.mark.parametrize("container", ["pins", "scenario"])
+def test_cleanup_rejects_retired_override_selectors(selector, container):
+    cfg = get_template_config()
+    if container == "pins":
+        cfg["optimize"]["fixed_runtime_overrides"] = {selector: 7}
+    else:
+        cfg["backtest"]["scenarios"] = [{"label": "base", "overrides": {selector: 7}}]
+    with pytest.raises((ValueError, TypeError)):
+        cleanup_config(cfg)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("threshold", 1), ("bound", 1), ("values", [0, 1]),
+    ("bounds", {"min": 0, "max": 1}), ("metadata", {"value": 1}),
+])
+def test_cleanup_rejects_unknown_limit_fields(field, value):
+    cfg = get_template_config()
+    cfg["optimize"]["limits"] = [{
+        "metric": "adg_strategy_eq", "penalize_if": "less_than", "value": 0,
+        field: value,
+    }]
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        cleanup_config(cfg)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("maker", 0.001), ("taker", 0.001), ("maker_fee", 0.001),
+    ("taker_fee", 0.001), ("exchange", "binance"), ("active", True),
+    ("metadata", {"price_step": 1}),
+])
+@pytest.mark.parametrize("per_exchange", [False, True])
+def test_cleanup_rejects_unknown_market_fields(field, value, per_exchange):
+    cfg = get_template_config()
+    settings = {"price_step": 1, field: value}
+    cfg["backtest"]["market_settings"] = (
+        {"overrides_by_exchange": {"binance": {"BTC": settings}}}
+        if per_exchange else {"overrides": {"BTC": settings}}
+    )
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        cleanup_config(cfg)
+
+
+def test_cleanup_preserves_only_declared_nullable_coin_patch_leaves():
+    cfg = get_template_config()
+    cfg["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"entry_cooldown": {"max_duration_minutes": None}}}}
+    }
+    original = deepcopy(cfg)
+    assert cleanup_config(cfg)["coin_overrides"] == cfg["coin_overrides"]
+    assert cfg == original
+    cfg["coin_overrides"]["BTC"]["bot"]["long"]["entry_cooldown"]["min_duration_minutes"] = None
+    with pytest.raises(TypeError, match="null"):
+        cleanup_config(cfg)
+
+
 @pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
-@pytest.mark.parametrize("hsl_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("input_format", ["json", "hjson"])
+@pytest.mark.parametrize("max_inline", [0, 10000])
+def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_inline):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        close = {"retracement_volatility_1h_weight": number(0)}
+        cfg["bot"]["long"]["strategy"]["trailing_martingale"]["close"].update(close)
+        cfg["bot"]["long"]["unstuck"]["ema_span_0"] = number(60)
+        cfg["bot"]["long"]["risk"]["max_positions"] = number(7)
+        cfg["backtest"]["balance_sample_divider"] = number(60)
+        cfg["backtest"]["starting_balance"] = 1000.25
+        cfg["coin_overrides"] = {
+            "BTC": {
+                "bot": {
+                    "long": {
+                        "entry_cooldown": {
+                            "max_duration_minutes": number(60),
+                            "min_duration_minutes": 0.0,
+                        },
+                        "strategy": {"trailing_martingale": {"close": close}},
+                    }
+                },
+                "live": {"leverage": number(3)},
+            }
+        }
+        cfg["backtest"]["scenarios"] = [
+            {
+                "label": "base",
+                "overrides": {"bot.long.unstuck.ema_span_0": number(60)},
+            }
+        ]
+        cfg["optimize"]["fixed_runtime_overrides"] = {
+            "bot.long.unstuck.ema_span_0": number(60)
+        }
+        cfg["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "retracement_volatility_1h_weight"
+        ] = [number(0), number(1), 0.01]
+        output = render_source(
+            json.dumps(cfg),
+            source=Path("input.json"),
+            mode=mode,
+            input_format=input_format,
+            max_inline=max_inline,
+        )
+        assert (
+            render_source(
+                output, source=Path("output.json"), mode=mode, max_inline=max_inline
+            )
+            == output
+        )
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+    result = json.loads(outputs[0])
+    assert type(result["bot"]["long"]["unstuck"]["ema_span_0"]) is float
+    assert type(result["bot"]["long"]["risk"]["max_positions"]) is int
+    patch = result["coin_overrides"]["BTC"]
+    assert patch["bot"]["long"]["entry_cooldown"] == {
+        "max_duration_minutes": 60.0,
+        "min_duration_minutes": 0.0,
+    }
+    assert type(patch["bot"]["long"]["entry_cooldown"]["max_duration_minutes"]) is float
+    assert set(patch["bot"]["long"]["strategy"]["trailing_martingale"]["close"]) == {
+        "retracement_volatility_1h_weight"
+    }
+    assert type(patch["live"]["leverage"]) is int
+    assert '"retracement_volatility_1h_weight": 0.0' in outputs[0]
+    if "backtest" in result:
+        assert type(result["backtest"]["balance_sample_divider"]) is int
+        assert result["backtest"]["starting_balance"] == 1000.25
+        overrides = result["backtest"]["scenarios"][0]["overrides"]
+        assert type(overrides["bot.long.unstuck.ema_span_0"]) is float
+    if "optimize" in result:
+        pins = result["optimize"]["fixed_runtime_overrides"]
+        assert type(pins["bot.long.unstuck.ema_span_0"]) is float
+        bounds = result["optimize"]["bounds"]["long"]
+        weight_bounds = bounds["strategy"]["trailing_martingale"]["close"][
+            "retracement_volatility_1h_weight"
+        ]
+        assert all(type(value) is float for value in weight_bounds)
+        assert all(type(value) is int for value in bounds["risk"]["max_positions"])
+
+
+def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
+    source = tmp_path / "config.json"
+    cfg = get_template_config()
+    close = {"retracement_volatility_1h_weight": 0}
+    cfg["coin_overrides"] = {
+        "BTC": {
+            "bot": {"long": {"strategy": {"trailing_martingale": {"close": close}}}}
+        }
+    }
+    expected = render_source(json.dumps(cfg), source=source, mode="full")
+    noncanonical = json.loads(expected)
+    noncanonical["coin_overrides"] = cfg["coin_overrides"]
+    original = json_dumps_streamlined(noncanonical, max_inline=72, sort_keys=True) + "\n"
+    assert original != expected
+    source.write_text(original)
+    assert main([str(source), "--check"]) == 1
+    assert source.read_text() == original
+    assert main([str(source), "--in-place"]) == 0
+    assert source.read_text() == expected
+    assert main([str(source), "--check"]) == 0
+
+
+@pytest.mark.parametrize("mode", ["full", "backtest", "optimize"])
 @pytest.mark.parametrize(
-    "strategy", ["trailing_martingale", "ema_anchor", "trailing_grid_v7"]
+    "selector,value,expected_type",
+    [
+        ("bot.long.unstuck.ema_span_0", 60, float),
+        ("bot.unstuck.memory_ema_span_minutes", 60, float),
+        ("bot.risk.loss_gate.memory_ema_span_minutes", 60, float),
+        ("bot.long.risk.max_positions", 7, int),
+        ("bot.long.strategy.trailing_martingale.entry.ema_span_0", 60, float),
+        ("coin_overrides.BTC.bot.long.unstuck.ema_span_0", 60, float),
+        ("coin_overrides.BTC.live.leverage", 3, int),
+    ],
+)
+def test_cleanup_resolves_override_selector_numeric_types(
+    mode, selector, value, expected_type
+):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        cfg["coin_overrides"] = {
+            "BTC": {
+                "bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
+                "live": {"leverage": 3},
+            }
+        }
+        cfg["optimize"]["fixed_runtime_overrides"] = {selector: number(value)}
+        cfg["backtest"]["scenarios"] = [
+            {"label": "base", "overrides": {selector: number(value)}}
+        ]
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        result = json.loads(output)
+        exported_selector = selector
+        overrides = result["backtest"]["scenarios"][0]["overrides"]
+        assert type(overrides[exported_selector]) is expected_type
+        if "optimize" in result:
+            pins = result["optimize"]["fixed_runtime_overrides"]
+            assert type(pins[exported_selector]) is expected_type
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("mode", ["full", "backtest", "optimize"])
+def test_cleanup_normalizes_dynamic_market_setting_numeric_types(mode):
+    outputs = []
+    fields = (
+        "price_step", "qty_step", "min_qty", "min_cost", "c_mult",
+    )
+    for number in (int, float):
+        cfg = get_template_config()
+        settings = {field: number(1) for field in fields}
+        cfg["backtest"]["market_settings"] = {
+            "overrides": {"BTC": settings},
+            "overrides_by_exchange": {"binance": {"BTC/USDT:USDT": settings}},
+        }
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        market = json.loads(output)["backtest"]["market_settings"]
+        for result in (
+            market["overrides"]["BTC"],
+            market["overrides_by_exchange"]["binance"]["BTC/USDT:USDT"],
+        ):
+            assert all(type(result[field]) is float for field in fields)
+            assert set(result) == set(fields)
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("mode", ["full", "optimize"])
+@pytest.mark.parametrize("max_inline", [0, 10000])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_cleanup_normalizes_numeric_limit_lists(mode, max_inline, reverse):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        limits = [
+            {
+                "metric": "backtest_completion_ratio",
+                "penalize_if": "less_than",
+                "value": number(1),
+                "enabled": True,
+            },
+            {
+                "metric": "adg_strategy_eq",
+                "penalize_if": "outside_range",
+                "range": [number(0), number(1)],
+            },
+            {"metric": "fills_count", "penalize_if": "greater_than", "value": number(10)},
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "value": 0.125,
+            },
+            {
+                "metric": "adg_strategy_eq",
+                "penalize_if": "inside_range",
+                "range": [0.125, number(1)],
+            },
+        ]
+        cfg["optimize"]["limits"] = list(reversed(limits)) if reverse else limits
+        output = render_source(
+            json.dumps(cfg), source=Path("input.json"), mode=mode, max_inline=max_inline
+        )
+        result = json.loads(output)["optimize"]["limits"]
+        assert result == cfg["optimize"]["limits"]
+        for limit in result:
+            for field in ("value",):
+                if field in limit:
+                    assert type(limit[field]) is float
+            for field in ("range",):
+                if field in limit:
+                    assert all(type(endpoint) is float for endpoint in limit[field])
+        assert (
+            render_source(output, source=Path("input.json"), mode=mode, max_inline=max_inline)
+            == output
+        )
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("mode", ["full", "optimize"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("field", ["score_weights_unilateralness", "score_weights_ema_readiness"])
+def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field):
+    outputs = []
+    for number in (int, float):
+        cfg = get_template_config()
+        cfg["optimize"]["bounds"][side]["forager"][field] = [number(0), number(1), 0.01]
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        bound = json.loads(output)["optimize"]["bounds"][side]["forager"][field]
+        assert all(type(value) is float for value in bound)
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("mode", ["full", "optimize"])
+@pytest.mark.parametrize("field", [
+    "red_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
+    "cooldown_minutes_after_red",
+])
+def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
+    outputs = []
+    for number in (int, float):
+        cfg = generated_template(get_template_config(), "portfolio")
+        cfg["optimize"]["bounds"].setdefault("risk", {}).setdefault("hsl", {})[field] = [
+            number(1), number(1), 0.01
+        ]
+        output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
+        bounds = json.loads(output)["optimize"]["bounds"]["risk"]["hsl"][field]
+        assert all(type(value) is float for value in bounds)
+        assert render_source(output, source=Path("input.json"), mode=mode) == output
+        outputs.append(output)
+    assert outputs[0] == outputs[1]
+
+
+def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
+    cfg = {
+        "bot": {"long": {"unstuck": {"ema_span_0": 60.25, "enabled": False}}},
+        "backtest": {"starting_balance": 1000.25, "end_date": "now"},
+        "monitor": {"max_total_bytes": 2**60 + 1},
+        "coin_overrides": {"BTC": {"live": {"forced_mode_long": "0.0"}}},
+    }
+    original = deepcopy(cfg)
+    result = normalize_export_numbers(cfg)
+    assert result == original
+    assert cfg == original
+    assert result["bot"]["long"]["unstuck"]["enabled"] is False
+    assert type(result["monitor"]["max_total_bytes"]) is int
+
+
+@pytest.mark.parametrize("value", [2**53 + 1, 10**400])
+def test_export_numeric_normalization_rejects_lossy_float_conversion(value):
+    with pytest.raises(ValueError, match="bot.long.unstuck.ema_span_0.*float"):
+        normalize_export_numbers({"bot": {"long": {"unstuck": {"ema_span_0": value}}}})
+
+
+@pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
+@pytest.mark.parametrize("hsl_mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize(
+    "strategy", ["trailing_martingale", "ema_anchor"]
 )
 def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     mode, hsl_mode, strategy
@@ -125,15 +507,15 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     cfg["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": []}
     cfg["backtest"]["scenarios"] = [{"label": "base"}]
     cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
-    cfg["backtest"]["reducer"] = {"default": "mean", "adg_pnl": "min"}
+    cfg["backtest"]["reducer"] = {"default": "mean", "adg_strategy_eq": "min"}
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = rng.uniform(0.1, 2.0)
-        cfg["bot"][side]["risk"]["n_positions"] = rng.randint(1, 10)
-        cfg["bot"][side]["hsl"].update(enabled=True, restart_after_red_policy="never")
+        cfg["bot"][side]["risk"]["max_positions"] = rng.randint(1, 10)
+        cfg["bot"][side]["hsl"].update(enabled=True, cooldown_minutes_after_red=17.5)
         cfg["bot"][side]["unstuck"]["ema_span_0"] = rng.uniform(5.1, 1000.9)
-    if hsl_mode == "unified":
-        cfg["bot"]["hsl"].update(enabled=True, restart_after_red_policy="never")
+    if hsl_mode == "portfolio":
+        cfg["bot"]["risk"]["hsl"].update(enabled=True, cooldown_minutes_after_red=23.5)
     target = "canonical" if mode == "full" else mode
     projected = project_config(cfg, target, record_step=False)
     expected = project_config(
@@ -146,6 +528,14 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     result = cleanup_config(cfg, mode=mode)
     assert result == expected
     assert cleanup_config(result, mode=mode) == result
+    assert result["bot"]["risk"]["hsl"]["scope"] == hsl_mode
+    policies = [result["bot"][side]["hsl"] for side in ("long", "short")]
+    if hsl_mode == "portfolio":
+        policies.append(result["bot"]["risk"]["hsl"])
+        assert result["bot"]["risk"]["hsl"]["cooldown_minutes_after_red"] == 23.5
+    assert all(policy["cooldown_minutes_after_red"] == 17.5 for policy in policies[:2])
+    assert all("restart_after_red_policy" not in policy for policy in policies)
+    assert all(policy["cooldown_minutes_after_red"] >= 0.0 for policy in policies)
     assert (
         result["bot"]["long"]["unstuck"]["ema_span_0"]
         == cfg["bot"]["long"]["unstuck"]["ema_span_0"]
@@ -161,10 +551,32 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
         }
 
 
-def test_live_projection_discards_invalid_unused_blocks_and_omitted_side_stays_disabled():
+@pytest.mark.parametrize("section", ["backtest", "optimize"])
+@pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
+def test_projection_rejects_unknown_authored_fields_in_every_section(section, mode):
     cfg = get_template_config()
-    cfg["backtest"] = "unused garbage"
-    cfg["optimize"] = {"bounds": "unused garbage"}
+    cfg[section]["typo"] = 1
+    with pytest.raises(ValueError, match=rf"config\.{section}\.typo.*unknown"):
+        cleanup_config(cfg, mode=mode)
+
+
+@pytest.mark.parametrize("section", ["backtest", "optimize"])
+def test_live_projection_rejects_malformed_unused_sections(section):
+    cfg = get_template_config()
+    cfg[section] = "unused garbage"
+    with pytest.raises(TypeError, match=rf"config\.{section}"):
+        cleanup_config(cfg, mode="live")
+
+
+def test_live_projection_rejects_retired_optimizer_authority():
+    cfg = get_template_config()
+    cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.n_positions": 2}
+    with pytest.raises(ValueError, match="n_positions.*retired"):
+        cleanup_config(cfg, mode="live")
+
+
+def test_live_projection_keeps_omitted_side_disabled():
+    cfg = get_template_config()
     del cfg["bot"]["long"]
     result = cleanup_config(cfg, mode="live")
     assert "backtest" not in result and "optimize" not in result
@@ -187,34 +599,58 @@ def test_non_configs_fail_instead_of_becoming_defaults(source):
         cleanup_config(source)
 
 
-def test_enabled_legacy_hsl_requires_explicit_migration():
+@pytest.mark.parametrize("enabled", [False, True])
+def test_legacy_schema_requires_explicit_migration_even_when_hsl_disabled(enabled):
     cfg = get_template_config()
     cfg["config_version"] = "v8.5.0"
-    cfg["bot"]["long"]["hsl"]["enabled"] = True
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    cfg["bot"]["long"]["hsl"]["enabled"] = enabled
+    original = deepcopy(cfg)
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         cleanup_config(cfg)
+    assert cfg == original
 
 
-def test_supported_schema_renames_use_shared_migration():
-    cfg = get_template_config()
-    cfg["config_version"] = "v8.5.0"
-    result = cleanup_config(cfg)
+def test_explicit_v9_migration_produces_reusable_cleanup_input(tmp_path):
+    cfg = {
+        "config_version": "v8.6.0",
+        "bot": {
+            side: {"hsl": {"enabled": False, "restart_after_red_policy": "always"}}
+            for side in ("long", "short")
+        },
+        "live": {"pnls_max_lookback_days": 30.0},
+    }
+    source = write_config(tmp_path / "input.v8.json", cfg)
+    original = source.read_bytes()
+    destination = tmp_path / "input.v9.json"
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        cleanup_config(cfg)
+    assert migrate_config_v9_main([
+        str(source), str(destination), "--lookback-ema-span-minutes", "21600.5"
+    ]) == 0
+    assert source.read_bytes() == original
+    result = cleanup_config(json.loads(destination.read_text()))
     assert result["config_version"] == CONFIG_SCHEMA_VERSION
-    assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] is None
+    assert result["bot"]["unstuck"]["memory_ema_span_minutes"] == 21600.5
+    assert result["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == 21600.5
+    assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 21600.5
+    assert "realized_loss_gate_lookback_minutes" not in result["live"]
+    assert "pnls_max_lookback_days" not in result["live"]
+    assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
+    assert cleanup_config(result) == result
 
 
 def test_full_cleanup_normalizes_optimizer_policy_without_resolving_inputs():
     cfg = get_template_config()
     cfg["live"]["approved_coins"] = ["BTC", "ETH"]
     cfg["live"]["ignored_coins"] = "unreadable-coins.json"
-    cfg["optimize"]["backend"] = " DEAP "
+    cfg["optimize"]["backend"] = " PyMoO "
     cfg["optimize"]["population_size"] = "42"
     cfg["optimize"]["seed"] = "123"
     cfg["optimize"]["limits"] = []
     result = cleanup_config(cfg)
     assert result["live"]["approved_coins"] == ["BTC", "ETH"]
     assert result["live"]["ignored_coins"] == "unreadable-coins.json"
-    assert result["optimize"]["backend"] == "deap"
+    assert result["optimize"]["backend"] == "pymoo"
     assert result["optimize"]["population_size"] == 42
     assert result["optimize"]["seed"] == 123
     assert result["optimize"]["limits"] == []
@@ -252,9 +688,11 @@ def test_backtest_coin_sources_follow_shared_routing_validation(mode):
     with pytest.raises(ValueError, match="conflicting exchanges"):
         cleanup_config(cfg, mode=mode)
     cfg["backtest"]["coin_sources"] = None
-    assert cleanup_config(cfg, mode=mode)["backtest"]["coin_sources"] == {}
+    with pytest.raises(TypeError, match="coin_sources"):
+        cleanup_config(cfg, mode=mode)
     cfg["backtest"]["coin_sources"] = []
-    assert "backtest" not in cleanup_config(cfg, mode="live")
+    with pytest.raises(TypeError, match="coin_sources"):
+        cleanup_config(cfg, mode="live")
 
 
 @pytest.mark.parametrize(
@@ -271,7 +709,7 @@ def test_invalid_selected_section_reports_its_path(section):
 def test_format_only_preserves_numbers_duplicate_members_and_arbitrary_payload(
     max_inline,
 ):
-    text = '{"z": [1.234567890123456789, -0, 1e400, 1E-9999], "z": null, "s": "☃", "_raw": {"analysis": 3}, "yes": true}'
+    text = '{"z": [0, 0.0, 1, 1.0, 1.234567890123456789, -0, 1e400, 1E-9999], "z": null, "s": "☃", "_raw": {"analysis": 3}, "yes": true}'
     formatted = render_source(
         text, source=Path("result.json"), mode="format", max_inline=max_inline
     )
@@ -390,7 +828,9 @@ def test_directory_depth_structure_and_hjson(tmp_path):
     two = write_config(source / "sub" / "b.JSON")
     three = write_config(source / "sub" / "deeper" / "c.json")
     hjson_path = source / "sparse.hjson"
-    hjson_path.write_text("{bot: {long: {}, short: {}}, live: {}}")
+    hjson_path.write_text(
+        f'{{config_version: "{CONFIG_SCHEMA_VERSION}", bot: {{long: {{}}, short: {{}}}}, live: {{}}}}'
+    )
     assert discover_files(source) == [one]
     assert discover_files(source, max_depth=2) == [one, two]
     assert discover_files(source, max_depth=3) == [one, two, three]

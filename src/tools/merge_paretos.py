@@ -90,9 +90,28 @@ def _entry_optimize_bounds(entry: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
+    risk = side_config.get("risk")
+    if isinstance(risk, Mapping) and "max_positions" in risk:
+        count = risk["max_positions"]
+        exposure = risk.get("total_wallet_exposure_limit")
+        # This tool also reads historical result artifacts. Their old fields
+        # must not override an explicitly authored canonical policy.
+        for path, alias, canonical in (
+            ("n_positions", side_config.get("n_positions"), count),
+            ("risk.n_positions", risk.get("n_positions"), count),
+            ("total_wallet_exposure_limit", side_config.get("total_wallet_exposure_limit"), exposure),
+        ):
+            if alias is None:
+                continue
+            try:
+                equal = float(alias) == float(canonical)
+            except (TypeError, ValueError):
+                equal = alias == canonical
+            if not equal:
+                raise ValueError(f"Conflicting historical {path} and canonical risk policy")
+        return count, exposure
     n_positions_raw = side_config.get("n_positions")
     exposure_limit_raw = side_config.get("total_wallet_exposure_limit")
-    risk = side_config.get("risk")
     if isinstance(risk, Mapping):
         if n_positions_raw is None:
             n_positions_raw = risk.get("n_positions")
@@ -102,8 +121,8 @@ def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
 
 
 def _side_is_enabled(side_config: Mapping[str, Any]) -> bool:
+    n_positions_raw, exposure_limit_raw = _side_enablement_values(side_config)
     try:
-        n_positions_raw, exposure_limit_raw = _side_enablement_values(side_config)
         if n_positions_raw is None or exposure_limit_raw is None:
             return False
         n_positions = float(n_positions_raw)

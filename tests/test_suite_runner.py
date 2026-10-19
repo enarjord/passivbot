@@ -34,7 +34,7 @@ def test_extract_suite_config_merges_override():
         "backtest": {
             "suite_enabled": True,
             "scenarios": [{"label": "base"}],
-            "aggregate": {"default": "mean"},
+            "reducer": {"default": "mean"},
         }
     }
     override = {"scenarios": [{"label": "override"}]}
@@ -162,7 +162,7 @@ def test_build_scenarios_accepts_documented_scenario_keys():
                 "ignored_coins": ["ETH"],
                 "exchanges": "binance",
                 "coin_sources": {"BTC": "binance"},
-                "overrides": {"bot.long.risk.n_positions": 1},
+                "overrides": {"bot.long.risk.max_positions": 1},
             }
         ]
     }
@@ -174,7 +174,7 @@ def test_build_scenarios_accepts_documented_scenario_keys():
     assert scenarios[0].coins == ["BTC"]
     assert scenarios[0].ignored_coins == ["ETH"]
     assert scenarios[0].coin_sources == {"BTC": "binance"}
-    assert scenarios[0].overrides == {"bot.long.risk.n_positions": 1}
+    assert scenarios[0].overrides == {"bot.long.risk.max_positions": 1}
 
 
 def test_build_scenarios_rejects_unknown_scenario_keys():
@@ -575,7 +575,8 @@ def test_apply_scenario_overrides_update_config():
             "approved_coins": {"long": [], "short": []},
             "ignored_coins": {"long": [], "short": []},
         },
-        "bot": {"long": {"n_positions": 8}, "short": {"n_positions": 8}},
+        "bot": {"long": {"risk": {"max_positions": 8}},
+                "short": {"risk": {"max_positions": 8}}},
     }
     scenario = SuiteScenario(
         label="override",
@@ -583,7 +584,7 @@ def test_apply_scenario_overrides_update_config():
         end_date=None,
         coins=["BTC"],
         ignored_coins=[],
-        overrides={"bot.long.n_positions": 3},
+        overrides={"bot.long.risk.max_positions": 3},
     )
     cfg, _ = apply_scenario(
         base_config,
@@ -594,11 +595,11 @@ def test_apply_scenario_overrides_update_config():
         available_coins={"BTC"},
         base_coin_sources={"BTC": "binance"},
     )
-    assert cfg["bot"]["long"]["risk"]["n_positions"] == 3
-    assert "n_positions" not in cfg["bot"]["long"]
+    assert cfg["bot"]["long"]["risk"]["max_positions"] == 3
+    assert "max_positions" not in cfg["bot"]["long"]
     entry = cfg["_transform_log"][-1]
     paths = [change["path"] for change in entry["details"]["changes"] if "path" in change]
-    assert "bot.long.risk.n_positions" in paths
+    assert "bot.long.risk.max_positions" in paths
 
 
 def test_apply_scenario_rejects_unknown_override_path():
@@ -615,8 +616,8 @@ def test_apply_scenario_rejects_unknown_override_path():
             "ignored_coins": {"long": [], "short": []},
         },
         "bot": {
-            "long": {"risk": {"n_positions": 8}},
-            "short": {"risk": {"n_positions": 8}},
+            "long": {"risk": {"max_positions": 8}},
+            "short": {"risk": {"max_positions": 8}},
         },
     }
     scenario = SuiteScenario(
@@ -625,10 +626,10 @@ def test_apply_scenario_rejects_unknown_override_path():
         end_date=None,
         coins=["BTC"],
         ignored_coins=[],
-        overrides={"bot.long.risk.n_positons": 3},
+        overrides={"bot.long.risk.max_positons": 3},
     )
 
-    with pytest.raises(KeyError, match="n_positons"):
+    with pytest.raises(KeyError, match="max_positons"):
         apply_scenario(
             base_config,
             scenario,
@@ -639,10 +640,10 @@ def test_apply_scenario_rejects_unknown_override_path():
             base_coin_sources={"BTC": "binance"},
         )
 
-    assert "n_positons" not in base_config["bot"]["long"]["risk"]
+    assert "max_positons" not in base_config["bot"]["long"]["risk"]
 
 
-def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
+def test_apply_scenario_overrides_use_canonical_paths():
     base_config = {
         "backtest": {
             "start_date": "2021-01-01",
@@ -658,9 +659,7 @@ def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
         "bot": {
             "long": {
                 "hsl": {"red_threshold": 0.3},
-                "hsl_red_threshold": 0.1,
-                "risk": {"entry_cooldown_minutes": 0.0},
-                "risk_entry_cooldown_minutes": 9.0,
+                "entry_cooldown": {"base_duration_minutes": 0.0},
             },
             "short": {},
         },
@@ -672,8 +671,8 @@ def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
         coins=["BTC"],
         ignored_coins=[],
         overrides={
-            "bot.long.hsl_red_threshold": 1.0,
-            "bot.long.risk.entry_cooldown_minutes": 2.5,
+            "bot.long.hsl.red_threshold": 1.0,
+            "bot.long.entry_cooldown.base_duration_minutes": 2.5,
         },
     )
 

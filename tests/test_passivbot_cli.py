@@ -110,7 +110,7 @@ def test_help_subcommand_forwards_to_command_help(monkeypatch):
         return True, 0
 
     monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
-    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["deap"])
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: ["pymoo"])
 
     assert cli_main.main(["help", "backtest"]) == 0
 
@@ -840,36 +840,16 @@ def test_ticker_endpoint_probe_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["prog_env"] == "passivbot tool ticker-endpoint-probe"
 
 
-def test_gpu_proxy_benchmark_owns_its_gpu_dependency_gate(monkeypatch):
-    captured = {}
-
-    def fake_invoke_module_main(module_name):
-        captured["module_name"] = module_name
-        captured["argv"] = sys.argv[:]
-        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
-        return True, 0
-
-    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
-    monkeypatch.setattr(
-        cli_main, "_missing_full_install_markers", lambda: ["aiohttp"]
-    )
-
-    assert (
-        cli_main.main(
-            ["tool", "gpu-proxy-benchmark", "--case", "ema-single-long"]
-        )
-        == 0
-    )
-
-    assert captured == {
-        "module_name": "tools.gpu_proxy_benchmark",
-        "argv": [
-            "passivbot tool gpu-proxy-benchmark",
-            "--case",
-            "ema-single-long",
-        ],
-        "prog_env": "passivbot tool gpu-proxy-benchmark",
-    }
+@pytest.mark.parametrize("tool", ["gpu-proxy-benchmark", "gpu-suite-benchmark", "migrate-hsl",
+                                  "migrate-config-v7", "migrate-historical-data"])
+def test_removed_tools_are_rejected_before_module_dispatch(monkeypatch, tool, capsys):
+    def forbidden(*args, **kwargs):
+        pytest.fail("removed tool reached a module")
+    monkeypatch.setattr(cli_main, "_invoke_module_main", forbidden)
+    with pytest.raises(SystemExit) as error:
+        cli_main.main(["tool", tool])
+    assert error.value.code == 2
+    assert "unknown tool" in capsys.readouterr().err
 
 
 def test_unknown_command_exits_with_error():
@@ -880,8 +860,8 @@ def test_unknown_command_exits_with_error():
 
 
 def test_full_install_hint_is_shown_for_missing_optional_dependency(monkeypatch, capsys):
-    error = ModuleNotFoundError("No module named 'deap'")
-    error.name = "deap"
+    error = ModuleNotFoundError("No module named 'pymoo'")
+    error.name = "pymoo"
 
     def fake_invoke_module_main(module_name):
         raise error
@@ -1059,7 +1039,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "--backtest_start_date",
                 "2025",
                 "--optimizer-backend",
-                "deap",
+                "pymoo",
                 "-h",
             ],
             "usage: passivbot optimize [config_path] [options]",

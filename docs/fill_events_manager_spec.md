@@ -86,7 +86,6 @@ All fields except `psize`, `pprice`, `fees`, and `raw` are required when constru
 
 | Exchange | Current Implementation | Priority | Notes |
 |----------|------------------------|----------|-------|
-| Defx | `exchanges/defx.py:fetch_pnls` | Low | Minimal implementation, TODO for time filters |
 
 ---
 
@@ -463,7 +462,6 @@ async def fetch_and_cache(self, start_ms: int, end_ms: int):
 | `exchanges/hyperliquid.py` | 232 | `fetch_pnls` |
 | `exchanges/gateio.py` | 233 | `fetch_pnls` |
 | `exchanges/kucoin.py` | 408 | `fetch_pnls` |
-| `exchanges/defx.py` | 194 | `fetch_pnls` |
 
 ---
 

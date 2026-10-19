@@ -261,7 +261,7 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
     assert windows["HELD"] == (500_000 if inactive is None else 20)
 
 
-@pytest.mark.parametrize('kind', ['trailing_martingale', 'trailing_grid_v7', 'ema_anchor'])
+@pytest.mark.parametrize('kind', ['trailing_martingale', 'ema_anchor'])
 def test_warmup_reuses_strategy_only_within_calculation(kind):
     from collections import Counter
     from copy import deepcopy

@@ -53,19 +53,19 @@ def test_resume_requires_same_fill_assumption():
 
 @pytest.mark.parametrize("buffer", [0.0, 0.0001, 0.0015])
 def test_gpu_accepts_valid_buffer_before_preparing_data(buffer):
-    from optimization.backends.gpu_backend import _validate_gpu_static_scope
+    from config.gpu import validate_gpu_backtest_config
     cfg = get_template_config()
     cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
-    _validate_gpu_static_scope(cfg)
+    validate_gpu_backtest_config(cfg)
 
 
 @pytest.mark.parametrize("buffer", [-0.1, 1.0, float("nan"), float("inf"), True])
 def test_gpu_rejects_invalid_buffer_before_preparing_data(buffer):
-    from optimization.backends.gpu_backend import _validate_gpu_static_scope
+    from config.gpu import validate_gpu_backtest_config
     cfg = get_template_config()
     cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
     with pytest.raises(ValueError, match="limit_order_fill_buffer_pct"):
-        _validate_gpu_static_scope(cfg)
+        validate_gpu_backtest_config(cfg)
 
 
 def _native_args():
@@ -80,9 +80,13 @@ def _native_args():
     for side in ['long', 'short']:
         cfg['bot'][side]['hsl']['enabled'] = False
         cfg['bot'][side]['unstuck']['enabled'] = False
-        cfg['bot'][side]['risk']['n_positions'] = 1
+        cfg['bot'][side]['risk']['max_positions'] = 1
         cfg['bot'][side]['risk']['total_wallet_exposure_limit'] = 1.0 if side == 'long' else 0.0
         cfg['bot'][side]['strategy']['trailing_martingale']['entry']['ema_gate_mode'] = 'disabled'
+        # This short fixture tests fill admission, not hourly indicators.
+        for leg in ['entry', 'close']:
+            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['threshold_volatility_1h_weight'] = 0.0
+            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['retracement_volatility_1h_weight'] = 0.0
     mss = {'BTC': dict(maker=0.0002, taker=0.00055, qty_step=0.001,
                        price_step=0.01, min_qty=0.001, min_cost=1.0, c_mult=1.0)}
     bot, strategy, exchange, params = prep_backtest_args(cfg, mss, 'binance')

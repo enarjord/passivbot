@@ -24,9 +24,7 @@ from plotting import (
 def _make_analysis_entry(value):
     base_keys = [
         "adg",
-        "adg_w",
         "mdg",
-        "mdg_w",
         "gain",
         "positions_held_per_day",
         "position_held_time_weighted_mean_hours",
@@ -39,7 +37,6 @@ def _make_analysis_entry(value):
         "position_held_days_median",
         "position_unchanged_days_max",
         "win_rate",
-        "win_rate_w",
         "trade_loss_max",
         "trade_loss_mean",
         "trade_loss_median",
@@ -47,14 +44,8 @@ def _make_analysis_entry(value):
         "paper_loss_mean_ratio",
         "exposure_ratio",
         "exposure_mean_ratio",
-        "paper_loss_ratio_w",
-        "paper_loss_mean_ratio_w",
-        "exposure_ratio_w",
-        "exposure_mean_ratio_w",
         "loss_profit_ratio",
-        "loss_profit_ratio_w",
         "volume_pct_per_day_avg",
-        "volume_pct_per_day_avg_w",
         "peak_recovery_hours_pnl",
         "peak_recovery_days_pnl",
         "total_wallet_exposure_max",
@@ -102,9 +93,6 @@ def _make_analysis_entry(value):
             "equity_choppiness": 0.0,
             "equity_jerkiness": 0.0,
             "exponential_fit_error": 0.0,
-            "equity_choppiness_w": 0.0,
-            "equity_jerkiness_w": 0.0,
-            "exponential_fit_error_w": 0.0,
             "adg_per_exposure_long": 0.0,
             "adg_per_exposure_short": 0.0,
         }
@@ -112,14 +100,14 @@ def _make_analysis_entry(value):
     return analysis
 
 
-def test_backtest_hsl_signal_mode_requires_normalized_live_config():
+def test_backtest_hsl_scope_requires_canonical_global_config():
     assert (
-        bt._resolve_backtest_hsl_signal_mode({"live": {"hsl_signal_mode": "coin"}})
+        bt._resolve_backtest_hsl_signal_mode({"bot": {"risk": {"hsl": {"scope": "coin"}}}})
         == "coin"
     )
 
-    with pytest.raises(KeyError, match="live.hsl_signal_mode"):
-        bt._resolve_backtest_hsl_signal_mode({"live": {}})
+    with pytest.raises(KeyError, match="bot.risk.hsl.scope"):
+        bt._resolve_backtest_hsl_signal_mode({"bot": {"risk": {"hsl": {}}}})
 
 
 def test_expand_analysis_includes_entry_balance_pct():
@@ -214,7 +202,6 @@ def test_expand_analysis_includes_trade_level_metrics():
     )
 
     assert result["win_rate"] == 0.25
-    assert result["win_rate_w"] == 0.25
     assert result["trade_loss_max"] == 0.25
     assert result["trade_loss_mean"] == 0.25
     assert result["trade_loss_median"] == 0.25
@@ -245,10 +232,6 @@ def test_expand_analysis_currency_suffixes_new_ratio_metrics():
         "paper_loss_mean_ratio",
         "exposure_ratio",
         "exposure_mean_ratio",
-        "paper_loss_ratio_w",
-        "paper_loss_mean_ratio_w",
-        "exposure_ratio_w",
-        "exposure_mean_ratio_w",
     ):
         assert result[f"{metric}_usd"] == 0.25
         assert result[f"{metric}_btc"] == 0.75
@@ -340,7 +323,7 @@ def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
     def fake_run_backtest_bundle(*_args):
         return None, equities, analysis_usd, analysis_btc
 
-    monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
+    monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle, raising=False)
     payload = BacktestPayload(
         bundle=object(),
         bot_params_list=[],
@@ -388,7 +371,7 @@ def test_execute_backtest_captures_metrics_only_rust_profile(monkeypatch):
             {"_rust_profile": rust_profile},
         )
 
-    monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
+    monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle, raising=False)
     payload = BacktestPayload(
         bundle=object(),
         bot_params_list=[],

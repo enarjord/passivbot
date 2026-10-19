@@ -16,8 +16,50 @@ from optimization.config_adapter import get_optimization_key_paths
 
 def source(mode="coin", enabled=True):
     cfg = generated_template(get_template_config(), mode)
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block["enabled"] = enabled
+    return cfg
+
+
+def as_legacy(cfg, version="v8.6.0"):
+    """Restore released-v8 field placement for explicit converter regressions."""
+    cfg["config_version"] = version
+    bot, live = cfg["bot"], cfg["live"]
+    global_policy = bot.pop("risk")
+    mode = global_policy["hsl"]["scope"]
+    live["hsl_signal_mode"] = "unified" if mode == "portfolio" else mode
+    live["max_realized_loss_pct"] = global_policy["loss_gate"]["max_drawdown_ratio"]
+    live["auto_gs"] = live.pop("disapproved_position_mode") == "graceful_stop"
+    live.pop("risk_bootstrap_max_lookback_minutes", None)
+    live["pnls_max_lookback_days"] = 30.0
+    bot.pop("unstuck")
+    cfg["backtest"]["liquidation_threshold"] = cfg["backtest"].pop("equity_floor_ratio")
+    if mode == "portfolio":
+        bot["hsl"] = global_policy["hsl"]
+        bot["hsl"].pop("scope")
+    bounds = cfg["optimize"]["bounds"]
+    global_bounds = bounds.pop("risk", {})
+    if "hsl" in global_bounds:
+        bounds["hsl"] = global_bounds["hsl"]
+    bounds.pop("unstuck", None)
+    for side in ("long", "short"):
+        side_bot = bot[side]
+        side_bot["risk"]["n_positions"] = side_bot["risk"].pop("max_positions")
+        side_bot["unstuck"]["threshold"] = side_bot["unstuck"].pop("exposure_trigger_ratio")
+        side_bounds = bounds[side]
+        side_bounds["risk"]["n_positions"] = side_bounds["risk"].pop("max_positions")
+        side_bounds["unstuck"]["threshold"] = side_bounds["unstuck"].pop("exposure_trigger_ratio")
+    policies = [bot[side]["hsl"] for side in ("long", "short")]
+    policies += [bot["hsl"]] if mode == "portfolio" else []
+    bound_policies = [bounds[side]["hsl"] for side in ("long", "short") if "hsl" in bounds[side]]
+    bound_policies += [bounds["hsl"]] if mode == "portfolio" else []
+    for block in policies:
+        block.pop("memory_ema_span_minutes", None)
+        block["ema_span_minutes"] = block.pop("drawdown_ratio_ema_span_minutes")
+        block["restart_after_red_policy"] = "always" if block["enabled"] else None
+    for block in bound_policies:
+        block.pop("memory_ema_span_minutes", None)
+        block["ema_span_minutes"] = block.pop("drawdown_ratio_ema_span_minutes")
     return cfg
 
 
@@ -25,15 +67,16 @@ def prepared(cfg):
     return prepare_config(cfg, verbose=False, target="canonical", runtime=None)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_explicit_hsl_config_roundtrips_without_legacy_fields(mode):
     cfg = source(mode)
     result = prepared(cfg)
     result2 = prepared(result)
     assert result2["bot"] == result["bot"]
     assert "hsl_engine" not in result["live"]
-    block = result["bot"]["hsl"] if mode == "unified" else result["bot"]["long"]["hsl"]
-    assert block["restart_after_red_policy"] == "always"
+    block = result["bot"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    assert "restart_after_red_policy" not in block
+    assert block["cooldown_minutes_after_red"] >= 0.0
     assert not (
         {"tier_ratios", "orange_tier_mode", "no_restart_drawdown_threshold"}
         & block.keys()
@@ -51,81 +94,85 @@ def test_missing_selector_uses_sole_engine_without_authorizing_restart():
 def test_explicit_legacy_selector_is_rejected_before_runtime():
     cfg = source()
     cfg["live"]["hsl_engine"] = "legacy"
-    with pytest.raises(ValueError, match="legacy HSL has been removed.*migrate-hsl"):
+    with pytest.raises(ValueError, match="hsl_engine is removed in v9.*migrate-config-v9"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-@pytest.mark.parametrize("policy", [None, "threshold", "omit", [], {}])
-def test_enabled_hsl_scope_requires_explicit_restart_choice(mode, policy):
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("policy", [None, "always", "never", "threshold", [], {}])
+def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
     cfg = source(mode)
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
-    if policy == "omit":
-        del block["restart_after_red_policy"]
-    else:
-        block["restart_after_red_policy"] = policy
+    block = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block["restart_after_red_policy"] = policy
     with pytest.raises(ValueError, match="restart_after_red_policy"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-def test_disabled_missing_policy_cannot_become_implicit_after_hydration_or_cli(mode):
-    cfg = source(mode, enabled=False)
-    path = "bot.hsl" if mode == "unified" else "bot.long.hsl"
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
-    del block["restart_after_red_policy"]
-    cfg = prepared(cfg)
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode):
+    cfg = prepared(source(mode, enabled=False))
+    path = "bot.risk.hsl" if mode == "portfolio" else "bot.long.hsl"
     update_config_with_args(cfg, Namespace(**{f"{path}.enabled": True}), verbose=False)
-    with pytest.raises(ValueError, match="explicit choice"):
-        prepared(cfg)
-    update_config_with_args(
-        cfg, Namespace(**{f"{path}.restart_after_red_policy": "never"}), verbose=False
-    )
-    assert "hsl_engine" not in prepared(cfg)["live"]
+    result = prepared(cfg)
+    block = result["bot"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    assert block["enabled"]
+    assert block["cooldown_minutes_after_red"] >= 0.0
+    assert "restart_after_red_policy" not in block
+    with pytest.raises(ValueError, match="removed|unknown"):
+        update_config_with_args(cfg, Namespace(**{f"{path}.restart_after_red_policy": "never"}), verbose=False)
 
 
-def test_unified_missing_portfolio_block_is_not_hydrated_even_with_equal_sides():
-    cfg = source("unified", enabled=False)
-    del cfg["bot"]["hsl"]
+def test_portfolio_missing_portfolio_block_is_not_hydrated_even_with_equal_sides():
+    cfg = source("portfolio", enabled=False)
+    cfg["bot"]["risk"]["hsl"] = {"scope": "portfolio"}
     cfg["bot"]["short"]["hsl"] = deepcopy(cfg["bot"]["long"]["hsl"])
-    with pytest.raises(ValueError, match="explicit bot.hsl.*pside"):
+    with pytest.raises(ValueError, match="bot.risk.hsl missing required fields"):
         prepared(cfg)
 
 
 def test_cli_mode_change_rechecks_portfolio_presence():
     cfg = prepared(source("pside"))
     update_config_with_args(
-        cfg, Namespace(**{"live.hsl_signal_mode": "unified"}), verbose=False
+        cfg, Namespace(**{"bot.risk.hsl.scope": "portfolio"}), verbose=False
     )
-    with pytest.raises(ValueError, match="explicit bot.hsl"):
+    with pytest.raises(ValueError, match="explicit bot.risk.hsl"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("days", [0, -1, 0.99, 90.01, float("inf"), float("nan"), True])
-def test_enabled_lookback_rejects_outside_one_to_ninety_days(days):
+@pytest.mark.parametrize("span", [0, -1, 0.99, 1e30, float("inf"), float("nan"), True])
+def test_slow_memory_rejects_invalid_or_nondecaying_spans(span):
     cfg = source()
-    cfg["live"]["pnls_max_lookback_days"] = days
-    with pytest.raises(ValueError, match="lookback"):
+    cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
+    with pytest.raises(ValueError, match="memory_ema_span_minutes"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("days", [1, 1.5, 30, 90])
-def test_lookback_boundaries_and_fractional_ema_are_preserved(days):
+@pytest.mark.parametrize("span", [1.0, 1.5, 43200.0, 200000.0])
+def test_independent_slow_and_fast_spans_preserve_fractional_minutes(span):
     cfg = source()
-    cfg["live"]["pnls_max_lookback_days"] = days
-    cfg["bot"]["long"]["hsl"]["ema_span_minutes"] = 2.5
+    cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
+    cfg["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 2.5
     result = prepared(cfg)
-    assert result["live"]["pnls_max_lookback_days"] == days
-    assert result["bot"]["long"]["hsl"]["ema_span_minutes"] == 2.5
+    assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == span
+    assert result["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 2.5
+
+
+@pytest.mark.parametrize("cap", [0.0, -1.0, 0.99, 129600.01, float("inf"), float("nan"), True])
+def test_startup_coverage_cap_is_bounded_independently_of_memory_age(cap):
+    cfg = source()
+    cfg["live"]["risk_bootstrap_max_lookback_minutes"] = cap
+    with pytest.raises(ValueError, match="risk_bootstrap_max_lookback_minutes"):
+        prepared(cfg)
 
 
 @pytest.mark.parametrize(
     "policy", ["panic", "normal", "manual", "tp_only", "graceful_stop"]
 )
-def test_removed_intervention_policy_is_stripped_from_hsl_config(policy):
+def test_removed_intervention_policy_is_rejected_at_v9_boundary(policy):
     cfg = source()
     cfg["live"]["hsl_position_during_cooldown_policy"] = policy
-    assert "hsl_position_during_cooldown_policy" not in prepared(cfg)["live"]
+    with pytest.raises(ValueError, match="hsl_position_during_cooldown_policy.*removed in v9"):
+        prepared(cfg)
 
 
 @pytest.mark.parametrize("section", ["bounds", "fixed_runtime_overrides"])
@@ -140,7 +187,7 @@ def test_removed_optimizer_paths_are_rejected_before_pruning(section, field):
         else f"long_hsl_{field}"
     )
     cfg["optimize"][section][key] = [0, 1]
-    with pytest.raises(ValueError, match="removed HSL"):
+    with pytest.raises(ValueError, match="removed.*(v9|HSL)|unknown configuration field"):
         prepared(cfg)
 
 
@@ -148,16 +195,16 @@ def test_removed_optimizer_paths_are_rejected_before_pruning(section, field):
 @pytest.mark.parametrize("tier", ["yellow", "orange"])
 def test_removed_metric_is_rejected_in_keys_and_values(section, tier):
     cfg = source()
-    cfg["optimize"][section] = [{f"hard_stop_time_in_{tier}_pct": 0.5}]
+    cfg["optimize"][section] = [{"metric": f"hard_stop_time_in_{tier}_pct", **({"goal": "min"} if section == "scoring" else {"penalize_if": "greater_than", "value": 0.5})}]
     with pytest.raises(ValueError, match="removed for HSL"):
         prepared(cfg)
 
 
-def test_unified_optimizer_paths_target_portfolio_only():
-    cfg = prepared(source("unified"))
+def test_portfolio_optimizer_paths_target_portfolio_only():
+    cfg = prepared(source("portfolio"))
     keys = dict(get_optimization_key_paths(cfg))
-    assert keys["hsl_red_threshold"] == ("bot", "hsl", "red_threshold")
-    assert keys["hsl_ema_span_minutes"] == ("bot", "hsl", "ema_span_minutes")
+    assert keys["hsl_red_threshold"] == ("bot", "risk", "hsl", "red_threshold")
+    assert keys["hsl_drawdown_ratio_ema_span_minutes"] == ("bot", "risk", "hsl", "drawdown_ratio_ema_span_minutes")
     assert not any(k.startswith(("long_hsl_", "short_hsl_")) for k in keys)
     assert "hsl_red_threshold" in flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg["live"]["strategy_kind"]
@@ -165,40 +212,42 @@ def test_unified_optimizer_paths_target_portfolio_only():
 
 
 @pytest.mark.parametrize("section", ["bounds", "fixed_runtime_overrides"])
-def test_unified_rejects_inactive_side_optimizer_paths(section):
-    cfg = source("unified")
+def test_portfolio_rejects_inactive_side_optimizer_paths(section):
+    cfg = source("portfolio")
     if section == "bounds":
         cfg["optimize"][section]["long"]["hsl"] = {"red_threshold": [0.1, 0.2]}
     else:
-        cfg["optimize"][section]["bot.short.hsl.restart_after_red_policy"] = "never"
-    with pytest.raises(ValueError, match="inactive in unified"):
+        cfg["optimize"][section]["bot.short.hsl.red_threshold"] = 0.2
+    with pytest.raises(ValueError, match="inactive in portfolio"):
         prepared(cfg)
 
 
-def test_enabling_coin_override_requires_restart_choice():
+def test_enabling_coin_override_inherits_finite_policy():
+    from config.overrides import parse_overrides
+
     cfg = source(enabled=False)
-    del cfg["bot"]["long"]["hsl"]["restart_after_red_policy"]
     cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"enabled": True}}}}}
-    with pytest.raises(ValueError, match="explicit choice"):
-        prepared(cfg)
+    result = parse_overrides(prepared(cfg), verbose=False)
+    assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"]["enabled"]
+    assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_inactive_coin_hsl_override_is_not_silently_ignored(mode):
     cfg = source(mode)
     cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"red_threshold": 0.2}}}}}
-    with pytest.raises(ValueError, match="inactive outside coin mode"):
+    with pytest.raises(ValueError, match="inactive in portfolio|overridable only.*scope"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_unimplemented_runtime_mode_is_explicitly_rejected(mode):
     with pytest.raises(ValueError, match="runtime integration is not available"):
         require_runtime_support(prepared(source(mode)))
     require_runtime_support(prepared(get_template_config()), supported_modes=("coin",))
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_live_constructor_accepts_hsl_before_offline_credential_sentinel(
     monkeypatch, mode
 ):
@@ -233,12 +282,12 @@ def test_live_constructor_rejects_unknown_engine_before_credentials(monkeypatch)
     ["bot.long.hsl.red_threshold", "bot.short.hsl.no_restart_drawdown_threshold"],
 )
 def test_cli_cannot_target_inactive_or_removed_hsl_settings(path):
-    cfg = prepared(source("unified"))
+    cfg = prepared(source("portfolio"))
     with pytest.raises(ValueError, match="inactive|removed"):
         update_config_with_args(cfg, Namespace(**{path: 0.3}), verbose=False)
 
 
-def test_hsl_coin_override_parsing_keeps_explicit_restart():
+def test_hsl_coin_override_parsing_keeps_explicit_threshold():
     from config.overrides import parse_overrides
 
     cfg = source()
@@ -255,31 +304,35 @@ def test_hsl_coin_override_parsing_keeps_explicit_restart():
 def test_scenario_rechecks_effective_hsl_contract(change):
     from suite_runner import SuiteScenario, apply_scenario
 
-    cfg = source("unified" if change == "inactive" else "coin", enabled=False)
-    cfg["bot"]["long"]["hsl"].pop("restart_after_red_policy")
+    cfg = source("portfolio" if change == "inactive" else "coin", enabled=False)
     cfg = prepared(cfg)
     overrides = {
         "enable": {"bot.long.hsl.enabled": True},
-        "mode": {"live.hsl_signal_mode": "unified"},
+        "mode": {"bot.risk.hsl.scope": "portfolio"},
         "removed": {"bot.long.hsl.no_restart_drawdown_threshold": 0.3},
         "inactive": {"bot.long.hsl.red_threshold": 0.3},
     }[change]
     scenario = SuiteScenario(
         "test", None, None, ["TEST"], [], exchanges=["binance"], overrides=overrides
     )
-    with pytest.raises(ValueError, match="explicit|removed|inactive"):
-        apply_scenario(cfg, scenario, ["TEST"], [], ["binance"], {"TEST"}, quiet=True)
+    if change == "enable":
+        result, *_ = apply_scenario(cfg, scenario, ["TEST"], [], ["binance"], {"TEST"}, quiet=True)
+        assert result["bot"]["long"]["hsl"]["enabled"]
+        assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
+    else:
+        with pytest.raises(ValueError, match="explicit|removed|inactive"):
+            apply_scenario(cfg, scenario, ["TEST"], [], ["binance"], {"TEST"}, quiet=True)
 
 
 def test_optimizer_finalization_rechecks_fixed_enablement():
     from optimization.warmup import _finalize_optimizer_vector_config
 
     cfg = source(enabled=False)
-    del cfg["bot"]["long"]["hsl"]["restart_after_red_policy"]
     cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": True}
     cfg = prepared(cfg)
-    with pytest.raises(ValueError, match="explicit choice"):
-        _finalize_optimizer_vector_config(cfg)
+    _finalize_optimizer_vector_config(cfg)
+    assert cfg["bot"]["long"]["hsl"]["enabled"]
+    assert "restart_after_red_policy" not in cfg["bot"]["long"]["hsl"]
 
 
 def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
@@ -299,16 +352,16 @@ def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
     "field,bounds",
     [
         ("red_threshold", [0, 0.2]),
-        ("ema_span_minutes", [0.5, 2]),
+        ("drawdown_ratio_ema_span_minutes", [0.5, 2]),
         ("cooldown_minutes_after_red", [-1, 2]),
     ],
 )
-@pytest.mark.parametrize("mode", ["coin", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "portfolio"])
 def test_hsl_numeric_bounds_rejected_before_candidate_generation(field, bounds, mode):
     cfg = source(mode)
     target = (
-        cfg["optimize"]["bounds"]
-        if mode == "unified"
+        cfg["optimize"]["bounds"]["risk"]
+        if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
     target["hsl"][field] = bounds
@@ -319,12 +372,12 @@ def test_hsl_numeric_bounds_rejected_before_candidate_generation(field, bounds, 
 def test_engine_cannot_be_changed_by_optimizer_override():
     cfg = get_template_config()
     cfg["optimize"]["fixed_runtime_overrides"]["live.hsl_engine"] = "hsl"
-    with pytest.raises(ValueError, match="startup selector"):
+    with pytest.raises(ValueError, match="removed.*v9|startup selector"):
         prepared(cfg)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, mode):
     import passivbot
 
@@ -341,7 +394,7 @@ async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, m
 
     def stop_after_config(config, **kwargs):
         assert "hsl_engine" not in config["live"]
-        assert config["live"]["hsl_signal_mode"] == mode
+        assert config["bot"]["risk"]["hsl"]["scope"] == mode
         raise OfflineBoundary()
 
     def forbidden(*args, **kwargs):
@@ -371,11 +424,11 @@ async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, m
 def test_retired_recovery_controls_cannot_be_optimizer_parameters(field, section):
     cfg = source()
     cfg["optimize"][section][f"live.{field}"] = [0, 1] if section == "bounds" else 1
-    with pytest.raises(ValueError, match="removed HSL recovery control"):
+    with pytest.raises(ValueError, match="removed.*v9|removed HSL recovery control"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_aggregate_balance_override_constructor_rejects_before_credentials(
     mode, monkeypatch
 ):
@@ -400,7 +453,7 @@ def test_aggregate_balance_override_constructor_rejects_before_credentials(
 @pytest.mark.parametrize("location", ["base", "coin", "fixed", "scenario"])
 def test_old_selectorless_hsl_requires_explicit_migration(version, policy, location):
     cfg = source(enabled=location == "base")
-    cfg["config_version"] = version
+    as_legacy(cfg, version)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -431,23 +484,37 @@ def test_old_selectorless_hsl_requires_explicit_migration(version, policy, locat
                 },
             }
         ]
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         prepared(cfg)
-    from tools.migrate_hsl_config import migrate
+    from tools.migrate_config_v9 import migrate
 
-    converted = migrate(cfg)
-    assert prepared(converted)["config_version"] == "v8.6.0"
+    if version is None:
+        with pytest.raises(ValueError, match="versioned v8"):
+            migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True)
+        return
+    if policy == "never":
+        with pytest.raises(ValueError, match="acknowledge-never-removal"):
+            migrate(cfg, memory_span_minutes=43200.0)
+    converted = migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
+    assert prepared(converted)["config_version"] == "v9.0.0"
 
 
-def test_old_disabled_hsl_without_restart_authorization_can_upgrade():
+def test_old_disabled_hsl_requires_explicit_migration_too():
     cfg = source(enabled=False)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = "threshold"
-    result = prepared(cfg)
-    assert result["config_version"] == "v8.6.0"
-    assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] is None
+    from tools.migrate_config_v9 import migrate
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        prepared(cfg)
+    with pytest.raises(ValueError, match="no v9 policy equivalent"):
+        migrate(cfg, memory_span_minutes=43200.0)
+    for side in ("long", "short"):
+        del cfg["bot"][side]["hsl"]["restart_after_red_policy"]
+    result = migrate(cfg, memory_span_minutes=43200.0).config
+    assert prepared(result)["config_version"] == "v9.0.0"
+    assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
 
 
 @pytest.mark.parametrize("location", ["root", "scenario"])
@@ -455,10 +522,10 @@ def test_old_disabled_hsl_without_restart_authorization_can_upgrade():
 def test_old_root_file_backed_hsl_requires_migration_before_hydration(
     tmp_path, location, policy
 ):
-    from tools.migrate_hsl_config import migrate
+    from tools.migrate_config_v9 import migrate
 
     cfg = source(enabled=False)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -480,24 +547,24 @@ def test_old_root_file_backed_hsl_requires_migration_before_hydration(
         cfg["backtest"]["scenarios"] = [
             {"label": "file", "overrides": {"coin_overrides": patch}}
         ]
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         prepare_config(
             cfg, base_config_path=str(tmp_path / "config.json"), verbose=False
         )
-    result = migrate(cfg, base_config_path=str(tmp_path / "config.json"))
-    assert result["config_version"] == "v8.6.0"
+    result = migrate(cfg, base_config_path=str(tmp_path / "config.json"), memory_span_minutes=43200.0, acknowledge_never_removal=True).config
+    assert result["config_version"] == "v9.0.0"
     assert not any(key.startswith("_hsl") for key in result)
-    assert prepare_config(result, verbose=False)["config_version"] == "v8.6.0"
+    assert prepare_config(result, verbose=False)["config_version"] == "v9.0.0"
 
 
 @pytest.mark.parametrize("policy", ["always", "never"])
 @pytest.mark.parametrize("location", ["root", "scenario"])
 def test_old_legacy_coin_flag_file_requires_migration(tmp_path, policy, location):
     from config.overrides import parse_overrides
-    from tools.migrate_hsl_config import migrate
+    from tools.migrate_config_v9 import migrate
 
     cfg = source(enabled=False)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -521,17 +588,14 @@ def test_old_legacy_coin_flag_file_requires_migration(tmp_path, policy, location
     else:
         cfg["backtest"]["scenarios"] = [{"label": "legacy", "overrides": flags}]
     base_path = str(tmp_path / "base.json")
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         prepare_config(cfg, base_config_path=base_path, verbose=False)
     if location == "root":
-        converted = migrate(cfg, base_config_path=base_path)
-        assert prepared(converted)["config_version"] == "v8.6.0"
-        assert (
-            parse_overrides(converted, verbose=False)["coin_overrides"]["TEST"]["bot"][
-                "long"
-            ]["hsl"]["restart_after_red_policy"]
-            == policy
-        )
+        converted = migrate(cfg, base_config_path=base_path, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
+        assert prepared(converted)["config_version"] == "v9.0.0"
+        block = parse_overrides(converted, verbose=False)["coin_overrides"]["TEST"]["bot"]["long"]["hsl"]
+        assert block["enabled"]
+        assert "restart_after_red_policy" not in block
 
 
 @pytest.mark.asyncio
@@ -549,7 +613,7 @@ async def test_cli_external_suite_old_hsl_rejected_before_preparation(
 
     module = importlib.import_module(command)
     cfg = source(enabled=False)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -583,28 +647,19 @@ async def test_cli_external_suite_old_hsl_rejected_before_preparation(
         "argv",
         [f"passivbot {command}", str(path), "--suite-config", str(suite_path)],
     )
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         await module.main()
 
 
-@pytest.mark.parametrize("version", ["v8.5.0", "v8.6.0"])
+@pytest.mark.parametrize("version", ["v8.5.0", "v9.0.0"])
 @pytest.mark.parametrize("patch_kind", ["inline", "file", "legacy_file", "non_hsl"])
-def test_external_suite_loader_uses_raw_base_schema_and_resolves_files(
-    tmp_path,
-    version,
-    patch_kind,
-):
+def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_path, version, patch_kind):
     from suite_runner import load_suite_override_config
-    from tools.migrate_hsl_config import migrate
 
     cfg = source(enabled=False)
-    cfg["config_version"] = version
-    cfg["optimize"]["fixed_runtime_overrides"] = {}
-    for side in ("long", "short"):
-        cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
-    hsl = {
-        "bot": {"long": {"hsl": {"enabled": True, "restart_after_red_policy": "never"}}}
-    }
+    if version != "v9.0.0":
+        as_legacy(cfg, version)
+    hsl = {"bot": {"long": {"hsl": {"enabled": True, "cooldown_minutes_after_red": 2.5}}}}
     (tmp_path / "coin.json").write_text(json.dumps(hsl))
     patches = {
         "inline": hsl,
@@ -612,24 +667,19 @@ def test_external_suite_loader_uses_raw_base_schema_and_resolves_files(
         "legacy_file": {"live.coin_flags.TEST": "-lc coin.json"},
         "non_hsl": {"live.minimum_coin_age_days": 30},
     }
-    suite = {
-        "backtest": {
-            "suite": {
-                "scenarios": [{"label": "external", "overrides": patches[patch_kind]}]
-            }
-        }
-    }
+    scenarios = [{"label": "external", "overrides": patches[patch_kind]}]
     path = tmp_path / "suite.json"
-    path.write_text(json.dumps(suite))
+    path.write_text(json.dumps({"backtest": {"scenarios": scenarios}}))
     kwargs = {"source_config": cfg, "base_config_path": str(tmp_path / "base.json")}
-    if version == "v8.5.0" and patch_kind != "non_hsl":
-        with pytest.raises(ValueError, match="migrate-hsl"):
+    if version != "v9.0.0":
+        with pytest.raises(ValueError, match="migrate-config-v9"):
             load_suite_override_config(path, **kwargs)
-        kwargs["source_config"] = migrate(
-            cfg, base_config_path=kwargs["base_config_path"]
-        )
-    loaded = load_suite_override_config(path, **kwargs)
-    assert loaded["scenarios"] == suite["backtest"]["suite"]["scenarios"]
+    elif patch_kind == "legacy_file":
+        with pytest.raises(ValueError, match="unknown configuration field"):
+            load_suite_override_config(path, **kwargs)
+    else:
+        loaded = load_suite_override_config(path, **kwargs)
+        assert loaded["scenarios"] == scenarios
 
 
 @pytest.mark.parametrize(
@@ -642,7 +692,7 @@ def test_external_suite_file_helpers_gate_before_hydration(
     import suite_runner
 
     cfg = source(enabled=False)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["restart_after_red_policy"] = None
@@ -670,7 +720,7 @@ def test_external_suite_file_helpers_gate_before_hydration(
 
     module = optimize_suite if entrypoint == "ensure_suite_config" else suite_runner
     monkeypatch.setattr(module, "prepare_config", unexpected_prepare)
-    with pytest.raises(ValueError, match="migrate-hsl"):
+    with pytest.raises(ValueError, match="migrate-config-v9"):
         if entrypoint == "ensure_suite_config":
             module.ensure_suite_config(base, suite)
         else:
@@ -697,7 +747,7 @@ async def test_cli_current_external_suite_reaches_preparation(
                         "label": "external",
                         "overrides": {
                             "bot.long.hsl.enabled": True,
-                            "bot.long.hsl.restart_after_red_policy": "never",
+                            "bot.long.hsl.cooldown_minutes_after_red": 2.5,
                         },
                     }
                 ]
@@ -709,7 +759,7 @@ async def test_cli_current_external_suite_reaches_preparation(
         pass
 
     def capture_prepare(source, **kwargs):
-        assert source["config_version"] == "v8.6.0"
+        assert source["config_version"] == "v9.0.0"
         raise PreparedOnly
 
     monkeypatch.setattr(module, "prepare_config", capture_prepare)
@@ -722,50 +772,49 @@ async def test_cli_current_external_suite_reaches_preparation(
         await module.main()
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("selector", [None, "legacy", "revised"])
-def test_disabled_legacy_hsl_warns_and_clears_restart_authority(mode, selector, caplog):
-    cfg = source(mode, enabled=False)
-    cfg["config_version"] = "v8.5.0"
+def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mode, selector):
+    from tools.migrate_config_v9 import migrate
+
+    cfg = as_legacy(source(mode, enabled=False), "v8.5.0")
     if selector is not None:
         cfg["live"]["hsl_engine"] = selector
     original = deepcopy(cfg)
-    result = prepared(cfg)
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        prepared(cfg)
+    result = migrate(cfg, memory_span_minutes=43200.0).config
     assert cfg == original
-    assert "HSL disabled" in caplog.text
     assert "hsl_engine" not in result["live"]
-    path = "bot.hsl" if mode == "unified" else "bot.long.hsl"
-    block = result["bot"]["hsl"] if mode == "unified" else result["bot"]["long"]["hsl"]
-    assert block["restart_after_red_policy"] is None
+    path = "bot.risk.hsl" if mode == "portfolio" else "bot.long.hsl"
+    block = result["bot"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    assert "restart_after_red_policy" not in block
     assert block["enabled"] is False
-    # A second normalization cannot resurrect template/fixed restart choices.
     result = prepared(result)
     update_config_with_args(result, Namespace(**{f"{path}.enabled": True}))
-    with pytest.raises(ValueError, match="explicit choice"):
-        prepared(result)
+    result = prepared(result)
+    block = result["bot"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    assert block["enabled"] and block["cooldown_minutes_after_red"] >= 0.0
 
 
 @pytest.mark.parametrize("enabled_before,enabled_after", [(False, True), (True, False)])
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_legacy_hsl_guard_uses_cli_modified_config(enabled_before, enabled_after, wrapped):
     cfg = source(enabled=enabled_before)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     cfg["live"]["hsl_engine"] = "legacy"
     if wrapped:
         cfg = {"config": cfg}
     update_config_with_args(cfg, Namespace(**{"bot.long.hsl.enabled": enabled_after}))
-    if enabled_after:
-        with pytest.raises(ValueError, match="migrate-hsl"):
-            prepared(cfg)
-    else:
-        assert prepared(cfg)["bot"]["long"]["hsl"]["enabled"] is False
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        prepared(cfg)
 
 
 @pytest.mark.parametrize("location", ["coin", "fixed", "scenario", "file"])
 def test_disabled_legacy_restart_choices_cannot_survive_in_patches(location, tmp_path):
     from config.overrides import parse_overrides
     cfg = source(enabled=False)
-    cfg["config_version"] = "v8.5.0"
+    as_legacy(cfg, "v8.5.0")
     policy = {"bot": {"long": {"hsl": {"enabled": False, "restart_after_red_policy": "never"}}}}
     if location == "coin":
         cfg["coin_overrides"] = {"TEST": policy}
@@ -776,7 +825,11 @@ def test_disabled_legacy_restart_choices_cannot_survive_in_patches(location, tmp
         cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.restart_after_red_policy": "never"}
     else:
         cfg["backtest"]["scenarios"] = [{"label": "off", "overrides": {"bot.long.hsl.restart_after_red_policy": "never"}}]
-    result = prepare_config(cfg, verbose=False, base_config_path=str(tmp_path / "base.json"))
+    from tools.migrate_config_v9 import migrate
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        prepare_config(cfg, verbose=False, base_config_path=str(tmp_path / "base.json"))
+    result = migrate(cfg, memory_span_minutes=43200.0, acknowledge_never_removal=True,
+                     base_config_path=str(tmp_path / "base.json")).config
     if location in {"coin", "file"}:
         result = parse_overrides(result, verbose=False)
         assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"].get("restart_after_red_policy") is None

@@ -1,6 +1,6 @@
 use core::str::FromStr;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArray3, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,8 @@ pub struct HlcvsBundle {
     pub btc_usd: Py<PyArray1<f64>>,
     pub timestamps: Py<PyArray1<i64>>,
     pub meta: HlcvsMeta,
+    pub eligibility: Option<Py<PyArray2<u8>>>,
+    pub eligibility_rows: Option<Py<PyArray1<i32>>>,
 }
 
 impl HlcvsBundle {
@@ -188,6 +190,30 @@ impl HlcvsBundle {
             )));
         }
 
+        match (&self.eligibility, &self.eligibility_rows) {
+            (None, None) => (),
+            (Some(values), Some(rows)) => {
+                let values = values.bind(py).readonly();
+                let rows = rows.bind(py).readonly();
+                let a = values.as_array();
+                let r = rows.as_array();
+                if a.nrows() == 0
+                    || a.ncols() != n_coins
+                    || a.iter().any(|&x| x > 1)
+                    || r.len() != n_timesteps
+                    || r.iter().any(|&x| x < 0 || x as usize >= a.nrows())
+                {
+                    return Err(PyValueError::new_err(
+                        "invalid Organillo binary eligibility/row mapping",
+                    ));
+                }
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "Organillo eligibility and row mapping must be supplied together",
+                ))
+            }
+        }
         Ok(())
     }
 }
@@ -283,13 +309,15 @@ pub struct BacktestParams {
     pub btc_collateral_cap: f64,
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
+    pub ew_half_life_days: Option<f64>,
     pub hsl_detailed_report: bool,
     pub skip_btc_analysis: bool,
     pub filter_by_min_effective_cost: bool,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
     pub max_realized_loss_pct: f64,
-    pub pnls_max_lookback_days: f64,
+    pub unstuck_memory_ema_span_minutes: f64,
+    pub loss_gate_memory_ema_span_minutes: f64,
     pub liquidation_threshold: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,
     pub market_orders_allowed: bool,
@@ -498,8 +526,6 @@ pub struct BotParams {
     pub filter_volume_ema_span_1m: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
     pub _legacy_filter_volatility_drop_pct: f64,
-    #[serde(default, alias = "filter_volume_drop_pct")]
-    pub forager_volume_drop_pct: f64,
     #[serde(default)]
     pub forager_score_weights: ForagerScoreWeights,
     #[serde(default)]
@@ -535,8 +561,6 @@ pub struct BotParams {
     #[serde(default = "default_true")]
     pub risk_wel_enforcer_enabled: bool,
     pub risk_wel_enforcer_threshold: f64,
-    #[serde(default = "default_true")]
-    pub risk_twel_entry_gate_enabled: bool,
     #[serde(default = "default_true")]
     pub risk_twel_enforcer_enabled: bool,
     #[serde(default)]
@@ -579,7 +603,6 @@ impl Default for BotParams {
             filter_volatility_ema_span_1m: 0.0,
             filter_volume_ema_span_1m: 0.0,
             _legacy_filter_volatility_drop_pct: 0.0,
-            forager_volume_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
             entry_eligible: true,
@@ -597,7 +620,6 @@ impl Default for BotParams {
             wallet_exposure_limit: 0.0,
             risk_wel_enforcer_enabled: true,
             risk_wel_enforcer_threshold: 0.0,
-            risk_twel_entry_gate_enabled: true,
             risk_twel_enforcer_enabled: true,
             risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
             risk_twel_enforcer_threshold: 0.0,
@@ -897,12 +919,8 @@ pub struct Analysis {
     pub equity_choppiness: f64,
     pub equity_jerkiness: f64,
     pub exponential_fit_error: f64,
-    pub equity_choppiness_w: f64,
-    pub equity_jerkiness_w: f64,
-    pub exponential_fit_error_w: f64,
 
     pub positions_held_per_day: f64,
-    pub positions_held_per_day_w: f64,
     pub position_held_time_weighted_mean_hours: f64,
     pub position_held_hours_mean: f64,
     pub position_held_hours_max: f64,
@@ -942,35 +960,17 @@ pub struct Analysis {
     pub fills_per_day_short: f64,
     pub fills_top_symbol_share: f64,
 
-    pub adg_w: f64,
-    pub adg_pnl_w: f64,
-    pub mdg_pnl_w: f64,
-    pub sharpe_ratio_pnl_w: f64,
-    pub sortino_ratio_pnl_w: f64,
-    pub adg_strategy_eq_w: f64,
-    pub mdg_strategy_eq_w: f64,
-    pub sharpe_ratio_strategy_eq_w: f64,
-    pub sortino_ratio_strategy_eq_w: f64,
-    pub omega_ratio_strategy_eq_w: f64,
-    pub calmar_ratio_strategy_eq_w: f64,
-    pub sterling_ratio_strategy_eq_w: f64,
-    pub mdg_w: f64,
-    pub sharpe_ratio_w: f64,
-    pub sortino_ratio_w: f64,
-    pub omega_ratio_w: f64,
-    pub calmar_ratio_w: f64,
-    pub sterling_ratio_w: f64,
-    pub loss_profit_ratio_w: f64,
-    pub win_rate_w: f64,
-    pub paper_loss_ratio_w: f64,
-    pub paper_loss_mean_ratio_w: f64,
-    pub exposure_ratio_w: f64,
-    pub exposure_mean_ratio_w: f64,
     pub volume_pct_per_day_avg: f64,
-    pub volume_pct_per_day_avg_w: f64,
 
     pub total_wallet_exposure_max: f64,
     pub total_wallet_exposure_mean: f64,
+    pub total_wallet_exposure_rms_long: f64,
+    pub total_wallet_exposure_rms_short: f64,
+    pub total_wallet_exposure_rms_gross: f64,
+    pub total_wallet_exposure_utilization_rms_long: f64,
+    pub total_wallet_exposure_utilization_rms_short: f64,
+    pub position_exposure_utilization_rms_long: f64,
+    pub position_exposure_utilization_rms_short: f64,
     pub total_wallet_exposure_median: f64,
     pub high_exposure_hours_mean_long: f64,
     pub high_exposure_hours_max_long: f64,
@@ -1092,7 +1092,6 @@ impl Default for Analysis {
             equity_jerkiness: 1.0,
             exponential_fit_error: 1.0,
             positions_held_per_day: 0.0,
-            positions_held_per_day_w: 0.0,
             position_held_time_weighted_mean_hours: 0.0,
             position_held_hours_mean: 0.0,
             position_held_hours_max: 0.0,
@@ -1131,37 +1130,16 @@ impl Default for Analysis {
             fills_per_day_per_position_slot_short: 0.0,
             fills_per_day_short: 0.0,
             fills_top_symbol_share: 0.0,
-            adg_w: 0.0,
-            adg_pnl_w: 0.0,
-            mdg_pnl_w: 0.0,
-            sharpe_ratio_pnl_w: 0.0,
-            sortino_ratio_pnl_w: 0.0,
-            adg_strategy_eq_w: 0.0,
-            mdg_strategy_eq_w: 0.0,
-            sharpe_ratio_strategy_eq_w: 0.0,
-            sortino_ratio_strategy_eq_w: 0.0,
-            omega_ratio_strategy_eq_w: 0.0,
-            calmar_ratio_strategy_eq_w: 0.0,
-            sterling_ratio_strategy_eq_w: 0.0,
-            mdg_w: 0.0,
-            sharpe_ratio_w: 0.0,
-            sortino_ratio_w: 0.0,
-            omega_ratio_w: 0.0,
-            calmar_ratio_w: 0.0,
-            sterling_ratio_w: 0.0,
-            loss_profit_ratio_w: 1.0,
-            win_rate_w: 0.0,
-            paper_loss_ratio_w: 0.0,
-            paper_loss_mean_ratio_w: 0.0,
-            exposure_ratio_w: 0.0,
-            exposure_mean_ratio_w: 0.0,
-            equity_choppiness_w: 1.0,
-            equity_jerkiness_w: 1.0,
-            exponential_fit_error_w: 1.0,
             volume_pct_per_day_avg: 0.0,
-            volume_pct_per_day_avg_w: 0.0,
             total_wallet_exposure_max: 0.0,
             total_wallet_exposure_mean: 0.0,
+            total_wallet_exposure_rms_long: f64::NAN,
+            total_wallet_exposure_rms_short: f64::NAN,
+            total_wallet_exposure_rms_gross: f64::NAN,
+            total_wallet_exposure_utilization_rms_long: f64::NAN,
+            total_wallet_exposure_utilization_rms_short: f64::NAN,
+            position_exposure_utilization_rms_long: f64::NAN,
+            position_exposure_utilization_rms_short: f64::NAN,
             total_wallet_exposure_median: 0.0,
             high_exposure_hours_mean_long: 0.0,
             high_exposure_hours_max_long: 0.0,

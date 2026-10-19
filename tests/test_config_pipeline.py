@@ -15,12 +15,8 @@ from config import (
     project_config,
 )
 from config.optimize_bounds import get_optimize_bounds_defaults
-from config.migrations.trailing_grid_v7 import migrate_v7_trailing_grid_config
-from config.migrations import trailing_grid_v7 as trailing_grid_v7_migration
 from config.overrides import parse_overrides
 from config.strategy_spec import get_supported_strategy_kinds
-from tools.migrate_config_v7 import main as migrate_config_v7_main
-from tools import migrate_config_v7 as migrate_config_v7_tool
 
 
 def _set_path(mapping, path, value):
@@ -54,6 +50,52 @@ def _strategy_side(config, pside, kind=None):
     return config["bot"][pside]["strategy"][kind]
 
 
+def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
+    path = Path(__file__).resolve().parents[1] / "configs/examples/ema_anchor_smoke_test.json"
+    authored = json.loads(path.read_text())
+    original = deepcopy(authored)
+    config = load_prepared_config(str(path), verbose=False, log_info=False)
+    compiled = compile_runtime_config(config, runtime="backtest")
+
+    assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
+    assert config["live"]["strategy_kind"] == "ema_anchor"
+    assert config["live"]["user"] == "example"
+    # This explicit demonstration span is not a converted rolling-window policy.
+    assert config["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert config["live"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
+    assert config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == 1.0
+    assert config["bot"]["risk"]["hsl"]["scope"] == "coin"
+    assert config["live"]["approved_coins"] == {
+        "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
+    }
+    for key, expected in {
+        "start_date": "2023-01-01", "end_date": "2023-01-15",
+        "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
+        "starting_balance": 100000.0, "maker_fee_override": 0.0004,
+        "btc_collateral_cap": 0.0, "suite_enabled": False,
+    }.items():
+        assert config["backtest"][key] == expected
+    expected_strategy = {
+        "base_qty_pct": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
+        "offset": 0.003, "offset_volatility_ema_span_1m": 60.0,
+        "offset_volatility_1m_weight": 0.0, "offset_volatility_ema_span_1h": 24.0,
+        "offset_volatility_1h_weight": 0.0, "offset_psize_weight": 0.2,
+    }
+    for side in ("long", "short"):
+        assert config["bot"][side]["hsl"]["enabled"] is False
+        assert config["bot"][side]["risk"]["max_positions"] == 2.0
+        assert config["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.0
+        for key, expected in expected_strategy.items():
+            assert _strategy_side(config, side)[key] == expected
+            assert _strategy_side(compiled, side)[key] == expected
+        assert config["bot"][side]["unstuck"]["ema_span_0"] == 48.0
+        assert config["bot"][side]["unstuck"]["ema_span_1"] == 288.0
+    for retired in ("pnls_max_lookback_days", "realized_loss_gate_lookback_minutes",
+                    "no_restart_drawdown_threshold", "orange_tier_mode", "tier_ratios"):
+        assert retired not in path.read_text()
+    assert json.loads(path.read_text()) == original
+
+
 def test_startup_phase_budgets_validate_and_roundtrip():
     source = get_template_config()
     assert source["live"]["startup_phase_budgets"] == {}
@@ -85,19 +127,131 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
     )
 
 
+@pytest.mark.parametrize("location", ["fixed", "scenario"])
+@pytest.mark.parametrize("path", [
+    "bot.long.unstuck_ema_span_0",
+    "bot.long.strategy.trailing_martingale.ema_span_0",
+    "long.unstuck.ema_span_0",
+    "bot.long.strategy.entry.ema_span_0",
+    "long.strategy.entry.ema_span_0",
+])
+def test_authored_patches_reject_retired_paths_and_selector_shorthand(location, path):
+    source = get_template_config()
+    if location == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = {path: 12.5}
+    else:
+        source["backtest"]["scenarios"] = [{"label": "invalid", "overrides": {path: 12.5}}]
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("location", ["fixed", "scenario"])
+def test_authored_patches_accept_literal_canonical_paths(location):
+    source = get_template_config()
+    patch = {"bot.long.unstuck.ema_span_0": 12.5,
+             "bot.long.strategy.trailing_martingale.entry.ema_span_0": 25.0}
+    if location == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    else:
+        source["backtest"]["scenarios"] = [{"label": "canonical", "overrides": patch}]
+    prepared = prepare_config(source, verbose=False)
+    if location == "fixed":
+        assert prepared["optimize"]["fixed_runtime_overrides"] == patch
+    else:
+        assert prepared["backtest"]["scenarios"][0]["overrides"] == patch
+
+
+@pytest.mark.parametrize("source", [None, "", "all", "coins.json", [], ["BTC", "ETH"],
+    {}, {"long": "all", "short": ["BTC"]}, {"long": "coins.json", "short": None}])
+@pytest.mark.parametrize("field", ["approved_coins", "ignored_coins"])
+def test_authored_coin_sources_preserve_supported_shapes_without_resolving_files(source, field):
+    from config.authored import validate_authored_config
+
+    config = get_template_config()
+    config["live"][field] = source
+    before = deepcopy(config)
+    validate_authored_config(config, get_template_config())
+    assert config == before
+
+
+@pytest.mark.parametrize("source", [{"typo": ["BTC"]}, {"long": {"file": "coins.json"}}, ["BTC", 2], 2])
+def test_authored_coin_sources_reject_unknown_shapes(source):
+    from config.authored import validate_authored_config
+
+    config = get_template_config()
+    config["live"]["approved_coins"] = source
+    with pytest.raises((TypeError, ValueError), match="approved_coins"):
+        validate_authored_config(config, get_template_config())
+
+
+@pytest.mark.parametrize("location", ["fixed", "scenario"])
+@pytest.mark.parametrize("path,value", [("bot.long.unstuck.ema_span_0", 12.5), ("live.leverage", 3)])
+def test_authored_patches_accept_sparse_local_coin_paths(location, path, value):
+    source = get_template_config()
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
+                                         "live": {"leverage": 3}}}
+    patch = {f"coin_overrides.BTC.{path}": value}
+    if location == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    else:
+        source["backtest"]["scenarios"] = [{"label": "local", "overrides": patch}]
+    assert prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.risk.loss_gate.memory_ema_span_minutes",
+                                  "bot.long.risk.max_positions", "bot.long.hsl.ema_span_minutes"])
+@pytest.mark.parametrize("location", ["fixed", "scenario"])
+def test_authored_coin_path_pins_reject_aliases_and_global_policy(path, location):
+    source = get_template_config()
+    source["coin_overrides"] = {"BTC": {}}
+    patch = {f"coin_overrides.BTC.{path}": 12.5}
+    if location == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    else:
+        source["backtest"]["scenarios"] = [{"label": "invalid", "overrides": patch}]
+    with pytest.raises(ValueError, match="(?:not overridable|retired)"):
+        prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("location", ["config", "runtime"])
+def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
+    from config.hsl import require_live_balance_support
+
+    config = get_template_config()
+    config["bot"]["risk"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
+    override = 100.0 if location == "runtime" else None
+    if location == "config":
+        config["live"]["balance_override"] = 100.0
+    with pytest.raises(ValueError, match="does not support live.balance_override"):
+        require_live_balance_support(config, override)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
+    from config.hsl import validate_optimizer_metrics
+
+    config = get_template_config()
+    config["bot"]["risk"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
+    if enabled:
+        validate_optimizer_metrics(config, ["hard_stop_restarts"])
+    else:
+        with pytest.raises(ValueError, match="no enabled controller"):
+            validate_optimizer_metrics(config, ["hard_stop_restarts"])
+
+
 @pytest.mark.parametrize(
     "overrides,error_type,error_match",
     [
         ([], TypeError, "fixed_runtime_overrides must be a dict"),
-        ({1: 2}, TypeError, "keys must be dotted strings"),
-        ({"bot.long.not_a_setting": 1}, KeyError, "Unknown override path"),
+        ({1: 2}, TypeError, "keys must be strings"),
+        ({"bot.long.not_a_setting": 1}, ValueError, "unknown configuration field"),
         (
             {
                 "bot.long.risk.total_wallet_exposure_limit": 1.0,
                 "bot.long.total_wallet_exposure_limit": 2.0,
             },
             ValueError,
-            "resolve to the same setting",
+            "unknown configuration field",
         ),
         (
             {"bot.long.strategy.trailing_martingale": {}},
@@ -197,19 +351,6 @@ def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound()
     )
 
 
-def test_trailing_grid_v7_seed_profile_remains_compatibility_profile():
-    spec = pbr.get_strategy_spec("trailing_grid_v7")
-    defaults = _nested_strategy_values_from_spec(spec, "default")
-    bounds = spec["optimize_bounds"]
-
-    assert defaults["long"]["ema_span_0"] == pytest.approx(385.0)
-    assert defaults["short"]["ema_span_0"] == pytest.approx(300.0)
-    assert defaults["short"]["entry"]["grid_spacing_pct"] == pytest.approx(0.02)
-    assert defaults["short"]["close"]["trailing_threshold_pct"] == pytest.approx(0.005)
-    assert bounds["long_ema_span_0"] == [200.0, 1440.0, 1.0]
-    assert bounds["short_entry_grid_spacing_pct"] == [0.001, 0.03, 0.0001]
-
-
 def test_prepare_config_rejects_invalid_trailing_martingale_ema_gate_mode():
     source = get_template_config()
     source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
@@ -218,1219 +359,6 @@ def test_prepare_config_rejects_invalid_trailing_martingale_ema_gate_mode():
 
     with pytest.raises(ValueError, match="ema_gate_mode must be one of"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-
-def _minimal_v7_trailing_grid_config():
-    return {
-        "config_version": "v7.12.0",
-        "live": {
-            "leverage": 3,
-        },
-        "backtest": {
-            "start_date": "2024-01-01",
-            "end_date": "2024-02-01",
-        },
-        "bot": {
-            "long": {
-                "n_positions": 7,
-                "total_wallet_exposure_limit": 1.5,
-                "risk_wel_enforcer_threshold": 0.99,
-                "risk_twel_enforcer_threshold": 0.985,
-                "risk_we_excess_allowance_pct": 0.1,
-                "forager_volatility_ema_span": 120,
-                "forager_volume_ema_span": 760,
-                "ema_span_0": 385.0,
-                "ema_span_1": 620.0,
-                "entry_grid_double_down_factor": 1.39,
-                "entry_grid_spacing_pct": 0.02312,
-                "entry_grid_spacing_we_weight": 0.6766,
-                "entry_grid_spacing_volatility_weight": 17.8,
-                "entry_initial_ema_dist": 0.0078,
-                "entry_initial_qty_pct": 0.0122,
-                "entry_trailing_double_down_factor": 1.0,
-                "entry_trailing_grid_ratio": -0.32,
-                "entry_trailing_retracement_pct": 0.01498,
-                "entry_trailing_retracement_we_weight": 4.958,
-                "entry_trailing_retracement_volatility_weight": 37.9,
-                "entry_trailing_threshold_pct": 0.00215,
-                "entry_trailing_threshold_we_weight": 4.243,
-                "entry_trailing_threshold_volatility_weight": 15.2,
-                "entry_volatility_ema_span_hours": 1909.0,
-                "close_grid_markup_start": 0.01041,
-                "close_grid_markup_end": 0.00241,
-                "close_grid_qty_pct": 0.88,
-                "close_trailing_grid_ratio": -0.07,
-                "close_trailing_qty_pct": 0.89,
-                "close_trailing_retracement_pct": 0.00413,
-                "close_trailing_threshold_pct": 0.0125,
-            },
-            "short": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 0.0,
-                "risk_wel_enforcer_threshold": 0.8,
-                "risk_twel_enforcer_threshold": 0.8,
-                "risk_we_excess_allowance_pct": 0.0,
-                "forager_volatility_ema_span": 10,
-                "forager_volume_ema_span": 360,
-                "ema_span_0": 300.0,
-                "ema_span_1": 700.0,
-                "entry_grid_double_down_factor": 1.0,
-                "entry_grid_spacing_pct": 0.02,
-                "entry_grid_spacing_we_weight": 1.0,
-                "entry_grid_spacing_volatility_weight": 10.0,
-                "entry_initial_ema_dist": 0.01,
-                "entry_initial_qty_pct": 0.01,
-                "entry_trailing_double_down_factor": 1.0,
-                "entry_trailing_grid_ratio": -0.7,
-                "entry_trailing_retracement_pct": 0.01,
-                "entry_trailing_retracement_we_weight": 1.0,
-                "entry_trailing_retracement_volatility_weight": 10.0,
-                "entry_trailing_threshold_pct": 0.002,
-                "entry_trailing_threshold_we_weight": 1.0,
-                "entry_trailing_threshold_volatility_weight": 10.0,
-                "entry_volatility_ema_span_hours": 1000.0,
-                "close_grid_markup_start": 0.00402,
-                "close_grid_markup_end": 0.00223,
-                "close_grid_qty_pct": 0.5,
-                "close_trailing_grid_ratio": -0.03,
-                "close_trailing_qty_pct": 0.5,
-                "close_trailing_retracement_pct": 0.005,
-                "close_trailing_threshold_pct": 0.005,
-            },
-        },
-        "optimize": {
-            "bounds": {
-                "long_close_grid_markup_start": [0.0015, 0.012, 1e-05],
-                "long_close_grid_markup_end": [-0.1, 0.012, 1e-05],
-                "long_entry_trailing_grid_ratio": [-0.8, -0.2, 0.01],
-                "long_forager_volatility_ema_span": [10, 720, 1],
-                "long_n_positions": [2, 7, 1],
-            }
-        },
-        "coin_overrides": {
-            "XMR": {
-                "bot": {
-                    "long": {
-                        "entry_trailing_grid_ratio": 1.0,
-                        "close_grid_markup_start": 0.02,
-                    }
-                }
-            }
-        },
-    }
-
-
-def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
-    migrated, report = migrate_v7_trailing_grid_config(
-        _minimal_v7_trailing_grid_config()
-    )
-
-    assert migrated["config_version"] == CONFIG_SCHEMA_VERSION
-    assert migrated["live"]["strategy_kind"] == "trailing_grid_v7"
-    assert set(migrated["bot"]["long"]["strategy"]) == {"trailing_grid_v7"}
-    long_strategy = migrated["bot"]["long"]["strategy"]["trailing_grid_v7"]
-    assert long_strategy["ema_span_0"] == pytest.approx(385.0)
-    assert long_strategy["entry"]["trailing_grid_ratio"] == pytest.approx(-0.32)
-    assert long_strategy["entry"]["volatility_ema_span_hours"] == pytest.approx(1909.0)
-    assert long_strategy["close"]["grid_markup_start"] == pytest.approx(0.01041)
-    assert long_strategy["close"]["grid_markup_end"] == pytest.approx(0.00241)
-    assert migrated["backtest"]["candle_interval_minutes"] == 1
-    assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
-    assert migrated["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(0.0)
-    assert "we_excess_allowance_mode" not in migrated["bot"]["long"]["risk"]
-    assert migrated["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 120
-    assert migrated["bot"]["long"]["forager"]["volume_ema_span_1m"] == 760
-    assert migrated["optimize"]["bounds"]["long"]["entry_cooldown"]["base_duration_minutes"] == [
-        0.0,
-        0.0,
-        0.1,
-    ]
-    assert migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"][
-        "close"
-    ]["grid_markup_start"] == [0.0015, 0.012, 1e-05]
-    assert migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"][
-        "entry"
-    ]["trailing_grid_ratio"] == [-0.8, -0.2, 0.01]
-    assert migrated["optimize"]["bounds"]["long"]["forager"][
-        "volatility_ema_span_1m"
-    ] == [
-        10,
-        720,
-        1,
-    ]
-    override = migrated["coin_overrides"]["XMR"]["bot"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]
-    assert override["entry"]["trailing_grid_ratio"] == pytest.approx(1.0)
-    assert override["close"]["grid_markup_start"] == pytest.approx(0.02)
-    assert report["destination_strategy_kind"] == "trailing_grid_v7"
-    assert report["canonical_validation"] == {"status": "ok"}
-    assert any("entry_trailing_grid_ratio" in item for item in report["moved_fields"])
-    assert any(
-        "base_duration_minutes was not a v7 parameter" in item
-        for item in report["warnings"]
-    )
-
-
-def test_migrate_v7_trailing_grid_warns_when_v7_raw_excess_would_be_clamped():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["n_positions"] = 1
-    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.1
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "we_excess_allowance_mode" not in migrated["bot"]["long"]["risk"]
-    assert any(
-        "bot.long.risk.we_excess_allowance_pct=0.1" in item
-        and "Raw/unclamped exposure is no longer supported" in item
-        and "above side TWEL" in item
-        for item in report["warnings"]
-    )
-
-
-def test_migrate_v7_trailing_grid_warns_for_coin_override_raw_excess_clamp():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["n_positions"] = 1
-    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.0
-    source["coin_overrides"]["BTC"] = {
-        "bot": {
-            "long": {
-                "risk_we_excess_allowance_pct": 0.1,
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
-        "we_excess_allowance_pct"
-    ] == pytest.approx(0.1)
-    assert any(
-        "coin_overrides.BTC.bot.long.risk.we_excess_allowance_pct=0.1" in item
-        and "Raw/unclamped exposure is no longer supported" in item
-        for item in report["warnings"]
-    )
-
-
-def test_migrate_v7_trailing_grid_warns_for_coin_override_explicit_wel_clamp():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["n_positions"] = 4
-    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.0
-    source["coin_overrides"]["BTC"] = {
-        "bot": {
-            "long": {
-                "wallet_exposure_limit": 0.8,
-                "risk_we_excess_allowance_pct": 0.5,
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["coin_overrides"]["BTC"]["bot"]["long"][
-        "wallet_exposure_limit"
-    ] == pytest.approx(0.8)
-    assert any(
-        "coin_overrides.BTC.bot.long.risk.we_excess_allowance_pct=0.5" in item
-        and "base WEL = 0.8" in item
-        and "above side TWEL 1" in item
-        for item in report["warnings"]
-    )
-
-
-def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
-    source = _minimal_v7_trailing_grid_config()
-    source["backtest"].pop("candle_interval_minutes", None)
-    source["live"].pop("approved_coins", None)
-    source["bot"]["long"].pop("risk_wel_enforcer_enabled", None)
-    source["bot"]["long"].pop("close_grid_markup_end", None)
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["backtest"]["candle_interval_minutes"] == 1
-    assert migrated["bot"]["long"]["strategy"]["trailing_grid_v7"]["close"][
-        "grid_markup_end"
-    ] == pytest.approx(0.00241)
-    assert "backtest.candle_interval_minutes" in report["inserted_v8_defaults"]
-    assert "backtest.liquidation_threshold" in report["inserted_v8_defaults"]
-    assert "backtest.maker_fee_override" in report["inserted_v8_defaults"]
-    assert "backtest.market_order_slippage_pct" in report["inserted_v8_defaults"]
-    assert "backtest.starting_balance" in report["inserted_v8_defaults"]
-    assert "backtest.taker_fee_override" in report["inserted_v8_defaults"]
-    assert "live.approved_coins" in report["inserted_v8_defaults"]
-    assert "live.forager_score_hysteresis_pct" in report["inserted_v8_defaults"]
-    assert (
-        "live.hsl_position_during_cooldown_policy" not in report["inserted_v8_defaults"]
-    )
-    assert "live.hsl_signal_mode" in report["inserted_v8_defaults"]
-    assert (
-        "bot.long.risk.position_exposure_enforcer_enabled"
-        in report["inserted_v8_defaults"]
-    )
-    assert (
-        "bot.long.strategy.trailing_grid_v7.close.grid_markup_end"
-        in report["inserted_v8_defaults"]
-    )
-    assert (
-        "optimize.bounds.long.strategy.trailing_grid_v7.ema_span_0"
-        in report["inserted_v8_defaults"]
-    )
-    assert (
-        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_pct"
-        in report["inserted_v8_defaults"]
-    )
-    assert any("inserted v8 default values" in item for item in report["warnings"])
-
-
-def test_migrate_v7_trailing_grid_zero_enforcer_thresholds_disable_enforcers():
-    source = _minimal_v7_trailing_grid_config()
-    for pside in ("long", "short"):
-        source["bot"][pside].pop("risk_wel_enforcer_enabled", None)
-        source["bot"][pside].pop("risk_twel_enforcer_enabled", None)
-        source["bot"][pside]["risk_wel_enforcer_threshold"] = 0
-        source["bot"][pside]["risk_twel_enforcer_threshold"] = 0
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    for pside in ("long", "short"):
-        risk = migrated["bot"][pside]["risk"]
-        assert risk["position_exposure_enforcer_threshold"] == 0
-        assert risk["total_exposure_enforcer_threshold"] == 0
-        assert risk["position_exposure_enforcer_enabled"] is False
-        assert risk["total_exposure_enforcer_enabled"] is False
-        assert risk["total_exposure_entry_gate_enabled"] is False
-        assert (
-            f"bot.{pside}.risk.position_exposure_enforcer_enabled"
-            not in report["inserted_v8_defaults"]
-        )
-        assert (
-            f"bot.{pside}.risk.total_exposure_enforcer_enabled"
-            not in report["inserted_v8_defaults"]
-        )
-    assert any(
-        "position_exposure_enforcer_enabled set false" in item
-        for item in report["warnings"]
-    )
-    assert any(
-        "total_exposure_enforcer_enabled set false" in item
-        for item in report["warnings"]
-    )
-    assert any(
-        "total_exposure_entry_gate_enabled set false" in item
-        for item in report["warnings"]
-    )
-    assert report["canonical_validation"] == {"status": "ok"}
-
-
-def test_migrate_v7_trailing_grid_moves_backtest_only_max_warmup_to_live():
-    source = _minimal_v7_trailing_grid_config()
-    source["backtest"]["max_warmup_minutes"] = 720
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["live"]["max_warmup_minutes"] == 720
-    assert "backtest.max_warmup_minutes" not in report["manual_review_fields"]
-    assert (
-        "backtest.max_warmup_minutes -> live.max_warmup_minutes"
-        in report["moved_fields"]
-    )
-
-
-def test_migrate_v7_trailing_grid_collapses_matching_live_and_backtest_warmup_caps():
-    source = _minimal_v7_trailing_grid_config()
-    source["live"]["max_warmup_minutes"] = 1440
-    source["backtest"]["max_warmup_minutes"] = 1440
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["live"]["max_warmup_minutes"] == 1440
-    assert not any(
-        "max_warmup_minutes" in item for item in report["manual_review_fields"]
-    )
-
-
-def test_migrate_v7_trailing_grid_requires_review_for_conflicting_warmup_caps():
-    source = _minimal_v7_trailing_grid_config()
-    source["live"]["max_warmup_minutes"] = 1440
-    source["backtest"]["max_warmup_minutes"] = 720
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["live"]["max_warmup_minutes"] == 1440
-    assert any(
-        "backtest.max_warmup_minutes conflicts with live.max_warmup_minutes" in item
-        for item in report["manual_review_fields"]
-    )
-
-
-def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    source = _minimal_v7_trailing_grid_config()
-    source["backtest"]["scenarios"] = [
-        {"label": "base"},
-        {"label": "recent", "start_date": "2025-10-02"},
-    ]
-    input_path.write_text(
-        json.dumps(source),
-        encoding="utf-8",
-    )
-
-    rc = migrate_config_v7_main([str(input_path), str(output_path)])
-
-    assert rc == 0
-    assert output_path.exists()
-    assert output_path.with_suffix(".migration-report.json").exists()
-    loaded = json.loads(output_path.read_text(encoding="utf-8"))
-    assert loaded["live"]["strategy_kind"] == "trailing_grid_v7"
-    assert loaded["backtest"]["scenarios"] == source["backtest"]["scenarios"]
-    assert '{"label": "recent", "start_date": "2025-10-02"}' in output_path.read_text()
-
-
-def test_migrate_config_v7_default_report_path_never_overwrites_output_path():
-    output_path = Path("config.migration-report.json")
-
-    assert migrate_config_v7_tool.default_report_path(output_path) != output_path
-
-
-def test_migrate_config_v7_cli_rejects_report_path_equal_to_output(tmp_path, capsys):
-    source = _minimal_v7_trailing_grid_config()
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    input_path.write_text(json.dumps(source), encoding="utf-8")
-
-    rc = migrate_config_v7_main(
-        [str(input_path), str(output_path), "--report", str(output_path)]
-    )
-
-    assert rc == 2
-    assert not output_path.exists()
-    assert "report path must differ" in capsys.readouterr().err
-
-
-def test_migrate_config_v7_cli_rejects_in_place_migration(tmp_path, capsys):
-    config_path = tmp_path / "legacy.json"
-    original = json.dumps(_minimal_v7_trailing_grid_config())
-    config_path.write_text(original, encoding="utf-8")
-
-    rc = migrate_config_v7_main([str(config_path), str(config_path)])
-
-    assert rc == 2
-    assert config_path.read_text(encoding="utf-8") == original
-    assert "input config and output config paths must differ" in capsys.readouterr().err
-
-
-def test_migrate_config_v7_cli_prints_migration_warnings(tmp_path, capsys):
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["n_positions"] = 1
-    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.1
-    input_path.write_text(json.dumps(source), encoding="utf-8")
-
-    rc = migrate_config_v7_main([str(input_path), str(output_path)])
-    captured = capsys.readouterr()
-
-    assert rc == 0
-    assert "behavior warning: bot.long.risk.we_excess_allowance_pct=0.1" in captured.err
-    assert "Raw/unclamped exposure is no longer supported" in captured.err
-    assert "Migration status: ok" in captured.out
-    assert not captured.out.lstrip().startswith("{")
-
-
-def test_migrate_config_v7_cli_unresolved_returns_nonzero_without_output_but_writes_report(
-    tmp_path,
-):
-    source = _minimal_v7_trailing_grid_config()
-    source["custom_top_level_section"] = {"important": 1}
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    report_path = tmp_path / "report.json"
-    input_path.write_text(json.dumps(source), encoding="utf-8")
-
-    rc = migrate_config_v7_main(
-        [str(input_path), str(output_path), "--report", str(report_path)]
-    )
-
-    assert rc == 1
-    assert not output_path.exists()
-    assert report_path.exists()
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["status"] == "manual_review_required"
-    assert report["output_written"] is False
-    assert "custom_top_level_section" in report["manual_review_fields"]
-
-
-def test_migrate_config_v7_cli_override_writes_unresolved_best_effort_output(tmp_path):
-    source = _minimal_v7_trailing_grid_config()
-    source["custom_top_level_section"] = {"important": 1}
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    report_path = tmp_path / "report.json"
-    input_path.write_text(json.dumps(source), encoding="utf-8")
-
-    rc = migrate_config_v7_main(
-        [
-            str(input_path),
-            str(output_path),
-            "--report",
-            str(report_path),
-            "--allow-manual-review-output",
-        ]
-    )
-
-    assert rc == 0
-    assert output_path.exists()
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["status"] == "unsafe_manual_review_output_written"
-    assert report["output_written"] is True
-    assert report["allow_manual_review_output"] is True
-
-
-def test_migrate_config_v7_cli_json_prints_machine_report_without_action_duplicates(
-    tmp_path, capsys
-):
-    source = _minimal_v7_trailing_grid_config()
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    input_path.write_text(json.dumps(source), encoding="utf-8")
-
-    rc = migrate_config_v7_main([str(input_path), str(output_path), "--json"])
-    captured = capsys.readouterr()
-
-    assert rc == 0
-    payload = json.loads(captured.out)
-    assert payload["status"] == "ok"
-    assert payload["report_path"] == str(
-        output_path.with_suffix(".migration-report.json")
-    )
-    assert captured.err == ""
-
-
-def test_migrate_config_v7_cli_never_writes_invalid_canonical_output(
-    tmp_path, monkeypatch, capsys
-):
-    source = _minimal_v7_trailing_grid_config()
-    input_path = tmp_path / "legacy.json"
-    output_path = tmp_path / "migrated.json"
-    input_path.write_text(json.dumps(source), encoding="utf-8")
-    monkeypatch.setattr(
-        trailing_grid_v7_migration,
-        "_validate_migrated_config",
-        lambda _config: {
-            "status": "error",
-            "error_type": "ValueError",
-            "message": "synthetic invalid migration",
-        },
-    )
-
-    rc = migrate_config_v7_tool.main([str(input_path), str(output_path)])
-    captured = capsys.readouterr()
-
-    assert rc == 2
-    assert not output_path.exists()
-    report_path = output_path.with_suffix(".migration-report.json")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["status"] == "invalid_migrated_config"
-    assert report["output_written"] is False
-    assert "synthetic invalid migration" in captured.err
-
-
-def test_migrate_v7_trailing_grid_rejects_root_ema_only_config():
-    source = {
-        "bot": {
-            "long": {"ema_span_0": 10.0, "ema_span_1": 20.0},
-            "short": {"ema_span_0": 10.0, "ema_span_1": 20.0},
-        }
-    }
-
-    with pytest.raises(ValueError, match="v7-distinctive entry/close"):
-        migrate_v7_trailing_grid_config(source)
-
-
-def test_migrated_v7_trailing_grid_config_prepares_and_validates():
-    migrated, _report = migrate_v7_trailing_grid_config(
-        _minimal_v7_trailing_grid_config()
-    )
-
-    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["live"]["strategy_kind"] == "trailing_grid_v7"
-    assert set(prepared["bot"]["long"]["strategy"]) == {"trailing_grid_v7"}
-    assert set(prepared["optimize"]["bounds"]["long"]["strategy"]) == {
-        "trailing_grid_v7"
-    }
-
-
-def test_migrate_v7_rejects_explicit_raw_coin_override():
-    source = _minimal_v7_trailing_grid_config()
-    source["coin_overrides"]["BTC"] = {"bot": {"long": {"risk_we_excess_allowance_mode": "LEGACY_RAW"}}}
-    with pytest.raises(ValueError, match="coin_overrides.BTC.*re-backtest"):
-        migrate_v7_trailing_grid_config(source)
-
-
-
-def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk_fields():
-    source = _minimal_v7_trailing_grid_config()
-    source["coin_overrides"]["BTC"] = {
-        "bot": {
-            "long": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 0.2,
-                "risk_we_excess_allowance_pct": 0.2,
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "n_positions" not in long_override.get("risk", {})
-    assert "total_wallet_exposure_limit" not in long_override.get("risk", {})
-    assert long_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
-    assert "coin_overrides.BTC.bot.long.n_positions" in report["manual_review_fields"]
-    assert (
-        "coin_overrides.BTC.bot.long.total_wallet_exposure_limit"
-        in report["manual_review_fields"]
-    )
-    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-    parsed = parse_overrides(prepared, verbose=False)
-    parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
-    assert parsed_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
-    assert "n_positions" not in parsed_override.get("risk", {})
-    assert "total_wallet_exposure_limit" not in parsed_override.get("risk", {})
-
-
-def test_migrate_v7_trailing_grid_reports_removed_hsl_aliases():
-    source = _minimal_v7_trailing_grid_config()
-    source["live"]["hsl_signal_mode"] = "coin"
-    source["coin_overrides"]["BTC"] = {
-        "bot": {
-            "long": {
-                "entry_trailing_grid_ratio": 0.5,
-                "hsl_tier_ratio_yellow": 0.45,
-                "hsl_tier_ratio_orange": 0.75,
-                "forager_score_weights": {
-                    "volume": 0.2,
-                    "ema_readiness": 0.3,
-                    "volatility": 0.5,
-                },
-                "forager_volatility_ema_span": 222.0,
-                "filter_volume_ema_span": 333.0,
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "hsl" not in long_override
-    assert "forager" not in long_override
-    for key in (
-        "forager_score_weights",
-        "forager_volatility_ema_span",
-        "filter_volume_ema_span",
-    ):
-        source_path = f"coin_overrides.BTC.bot.long.{key}"
-        assert source_path in report["manual_review_fields"]
-        assert not any(
-            moved.startswith(f"{source_path} ->") for moved in report["moved_fields"]
-        )
-    for key in ("hsl_tier_ratio_yellow", "hsl_tier_ratio_orange"):
-        source_path = f"coin_overrides.BTC.bot.long.{key}"
-        assert source_path in report["manual_review_fields"]
-        assert not any(
-            moved.startswith(f"{source_path} ->") for moved in report["moved_fields"]
-        )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_coin_override_rejects_hsl_aliases_outside_coin_mode():
-    source = _minimal_v7_trailing_grid_config()
-    source["live"]["hsl_signal_mode"] = "pside"
-    source["coin_overrides"]["BTC"] = {
-        "bot": {
-            "long": {
-                "hsl_tier_ratio_yellow": 0.45,
-                "hsl_tier_ratio_orange": 0.75,
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "hsl" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    for key in ("hsl_tier_ratio_yellow", "hsl_tier_ratio_orange"):
-        source_path = f"coin_overrides.BTC.bot.long.{key}"
-        assert source_path in report["manual_review_fields"]
-        assert not any(
-            moved.startswith(f"{source_path} ->") for moved in report["moved_fields"]
-        )
-
-
-def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():
-    source = _minimal_v7_trailing_grid_config()
-    source["coin_overrides"]["BTC"] = {
-        "foo": {"bar": 1},
-        "bot": {
-            "long": {
-                "ema_span_0": 3.0,
-                "mystery": 42,
-                "risk": {"mystery": 1},
-            }
-        },
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "coin_overrides.BTC.foo" in report["manual_review_fields"]
-    assert "coin_overrides.BTC.bot.long.mystery" in report["manual_review_fields"]
-    assert "coin_overrides.BTC.bot.long.risk" in report["manual_review_fields"]
-    assert "mystery" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "risk" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "foo" not in migrated["coin_overrides"]["BTC"]
-
-
-def test_migrate_v7_trailing_grid_coin_override_reports_unknown_live_keys():
-    source = _minimal_v7_trailing_grid_config()
-    source["coin_overrides"]["BTC"] = {
-        "live": {
-            "leverage": 5,
-            "unknown_live_toggle": True,
-        },
-        "bot": {"long": {"entry_trailing_grid_ratio": 0.5}},
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["coin_overrides"]["BTC"]["live"]["leverage"] == 5
-    assert "unknown_live_toggle" not in migrated["coin_overrides"]["BTC"]["live"]
-    assert (
-        "coin_overrides.BTC.live.unknown_live_toggle" in report["manual_review_fields"]
-    )
-    assert (
-        "coin_overrides.BTC.live.leverage -> coin_overrides.BTC.live.leverage"
-        in report["moved_fields"]
-    )
-
-
-def test_migrate_v7_trailing_grid_reports_unknown_top_level_fields():
-    source = _minimal_v7_trailing_grid_config()
-    source["custom_top_level_section"] = {"important": 1}
-
-    _migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "custom_top_level_section" in report["manual_review_fields"]
-
-
-def test_migrate_v7_trailing_grid_reports_source_strategy_subtree():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["strategy"] = {"custom_or_old_shape": {"x": 1}}
-
-    _migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "bot.long.strategy" in report["manual_review_fields"]
-
-
-def test_migrate_v7_trailing_grid_reports_grouped_bot_side_sections():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["risk"] = {"n_positions": 3}
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "bot.long.risk" in report["manual_review_fields"]
-    assert not any(
-        moved.startswith("bot.long.risk ->") for moved in report["moved_fields"]
-    )
-    assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
-
-
-def test_migrate_v7_trailing_grid_reports_top_level_wallet_exposure_limit():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["wallet_exposure_limit"] = 0.123
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "bot.long.wallet_exposure_limit" in report["manual_review_fields"]
-    assert not any(
-        moved.startswith("bot.long.wallet_exposure_limit ->")
-        for moved in report["moved_fields"]
-    )
-    assert "wallet_exposure_limit" not in migrated["bot"]["long"]
-
-
-def test_migrate_v7_trailing_grid_old_bound_alias_prepares():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_entry_grid_spacing_weight": [0.1, 2.0, 0.1],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert entry_bounds["grid_spacing_we_weight"] == [0.1, 2.0, 0.1]
-    assert "grid_spacing_weight" not in entry_bounds
-    assert (
-        "optimize.bounds.long_entry_grid_spacing_weight -> "
-        "optimize.bounds.long_entry_grid_spacing_we_weight"
-    ) in report["moved_fields"]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_old_filter_side_aliases_to_forager():
-    source = _minimal_v7_trailing_grid_config()
-    long_side = source["bot"]["long"]
-    for key in (
-        "forager_volatility_ema_span",
-        "forager_volume_ema_span",
-        "forager_volume_drop_pct",
-    ):
-        long_side.pop(key, None)
-    long_side.update(
-        {
-            "filter_volatility_ema_span": 111.0,
-            "filter_volume_ema_span": 555.0,
-            "filter_volume_drop_pct": 0.24,
-        }
-    )
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    forager = migrated["bot"]["long"]["forager"]
-    assert forager["volatility_ema_span_1m"] == pytest.approx(111.0)
-    assert forager["volume_ema_span_1m"] == pytest.approx(555.0)
-    assert forager["volume_drop_pct"] == pytest.approx(0.24)
-    for key in (
-        "filter_volatility_ema_span",
-        "filter_volume_ema_span",
-        "filter_volume_drop_pct",
-    ):
-        assert f"bot.long.{key}" not in report["manual_review_fields"]
-    assert (
-        "bot.long.filter_volatility_ema_span -> "
-        "bot.long.forager.volatility_ema_span_1m"
-    ) in report["moved_fields"]
-    assert (
-        "bot.long.filter_volume_ema_span -> bot.long.forager.volume_ema_span_1m"
-    ) in report["moved_fields"]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_forager_aliases_win_over_old_filter_aliases():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"].update(
-        {
-            "forager_volatility_ema_span": 120.0,
-            "filter_volatility_ema_span": 999.0,
-            "forager_volume_ema_span": 760.0,
-            "filter_volume_ema_span": 888.0,
-        }
-    )
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    forager = migrated["bot"]["long"]["forager"]
-    assert forager["volatility_ema_span_1m"] == pytest.approx(120.0)
-    assert forager["volume_ema_span_1m"] == pytest.approx(760.0)
-    assert not any(
-        "bot.long.filter_volatility_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        "bot.long.filter_volume_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith("bot.long.filter_volatility_ema_span ->")
-        for moved in report["moved_fields"]
-    )
-    assert not any(
-        moved.startswith("bot.long.filter_volume_ema_span ->")
-        for moved in report["moved_fields"]
-    )
-
-
-def test_migrate_v7_trailing_grid_strategy_alias_collision_keeps_newer_value():
-    source = _minimal_v7_trailing_grid_config()
-    source["bot"]["long"]["entry_volatility_ema_span_hours"] = 111.0
-    source["bot"]["long"]["entry_volatility_ema_span_1h"] = 222.0
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry = migrated["bot"]["long"]["strategy"]["trailing_grid_v7"]["entry"]
-    assert entry["volatility_ema_span_hours"] == pytest.approx(111.0)
-    assert any(
-        "bot.long.entry_volatility_ema_span_1h conflicts with "
-        "bot.long.entry_volatility_ema_span_hours" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith("bot.long.entry_volatility_ema_span_1h ->")
-        for moved in report["moved_fields"]
-    )
-
-
-def test_migrate_v7_trailing_grid_old_filter_side_alias_collision_reports_loser():
-    source = _minimal_v7_trailing_grid_config()
-    long_side = source["bot"]["long"]
-    long_side.pop("forager_volatility_ema_span", None)
-    long_side.update(
-        {
-            "filter_volatility_ema_span": 111.0,
-            "filter_noisiness_rolling_window": 222.0,
-            "filter_log_range_ema_span": 333.0,
-        }
-    )
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["bot"]["long"]["forager"][
-        "volatility_ema_span_1m"
-    ] == pytest.approx(111.0)
-    assert any(
-        "bot.long.filter_noisiness_rolling_window conflicts with "
-        "bot.long.filter_volatility_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert any(
-        "bot.long.filter_log_range_ema_span conflicts with "
-        "bot.long.filter_volatility_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith("bot.long.filter_noisiness_rolling_window ->")
-        for moved in report["moved_fields"]
-    )
-
-
-def test_migrate_v7_trailing_grid_old_filter_bound_aliases_to_forager():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_filter_volatility_ema_span": [10, 720, 1],
-        "long_filter_volume_ema_span": [360, 2880, 10],
-        "long_filter_volume_drop_pct": [0.1, 0.9, 0.01],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    forager_bounds = migrated["optimize"]["bounds"]["long"]["forager"]
-    assert forager_bounds["volatility_ema_span_1m"] == [10, 720, 1]
-    assert forager_bounds["volume_ema_span_1m"] == [360, 2880, 10]
-    assert forager_bounds["volume_drop_pct"] == [0.1, 0.9, 0.01]
-    for key in source["optimize"]["bounds"]:
-        assert f"optimize.bounds.{key}" not in report["manual_review_fields"]
-    assert (
-        "optimize.bounds.long_filter_volatility_ema_span -> "
-        "optimize.bounds.long_forager_volatility_ema_span_1m"
-    ) in report["moved_fields"]
-    assert (
-        "optimize.bounds.long_filter_volume_ema_span -> "
-        "optimize.bounds.long_forager_volume_ema_span_1m"
-    ) in report["moved_fields"]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_forager_bound_aliases_win_over_old_filter_aliases():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_filter_volatility_ema_span": [10, 720, 1],
-        "long_forager_volatility_ema_span": [20, 800, 1],
-        "long_filter_volume_ema_span": [360, 2880, 10],
-        "long_forager_volume_ema_span": [500, 3000, 10],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    forager_bounds = migrated["optimize"]["bounds"]["long"]["forager"]
-    assert forager_bounds["volatility_ema_span_1m"] == [20, 800, 1]
-    assert forager_bounds["volume_ema_span_1m"] == [500, 3000, 10]
-    assert not any(
-        "optimize.bounds.long_filter_volatility_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        "optimize.bounds.long_filter_volume_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith("optimize.bounds.long_filter_volatility_ema_span ->")
-        for moved in report["moved_fields"]
-    )
-    assert not any(
-        moved.startswith("optimize.bounds.long_filter_volume_ema_span ->")
-        for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_flat_bound_alias_collision_keeps_canonical():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_entry_volatility_ema_span_1h": [222, 333, 1],
-        "long_entry_volatility_ema_span_hours": [111, 222, 1],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert entry_bounds["volatility_ema_span_hours"] == [111, 222, 1]
-    assert any(
-        "optimize.bounds.long_entry_volatility_ema_span_1h conflicts with "
-        "optimize.bounds.long_entry_volatility_ema_span_hours" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith("optimize.bounds.long_entry_volatility_ema_span_1h ->")
-        for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_old_filter_bound_alias_collision_reports_loser():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_filter_volatility_ema_span": [10, 720, 1],
-        "long_filter_noisiness_rolling_window": [20, 300, 1],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    forager_bounds = migrated["optimize"]["bounds"]["long"]["forager"]
-    assert forager_bounds["volatility_ema_span_1m"] == [10, 720, 1]
-    assert any(
-        "optimize.bounds.long_filter_noisiness_rolling_window conflicts with "
-        "optimize.bounds.long_filter_volatility_ema_span" in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith("optimize.bounds.long_filter_noisiness_rolling_window ->")
-        for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_uncertain_markup_bounds_require_manual_review():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_min_markup": [0.001, 0.01, 0.001],
-        "long_close_grid_min_markup": [0.002, 0.02, 0.001],
-        "long_markup_range": [0.001, 0.01, 0.001],
-        "long_close_grid_markup_range": [0.001, 0.02, 0.001],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    for key in source["optimize"]["bounds"]:
-        assert f"optimize.bounds.{key}" in report["manual_review_fields"]
-        assert not any(key in moved for moved in report["moved_fields"])
-    close_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["close"]
-    assert close_bounds["grid_markup_start"] != [0.001, 0.01, 0.001]
-    assert close_bounds["grid_markup_end"] != [0.002, 0.02, 0.001]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_unknown_flat_bound_is_reported_not_emitted():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long_entry_totally_unknown": [0.1, 2.0, 0.1],
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert "totally_unknown" not in entry_bounds
-    assert (
-        "optimize.bounds.long_entry_totally_unknown" in report["manual_review_fields"]
-    )
-    assert not any(
-        "long_entry_totally_unknown" in moved for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_unknown_nested_strategy_bound_is_reported_not_emitted():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long": {
-            "strategy": {
-                "trailing_grid": {
-                    "entry": {
-                        "grid_spacing_pct": [0.01, 0.03, 0.001],
-                        "totally_unknown": [0.1, 2.0, 0.1],
-                    }
-                }
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert entry_bounds["grid_spacing_pct"] == [0.01, 0.03, 0.001]
-    assert "totally_unknown" not in entry_bounds
-    assert (
-        "optimize.bounds.long.strategy.trailing_grid.entry.totally_unknown"
-        in report["manual_review_fields"]
-    )
-    assert not any("totally_unknown" in moved for moved in report["moved_fields"])
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_unknown_nested_shared_bound_is_reported_not_emitted():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long": {
-            "foo": {"bar": [1, 2, 1]},
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert "foo" not in migrated["optimize"]["bounds"]["long"]
-    assert "optimize.bounds.long.foo.bar" in report["manual_review_fields"]
-    assert not any(
-        "optimize.bounds.long.foo" in moved for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_valid_nested_shared_bound_is_moved():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long": {
-            "risk": {"n_positions": [2, 5, 1]},
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    assert migrated["optimize"]["bounds"]["long"]["risk"]["n_positions"] == [2, 5, 1]
-    assert (
-        "optimize.bounds.long.risk.n_positions -> "
-        "optimize.bounds.long.risk.n_positions"
-    ) in report["moved_fields"]
-    assert "optimize.bounds.long.risk.n_positions" not in report["manual_review_fields"]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_nested_strategy_bound_alias_is_canonicalized():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long": {
-            "strategy": {
-                "trailing_grid": {
-                    "entry": {
-                        "volatility_ema_span_1h": [4.0, 20.0, 1.0],
-                    }
-                }
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert entry_bounds["volatility_ema_span_hours"] == [4.0, 20.0, 1.0]
-    assert "volatility_ema_span_1h" not in entry_bounds
-    assert (
-        "optimize.bounds.long.strategy.trailing_grid.entry.volatility_ema_span_1h -> "
-        "optimize.bounds.long.strategy.trailing_grid_v7.entry.volatility_ema_span_hours"
-    ) in report["moved_fields"]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_nested_strategy_bound_alias_conflict_reports_loser():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long": {
-            "strategy": {
-                "trailing_grid_v7": {
-                    "entry": {
-                        "grid_spacing_weight": [0.1, 1.0, 0.1],
-                        "grid_spacing_we_weight": [2.0, 2.0, 0.1],
-                    }
-                }
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert entry_bounds["grid_spacing_we_weight"] == [0.1, 1.0, 0.1]
-    assert any(
-        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight "
-        "conflicts with "
-        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_weight"
-        in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith(
-            "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight ->"
-        )
-        for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
-
-
-def test_migrate_v7_trailing_grid_nested_strategy_namespace_conflict_reports_loser():
-    source = _minimal_v7_trailing_grid_config()
-    source["optimize"]["bounds"] = {
-        "long": {
-            "strategy": {
-                "trailing_grid": {
-                    "entry": {
-                        "grid_spacing_we_weight": [1.0, 1.0, 1.0],
-                    }
-                },
-                "trailing_grid_v7": {
-                    "entry": {
-                        "grid_spacing_we_weight": [2.0, 2.0, 1.0],
-                    }
-                },
-            }
-        }
-    }
-
-    migrated, report = migrate_v7_trailing_grid_config(source)
-
-    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"][
-        "trailing_grid_v7"
-    ]["entry"]
-    assert entry_bounds["grid_spacing_we_weight"] == [1.0, 1.0, 1.0]
-    assert any(
-        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight "
-        "conflicts with "
-        "optimize.bounds.long.strategy.trailing_grid.entry.grid_spacing_we_weight"
-        in item
-        for item in report["manual_review_fields"]
-    )
-    assert not any(
-        moved.startswith(
-            "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight ->"
-        )
-        for moved in report["moved_fields"]
-    )
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize(
@@ -1527,11 +455,11 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_marti
     source["bot"]["long"]["entry_trailing_grid_ratio"] = -0.5
     source["bot"]["long"]["close_grid_markup_start"] = 0.01
 
-    with pytest.raises(ValueError, match="passivbot tool migrate-config-v7"):
+    with pytest.raises(ValueError, match="unknown configuration field"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-@pytest.mark.parametrize("strategy_kind", ["trailing_grid_v7", "ema_anchor"])
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor"])
 @pytest.mark.parametrize(
     "flat_key", ["entry_grid_spacing_pct", "entry_volatility_ema_span_1h"]
 )
@@ -1545,7 +473,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_k
 
     with pytest.raises(
         ValueError,
-        match=rf"bot\.long\.{flat_key}.*passivbot tool migrate-config-v7",
+        match=rf"bot\.long\.{flat_key}.*unknown configuration field",
     ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
@@ -1557,14 +485,7 @@ def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
     source["bot"]["long"]["entry_grid_spacing_log_weight"] = 0.6
     source["bot"]["long"]["entry_grid_spacing_log_span_hours"] = 12.0
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "bot.long.entry_grid_spacing_log_span_hours.*"
-            "bot.long.entry_grid_spacing_log_weight.*"
-            "bot.long.entry_grid_spacing_weight.*passivbot tool migrate-config-v7"
-        ),
-    ):
+    with pytest.raises(ValueError, match="unknown configuration field"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
@@ -1588,20 +509,10 @@ def test_parse_overrides_rejects_v7_flat_strategy_override_keys(flat_key):
             }
         }
     }
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    with pytest.raises(
-        ValueError,
-        match=(
-            rf"coin_overrides\.BTC\.bot\.long.*unsupported flat strategy.*"
-            rf"{flat_key}.*passivbot tool migrate-config-v7"
-        ),
-    ):
-        parse_overrides(
-            prepared,
-            verbose=False,
-            symbol_normalizer=lambda coin: coin,
-        )
+    with pytest.raises(ValueError, match=rf"coin_overrides\.BTC\.bot\.long.*unsupported flat strategy.*{flat_key}"):
+        prepare_config(source, verbose=False)
+    with pytest.raises(ValueError, match=rf"unsupported flat strategy.*{flat_key}"):
+        parse_overrides(source, verbose=False, symbol_normalizer=lambda coin: coin)
 
 
 @pytest.mark.parametrize(
@@ -1618,7 +529,7 @@ def test_prepare_config_rejects_nontunable_bot_bounds(bound_key):
     cfg["optimize"]["bounds"][bound_key] = [0.0, 1.0]
 
     with pytest.raises(
-        KeyError, match=rf"optimize bound {bound_key} must map to a numeric bot\."
+        ValueError, match=rf"optimize.bounds.{bound_key}.*unknown configuration field"
     ):
         prepare_config(cfg, verbose=False, target="canonical", runtime=None)
 
@@ -1635,7 +546,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
 
     assert (
         compiled["bot"]["long"]["n_positions"]
-        == canonical["bot"]["long"]["risk"]["n_positions"]
+        == canonical["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
         compiled["bot"]["long"]["total_wallet_exposure_limit"]
@@ -1647,7 +558,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["unstuck_threshold"]
-        == canonical["bot"]["long"]["unstuck"]["threshold"]
+        == canonical["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
         compiled["bot"]["long"]["hsl_red_threshold"]
@@ -1763,14 +674,13 @@ def test_prepare_config_rejects_positive_twel_with_zero_positions():
     source = get_template_config()
     risk = source["bot"]["long"]["risk"]
     risk["total_wallet_exposure_limit"] = 1.0
-    risk["n_positions"] = 0
-    risk["total_exposure_entry_gate_enabled"] = False
+    risk["max_positions"] = 0
     risk["total_exposure_enforcer_enabled"] = False
 
     with pytest.raises(
         ValueError,
         match=(
-            r"bot\.long\.risk\.n_positions must be > 0 when "
+            r"bot\.long\.risk\.max_positions must be > 0 when "
             r"bot\.long\.risk\.total_wallet_exposure_limit is > 0"
         ),
     ):
@@ -1782,37 +692,31 @@ def test_prepare_config_rejects_negative_positions_even_when_side_disabled(n_pos
     source = get_template_config()
     risk = source["bot"]["short"]["risk"]
     risk["total_wallet_exposure_limit"] = 0.0
-    risk["n_positions"] = n_positions
+    risk["max_positions"] = n_positions
 
-    with pytest.raises(ValueError, match=r"bot\.short\.risk\.n_positions"):
+    with pytest.raises(ValueError, match=r"bot\.short\.risk\.max_positions"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_removes_bounded_selector_and_runtime_flattening():
+def test_prepare_config_rejects_retired_bounded_selector():
     source = get_template_config()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "BOUNDED"
-    prepared = prepare_config(source, verbose=False)
-    compiled = compile_runtime_config(prepared, runtime="backtest")
-    assert "we_excess_allowance_mode" not in prepared["bot"]["long"]["risk"]
-    assert "risk_we_excess_allowance_mode" not in compiled["bot"]["long"]
-    assert source["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "BOUNDED"
-
+    with pytest.raises(ValueError, match="we_excess_allowance_mode.*unknown configuration field"):
+        prepare_config(source, verbose=False)
 
 
 def test_prepare_config_rejects_retired_raw_coin_override():
     source = get_template_config()
     source["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"we_excess_allowance_mode": "LEGACY_RAW"}}}}}
-    with pytest.raises(ValueError, match="coin_overrides.BTC.*Legacy raw sizing cannot be preserved automatically"):
+    with pytest.raises(ValueError, match="coin_overrides.BTC.*not overridable"):
         prepare_config(source, verbose=False)
-
 
 
 def test_parse_overrides_rejects_retired_raw_coin_override():
     source = get_template_config()
     source["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"we_excess_allowance_mode": "LEGACY_RAW"}}}}}
-    with pytest.raises(ValueError, match="coin_overrides.BTC.*no longer supported"):
+    with pytest.raises(ValueError, match="coin_overrides.BTC.*not overridable"):
         parse_overrides(source, verbose=False)
-
 
 
 def test_prepare_config_rejects_invalid_we_excess_allowance_mode():
@@ -1927,6 +831,7 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
 
 def test_prepare_config_preserves_backtest_visible_metrics():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "visible_metrics": [
                 "gain",
@@ -1951,6 +856,7 @@ def test_prepare_config_preserves_backtest_visible_metrics():
 
 def test_prepare_config_rejects_unknown_backtest_visible_metrics():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {"visible_metrics": ["not_a_metric"]},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -1964,6 +870,7 @@ def test_prepare_config_rejects_unknown_backtest_visible_metrics():
 
 def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {"visible_metrics": "adg"},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -1977,7 +884,7 @@ def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
+def test_prepare_config_rejects_unversioned_configs_without_explicit_migration():
     source = {
         "backtest": {},
         "bot": {"long": {}, "short": {}},
@@ -1986,15 +893,14 @@ def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
+    with pytest.raises(ValueError, match="explicit migration"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize(
     "previous_version", ["v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0"]
 )
-def test_prepare_config_migrates_supported_previous_config_to_current_schema(
+def test_prepare_config_requires_explicit_previous_schema_migration(
     previous_version,
 ):
     source = {
@@ -2006,14 +912,17 @@ def test_prepare_config_migrates_supported_previous_config_to_current_schema(
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    with pytest.raises(ValueError, match="explicit migration"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
 
-
-def test_prepare_config_rejects_unreleased_same_major_schema():
+@pytest.mark.parametrize("version,message", [
+    ("v9.1.999", "newer than supported schema"),
+    ("v9.0.999", "newer than supported schema"),
+])
+def test_prepare_config_rejects_unreleased_same_major_schema(version, message):
     source = {
-        "config_version": "v8.0.999",
+        "config_version": version,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2021,7 +930,7 @@ def test_prepare_config_rejects_unreleased_same_major_schema():
         "optimize": {"bounds": {}},
     }
 
-    with pytest.raises(ValueError, match="not a supported previous schema"):
+    with pytest.raises(ValueError, match=message):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
@@ -2053,48 +962,37 @@ def test_prepare_config_rejects_malformed_config_version():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_keeps_live_pnls_max_lookback_days_without_backtest_override():
+def test_prepare_config_preserves_independent_memory_spans():
+    source = get_template_config()
+    source["bot"]["unstuck"]["memory_ema_span_minutes"] = 30.5
+    source["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
+    source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 90.5
+    prepared = prepare_config(source, verbose=False)
+    assert prepared["bot"]["unstuck"]["memory_ema_span_minutes"] == 30.5
+    assert prepared["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == 60.5
+    assert prepared["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 90.5
+    assert "lookback_ema_span_minutes" not in prepared["live"]
+
+
+def test_prepare_config_rejects_retired_all_history_gate_window():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
-        "live": {"pnls_max_lookback_days": 30.0},
+        "live": {"realized_loss_gate_lookback_minutes": -1.0},
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["live"]["pnls_max_lookback_days"] == pytest.approx(30.0)
-    assert "pnls_max_lookback_days" not in prepared["backtest"]
-
-
-def test_prepare_config_normalizes_all_pnls_max_lookback_days():
-    source = {
-        "backtest": {},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {"pnls_max_lookback_days": "ALL"},
-        "optimize": {"bounds": {}},
-    }
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["live"]["pnls_max_lookback_days"] == "all"
-
-
-def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
-    source = {
-        "backtest": {},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {"pnls_max_lookback_days": "everything"},
-        "optimize": {"bounds": {}},
-    }
-
-    with pytest.raises(
-        ValueError, match="live\\.pnls_max_lookback_days must be >= 0 or 'all'"
-    ):
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*removed"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_invalid_memory_ema_span_minutes_string():
+    source = get_template_config()
+    source["bot"]["unstuck"]["memory_ema_span_minutes"] = "everything"
+    with pytest.raises(ValueError, match="bot.unstuck.memory_ema_span_minutes must be a finite number"):
+        prepare_config(source, verbose=False)
 
 
 @pytest.mark.parametrize(
@@ -2106,6 +1004,7 @@ def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
 )
 def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected):
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {
             "long": {},
@@ -2115,7 +1014,7 @@ def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected)
         "live": {},
         "optimize": {"bounds": {}},
     }
-    source["bot"][pside]["unstuck_ema_dist"] = value
+    source["bot"][pside]["unstuck"] = {"ema_dist": value}
 
     with pytest.raises(ValueError, match=expected):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -2123,6 +1022,7 @@ def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected)
 
 def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_override():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2231,21 +1131,20 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
 
 def test_prepare_config_preserves_fractional_hsl_ema_span():
     source = get_template_config()
-    source["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.25
+    source["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.25
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1.25)
+    assert prepared["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == pytest.approx(1.25)
 
 
-def test_prepare_config_removes_retired_hsl_terminal_threshold():
+def test_prepare_config_rejects_retired_hsl_terminal_threshold():
     source = get_template_config()
     source["bot"]["long"]["hsl"]["red_threshold"] = 0.20
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert "no_restart_drawdown_threshold" not in prepared["bot"]["long"]["hsl"]
+    with pytest.raises(ValueError, match="removed in v9"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize(
@@ -2326,11 +1225,13 @@ def test_prepare_config_preserves_live_custom_endpoints_path():
     [
         ("market_orders_allowed", False),
         ("market_order_near_touch_threshold", 0.0),
-        ("pnls_max_lookback_days", 0.0),
+        ("lookback_ema_span_minutes", 0.0),
+        ("realized_loss_gate_lookback_minutes", 0.0),
     ],
 )
 def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {field: value},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2342,63 +1243,33 @@ def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_migrates_legacy_backtest_market_slippage_key():
-    source = {
-        "backtest": {"panic_market_slippage_pct": 0.0015},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {},
-        "optimize": {"bounds": {}},
-    }
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
-    assert "panic_market_slippage_pct" not in prepared["backtest"]
-
-
-def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
-    source = {
-        "backtest": {},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {
-            "approved_coins": [],
-            "ignored_coins": {"long": [], "short": []},
-            "empty_means_all_approved": True,
-        },
-        "optimize": {"bounds": {}},
-    }
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert "empty_means_all_approved" not in prepared["live"]
-    assert prepared["live"]["approved_coins"] == {"long": ["all"], "short": ["all"]}
-    assert prepared["_coins_sources"]["approved_coins"] == "all"
-    assert prepared["_raw"]["live"]["empty_means_all_approved"] is True
-    assert prepared["_raw_effective"]["live"]["empty_means_all_approved"] is True
-
-
-def test_prepare_config_warns_and_removes_entry_grid_inflation_enabled(caplog):
+def test_prepare_config_rejects_legacy_backtest_market_slippage_key():
     source = get_template_config()
-    source["bot"]["long"]["entry_grid_inflation_enabled"] = True
-    source["bot"]["short"]["entry_grid_inflation_enabled"] = True
-
-    with caplog.at_level(logging.WARNING):
-        prepared = prepare_config(
-            source, verbose=False, target="canonical", runtime=None
-        )
-
-    assert "entry_grid_inflation_enabled" not in prepared["bot"]["long"]
-    assert "entry_grid_inflation_enabled" not in prepared["bot"]["short"]
-    assert any(
-        "entry_grid_inflation_enabled" in rec.message
-        and "has no effect; removing it" in rec.message
-        for rec in caplog.records
-    )
+    source["backtest"]["panic_market_slippage_pct"] = 0.0015
+    with pytest.raises(ValueError, match="panic_market_slippage_pct.*unknown configuration field"):
+        prepare_config(source, verbose=False)
 
 
-def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(caplog):
+def test_prepare_config_rejects_legacy_empty_means_all_approved():
+    source = get_template_config()
+    source["live"]["empty_means_all_approved"] = True
+    with pytest.raises(ValueError, match="empty_means_all_approved.*unknown configuration field"):
+        prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("location", ["root", "coin"])
+def test_prepare_config_rejects_retired_entry_grid_inflation(enabled, location):
+    source = get_template_config()
+    if location == "root":
+        source["bot"]["long"]["entry_grid_inflation_enabled"] = enabled
+    else:
+        source["coin_overrides"] = {"BTC": {"bot": {"long": {"entry_grid_inflation_enabled": enabled}}}}
+    with pytest.raises(ValueError, match="entry_grid_inflation_enabled.*(?:unknown configuration field|not overridable)"):
+        prepare_config(source, verbose=False)
+
+
+def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     source = get_template_config()
     trailing_martingale = source["bot"]["long"]["strategy"]["trailing_martingale"]
     risk = source["bot"]["long"]["risk"]
@@ -2411,7 +1282,6 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     ):
         trailing_martingale["entry"].pop(key)
     for key in (
-        "total_exposure_entry_gate_enabled",
         "total_exposure_enforcer_policy",
         "total_exposure_enforcer_threshold",
         "we_excess_allowance_pct",
@@ -2446,7 +1316,7 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(
         template_risk["total_exposure_enforcer_threshold"]
     )
-    assert long_risk["total_exposure_entry_gate_enabled"] is True
+    assert "total_exposure_entry_gate_enabled" not in long_risk
     assert long_risk["total_exposure_enforcer_policy"] == "reduce_overweight"
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(
         template_risk["we_excess_allowance_pct"]
@@ -2468,7 +1338,7 @@ def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():
         == "reduce_portfolio"
     )
     assert compiled["bot"]["long"]["risk_twel_enforcer_policy"] == "reduce_portfolio"
-    assert compiled["bot"]["long"]["risk_twel_entry_gate_enabled"] is True
+    assert "risk_twel_entry_gate_enabled" not in compiled["bot"]["long"]
 
 
 def test_prepare_config_rejects_invalid_twel_policy():
@@ -2501,51 +1371,10 @@ def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
     ] == pytest.approx(0.5)
 
 
-def test_prepare_config_silently_removes_disabled_entry_grid_inflation_flag(caplog):
-    source = get_template_config()
-    source["bot"]["long"]["entry_grid_inflation_enabled"] = False
-    source["bot"]["short"]["entry_grid_inflation_enabled"] = False
-
-    with caplog.at_level(logging.WARNING):
-        prepared = prepare_config(
-            source, verbose=False, target="canonical", runtime=None
-        )
-
-    assert "entry_grid_inflation_enabled" not in prepared["bot"]["long"]
-    assert "entry_grid_inflation_enabled" not in prepared["bot"]["short"]
-    assert not any(
-        "entry_grid_inflation_enabled" in rec.message for rec in caplog.records
-    )
 
 
-def test_prepare_config_removes_entry_grid_inflation_flag_in_coin_overrides():
-    source = get_template_config()
-    source["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": "false"}}}
-    }
-
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert (
-        "entry_grid_inflation_enabled"
-        not in prepared["coin_overrides"]["BTC"]["bot"]["long"]
-    )
 
 
-def test_prepare_config_warns_and_removes_coin_override_entry_grid_inflation(caplog):
-    source = get_template_config()
-    source["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"entry_grid_inflation_enabled": True}}}
-    }
-
-    with caplog.at_level(logging.WARNING):
-        prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert any(
-        "coin_overrides.BTC.bot.long.entry_grid_inflation_enabled" in rec.message
-        and "has no effect; removing it" in rec.message
-        for rec in caplog.records
-    )
 
 
 def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readiness_only():
@@ -2557,7 +1386,6 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
     }
     source["bot"]["long"]["forager"]["volume_ema_span_1m"] = 0.0
     source["bot"]["long"]["forager"]["volatility_ema_span_1m"] = 0.0
-    source["bot"]["long"]["forager"]["volume_drop_pct"] = 0.0
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
@@ -2574,7 +1402,7 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
 def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
     source = get_template_config()
     source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
-    source["bot"]["short"]["risk"]["n_positions"] = 1
+    source["bot"]["short"]["risk"]["max_positions"] = 1
     source["bot"]["short"]["forager"]["score_weights"] = {
         "volume": 0.0,
         "ema_readiness": 0.0,

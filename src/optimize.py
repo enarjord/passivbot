@@ -92,6 +92,7 @@ from config.shared_bot import (
 )
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.metrics import resolve_metric_value
+from config.ew import is_ew_metric
 from config.scoring import (
     ObjectiveSpec,
     default_scoring_weights,
@@ -149,35 +150,14 @@ import traceback
 import json
 import pprint
 
-try:
-    from deap import base, creator, tools, algorithms
-except ImportError:  # pragma: no cover - allow import in minimal test envs
-
-    class _DummyFitness:
-        weights = ()
-
-        def __init__(self, values=()):
-            self.values = values
-
-        def wvalues(self):
-            return self.values
-
-    class _DummyBase:
-        Fitness = _DummyFitness
-
-    class _DummyCreator:
-        def create(self, *args, **kwargs):
-            return None
-
-        def __getattr__(self, name):
-            raise AttributeError
-
-    base = _DummyBase()
-    creator = _DummyCreator()
-    tools = algorithms = None
 import math
 import fcntl
-from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
+from optimizer_overrides import (
+    optimizer_overrides,
+    validate_optimizer_overrides,
+    unstuck_ema_spans_coupled,
+    materialize_coupled_scenario_spans,
+)
 from opt_utils import (
     deep_updated,
     generate_incremental_diff,
@@ -208,6 +188,7 @@ from suite_runner import (
 from metrics_schema import (
     MetricAggregationError,
     build_scenario_metrics,
+    validate_required_ew_metrics,
     flatten_metric_stats,
 )
 from optimization.bounds import (
@@ -221,10 +202,6 @@ from optimization.fine_tune_anchors import (
     get_anchor_plan,
 )
 from optimization.interrupts import OptimizerInterruptLatch
-from optimization.backend_shared import (
-    cancel_pending_async_results,
-    stream_async_results,
-)
 from optimization.backends import get_backend_runner
 from optimization.random_seed import seed_rngs
 from optimization.starting_config_selection import select_starting_config_artifacts
@@ -234,9 +211,10 @@ from optimization.config_adapter import (
     resolve_optimization_bound_path,
 )
 from optimization.evaluation_payload import (
-    apply_evaluation_payload,
     build_evaluation_payload,
 )
+from config.prefilter import prefilter_enabled
+from optimization.prefilter import prefilter_candidate, build_prefilter_payload, prefilter_config_for_exchange
 from optimization.prepared_dataset_identity import (
     PREPARED_DATASET_KEY,
     build_prepared_dataset_identity,
@@ -259,22 +237,7 @@ from optimization.warmup import (
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
-from optimization.deap_adapters import (
-    mutPolynomialBoundedWrapper,
-    cxSimulatedBinaryBoundedWrapper,
-)
 from multiprocessing_utils import ignore_sigint_in_worker
-
-
-class ConstraintAwareFitness(base.Fitness):
-    constraint_violation: float = 0.0
-
-    def dominates(self, other, obj=slice(None)):
-        self_violation = getattr(self, "constraint_violation", 0.0)
-        other_violation = getattr(other, "constraint_violation", 0.0)
-        if math.isclose(self_violation, other_violation, rel_tol=0.0, abs_tol=1e-12):
-            return super().dominates(other, obj)
-        return self_violation < other_violation
 
 
 def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
@@ -289,13 +252,8 @@ def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -
         for part in parts[:-1]:
             target = target[part]
         target[parts[-1]] = value
-    bot_cfg = config.get("bot")
-    if isinstance(bot_cfg, dict):
-        for pside in ("long", "short"):
-            pside_cfg = bot_cfg.get(pside)
-            if isinstance(pside_cfg, dict):
-                for key, value in flatten_shared_bot_side(pside_cfg).items():
-                    pside_cfg[key] = deepcopy(value)
+    # These overrides edit canonical candidates and scenario policies. Runtime
+    # aliases are produced once by compile_runtime_config after overrides.
 
 
 _BOOL_LITERALS = {"1", "0", "true", "false", "t", "f", "yes", "no", "y", "n"}
@@ -599,7 +557,6 @@ logging.basicConfig(
 )
 
 
-TEMPLATE_CONFIG_MODE = "v8"
 INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
 DEFAULT_PARETO_MAX_SIZE = 1000
 OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
@@ -836,6 +793,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     # Released configurations without this setting used strict crossing at zero.
     old_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
     new_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
+    old_bt.setdefault("ew_half_life_days", None)
+    new_bt.setdefault("ew_half_life_days", None)
     old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
     new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
@@ -852,12 +811,13 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "coins",
         "coin_sources",
         "dynamic_wel_by_tradability",
+        "ew_half_life_days",
         "end_date",
         "exchanges",
         "filter_by_min_effective_cost",
         "gap_tolerance_ohlcvs_minutes",
         "hlcvs_data_override_mode",
-        "liquidation_threshold",
+        "equity_floor_ratio",
         "maker_fee_override",
         "market_order_slippage_pct",
         "limit_order_fill_buffer_pct",
@@ -879,6 +839,18 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         # scenario list is the source of truth for per-scenario coins.
         if old_bt_compare.get("coins") is None:
             new_bt_compare.pop("coins", None)
+        if unstuck_ema_spans_coupled(entry) and unstuck_ema_spans_coupled(config):
+            # Saved suites contain explicit candidate-dependent spans for plain
+            # backtest replay. Compare incoming recipes after materializing them
+            # against this saved candidate, not against the current seed values.
+            # All other scenario inputs remain in the comparison, and corrupted
+            # stored spans still fail because only the incoming view is rebuilt.
+            # Result metadata is not authored configuration for the dependency fold.
+            # Keep the stored candidate values while projecting its config sections.
+            expected = {key: deepcopy(entry[key]) for key in get_template_config() if key in entry}
+            expected["backtest"]["scenarios"] = deepcopy(new_bt.get("scenarios", []))
+            materialize_coupled_scenario_spans(expected)
+            new_bt_compare["scenarios"] = expected["backtest"]["scenarios"]
     _append_resume_section_mismatches(
         mismatches, "backtest", old_bt_compare, new_bt_compare
     )
@@ -887,16 +859,11 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "backend",
         "bounds",
         "compress_results_file",
-        "crossover_eta",
-        "crossover_probability",
         "enable_overrides",
         "fixed_params",
         "fixed_runtime_overrides",
         "limits",
-        "mutation_eta",
-        "mutation_indpb",
-        "mutation_probability",
-        "offspring_multiplier",
+        "prefilter",
         "objective_scenario",
         "population_size",
         "gpu",
@@ -959,13 +926,6 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
-    if normalized.get("backend") == "gpu" and isinstance(normalized.get("gpu"), dict):
-        from optimization.backends.gpu_backend import GPU_DEFAULTS
-
-        # These additive options preserve the legacy gates when omitted. Do not
-        # normalize other policy differences or erase explicit non-default values.
-        for key in ("drift_rank_halt", "drift_objective_tolerance"):
-            normalized["gpu"].setdefault(key, GPU_DEFAULTS[key])
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
@@ -1064,32 +1024,12 @@ def _gpu_checkpoint_allows_empty_results(
 ) -> bool:
     """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
 
-    if config.get("optimize", {}).get("backend") != "gpu" or checkpoint_path is None:
+    if config.get("optimize", {}).get("backend") != "gpu":
         return False
-    try:
-        import pickle
+    from optimization.native_checkpoint import load_checkpoint
 
-        with open(checkpoint_path, "rb") as file:
-            checkpoint = pickle.load(file)
-    except Exception:
-        return False
-    plan = checkpoint.get("seed_bootstrap_plan")
-    allowed = bool(
-        not checkpoint.get("seed_bootstrap_complete", True)
-        and int(checkpoint.get("seed_exact_done", -1)) == 0
-        and int(checkpoint.get("exact_done", -1)) == 0
-        and isinstance(checkpoint.get("seed_bootstrap_contract"), dict)
-        and isinstance(plan, dict)
-        and plan.get("starting_vectors")
-        and plan.get("effective_mode") in {"exact", "screened"}
-    )
-
-    if allowed and checkpoint.get(CONTRACT_KEY) != build_evaluation_contract(config):
-        raise ValueError(
-            "GPU checkpoint historical evaluation contract cannot be proven or changed; "
-            "start a fresh run"
-        )
-    return allowed
+    checkpoint = load_checkpoint(checkpoint_path, config)
+    return checkpoint["completed"] == 0
 
 
 def _validate_resume_results(
@@ -1109,7 +1049,7 @@ def _validate_resume_results(
             if resume_state is not None:
                 resume_state["previous_data"] = None
             logging.info(
-                "Resuming GPU seed bootstrap before its first durable exact result"
+                "Resuming GPU seed bootstrap before its first durable GPU result"
             )
             return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
@@ -1188,225 +1128,6 @@ def _iter_strict_msgpack_objects(file_obj, filename: str, file_size: int):
             ) from exc
         last_successful_offset = unpacker.tell()
         yield entry
-
-
-def ea_mu_plus_lambda_stream(
-    population,
-    toolbox,
-    mu,
-    lambda_,
-    cxpb,
-    mutpb,
-    ngen,
-    stats,
-    halloffame,
-    verbose,
-    recorder,
-    evaluator_config,
-    overrides_list,
-    pool,
-    duplicate_counter,
-    pool_state,
-    start_gen=1,
-    logbook=None,
-    checkpoint_path=None,
-    max_pending_evals=None,
-):
-    import pickle
-
-    if logbook is None:
-        logbook = tools.Logbook()
-        logbook.header = "gen", "evals", "min", "max"
-
-    start_time = time.time()
-    total_evals = 0
-    liquidation_total = 0
-    liquidation_prev_total = 0
-
-    def evaluate_and_record(individuals):
-        nonlocal total_evals, liquidation_total
-        if not individuals:
-            return 0
-        logging.debug("Evaluating %d candidates", len(individuals))
-
-        completed = {"count": 0}
-
-        def _on_result(idx, payload):
-            nonlocal liquidation_total
-            ind = individuals[idx]
-            metrics = apply_evaluation_payload(ind, payload)
-            if metrics and isinstance(metrics, dict):
-                suite = metrics.get("suite_metrics", {}) or {}
-                metric_map = suite.get("metrics", {}) or {}
-                adg_entry = metric_map.get("adg_pnl", {}) or {}
-                prh_entry = metric_map.get("peak_recovery_hours_pnl", {}) or {}
-                logging.debug(
-                    "Eval metrics | idx=%d adg_pnl=%s peak_recovery_hours_pnl=%s",
-                    idx,
-                    adg_entry.get("aggregated"),
-                    prh_entry.get("aggregated"),
-                )
-                scenario_labels = suite.get("scenario_labels") or []
-                if not scenario_labels and isinstance(adg_entry, dict):
-                    scenario_labels = list((adg_entry.get("scenarios") or {}).keys())
-                for label in scenario_labels:
-                    adg_val = (adg_entry.get("scenarios") or {}).get(label)
-                    prh_val = (prh_entry.get("scenarios") or {}).get(label)
-                    logging.debug(
-                        "Eval metrics scenario | idx=%d label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
-                        idx,
-                        label,
-                        adg_val,
-                        prh_val,
-                    )
-            if metrics is not None:
-                if bool(metrics.get("liquidated")):
-                    liquidation_total += 1
-                _set_candidate_metrics(ind, metrics)
-                _record_individual_result(
-                    ind, evaluator_config, overrides_list, recorder
-                )
-            else:
-                _clear_candidate_metrics(ind)
-            completed["count"] += 1
-
-        def _on_interrupt(still_pending):
-            logging.info("Evaluation interrupted; terminating pending tasks...")
-            cancel_pending_async_results(still_pending)
-            if not pool_state["terminated"]:
-                logging.info("Terminating worker pool immediately due to interrupt...")
-                pool.terminate()
-                pool_state["terminated"] = True
-
-        stream_async_results(
-            enumerate(individuals),
-            submit=lambda item: (
-                pool.apply_async(toolbox.evaluate, (item[1],)),
-                item[0],
-            ),
-            poll_interval_seconds=0.1,
-            on_result=_on_result,
-            on_interrupt=_on_interrupt,
-            max_pending=max_pending_evals,
-            progress_label="Optimizer population",
-            progress_total=len(individuals),
-        )
-
-        total_evals += completed["count"]
-        return completed["count"]
-
-    dup_prev_total = 0
-    dup_prev_resolved = 0
-    dup_prev_reused = 0
-
-    def log_generation(gen, nevals, record):
-        nonlocal dup_prev_total, dup_prev_resolved, dup_prev_reused, liquidation_prev_total
-        best = record.get("min") if record else None
-        front_size = len(halloffame) if halloffame is not None else 0
-        dup_tot = duplicate_counter["total"]
-        dup_res = duplicate_counter["resolved"]
-        dup_reuse = duplicate_counter["reused"]
-        dup_ratio = (dup_tot / total_evals) if total_evals else 0.0
-        dup_delta = dup_tot - dup_prev_total
-        dup_res_delta = dup_res - dup_prev_resolved
-        dup_reuse_delta = dup_reuse - dup_prev_reused
-        dup_gen_ratio = (dup_delta / nevals) if nevals else 0.0
-        liquidation_delta = liquidation_total - liquidation_prev_total
-        logging.info(
-            (
-                "Gen %d complete | evals=%d | total=%d | front=%d | best=%s | "
-                "dups=%d (resolved=%d reused=%d) | dup_delta=%d (res=%d reuse=%d) | "
-                "dup_ratio=%.2f%% | dup_gen=%.2f%% | "
-                "n_bankruptcies=%d (delta=%d) | elapsed=%.1fs"
-            ),
-            gen,
-            nevals,
-            total_evals,
-            front_size,
-            _format_objectives(best),
-            dup_tot,
-            dup_res,
-            dup_reuse,
-            dup_delta,
-            dup_res_delta,
-            dup_reuse_delta,
-            dup_ratio * 100.0,
-            dup_gen_ratio * 100.0,
-            liquidation_total,
-            liquidation_delta,
-            time.time() - start_time,
-        )
-        dup_prev_total = dup_tot
-        dup_prev_resolved = dup_res
-        dup_prev_reused = dup_reuse
-        liquidation_prev_total = liquidation_total
-        if verbose and record:
-            logging.debug(
-                "Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items())
-            )
-
-    invalid_ind = [ind for ind in population if not ind.fitness.valid]
-    if invalid_ind:
-        logging.info(
-            "Evaluating initial population (%d candidates)...", len(invalid_ind)
-        )
-    nevals = evaluate_and_record(invalid_ind)
-
-    if halloffame is not None:
-        halloffame.update(population)
-
-    record = stats.compile(population) if stats is not None else {}
-    logbook.record(gen=0, nevals=nevals, **record)
-    log_generation(0, nevals, record)
-
-    if len(population) < 2:
-        logging.warning(
-            "Population too small for crossover/mutation (size=%d); skipping evolution steps",
-            len(population),
-        )
-        return population, logbook
-
-    for gen in range(start_gen, ngen + 1):
-        offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        nevals = evaluate_and_record(invalid_ind)
-
-        population[:] = toolbox.select(population + offspring, mu)
-
-        if halloffame is not None:
-            halloffame.update(population)
-
-        record = stats.compile(population) if stats is not None else {}
-        logbook.record(gen=gen, nevals=nevals, **record)
-        log_generation(gen, nevals, record)
-
-        if checkpoint_path is not None:
-            chk = {
-                "population": population,
-                "logbook": logbook,
-                "gen": gen,
-                "halloffame": halloffame,
-                "random_state": random.getstate(),
-                "np_random_state": np.random.get_state(),
-            }
-            tmp_path = f"{checkpoint_path}.tmp"
-            try:
-                with open(tmp_path, "wb") as f:
-                    pickle.dump(chk, f, protocol=pickle.HIGHEST_PROTOCOL)
-                os.replace(tmp_path, checkpoint_path)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to save checkpoint: {checkpoint_path}"
-                ) from exc
-
-    logging.info(
-        "Optimization summary | generations=%d | total_evals=%d | front=%d | duration=%.1fs",
-        ngen,
-        total_evals,
-        len(halloffame) if halloffame is not None else 0,
-        time.time() - start_time,
-    )
-    return population, logbook
 
 
 def _get_path_value(config: dict, path) -> object:
@@ -1705,6 +1426,12 @@ class Evaluator:
                         btc_spec
                     )
 
+        self.selection_specs = {}
+        if config["backtest"].get("organillo_csv") is not None and shared_array_manager is not None:
+            from organillo import share_selection
+            for exchange in self.exchanges:
+                self.selection_specs[exchange] = share_selection(config,
+                    config["backtest"]["coins"][exchange], self.timestamps[exchange], shared_array_manager)
         self.config = config
         logging.debug("Evaluator initialization complete.")
         logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
@@ -1721,6 +1448,33 @@ class Evaluator:
         self.scoring_weights = default_scoring_weights()
 
         self.build_limit_checks()
+
+    def prepared_selection(self, exchange):
+        specs = self.selection_specs.get(exchange)
+        if specs is None:
+            return None
+        from organillo import borrow_selection
+        return borrow_selection(specs, self._attachments.setdefault("organillo", {}))
+
+    def prefilter_payload(self, individual, configs, *, suite=False, markets_by_scenario=None):
+        params = self.config["optimize"].get("prefilter")
+        if not prefilter_enabled(params):
+            return None
+        views = {}
+        for label, config in configs.items():
+            markets = self.msss if markets_by_scenario is None else markets_by_scenario[label]
+            for exchange in markets:
+                views.setdefault(label, []).append(
+                    prefilter_config_for_exchange(config, markets[exchange], exchange))
+        constraint, findings = prefilter_candidate(views, params)
+        if constraint == 0.0:
+            return None
+        payload = build_prefilter_payload(self, individual, constraint, findings, suite=suite,
+                                          scenario_labels=tuple(configs) if suite else ())
+        _set_candidate_metrics(individual, payload["metrics"])
+        if self.use_duplicate_guard:
+            self.seen_hashes[calc_hash(individual)] = (payload["fitness"], constraint)
+        return payload
 
     def _ensure_attached(self, exchange: str) -> None:
         if exchange not in self.shared_hlcvs_np:
@@ -1891,6 +1645,9 @@ class Evaluator:
                 else:
                     if existing_score is not None:
                         self.duplicate_counter["reused"] += 1
+                        rejected = self.prefilter_payload(individual, {"base": config})
+                        if rejected is not None:
+                            return rejected
                         return build_evaluation_payload(
                             existing_score,
                             existing_penalty,
@@ -1899,6 +1656,13 @@ class Evaluator:
                         )
             else:
                 self.seen_hashes[individual_hash] = None
+        rejected = self.prefilter_payload(individual, {"base": config})
+        if rejected is not None:
+            return rejected
+        required_metrics = [
+            *(spec.metric for spec in self.scoring_specs),
+            *(check["metric"] for check in self.limit_checks),
+        ]
         analyses = {}
         liquidated = False
         skip_btc_analysis = _optimizer_can_skip_btc_analysis(
@@ -1916,6 +1680,7 @@ class Evaluator:
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
                 metrics_only=True,
+                selection=self.prepared_selection(exchange) if self.selection_specs else None,
                 skip_btc_analysis=skip_btc_analysis,
             )
             try:
@@ -1953,6 +1718,7 @@ class Evaluator:
             del fills
             del equities_array
         try:
+            validate_required_ew_metrics(analyses, required_metrics)
             scenario_metrics = build_scenario_metrics(analyses)
             aggregate_stats = scenario_metrics.get("stats", {})
             flat_stats = flatten_metric_stats(aggregate_stats)
@@ -2077,7 +1843,11 @@ class Evaluator:
         for idx, spec in enumerate(self.scoring_specs):
             if objective_values is None:
                 val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
-                if val is None and spec.metric.endswith(("_usd", "_btc")):
+                if (
+                    val is None
+                    and spec.metric.endswith(("_usd", "_btc"))
+                    and not is_ew_metric(spec.metric)
+                ):
                     val = resolve_metric_value(
                         analyses_combined,
                         f"{spec.metric.rsplit('_', 1)[0]}_mean",
@@ -2135,6 +1905,16 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.reducer_cfg = reducer_cfg
+        if base_evaluator.shared_array_manager is not None and any(
+            ctx.config["backtest"].get("organillo_csv") is not None for ctx in self.contexts
+        ):
+            from organillo import share_selection
+            for ctx in self.contexts:
+                if ctx.config["backtest"].get("organillo_csv") is not None:
+                    ctx.selection_specs = {ex: share_selection(ctx.config,
+                        ctx.config["backtest"]["coins"][ex], ctx.timestamps[ex],
+                        base_evaluator.shared_array_manager) for ex in ctx.exchanges}
+
         objective_scenario = self.base.config["optimize"].get("objective_scenario")
         self.objective_scenario = (
             str(objective_scenario).strip() if objective_scenario is not None else None
@@ -2325,11 +2105,46 @@ class SuiteEvaluator:
 
         return self.build_scenario_candidate_config(config, ctx)
 
+    def required_metrics_for_scenario(self, label):
+        return [
+            *(
+                spec.metric
+                for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
+                if basis.scenario is None or basis.scenario == label
+            ),
+            *(
+                check["metric"]
+                for check in self.base.limit_checks
+                if check.get("scenario") is None or check["scenario"] == label
+            ),
+        ]
+
     def score_scenario_results(
-        self, scenario_results: List[ScenarioResult]
+        self, scenario_results: List[ScenarioResult], *, stage: str = "full"
     ) -> Dict[str, Any]:
         """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
 
+        if stage not in {"full", "screening"}:
+            raise ValueError("evaluation stage must be full or screening")
+        result_labels = {result.scenario.label for result in scenario_results}
+        for ctx in getattr(self, "contexts", []):
+            if stage == "full" and ctx.label not in result_labels and any(
+                is_ew_metric(metric)
+                for metric in self.required_metrics_for_scenario(ctx.label)
+            ):
+                raise MetricAggregationError(
+                    f"required EW scenario {ctx.label!r} is absent from evaluation"
+                )
+        for result in scenario_results:
+            stats = result.metrics.get("stats", {})
+            validate_required_ew_metrics(
+                {
+                    result.scenario.label: {
+                        metric: values.get("mean") for metric, values in stats.items()
+                    }
+                },
+                self.required_metrics_for_scenario(result.scenario.label),
+            )
         reduce_started = time.perf_counter()
         reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
         reduce_metrics_ms = (time.perf_counter() - reduce_started) * 1000.0
@@ -2368,7 +2183,11 @@ class SuiteEvaluator:
                 source_stats = reduced_stats_flat
                 reducer = basis.reducer or "mean"
             value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
-            if value is None and spec.metric.endswith(("_usd", "_btc")):
+            if (
+                value is None
+                and spec.metric.endswith(("_usd", "_btc"))
+                and not is_ew_metric(spec.metric)
+            ):
                 value = resolve_metric_value(
                     source_stats,
                     f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
@@ -2461,6 +2280,13 @@ class SuiteEvaluator:
                 else:
                     if existing_score is not None:
                         duplicate_counter["reused"] += 1
+                        if prefilter_enabled(self.base.config["optimize"].get("prefilter")):
+                            configs = {ctx.label: self.build_scenario_candidate_config(config, ctx)
+                                       for ctx in self.contexts}
+                            rejected = self.base.prefilter_payload(individual, configs, suite=True,
+                                markets_by_scenario={ctx.label: ctx.msss for ctx in self.contexts})
+                            if rejected is not None:
+                                return rejected
                         return build_evaluation_payload(
                             existing_score,
                             existing_penalty,
@@ -2470,6 +2296,13 @@ class SuiteEvaluator:
             else:
                 seen_hashes[individual_hash] = None
 
+        if prefilter_enabled(self.base.config["optimize"].get("prefilter")):
+            configs = {ctx.label: self.build_scenario_candidate_config(config, ctx)
+                       for ctx in self.contexts}
+            rejected = self.base.prefilter_payload(individual, configs, suite=True,
+                markets_by_scenario={ctx.label: ctx.msss for ctx in self.contexts})
+            if rejected is not None:
+                return rejected
         scenario_results: List[ScenarioResult] = []
         liquidated = False
 
@@ -2510,6 +2343,11 @@ class SuiteEvaluator:
                 )
 
                 phase_start = _profile_start(profile_enabled)
+                selection = None
+                if (getattr(ctx, "selection_specs", None) or {}).get(exchange) is not None:
+                    from organillo import borrow_selection
+                    selection = borrow_selection(ctx.selection_specs[exchange],
+                        ctx.attachments.setdefault("organillo", {}))
                 payload = build_backtest_payload(
                     hlcvs_data,
                     ctx.msss[exchange],
@@ -2519,6 +2357,7 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                     metrics_only=True,
+                    selection=selection,
                     skip_btc_analysis=skip_btc_analysis,
                     runtime_config=runtime_config,
                     execution_settings=execution_settings,
@@ -2582,6 +2421,9 @@ class SuiteEvaluator:
 
             phase_start = _profile_start(profile_enabled)
             try:
+                validate_required_ew_metrics(
+                    analyses, self.required_metrics_for_scenario(ctx.label)
+                )
                 combined_metrics = combine(analyses)
             except MetricAggregationError as exc:
                 error = f"{exc.__class__.__name__}: {exc}"
@@ -3231,9 +3073,12 @@ def install_anchored_fine_tune_plan(
                 {
                     "source": source,
                     "seed_bot": deepcopy(anchor_cfg["bot"]),
+                    "seed_live": _starting_live_numeric_seed(anchor_cfg.get("live")),
                     "fixed_values": fixed_values,
                 }
             )
+        except StartingConfigSchemaError:
+            raise
         except Exception as exc:
             logging.warning(
                 "failed to use starting config as fine-tune anchor: %s", exc
@@ -3260,6 +3105,10 @@ def install_anchored_fine_tune_plan(
     )
 
 
+class StartingConfigSchemaError(ValueError):
+    """A seed's old risk policy requires explicit migration before extraction."""
+
+
 def extract_configs(path):
     return list(iter_extract_configs(path))
 
@@ -3271,6 +3120,8 @@ def iter_extract_configs(path):
         try:
             raw = load_hjson_config(path, log_errors=False)
             yield _extract_starting_config(raw, source=path)
+        except StartingConfigSchemaError:
+            raise
         except Exception as e:
             logging.warning(
                 f"failed to extract bot config from starting config {path}: {e}"
@@ -3282,6 +3133,8 @@ def iter_extract_configs(path):
                 try:
                     cfg = json.loads(line)
                     yield _extract_starting_config(cfg, source=path)
+                except StartingConfigSchemaError:
+                    raise
                 except Exception as e:
                     logging.warning(
                         f"failed to extract bot config from starting config {path}: {e}"
@@ -3292,35 +3145,99 @@ def _format_starting_seed_bot(bot, live=None):
     """Normalize numeric seed parameters without inheriting HSL activation policy.
 
     Fresh searches evaluate every seed under the main config's current policy;
-    seed enablement/restart choices and old fitness are never runtime authority.
+    seed enablement and old fitness are never runtime authority.
     """
-    from config.shared_bot import canonicalize_shared_bot_side
+    from config.authored import validate_authored_config
+    from config.migrations.v9 import reject_retired_v9_fields
 
     bot = deepcopy(bot)
     live = deepcopy(live) if isinstance(live, dict) else {}
-    live.pop("hsl_engine", None)
-    for side in ("long", "short"):
-        if isinstance(bot.get(side), dict):
-            canonicalize_shared_bot_side(bot[side])
-    defaults = get_template_config()["bot"]["long"]["hsl"]
-    numeric_fields = ("red_threshold", "ema_span_minutes", "cooldown_minutes_after_red")
+    template = get_template_config()
+    try:
+        reject_retired_v9_fields({"bot": bot, "live": live})
+        validate_authored_config({"bot": bot, "live": live}, template)
+    except (ValueError, TypeError) as exc:
+        raise StartingConfigSchemaError(str(exc)) from exc
+    # Current finite numeric suggestions are clamped against the main search
+    # bounds later. Bot-layout normalization must not validate them as a live
+    # runtime policy first, or replace an invalid suggestion with a default.
+    for field in _starting_live_numeric_seed(live):
+        live[field] = deepcopy(template["live"][field])
+    defaults = template["bot"]["long"]["hsl"]
+    numeric_fields = (
+        "red_threshold", "memory_ema_span_minutes",
+        "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red",
+    )
     numeric_seeds = {}
-    for scope in ("long", "short", "portfolio"):
-        block = bot.get("hsl") if scope == "portfolio" else bot.get(scope, {}).get("hsl")
-        if not isinstance(block, dict):
+
+    def remember(block, fields, path):
+        for key in fields:
+            if key not in block:
+                continue
+            value = block[key]
+            try:
+                number = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"invalid risk optimizer seed value: {'.'.join((*path, key))}") from exc
+            if isinstance(value, bool) or not math.isfinite(number):
+                raise ValueError(f"non-finite or non-numeric risk optimizer seed value: {'.'.join((*path, key))}")
+            numeric_seeds[(*path, key)] = number
+
+    for scope, path in (
+        ("long", ("long", "hsl")),
+        ("short", ("short", "hsl")),
+        ("portfolio", ("risk", "hsl")),
+    ):
+        parent = bot
+        for key in path[:-1]:
+            parent = parent.get(key, {})
+        block = parent.get(path[-1])
+        if not isinstance(block, dict) or (scope == "portfolio" and str(block.get("scope")).strip().lower() != "portfolio"):
             continue
-        numeric_seeds[scope] = {key: float(block[key]) for key in numeric_fields if key in block}
-        if any(not math.isfinite(value) for value in numeric_seeds[scope].values()):
-            raise ValueError(f"non-finite HSL optimizer seed value in {scope} policy")
-        # Seed HSL policy is not used. Validate the bot layout with inert current
-        # defaults, then leave numeric suggestions for the optimizer's bounds clamp.
+        remember(block, numeric_fields, path)
+        # Runtime policy belongs to the main search; only finite numeric
+        # suggestions survive here for later normal bounds clamping.
         block.clear()
-        block.update(deepcopy(defaults), enabled=False, restart_after_red_policy=None)
+        block.update(deepcopy(defaults), enabled=False)
+        if scope == "portfolio":
+            block["scope"] = "portfolio"
+    for path in (("unstuck",), ("risk", "loss_gate")):
+        block = bot
+        default = template["bot"]
+        for key in path:
+            block = block.get(key, {})
+            default = default[key]
+        remember(block, ("memory_ema_span_minutes",), path)
+        if "memory_ema_span_minutes" in block:
+            block["memory_ema_span_minutes"] = default["memory_ema_span_minutes"]
     formatted = format_bot_config(bot, live_cfg=live, verbose=False, warn_deprecations=False)
-    for scope, values in numeric_seeds.items():
-        block = formatted["hsl"] if scope == "portfolio" else formatted[scope]["hsl"]
-        block.update(values)
+    for path, value in numeric_seeds.items():
+        block = formatted
+        for key in path[:-1]:
+            block = block[key]
+        block[path[-1]] = value
     return formatted
+
+
+def _starting_live_numeric_seed(live):
+    """Keep declared live optimizer genes without importing runtime policy."""
+    from config.param_paths import OPTIMIZABLE_BOT_KEY_PATHS
+
+    if not isinstance(live, dict):
+        return {}
+    result = {}
+    for path in set(OPTIMIZABLE_BOT_KEY_PATHS.values()):
+        if len(path) != 2 or path[0] != "live" or path[1] not in live:
+            continue
+        value = live[path[1]]
+        try:
+            number = float(value)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError(f"invalid live optimizer seed value: live.{path[1]}") from exc
+        if isinstance(value, bool) or not math.isfinite(number):
+            raise ValueError(f"non-finite or non-numeric live optimizer seed value: live.{path[1]}")
+        result[path[1]] = number
+    return result
 
 
 def _extract_starting_config(raw_config, *, source: str = "<memory>"):
@@ -3332,28 +3249,28 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
     bot_cfg = current.get("bot")
     if not isinstance(bot_cfg, dict):
         raise KeyError("missing bot config")
-    extracted = {"bot": _format_starting_seed_bot(bot_cfg, current.get("live"))}
+    from config.migrations.v9 import require_v9_runtime_config
+
+    try:
+        require_v9_runtime_config(current)
+    except ValueError as exc:
+        raise StartingConfigSchemaError(f"starting config {source}: {exc}") from exc
+    extracted = {"config_version": current["config_version"],
+                 "bot": _format_starting_seed_bot(bot_cfg, current.get("live"))}
     live_cfg = current.get("live")
     if isinstance(live_cfg, dict):
+        numeric_live = _starting_live_numeric_seed(live_cfg)
+        if numeric_live:
+            extracted["live"] = numeric_live
         strategy_kind = live_cfg.get("strategy_kind")
         if strategy_kind and normalize_strategy_kind(
             strategy_kind
         ) != normalize_strategy_kind(None):
-            extracted["live"] = {"strategy_kind": strategy_kind}
-        if live_cfg.get("hsl_signal_mode") == "unified":
-            extracted.setdefault("live", {})["hsl_signal_mode"] = "unified"
+            extracted.setdefault("live", {})["strategy_kind"] = strategy_kind
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
     record_source = source or "<memory>"
-    from config.migrations.legacy_v7 import _parse_version_tuple
-    version = _parse_version_tuple(current.get("config_version"))
-    if version is None or version < (8, 6, 0) or "hsl_engine" in (live_cfg or {}):
-        logging.warning(
-            "Loading legacy optimizer seed %s best effort under the current schema; "
-            "main config owns HSL activation/restart policy and all fitness is reevaluated",
-            record_source,
-        )
     extracted["_starting_config_source"] = record_source
     return extracted
 
@@ -3368,7 +3285,23 @@ def _build_starting_seed_config(cfg):
             "bot": _format_starting_seed_bot(cfg)
         }
     elif "bot" in cfg and isinstance(cfg.get("bot"), dict):
-        extracted = cfg
+        if "config_version" in cfg:
+            from config.migrations.v9 import require_v9_runtime_config
+
+            try:
+                require_v9_runtime_config(cfg)
+            except ValueError as exc:
+                raise StartingConfigSchemaError(str(exc)) from exc
+        else:
+            # In-memory numeric suggestions have no runtime schema authority;
+            # removed v8 policy must still pass through explicit migration.
+            from config.migrations.v9 import reject_retired_v9_fields
+
+            try:
+                reject_retired_v9_fields(cfg)
+            except ValueError as exc:
+                raise StartingConfigSchemaError(str(exc)) from exc
+        extracted = {**cfg, "bot": _format_starting_seed_bot(cfg["bot"], cfg.get("live"))}
     else:
         extracted = _extract_starting_config(cfg)
     seed = get_template_config()
@@ -3458,30 +3391,35 @@ def _materialize_suite_run_contract(
 def _run_gpu_preparation_preflight(
     config: Dict[str, Any], suite_cfg: Mapping[str, Any]
 ) -> None:
-    """Validate immutable Apple MPS requirements before loading historical data."""
+    """Validate effective GPU contracts before historical preparation or device imports."""
 
     if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
         return
-    from optimization.backends.gpu_backend import (
-        materialize_gpu_preparation_config,
-        validate_gpu_preparation_scope,
-    )
+    from config.gpu import resolve_gpu_screening, resolve_gpu_sizing, validate_gpu_backtest_config
+    from optimization.warmup import _apply_config_overrides
 
-    effective_config = materialize_gpu_preparation_config(config)
-    normalized_suite_cfg = dict(suite_cfg)
-    if bool(normalized_suite_cfg.get("enabled")):
+    effective_config = deepcopy(config)
+    _apply_config_overrides(effective_config, config["optimize"].get("fixed_runtime_overrides", {}))
+    if effective_config["live"]["strategy_kind"] != config["live"]["strategy_kind"]:
+        raise ValueError("fixed_runtime_overrides may not change live.strategy_kind")
+    validate_gpu_backtest_config(effective_config)
+    for field in ("batch_size", "max_dispatch_candidate_bars"):
+        resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
+    screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))
+    if suite_cfg.get("enabled"):
         scenarios, _reducer_cfg = build_scenarios(
-            normalized_suite_cfg,
+            dict(suite_cfg),
             base_exchanges=effective_config.get("backtest", {}).get("exchanges"),
         )
-        normalized_suite_cfg["scenarios"] = [
-            {
-                "label": scenario.label,
-                "overrides": dict(scenario.overrides or {}),
-            }
-            for scenario in scenarios
-        ]
-    validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
+        unknown = set(screening["scenarios"]) - {scenario.label for scenario in scenarios}
+        if unknown:
+            raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
+        for scenario in scenarios:
+            scenario_config = deepcopy(effective_config)
+            _apply_config_overrides(scenario_config, dict(scenario.overrides or {}))
+            validate_gpu_backtest_config(scenario_config)
+    elif screening["scenarios"]:
+        raise ValueError("GPU screening.scenarios requires a scenario suite")
 
 
 def _materialize_resolved_suite_dates(
@@ -3563,13 +3501,12 @@ def iter_anchored_fine_tune_seed_configs(config: dict):
     if anchor_plan is None:
         return
     for anchor in anchor_plan.get("anchors") or []:
+        live_seed = deepcopy(anchor.get("seed_live") or {})
+        if anchor_plan.get("strategy_kind"):
+            live_seed["strategy_kind"] = anchor_plan["strategy_kind"]
         yield {
             "bot": deepcopy(anchor.get("seed_bot") or {}),
-            "live": (
-                {"strategy_kind": anchor_plan.get("strategy_kind")}
-                if anchor_plan.get("strategy_kind")
-                else {}
-            ),
+            "live": live_seed,
             "_starting_config_source": anchor.get("source", "<memory>"),
         }
 
@@ -3642,6 +3579,8 @@ def configs_to_individuals_streaming(
                 clamp_collector=clamp_collector,
             )
             inds.add(tuple(individual))
+        except StartingConfigSchemaError:
+            raise
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
     _flush_seed_bounds_adjustments(clamp_collector)
@@ -3718,7 +3657,6 @@ async def main():
         "Backtest Runtime": parser.add_argument_group("Backtest Runtime"),
         "Optimize Common": parser.add_argument_group("Optimize Common"),
         "Optimize Bounds": parser.add_argument_group("Optimize Bounds"),
-        "Optimize DEAP": parser.add_argument_group("Optimize DEAP"),
         "Optimize Pymoo": parser.add_argument_group("Optimize Pymoo"),
         "Advanced Overrides": parser.add_argument_group("Advanced Overrides"),
     }
@@ -3803,7 +3741,7 @@ async def main():
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
     config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     if "couple_unstuck_ema_spans" in (
@@ -3819,8 +3757,8 @@ async def main():
     if effective_log_level != initial_log_level:
         configure_logging(debug=effective_log_level)
     logging.info(
-        "Config normalized for optimization | template=%s | scoring=%s",
-        TEMPLATE_CONFIG_MODE,
+        "Config normalized for optimization | schema=%s | scoring=%s",
+        config["config_version"],
         ",".join(objective_metric_names(config)),
     )
     if _suite_config_implies_suite_mode(args):
@@ -3917,6 +3855,9 @@ async def main():
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
+    if config["backtest"].get("organillo_csv") is not None:
+        from organillo import freeze_config
+        freeze_config(config)
     data_config = build_optimizer_data_config(config)
     allow_internal_nan_gaps = (
         str(config.get("optimize", {}).get("backend", "")).strip().lower() == "gpu"
@@ -3934,6 +3875,7 @@ async def main():
         btc_usd_specs = {}
         msss = {}
         timestamps_dict = {}
+        candle_coins_dict = {}
         config["backtest"]["coins"] = {}
         reducer_cfg: Dict[str, Any] = {"default": "mean"}
         scenario_contexts: List[ScenarioEvalContext] = []
@@ -4041,6 +3983,7 @@ async def main():
                     array_manager=array_manager,
                     preserve_internal_nan_gaps=allow_internal_nan_gaps,
                 )
+                candle_coins_dict[exchange] = tuple(coins)
                 exchange_preference = defaultdict(list)
                 for coin in coins:
                     exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -4058,7 +4001,7 @@ async def main():
                     for exchange in backtest_exchanges
                 }
                 for exchange, task in tasks.items():
-                    _register_exchange_data(
+                    source_coins, _mss = _register_exchange_data(
                         exchange,
                         await task,
                         config,
@@ -4069,6 +4012,7 @@ async def main():
                         array_manager=array_manager,
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
+                    candle_coins_dict[exchange] = tuple(source_coins)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
             hlcvs_specs=hlcvs_specs,
@@ -4151,9 +4095,13 @@ async def main():
         seed_rngs(config.get("optimize", {}).get("seed"), context="optimizer")
 
         # Shared state used by workers for duplicate detection
-        manager = multiprocessing.Manager()
-        seen_hashes = manager.dict()
-        duplicate_counter = manager.dict()
+        if config["optimize"]["backend"] == "gpu":
+            seen_hashes = {}
+            duplicate_counter = {}
+        else:
+            manager = multiprocessing.Manager()
+            seen_hashes = manager.dict()
+            duplicate_counter = manager.dict()
         duplicate_counter["total"] = 0
         duplicate_counter["resolved"] = 0
         duplicate_counter["reused"] = 0
@@ -4206,18 +4154,17 @@ async def main():
             starting_configs_path=args.starting_configs,
             checkpoint_path=checkpoint_path,
             resume=bool(args.resume),
-            constraint_fitness_cls=ConstraintAwareFitness,
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
             iter_starting_configs=starting_config_iter,
             configs_to_individuals_streaming=configs_to_individuals_streaming,
             optimization_shape=evaluator.optimization_shape,
-            record_individual_result=_record_individual_result,
-            run_evolution=ea_mu_plus_lambda_stream,
             build_config_fn=individual_to_config,
             overrides_fn=optimizer_overrides,
         )
+        if backend_name == "gpu":
+            backend_kwargs["standalone_candle_coins"] = candle_coins_dict
         if backend_name == "gpu":
             interrupt_latch = OptimizerInterruptLatch()
             backend_kwargs["interrupt_check"] = interrupt_latch.raise_if_requested

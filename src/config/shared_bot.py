@@ -12,9 +12,8 @@ BOT_GROUP_FIELD_MAP = {
         "weights_minutes": "entry_cooldown_weights_minutes",
     },
     "risk": {
-        "n_positions": "n_positions",
+        "max_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
-        "total_exposure_entry_gate_enabled": "risk_twel_entry_gate_enabled",
         "total_exposure_enforcer_enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer_policy": "risk_twel_enforcer_policy",
         "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
@@ -26,17 +25,16 @@ BOT_GROUP_FIELD_MAP = {
         "score_weights": "forager_score_weights",
         "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
         "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-        "volume_drop_pct": "forager_volume_drop_pct",
         "volume_ema_span_1m": "forager_volume_ema_span_1m",
     },
     "hsl": {
         "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
-        "ema_span_minutes": "hsl_ema_span_minutes",
+        "drawdown_ratio_ema_span_minutes": "hsl_ema_span_minutes",
+        "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "enabled": "hsl_enabled",
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
         "red_threshold": "hsl_red_threshold",
-        "restart_after_red_policy": "hsl_restart_after_red_policy",
     },
     "unstuck": {
         "close_pct": "unstuck_close_pct",
@@ -46,7 +44,7 @@ BOT_GROUP_FIELD_MAP = {
         "ema_gating_enabled": "unstuck_ema_gating_enabled",
         "enabled": "unstuck_enabled",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",
-        "threshold": "unstuck_threshold",
+        "exposure_trigger_ratio": "unstuck_threshold",
     },
 }
 

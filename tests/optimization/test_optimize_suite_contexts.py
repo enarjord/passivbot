@@ -1,11 +1,14 @@
 import pickle
+from copy import deepcopy
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import optimize_suite
+from config.authored import validate_authored_config
 from config.schema import get_template_config
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 from suite_runner import ExchangeDataset
 
 
@@ -88,23 +91,23 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
         {"label": "base"},
         {
             "label": "long_only",
-            "overrides": {"bot.short.total_wallet_exposure_limit": 0},
+            "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0},
         },
         {
             "label": "short_only",
-            "overrides": {"bot.long.total_wallet_exposure_limit": 0},
+            "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
         },
     ]
     config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
     config["live"]["ignored_coins"] = {"long": [], "short": []}
     # Schema defaults keep shorts disabled. Optimizer candidates may enable
     # shorts later, so context preparation must not dedupe base vs long_only.
-    config["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     if rms_search:
         config["live"]["max_warmup_minutes"] = 3
         config["optimize"]["bounds"]["long"]["forager"].update(
             unilateralness_ema_span_1m=[1.0, 60.0],
-            score_weights={"unilateralness": [0.0, 1.0]},
+            score_weights_unilateralness=[0.0, 1.0],
         )
 
     async def fake_load_markets(_exchange, verbose=False):
@@ -244,6 +247,7 @@ def test_suite_evaluator_pickle_strips_attached_and_cached_arrays():
 async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_coins(
     monkeypatch,
 ):
+    _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -256,6 +260,20 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
     config["live"]["ignored_coins"] = {"long": [], "short": []}
     captured = {}
+    format_scenario = optimize_suite.format_config
+
+    def capture_public_scenario_format(scenario_config, **kwargs):
+        # Dataset selection may carry these internal values, but public
+        # formatting must receive only canonical authored configuration.
+        assert "coins" not in scenario_config["backtest"]
+        assert "cache_dir" not in scenario_config["backtest"]
+        for side in ("long", "short"):
+            assert not set(scenario_config["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH)
+        validate_authored_config(scenario_config, get_template_config())
+        captured.setdefault("formatted_approved", []).append(
+            deepcopy(scenario_config["live"]["approved_coins"])
+        )
+        return format_scenario(scenario_config, **kwargs)
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -285,6 +303,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     monkeypatch.setattr(
         optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
     )
+    monkeypatch.setattr(optimize_suite, "format_config", capture_public_scenario_format)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
@@ -296,6 +315,18 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     assert captured["approved"] == ["DOGE", "HYPE"]
     assert captured["exchanges"] == ["binance"]
     assert [ctx.label for ctx in contexts] == ["explicit", "default"]
+    assert captured["formatted_approved"] == [
+        {"long": ["DOGE"], "short": ["DOGE"]},
+        {"long": ["HYPE"], "short": ["HYPE"]},
+    ]
+    assert [ctx.config["backtest"]["coins"] for ctx in contexts] == [
+        {"combined": ["DOGE"]}, {"combined": ["HYPE"]},
+    ]
+    assert [ctx.candle_coins for ctx in contexts] == [
+        {"combined": ("DOGE", "HYPE")}, {"combined": ("DOGE", "HYPE")},
+    ]
+    assert contexts[0].coin_slice_indices["combined"] == [0]
+    assert contexts[1].coin_slice_indices["combined"] == [1]
 
 
 @pytest.mark.asyncio
@@ -542,7 +573,7 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+@pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contract(
     tmp_path, monkeypatch, backend
 ):
@@ -603,7 +634,7 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
 
     async def prepare(value):
         path.write_text(
-            json.dumps({"bot": {"long": {"risk": {"entry_cooldown_minutes": value}}}})
+            json.dumps({"bot": {"long": {"entry_cooldown": {"base_duration_minutes": value}}}})
         )
         run = deepcopy(config)
         suite = optimize_suite.extract_suite_config(run, suite_override=None)

@@ -4,7 +4,7 @@ import sys
 import numpy as np
 import pytest
 
-from optimization.gpu.model import ProxyMarket, ProxyRun, build_mps_data, build_mps_multicoin_data
+from optimization.gpu.model import ProxyMarket, ProxyRun, build_mps_multicoin_data
 
 
 @pytest.fixture
@@ -34,38 +34,53 @@ def _market():
     return ProxyMarket(0.001, 0.01, 0.001, 1.0, 1.0, 0.0002)
 
 
-@pytest.mark.parametrize("multicoin", [False, True])
+def test_shared_account_packer_accepts_one_coin_and_preserves_validity(cpu_packer):
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, 1, 1))
+    values[:2] = np.nan
+    values[5:] = np.nan
+    original = values.copy()
+    packed = build_mps_multicoin_data(values, np.arange(6) * 60000, [_run(2, 4)], [_market()])
+    assert packed["n_coins"] == 1
+    assert packed["bars"].shape[:2] == (6, 1)
+    np.testing.assert_array_equal(packed["coin_settings"][:, 6:8], [[2, 4]])
+    np.testing.assert_array_equal(values, original)
+
+
+@pytest.mark.parametrize("coins", [0, 65])
+def test_shared_account_packer_rejects_out_of_range_coin_counts(cpu_packer, coins):
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, coins, 1))
+    with pytest.raises(ValueError, match="supports 1..64 coins"):
+        build_mps_multicoin_data(values, np.arange(6) * 60000, [_run()] * coins, [_market()] * coins)
+    assert cpu_packer == []
+
+
+@pytest.mark.parametrize("coins", [1, 2])
 @pytest.mark.parametrize("bad_hlc", [
     [np.nan, np.nan, np.nan], [101.0, 99.0, np.nan], [np.inf, 99.0, 100.0],
     [0.0, 99.0, 100.0], [101.0, 99.0, np.nextafter(0.0, 1.0)],
     [np.finfo(np.float64).max, 99.0, 100.0],
 ])
-def test_direct_builders_reject_internal_invalid_hlc_before_gpu_allocation(cpu_packer, multicoin, bad_hlc):
-    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, 2, 1))
+def test_direct_builders_reject_internal_invalid_hlc_before_gpu_allocation(cpu_packer, coins, bad_hlc):
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, coins, 1))
     values[3, 0, :3] = bad_hlc
     original = values.copy()
     timestamps = np.arange(6) * 60000
     with pytest.raises(ValueError, match="coin index 0, invalid candle at 3"):
-        if multicoin:
-            build_mps_multicoin_data(values, timestamps, [_run()] * 2, [_market()] * 2)
-        else:
-            build_mps_data(*[values[:, 0, column] for column in range(3)], timestamps, _run(), _market())
+        build_mps_multicoin_data(values, timestamps, [_run()] * coins, [_market()] * coins)
     assert cpu_packer == []
     np.testing.assert_array_equal(values, original)
 
 
-@pytest.mark.parametrize("multicoin", [False, True])
-def test_direct_builders_allow_unavailable_listing_prefix_and_delisting_tail(cpu_packer, multicoin):
-    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, 2, 1))
+@pytest.mark.parametrize("coins", [1, 2])
+def test_direct_builders_allow_unavailable_listing_prefix_and_delisting_tail(cpu_packer, coins):
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, coins, 1))
     values[:2, 0] = np.nan
     values[5:, 0] = np.nan
     timestamps = np.arange(6) * 60000
-    if multicoin:
-        packed = build_mps_multicoin_data(values, timestamps, [_run(2, 4), _run()], [_market()] * 2)
-        np.testing.assert_array_equal(packed["coin_settings"][:, 6:8], [[2, 4], [0, 5]])
-    else:
-        packed = build_mps_data(*[values[:, 0, column] for column in range(3)], timestamps, _run(2, 4), _market())
-        np.testing.assert_array_equal(packed["valid"], [False, False, True, True, True, False])
+    packed = build_mps_multicoin_data(values, timestamps,
+        [_run(2, 4), *[_run()] * (coins - 1)], [_market()] * coins)
+    np.testing.assert_array_equal(packed["coin_settings"][:, 6:8],
+                                  [[2, 4], *[[0, 5]] * (coins - 1)])
     assert cpu_packer
 
 

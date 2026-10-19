@@ -6,12 +6,10 @@ from dataclasses import replace
 import pytest
 
 from hsl_reference import Fill, dec
-from hsl_reference_controller import replay
-from test_hsl_evaluator import evaluate
-from test_hsl_trace import oracle
+from test_hsl_evaluator import evaluate_snapshot as evaluate
 from test_hsl_reference_replay import pair, frame, M
 
-MODES = ["coin", "pside", "unified"]
+MODES = ["coin", "pside", "portfolio"]
 
 
 def selectors(mode, side):
@@ -43,7 +41,7 @@ def damaged(side, now=30 * M + 1, *, repaired=False, size=0):
     return frame(p, now=now, balance=100)
 
 
-def result(snapshot, mode, side, *, restart="always"):
+def result(snapshot, mode, side):
     selected = selectors(mode, side)
     if mode == "coin":
         selected["symbol"] = snapshot.pairs[0].symbol
@@ -53,7 +51,6 @@ def result(snapshot, mode, side, *, restart="always"):
         span=10,
         threshold=0.1,
         cooldown_ms=5 * M,
-        restart=restart,
         **selected,
     )
 
@@ -77,18 +74,7 @@ def test_missing_final_fill_uses_fixed_scoped_anchor_across_time_and_restart(
         assert [e["timestamp"] for e in actual["events"] if e["kind"] == "flat"] == [
             20 * M
         ]
-        reference = replay(
-            oracle(snapshot, mode, **selectors(mode, side)),
-            now=now,
-            start=0,
-            budget=100,
-            span=10,
-            threshold=0.1,
-            cooldown=5 * M,
-        )
-        assert reference[-1].action == expected
-        assert actual["decision"]["raw"] == pytest.approx(float(reference[-1].raw))
-        assert actual["decision"]["ema"] == pytest.approx(float(reference[-1].ema))
+
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -117,13 +103,13 @@ def test_current_residual_exposure_cannot_use_flat_fallback(mode, side):
 
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_never_and_history_expiry_keep_their_finite_window_contract(mode, side):
-    snapshot = damaged(side)
+def test_finite_history_cut_reports_lost_flatten_evidence(mode, side):
+    snapshot = damaged(side,22*M)
     assert (
-        result(snapshot, mode, side, restart="never")["decision"]["action"] == "halted"
+        result(snapshot, mode, side)["decision"]["action"] == "halted"
     )
     for start in (20 * M + 1, snapshot.now):
-        expired = result(replace(snapshot, start=start), mode, side, restart="never")
+        expired = result(replace(snapshot, start=start), mode, side)
         assert expired["decision"]["action"] == "normal"
         assert not expired["events"]
     p = snapshot.pairs[0]
@@ -150,7 +136,7 @@ def test_latest_fill_is_scoped_and_aggregate_flat_is_not_net_exposure(mode):
     actual = result(combined, mode, "long")
     expected = "normal"  # Later GREEN episode supersedes the earlier stop.
     assert actual["decision"]["action"] == expected
-    if mode == "unified":
+    if mode == "portfolio":
         assert actual["decision"]["flat_at"] is None
     else:
         assert [e["timestamp"] for e in actual["events"] if e["kind"] == "flat"] == [
@@ -333,8 +319,8 @@ def test_live_owner_admits_after_estimated_cooldown_and_rechecks_repaired_histor
     value.positions[SYMBOL][side].update(size=0.0, price=0.0)
     value.get_raw_balance = lambda: 100.0
     policy = (
-        value.config["bot"]["hsl"]
-        if mode == "unified"
+        value.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else value.config["bot"][side]["hsl"]
     )
     policy["cooldown_minutes_after_red"] = 5.0

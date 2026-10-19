@@ -860,9 +860,11 @@ def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, 
         "_rotate_events_if_needed",
         lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 2_000_000),
     )
-    monkeypatch.setattr(monitor_publisher_module.json, "dumps", fail_dumps)
-
-    event, timing = publisher._record_event_timed("test.event", ("test",), {"value": 1})
+    # json is shared with pytest/reporting plugins. Restore the failing serializer
+    # before the call-phase report, which runs before fixture teardown.
+    with monkeypatch.context() as patch:
+        patch.setattr(monitor_publisher_module.json, "dumps", fail_dumps)
+        event, timing = publisher._record_event_timed("test.event", ("test",), {"value": 1})
 
     assert event is None
     assert timing == {

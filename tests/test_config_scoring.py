@@ -20,15 +20,15 @@ def test_default_objective_goal_recognizes_new_ratio_metrics():
 
 def test_normalize_scoring_entries_accepts_new_ratio_metrics():
     specs, changed = normalize_scoring_entries(
-        ["paper_loss_ratio", "paper_loss_ratio_w", "exposure_ratio", "exposure_mean_ratio_w"]
+        ["paper_loss_ratio", "paper_loss_mean_ratio", "exposure_ratio", "exposure_mean_ratio"]
     )
 
     assert changed
     assert [(spec.metric, spec.goal) for spec in specs] == [
         ("paper_loss_ratio_usd", "max"),
-        ("paper_loss_ratio_w_usd", "max"),
+        ("paper_loss_mean_ratio_usd", "max"),
         ("exposure_ratio_usd", "max"),
-        ("exposure_mean_ratio_w_usd", "max"),
+        ("exposure_mean_ratio_usd", "max"),
     ]
 
 
@@ -284,7 +284,7 @@ def test_duration_aliases_load_with_default_max_objective(metric):
     from config_utils import get_template_config
 
     config = get_template_config()
-    config["optimize"]["scoring"] = [metric]
+    config["optimize"]["scoring"] = [{"metric": metric, "goal": "max"}]
     prepared = prepare_config(config, verbose=False)
     assert prepared["optimize"]["scoring"] == [{"metric": "n_days", "goal": "max"}]
     assert default_objective_goal(metric) == "max"

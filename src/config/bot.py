@@ -7,7 +7,6 @@ from pure_funcs import sort_dict_keys, str2bool
 
 from .hsl import normalization_template, normalize_hsl
 from .log_output import log_config_message
-from .migrations import apply_backward_compatibility_renames
 from .optimize_bounds import get_optimize_bounds_defaults
 from .shared_bot import (
     BOT_POSITION_SIDES,
@@ -40,16 +39,13 @@ CLIFF_EDGE_WARNING_THRESHOLD = 0.1
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
     "forager_volatility_ema_span_1m": "filter_volatility_ema_span_1m",
     "forager_volume_ema_span_1m": "filter_volume_ema_span_1m",
-    "forager_volume_drop_pct": "filter_volume_drop_pct",
 }
 
 FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
     "long_forager_volatility_ema_span_1m": "long_filter_volatility_ema_span_1m",
     "long_forager_volume_ema_span_1m": "long_filter_volume_ema_span_1m",
-    "long_forager_volume_drop_pct": "long_filter_volume_drop_pct",
     "short_forager_volatility_ema_span_1m": "short_filter_volatility_ema_span_1m",
     "short_forager_volume_ema_span_1m": "short_filter_volume_ema_span_1m",
-    "short_forager_volume_drop_pct": "short_filter_volume_drop_pct",
 }
 
 
@@ -136,19 +132,12 @@ def validate_bot_config(result: dict) -> None:
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer_enabled",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
         )
-        entry_gate_enabled = _validate_bool(
-            get_grouped_bot_value(bot_side, "risk_twel_entry_gate_enabled"),
-            path=f"bot.{pside}.risk.total_exposure_entry_gate_enabled",
+        _validate_positive_ratio_when_enabled(
+            enabled_value=True,
+            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+            enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit",
+            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
         )
-        if entry_gate_enabled:
-            _validate_positive_ratio_when_enabled(
-                enabled_value=True,
-                threshold_value=get_grouped_bot_value(
-                    bot_side, "risk_twel_enforcer_threshold"
-                ),
-                enabled_path=f"bot.{pside}.risk.total_exposure_entry_gate_enabled",
-                threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
-            )
         normalize_twel_enforcer_policy(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
             path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
@@ -158,9 +147,9 @@ def validate_bot_config(result: dict) -> None:
         try:
             n_positions_value = float(raw_n_positions)
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.risk.n_positions must be numeric") from exc
+            raise TypeError(f"bot.{pside}.risk.max_positions must be numeric") from exc
         if not math.isfinite(n_positions_value) or n_positions_value < 0.0:
-            raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
+            raise ValueError(f"bot.{pside}.risk.max_positions must be finite and >= 0")
         n_positions = int(round(n_positions_value))
         if twel < 0.0 or not math.isfinite(twel):
             raise ValueError(
@@ -168,7 +157,7 @@ def validate_bot_config(result: dict) -> None:
             )
         if twel > 0.0 and n_positions <= 0:
             raise ValueError(
-                f"bot.{pside}.risk.n_positions must be > 0 when "
+                f"bot.{pside}.risk.max_positions must be > 0 when "
                 f"bot.{pside}.risk.total_wallet_exposure_limit is > 0"
             )
         _validate_bool(
@@ -657,23 +646,6 @@ def normalize_bot_forager_config(
     required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
-        raw_drop_pct = forager_cfg["volume_drop_pct"]
-        try:
-            drop_pct = float(raw_drop_pct)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                f"bot.{pside}.forager.volume_drop_pct must be numeric"
-            ) from exc
-        if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(
-                f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]"
-            )
-        if raw_drop_pct != drop_pct and tracker is not None:
-            tracker.update(
-                ["bot", pside, "forager", "volume_drop_pct"], raw_drop_pct, drop_pct
-            )
-        forager_cfg["volume_drop_pct"] = drop_pct
-
         weights = forager_cfg["score_weights"]
         if isinstance(weights, dict):
             weights.setdefault("unilateralness", 0.0)
@@ -692,7 +664,7 @@ def normalize_bot_forager_config(
                         break
             pside_enabled = (
                 float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
-                and int(round(float(risk_cfg["n_positions"]))) > 0
+                and int(round(float(risk_cfg["max_positions"]))) > 0
             )
             if raw_total <= 0.0 and not pside_enabled:
                 continue
@@ -730,19 +702,19 @@ def normalize_position_counts(
             seed_missing_groups=False,
         )
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
-        current = risk_cfg.get("n_positions")
+        current = risk_cfg.get("max_positions")
         if current is None:
             continue
         try:
             current_value = float(current)
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.n_positions must be numeric") from exc
+            raise TypeError(f"bot.{pside}.risk.max_positions must be numeric") from exc
         if not math.isfinite(current_value) or current_value < 0.0:
-            raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
+            raise ValueError(f"bot.{pside}.risk.max_positions must be finite and >= 0")
         rounded = int(round(current_value))
         if tracker is not None and current != rounded:
-            tracker.update(["bot", pside, "risk", "n_positions"], current, rounded)
-        risk_cfg["n_positions"] = rounded
+            tracker.update(["bot", pside, "risk", "max_positions"], current, rounded)
+        risk_cfg["max_positions"] = rounded
 
 
 def normalize_risk_config(result: dict, *, tracker: Optional[object] = None) -> None:
@@ -856,20 +828,9 @@ def validate_forager_config(
         bot_cfg = result["bot"][pside]
         forager_cfg = get_bot_group(bot_cfg, "forager")
         risk_cfg = get_bot_group(bot_cfg, "risk")
-        drop_pct = forager_cfg["volume_drop_pct"]
-        try:
-            drop_pct = float(drop_pct)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                f"bot.{pside}.forager.volume_drop_pct must be numeric"
-            ) from exc
-        if not math.isfinite(drop_pct) or not (0.0 <= drop_pct <= 1.0):
-            raise ValueError(
-                f"bot.{pside}.forager.volume_drop_pct must be within [0.0, 1.0]"
-            )
         pside_enabled = (
             float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
-            and int(round(float(risk_cfg["n_positions"]))) > 0
+            and int(round(float(risk_cfg["max_positions"]))) > 0
         )
 
         normalized = normalize_forager_score_weights(
@@ -888,7 +849,7 @@ def validate_forager_config(
                 f"bot.{pside}.forager.score_weights must be normalized before validation"
             )
 
-        if pside_enabled and (normalized["volume"] > 0.0 or drop_pct > 0.0):
+        if pside_enabled and (normalized["volume"] > 0.0):
             volume_span = float(forager_cfg["volume_ema_span_1m"])
             if not math.isfinite(volume_span) or volume_span <= 0.0:
                 raise ValueError(
@@ -937,15 +898,6 @@ def format_bot_config(
                 tracker.add(["bot", pside], seeded)
     for path in ("bot.long", "bot.short"):
         require_config_dict(result, path)
-    apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
-    from .migrations.entry_ema import migrate_entry_ema_spans
-    from .migrations.unstuck_ema import migrate_unstuck_ema_spans
-    from .migrations.entry_cooldown import migrate_entry_cooldown
-
-    migrate_entry_cooldown(result, tracker=tracker)
-    migrate_entry_ema_spans(result, tracker=tracker)
-
-    migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)
     normalize_hsl(result, template, verbose=verbose)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     ensure_required_bot_params_present(result)
@@ -954,11 +906,6 @@ def format_bot_config(
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)
     normalize_risk_config(result, tracker=tracker)
-    strip_deprecated_entry_grid_inflation_flags(
-        result,
-        verbose=verbose and warn_deprecations,
-        tracker=tracker,
-    )
     return sort_dict_keys(result["bot"])
 
 

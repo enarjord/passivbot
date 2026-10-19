@@ -6,33 +6,57 @@ import pytest
 
 from config import get_template_config, prepare_config
 from config.overrides import parse_overrides
-from config.optimize_bounds import flatten_optimize_bounds
+from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.param_paths import resolve_bound_selectors
 from config_utils import clean_config
 from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
 
+def _nested_bounds(entries):
+    """Build authored bounds through the canonical optimizer path writer."""
+    bounds = {}
+    for key, value in entries.items():
+        set_flat_optimize_bound(bounds, "trailing_martingale", key, value)
+    return bounds
+
+
 @pytest.mark.parametrize(
     "selector,sides",
     [
-        ("long.risk.*", ("long",)),
-        ("bot.short.risk.*", ("short",)),
-        ("risk.*", ("long", "short")),
-        ("*.risk.*", ("long", "short")),
-        ("risk", ("long", "short")),
-        ("long.risk", ("long",)),
+        ("long.entry_cooldown.*", ("long",)),
+        ("bot.short.entry_cooldown.*", ("short",)),
+        ("bot.*.entry_cooldown.*", ("long", "short")),
+        ("*.entry_cooldown.*", ("long", "short")),
+        ("bot.*.entry_cooldown", ("long", "short")),
+        ("long.entry_cooldown", ("long",)),
     ],
 )
-def test_legacy_risk_selectors_include_only_the_original_cooldown_leaf(selector, sides):
+def test_canonical_cooldown_selectors_include_the_entire_subtree(selector, sides):
     cfg = prepare_config(get_template_config(), verbose=False)
     bounds = flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind="trailing_martingale")
+    suffixes = ("risk_entry_cooldown_minutes", "entry_cooldown_min_duration_minutes",
+                "entry_cooldown_max_duration_minutes", "entry_cooldown_weights_minutes_exposure_ratio",
+                "entry_cooldown_weights_minutes_adverse_directionality")
     for side in ("long", "short"):
-        bounds[f"{side}_entry_cooldown_weights_minutes_exposure_ratio"] = [0.0, 10.0]
+        for suffix in suffixes:
+            bounds[f"{side}_{suffix}"] = [0.0, 10.0]
     selected = resolve_bound_selectors(cfg, [selector], bounds)
-    assert {k for k in selected if "cooldown" in k} == {
-        f"{side}_risk_entry_cooldown_minutes" for side in sides
-    }
-    assert all(k.split("_", 1)[0] in sides for k in selected)
+    assert set(selected) == {f"{side}_{suffix}" for side in sides for suffix in suffixes}
+    assert all(path[:3] == ("bot", path[1], "entry_cooldown") and path[1] in sides
+               for path in selected.values())
+
+
+@pytest.mark.parametrize("selector,sides", [
+    ("long.risk.*", ("long",)), ("bot.short.risk.*", ("short",)),
+    ("bot.*.risk.*", ("long", "short")), ("*.risk.*", ("long", "short")),
+    ("bot.*.risk", ("long", "short")), ("long.risk", ("long",)),
+])
+def test_risk_selectors_exclude_the_canonical_cooldown_subtree(selector, sides):
+    cfg = prepare_config(get_template_config(), verbose=False)
+    bounds = flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind="trailing_martingale")
+    selected = resolve_bound_selectors(cfg, [selector], bounds)
+    assert {f"{side}_n_positions" for side in sides} <= set(selected)
+    assert not any("cooldown" in key or "entry_cooldown" in path for key, path in selected.items())
 
 
 def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():
@@ -87,7 +111,7 @@ def test_adaptive_optimizer_rejects_invalid_domains_before_sampling(key, bound, 
     cfg = get_template_config()
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     with pytest.raises(ValueError, match="optimize.bounds"):
-        validate_optimize_bounds_against_bot_config(cfg, {f"{side}_{key}": bound})
+        validate_optimize_bounds_against_bot_config(cfg, _nested_bounds({f"{side}_{key}": bound}))
 
 
 def test_prepare_config_rejects_nested_invalid_search_domain():
@@ -101,37 +125,54 @@ def test_adaptive_optimizer_accepts_float_span_boundaries_and_zero_weights():
     cfg = get_template_config()
     validate_optimize_bounds_against_bot_config(
         cfg,
-        {
+        _nested_bounds({
             "long_unilateralness_ema_span_1m": [1.0, 100000.0, 0.5],
             "short_unilateralness_ema_span_1m": [10.5, 20.5],
             "long_entry_cooldown_weights_minutes_exposure_ratio": [0.0, 10.0],
             "short_entry_cooldown_weights_minutes_adverse_directionality": 0.0,
-        },
+        }),
     )
 
 
-def test_risk_wildcards_reach_fine_tune_fixed_params_and_composition():
+def test_canonical_cooldown_wildcards_reach_fine_tune_fixed_params_and_composition():
     from types import SimpleNamespace
     from optimize import _resolve_fine_tune_key_sets
     from config.overrides import get_allowed_modifications
     from tools.compose_coin_overrides import _resolve_override_params
 
     cfg = prepare_config(get_template_config(), verbose=False)
-    _, tunable, _, fixed = _resolve_fine_tune_key_sets(cfg, ["long.risk.*"])
-    assert "long_risk_entry_cooldown_minutes" in tunable
-    assert "long_risk_entry_cooldown_minutes" not in fixed
-    assert "short_risk_entry_cooldown_minutes" in fixed
-    cfg["optimize"]["fixed_params"] = ["risk.*"]
+    for side in ("long", "short"):
+        cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+        cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
+            min_duration_minutes=[0.0, 10.0], max_duration_minutes=[20.0, 60.0],
+            weights_minutes={"exposure_ratio": [0.0, 10.0], "adverse_directionality": [0.0, 10.0]},
+        )
+    suffixes = ("risk_entry_cooldown_minutes", "entry_cooldown_min_duration_minutes",
+                "entry_cooldown_max_duration_minutes", "entry_cooldown_weights_minutes_exposure_ratio",
+                "entry_cooldown_weights_minutes_adverse_directionality")
+    long_keys = {f"long_{suffix}" for suffix in suffixes}
+    short_keys = {f"short_{suffix}" for suffix in suffixes}
+    _, tunable, _, fixed = _resolve_fine_tune_key_sets(cfg, ["long.entry_cooldown.*"])
+    assert tunable == long_keys
+    assert long_keys.isdisjoint(fixed)
+    assert short_keys <= fixed
+    cfg["optimize"]["fixed_params"] = ["*.entry_cooldown.*"]
     _, _, configured_fixed, _ = _resolve_fine_tune_key_sets(cfg, [])
-    assert {
-        "long_risk_entry_cooldown_minutes",
-        "short_risk_entry_cooldown_minutes",
-    } <= configured_fixed
+    assert long_keys | short_keys <= configured_fixed
     paths, _ = _resolve_override_params(
+        "long.entry_cooldown.*", [SimpleNamespace(config=cfg)], cfg, get_allowed_modifications()
+    )
+    assert paths == {
+        ("bot", "long", "entry_cooldown", "base_duration_minutes"),
+        ("bot", "long", "entry_cooldown", "min_duration_minutes"),
+        ("bot", "long", "entry_cooldown", "max_duration_minutes"),
+        ("bot", "long", "entry_cooldown", "weights_minutes", "exposure_ratio"),
+        ("bot", "long", "entry_cooldown", "weights_minutes", "adverse_directionality"),
+    }
+    risk_paths, _ = _resolve_override_params(
         "long.risk.*", [SimpleNamespace(config=cfg)], cfg, get_allowed_modifications()
     )
-    assert ("bot", "long", "entry_cooldown", "base_duration_minutes") in paths
-    assert not any("weights_minutes" in path for path in paths)
+    assert risk_paths and not any("entry_cooldown" in path for path in risk_paths)
 
 
 @pytest.mark.parametrize("leaf", ["base_duration_minutes", "min_duration_minutes"])
@@ -176,9 +217,9 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     cfg["live"]["max_warmup_minutes"] = 1
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
-    bounds["risk"].update(n_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
     if consumer == "forager":
-        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+        bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     if bound_span is not None:
@@ -216,7 +257,7 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     bounds = cfg["optimize"]["bounds"]["long"]
     bounds["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
     if consumer == "forager":
-        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+        bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     cfg = prepare_config(cfg, verbose=False)
@@ -276,10 +317,10 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
-    bounds["risk"].update(n_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
     weight_bound = [0.0, 1.0 if positive_bound else 0.0]
     if consumer == "forager":
-        bounds["forager"]["score_weights"] = {"unilateralness": weight_bound}
+        bounds["forager"]["score_weights_unilateralness"] = weight_bound
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": weight_bound}
     cfg = prepare_config(cfg, verbose=False)
@@ -333,17 +374,17 @@ def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("gate", ["n_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("gate", ["max_positions", "total_wallet_exposure_limit"])
 @pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
 @pytest.mark.parametrize("reactivates", [False, True])
 def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consumer, reactivates):
     cfg = get_template_config()
     cfg["backtest"]["candle_interval_minutes"] = 5
-    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
     cfg["bot"][side]["risk"][gate] = 0
     cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
     cfg["optimize"]["bounds"][side]["risk"].update(
-        n_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0]
+        max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0]
     )
     cfg["optimize"]["bounds"][side]["risk"][gate] = [0, 1 if reactivates else 0]
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
@@ -371,18 +412,17 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mixed_optimizer_bounds_preserve_all_adaptive_dimensions(side):
+def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
     from optimization.config_adapter import get_optimization_key_paths
     cfg = get_template_config()
     bounds = cfg["optimize"]["bounds"]
-    bounds[f"{side}_n_positions"] = [2, 3]
-    del bounds[side]["risk"]["n_positions"]
+    bounds[side]["risk"]["max_positions"] = [2, 3]
     bounds[side]["entry_cooldown"].update(
         min_duration_minutes=[0, 5], max_duration_minutes=[30, 90],
         weights_minutes={"exposure_ratio": [0, 10], "adverse_directionality": [0, 20]},
     )
     bounds[side]["forager"].update(
-        unilateralness_ema_span_1m=[10.5, 60.5], score_weights={"unilateralness": [0, 1]},
+        unilateralness_ema_span_1m=[10.5, 60.5], score_weights_unilateralness=[0, 1],
     )
     expected = flatten_optimize_bounds(bounds, strategy_kind="trailing_martingale")
     prepared = prepare_config(cfg, verbose=False)
@@ -451,15 +491,14 @@ def test_nullable_cooldown_ceiling_cli_roundtrip(side, parser_ceiling, spelling,
 def test_optimizer_data_registration_checks_final_coin_rms_policy(side, eligibility):
     from optimize import _register_exchange_data
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
-    cfg = _ema_anchor_config(True)
+    cfg = _ema_anchor_config(True, include_dataset=False)
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["optimize"]["enable_overrides"] = []
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
-    cfg["optimize"]["bounds"] = {
-        f"{side}_n_positions": [1, 1],
-        f"{side}_total_wallet_exposure_limit": [1, 1],
-        f"{side}_entry_cooldown_weights_minutes_adverse_directionality": [0, 10],
-    }
+    cfg["optimize"]["bounds"] = {side: {
+        "risk": {"max_positions": [1, 1], "total_wallet_exposure_limit": [1, 1]},
+        "entry_cooldown": {"weights_minutes": {"adverse_directionality": [0, 10]}},
+    }}
     if eligibility == "excluded":
         cfg["live"]["approved_coins"][side] = ["UNLOADEDCOIN"]
     elif eligibility in ("zero_wel", "zero_weight"):
@@ -514,10 +553,10 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     cfg = get_template_config()
     cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
     bounds = cfg["optimize"]["bounds"][side]
-    bounds["risk"].update(n_positions=slots, total_wallet_exposure_limit=[1.0, 1.0])
-    bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+    bounds["risk"].update(max_positions=slots, total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
     if pinned is not None:
-        cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.n_positions": pinned}
+        cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.max_positions": pinned}
     cfg = prepare_config(cfg, verbose=False)
     _, markets, _, _ = _synthetic_inputs()
     cfg["live"]["approved_coins"] = {"long": [], "short": []}
@@ -549,7 +588,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
         base_duration_minutes=base_bounds[1], min_duration_minutes=floor_bounds[1],
         max_duration_minutes=ceil_bounds[1],
     )
-    cfg["optimize"]["bounds"][side]["risk"].update(n_positions=[1, 1], total_wallet_exposure_limit=[1, 1])
+    cfg["optimize"]["bounds"][side]["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1, 1])
     cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
         base_duration_minutes=base_bounds, min_duration_minutes=floor_bounds,
         max_duration_minutes=ceil_bounds, weights_minutes={"adverse_directionality": [0, 20]},

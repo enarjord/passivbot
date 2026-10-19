@@ -1,5 +1,7 @@
 """Current live observations through the real shared native evaluator, offline."""
 
+from hsl_fixture import set_risk_memory_spans
+
 from copy import deepcopy
 from dataclasses import replace
 import json
@@ -13,7 +15,7 @@ def require_real_passivbot_rust_module():
     import passivbot_rust as pbr
 
     assert not getattr(pbr, "__is_stub__", False)
-    assert hasattr(pbr, "hsl_evaluate"), "rebuild the source-matched Rust extension"
+    assert hasattr(pbr, "hsl_v9_evaluate"), "rebuild the source-matched Rust extension"
     return pbr
 
 from config import prepare_config
@@ -21,8 +23,10 @@ from config.hsl import generated_template
 from config.schema import get_template_config
 from live.freshness import FreshnessLedger
 from live.hsl_candles import Sources, Failure
+from live.hsl_continuity import ScopeReplay
 from live.hsl_inputs import capture_candles
 from live.hsl_runtime import capture, evaluate, InvalidHslOutput
+from live.hsl_runtime import history_start_ms
 from live.market_snapshot import MarketSnapshot
 from test_hsl_inputs import event
 
@@ -32,21 +36,22 @@ SYMBOL = "TEST/USDT:USDT"
 
 def bot(mode="coin", *, side="long", events=()):
     config = generated_template(get_template_config(), mode)
-    config["live"]["pnls_max_lookback_days"] = 1
+    set_risk_memory_spans(config, 288.0)
     for pside in ("long", "short"):
         config["bot"][pside]["hsl"].update(
             enabled=pside == side,
             red_threshold=0.05,
-            ema_span_minutes=1_000_000.0,
-            restart_after_red_policy="always",
+            # Availability/admission fixtures use an unsmoothed one-minute
+            # policy; dedicated bootstrap fixtures exercise very slow spans.
+            drawdown_ratio_ema_span_minutes=1.0,
         )
-        config["bot"][pside]["risk"]["n_positions"] = 1
-    if mode == "unified":
-        config["bot"]["hsl"].update(config["bot"][side]["hsl"])
-        config["bot"]["hsl"]["panic_close_order_type"] = "market"
+        config["bot"][pside]["risk"]["max_positions"] = 1
+    if mode == "portfolio":
+        config["bot"]["risk"]["hsl"].update(config["bot"][side]["hsl"])
+        config["bot"]["risk"]["hsl"]["panic_close_order_type"] = "market"
         for pside in ("long", "short"):
             config["bot"][pside]["hsl"]["enabled"] = False
-            config["bot"][pside]["risk"]["n_positions"] = 0
+            config["bot"][pside]["risk"]["max_positions"] = 0
             config["bot"][pside]["risk"]["total_wallet_exposure_limit"] = 0
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     ledger = FreshnessLedger(now_ms=NOW)
@@ -78,7 +83,9 @@ def bot(mode="coin", *, side="long", events=()):
             ]
         ),
     )
-    value.bot_value = lambda side, key: config["bot"][side]["risk"][key]
+    value.bot_value = lambda side, key: config["bot"][side]["risk"][
+        "max_positions" if key == "n_positions" else key
+    ]
     value.bp = lambda side, key, symbol: config["bot"][side]["hsl"][
         key.removeprefix("hsl_")
     ]
@@ -106,23 +113,27 @@ def run(value, marks=None, sources=None, **changes):
     return evaluate(requests), unavailable
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     value = bot(mode, side=side)
+    policy = value.config["bot"]["risk"]["hsl"] if mode == "portfolio" else value.config["bot"][side]["hsl"]
+    policy["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
     result, unavailable = run(value, quotes(side))
     assert not unavailable
     (decision,) = result
     assert decision.action == "panic"
     raw = json.loads(decision.payload)
-    assert raw["observations"] == 1
+    assert raw["episodes"] == 1
+    assert raw["risk"]["exposed"] is True
+    assert raw["risk"]["drawdown"] == 100.0
     assert raw["decision"]["raw"] == pytest.approx(100 / 1000)
     assert raw["decision"]["ema"] == raw["decision"]["raw"]
     assert "fill_capture_unknown" in decision.reasons
-    assert decision.execution_type == ("market" if mode == "unified" else "limit")
+    assert decision.execution_type == ("market" if mode == "portfolio" else "limit")
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_canonical_cashflows_survive_pending_quantity_and_missing_candles(mode):
     value = bot(
         mode,
@@ -141,7 +152,14 @@ def test_canonical_cashflows_survive_pending_quantity_and_missing_candles(mode):
     (decision,) = run(value)[0]
     assert decision.action == "panic"
     assert "invalid_fill_quantity" in decision.reasons
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(301 / 1201)
+    from v9_risk_reference import coefficients, fma, f32
+
+    _, beta = coefficients(288.0)
+    expected_d = fma(beta, 201, 100)
+    expected_r = f32(expected_d / f32(900 + expected_d))
+    risk = json.loads(decision.payload)["risk"]
+    assert risk["drawdown"] == expected_d
+    assert risk["raw"] == expected_r
 
 
 def test_current_quote_failure_is_scoped_before_native_evaluation():
@@ -153,11 +171,13 @@ def test_current_quote_failure_is_scoped_before_native_evaluation():
     assert [d.scope.symbol for d in result] == [SYMBOL]
     assert result[0].action == "panic"
     assert [u.scope.symbol for u in unavailable] == [other]
-    value.config["live"]["hsl_signal_mode"] = "unified"
-    value.config["bot"]["hsl"] = deepcopy(value.config["bot"]["long"]["hsl"])
+    value.config["bot"]["risk"]["hsl"]["scope"] = "portfolio"
+    value.config["bot"]["risk"]["hsl"] = dict(
+        deepcopy(value.config["bot"]["long"]["hsl"]), scope="portfolio"
+    )
     result, unavailable = run(value)
     assert not result and len(unavailable) == 1
-    assert unavailable[0].scope.mode == "unified"
+    assert unavailable[0].scope.mode == "portfolio"
 
 
 @pytest.mark.parametrize("surface", ["balance", "positions"])
@@ -182,6 +202,7 @@ def test_clock_offset_preserves_age_without_changing_exchange_event_times():
         symbols={"long": [SYMBOL], "short": [SYMBOL]},
         now_ms=NOW + 5000,
         utc_now_ms=NOW,
+        observation_clock_offset_ms=5000,
         max_current_age_ms=10_000,
         fills_started_ms=NOW - 150,
         fills_completed_ms=NOW - 50,
@@ -215,6 +236,7 @@ def test_candle_capture_clock_conversion_does_not_move_candle_open(offset):
         symbols={"long": [SYMBOL], "short": [SYMBOL]},
         now_ms=NOW,
         utc_now_ms=NOW - offset,
+        observation_clock_offset_ms=offset,
         max_current_age_ms=10_000,
     )
     assert not unavailable
@@ -244,16 +266,31 @@ def test_capture_is_immutable_and_does_not_inherit_prior_state():
 
 def test_zero_slots_remains_inactive_without_fake_divisor():
     value = bot()
-    value.config["bot"]["long"]["risk"]["n_positions"] = 0
+    value.config["bot"]["long"]["risk"]["max_positions"] = 0
+    value.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
     result, unavailable = run(value)
     assert not unavailable and result[0].action is None
     assert json.loads(result[0].payload)["decision"] is None
 
 
+def test_held_enabled_zero_slot_scope_is_an_explicit_configuration_error():
+    value = bot()
+    value.config["bot"]["long"]["risk"]["max_positions"] = 0
+    with pytest.raises(InvalidHslOutput, match="native evaluation"):
+        run(value)
+
+
+def test_held_zero_slot_scope_with_hsl_disabled_is_not_selected():
+    value = bot()
+    value.config["bot"]["long"]["risk"]["max_positions"] = 0
+    value.config["bot"]["long"]["hsl"]["enabled"] = False
+    assert run(value) == ((), ())
+
+
 def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
     value = bot()
     value.config["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = 1.5 / 60_000
-    value.config["live"]["pnls_max_lookback_days"] = (86_400_000 + 1.5) / 86_400_000
+    set_risk_memory_spans(value.config, 288.25)
     requests, _ = capture(
         value,
         quotes(),
@@ -264,7 +301,7 @@ def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
         max_current_age_ms=10_000,
     )
     assert json.loads(requests[0].payload)["cooldown_ms"] == 2
-    assert json.loads(requests[0].payload)["snapshot"]["start"] == NOW - 86_400_002
+    assert json.loads(requests[0].payload)["snapshot"]["start"] == NOW - 86_475_000
 
 
 def test_coarse_source_gaps_are_native_estimates_not_candle_ledger_writes():
@@ -313,7 +350,7 @@ def test_missing_flat_quote_uses_historical_close_but_never_for_held_exposure():
     assert not result and unavailable[0].reason == "current_mark_unavailable"
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     events = [
         event(
@@ -338,19 +375,19 @@ def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["hsl"]
-        if mode == "unified"
+        value.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
-    policy["restart_after_red_policy"] = "never"
     (decision,) = run(value, fills_started_ms=NOW - 150, fills_completed_ms=NOW - 50)[0]
     assert decision.action == "halted"
     assert json.loads(decision.payload)["decision"]["flat_at"] == NOW - 120_000
     # Cache reads cannot pretend to be a remote post-position interval.
     (estimated,) = run(value)[0]
     assert "fill_capture_unknown" in estimated.reasons
-    # A fresh process at a later exchange time has no out-of-window authority.
-    later = NOW + 86_400_000
+    # Expiry follows the original finite deadline, not disappearance from the
+    # exponential bootstrap target or a later GREEN sample.
+    later = NOW + round(policy["cooldown_minutes_after_red"] * 60_000)
     for surface in ("balance", "positions"):
         value._ensure_freshness_ledger().stamp(surface, now_ms=later - 200)
     marks = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=later - 100)}
@@ -380,7 +417,7 @@ def test_malformed_later_native_scope_does_not_publish_an_earlier_usable_subset(
 
     value = bot()
     value.config["bot"]["short"]["hsl"]["enabled"] = True
-    native = runtime.pbr.hsl_evaluate_grids
+    native = runtime.pbr.hsl_v9_evaluate_grids
     calls = []
 
     def malformed(request, grids):
@@ -390,15 +427,20 @@ def test_malformed_later_native_scope_does_not_publish_an_earlier_usable_subset(
             output["decision"] = None
         return json.dumps(output)
 
-    monkeypatch.setattr(runtime.pbr, "hsl_evaluate_grids", malformed)
+    monkeypatch.setattr(
+        ScopeReplay, "evaluate_grids",
+        lambda _self, request, grids: malformed(request, grids),
+    )
     with pytest.raises(InvalidHslOutput):
         run(value)
     assert len(calls) == 2
 
 
 def test_out_of_window_fill_does_not_introduce_old_flat_symbols_or_quality():
-    value = bot(
-        "unified", events=[event(symbol="OLD", timestamp=NOW - 86_400_001, qty=None)]
+    value = bot("portfolio")
+    old = event(symbol="OLD", timestamp=history_start_ms(value, NOW) - 1, qty=None)
+    value._pnls_manager.get_events = lambda *, start_ms: (
+        [old] if old.timestamp >= start_ms else []
     )
     result, unavailable = run(value, symbols=["UNUSED"])
     assert not unavailable and result[0].action == "panic"
@@ -408,7 +450,7 @@ def test_out_of_window_fill_does_not_introduce_old_flat_symbols_or_quality():
 def test_empty_aggregate_side_does_not_duplicate_price_history():
     import passivbot_rust as pbr
 
-    value = bot("unified")
+    value = bot("portfolio")
     requests, unavailable = capture(
         value,
         quotes(),
@@ -422,16 +464,16 @@ def test_empty_aggregate_side_does_not_duplicate_price_history():
     (request,) = requests
     payload = json.loads(request.payload)
     assert len(payload["snapshot"]["pairs"]) == 1
-    baseline = json.loads(pbr.hsl_evaluate(request.payload))
+    baseline = json.loads(pbr.hsl_v9_evaluate(request.payload))
     flat = deepcopy(payload["snapshot"]["pairs"][0])
     flat["position"].update(size=0.0, basis=0.0, pside="short")
     payload["snapshot"]["pairs"].append(flat)
-    assert json.loads(pbr.hsl_evaluate(json.dumps(payload))) == baseline
+    assert json.loads(pbr.hsl_v9_evaluate(json.dumps(payload))) == baseline
 
 
-def test_empty_aggregate_side_retains_cashflows_even_without_exposure():
+def test_empty_aggregate_cashflow_cannot_invent_a_historical_exposed_episode():
     value = bot(
-        "unified",
+        "portfolio",
         events=[
             event(
                 timestamp=NOW - 60_000,
@@ -457,13 +499,15 @@ def test_empty_aggregate_side_retains_cashflows_even_without_exposure():
         not unavailable
         and len(json.loads(requests[0].payload)["snapshot"]["pairs"]) == 2
     )
-    assert json.loads(evaluate(requests)[0].payload)["decision"][
-        "raw"
-    ] == pytest.approx(300 / 1200)
+    result = evaluate(requests)[0]
+    # The unproven historical cashflow survives as a diagnostic. It cannot
+    # invent exposure before the first observed current long position.
+    assert "flat_cashflow_without_exposure" in result.reasons
+    assert json.loads(result.payload)["decision"]["raw"] == pytest.approx(0.1)
 
 
 def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
-    value = bot("unified")
+    value = bot("portfolio")
     value.positions = {}
     result, unavailable = run(value, {}, symbols=["UNUSED"])
     assert not unavailable and result[0].action == "normal"
@@ -481,14 +525,45 @@ def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
 def test_malformed_native_decision_is_fatal(field, value, monkeypatch):
     import live.hsl_runtime as runtime
 
-    native = runtime.pbr.hsl_evaluate_grids
+    native = runtime.pbr.hsl_v9_evaluate_grids
 
     def malformed(request, grids):
         result = json.loads(native(request, grids))
         result["decision"][field] = value
         return json.dumps(result)
 
-    monkeypatch.setattr(runtime.pbr, "hsl_evaluate_grids", malformed)
+    monkeypatch.setattr(
+        ScopeReplay, "evaluate_grids",
+        lambda _self, request, grids: malformed(request, grids),
+    )
+    with pytest.raises(InvalidHslOutput):
+        run(bot())
+
+
+@pytest.mark.parametrize("change", [
+    None,
+    {"initialized": 1},
+    {"initialized": False},
+    {"retention_horizon_ms": 59_999},
+    {"bootstrap_origin_ms": True},
+    {"boundary_at_ms": NOW + 1},
+    {"reconstruction": "unannounced_reset"},
+])
+def test_malformed_native_continuity_envelope_is_fatal(change, monkeypatch):
+    import live.hsl_runtime as runtime
+
+    native = runtime.pbr.hsl_v9_evaluate_grids
+
+    def malformed(request, grids):
+        result = json.loads(native(request, grids))
+        if change is None:
+            del result["continuity"]
+        else:
+            result["continuity"].update(change)
+        return json.dumps(result)
+
+    monkeypatch.setattr(ScopeReplay, "evaluate_grids",
+                        lambda _self, request, grids: malformed(request, grids))
     with pytest.raises(InvalidHslOutput):
         run(bot())
 
@@ -500,12 +575,15 @@ def test_native_errors_use_the_bot_fatal_contract(monkeypatch):
     def invalid(_request, _grids):
         raise ValueError("unexpected native schema error")
 
-    monkeypatch.setattr(runtime.pbr, "hsl_evaluate_grids", invalid)
+    monkeypatch.setattr(
+        ScopeReplay, "evaluate_grids",
+        lambda _self, request, grids: invalid(request, grids),
+    )
     with pytest.raises(FatalBotException):
         run(bot())
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_future_only_symbol_does_not_demand_a_current_quote_or_metadata(mode):
     value = bot(
         mode, events=[event(symbol="FUTURE", timestamp=NOW + 60_000, c_mult=1.0)]
@@ -558,7 +636,11 @@ def test_simultaneous_flat_empty_observation_needs_no_invented_mark_or_metadata(
         value, {}, fills_started_ms=NOW - 300, fills_completed_ms=NOW - 200
     )
     assert not unavailable and result[0].action == "normal"
-    assert json.loads(result[0].payload)["observations"] == 1
+    output = json.loads(result[0].payload)
+    assert output["episodes"] == 0 and output["events"] == []
+    assert output["risk"]["exposed"] is False
+    assert output["risk"]["drawdown"] == 0.0
+    assert output["risk"]["cooldown_until"] is None
     requests, _ = capture(
         value,
         {},
@@ -577,7 +659,7 @@ def test_simultaneous_flat_empty_observation_needs_no_invented_mark_or_metadata(
         pside="long",
         position_at=NOW - 200,
         fills_at=NOW - 200,
-        history_start=NOW - 86_400_000,
+        history_start=history_start_ms(value, NOW),
     )
     # Unknown or skewed fill capture is diagnostic, not a flatness veto.
     for kwargs, reason in (
@@ -633,7 +715,7 @@ def test_damaged_flat_fill_preserves_usable_history_or_quality_diagnostics(chang
         assert "flat_coin" not in json.loads(requests[0].payload)["snapshot"]
 
 
-def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
+def test_negative_historical_equity_uses_explicit_loss_branch():
     value = bot(
         events=[
             event(
@@ -642,7 +724,7 @@ def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
         ]
     )
     value.positions[SYMBOL]["long"]["size"] = 100.0
-    value.config["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.5
+    value.config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.5
     rows = [
         dict(ts=NOW - (6 - i) * 60_000, o=p, h=p, l=p, c=p)
         for i, p in enumerate([1000.0, 0.001, 0.001, 0.001, 0.001, 0.001])
@@ -652,7 +734,10 @@ def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
     }
     result, unavailable = run(value, sources=sources)
     assert not unavailable and result[0].action == "panic"
-    assert json.loads(result[0].payload)["decision"]["ema"] > 1.0
+    payload = json.loads(result[0].payload)
+    assert payload["decision"]["raw"] == 1.0
+    assert 0 <= payload["decision"]["ema"] <= 1.0
+    assert payload["risk"]["nonpositive_equity"] is True
 
 
 @pytest.mark.parametrize(
@@ -664,7 +749,7 @@ def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
         dict(red_at=True),
         dict(flat_at=NOW),
         dict(red_at=NOW + 1),
-        dict(red_at=NOW - 86_400_001),
+        dict(red_at=0),
         dict(numeric_range_approximation=1),
         dict(reason=None),
         dict(ema=-0.01),
@@ -675,14 +760,17 @@ def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
 def test_lifecycle_incoherent_native_response_is_fatal(changes, monkeypatch):
     import live.hsl_runtime as runtime
 
-    native = runtime.pbr.hsl_evaluate_grids
+    native = runtime.pbr.hsl_v9_evaluate_grids
 
     def malformed(request, grids):
         result = json.loads(native(request, grids))
         result["decision"].update(changes)
         return json.dumps(result)
 
-    monkeypatch.setattr(runtime.pbr, "hsl_evaluate_grids", malformed)
+    monkeypatch.setattr(
+        ScopeReplay, "evaluate_grids",
+        lambda _self, request, grids: malformed(request, grids),
+    )
     with pytest.raises(InvalidHslOutput):
         run(bot())
 
@@ -714,7 +802,7 @@ def test_scope_selection_requires_explicit_valid_side_membership(symbols):
         )
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_empty_aggregate_retains_unknown_fill_capture_diagnostic(mode):
     value = bot(mode)
     value.positions = {}
@@ -727,11 +815,13 @@ def test_empty_aggregate_retains_unknown_fill_capture_diagnostic(mode):
     assert not unavailable and "fill_capture_unknown" not in result[0].reasons
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     from passivbot import Passivbot
 
     fixture = bot(mode)
+    policy = fixture.config["bot"]["risk"]["hsl"] if mode == "portfolio" else fixture.config["bot"]["long"]["hsl"]
+    policy["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
     # Do not start a bot or exchange client: exercise the real runtime accessors
     # and symbol override resolver against canonical prepared configuration.
     value = Passivbot.__new__(Passivbot)
@@ -763,12 +853,12 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     assert json.loads(request.payload)["threshold"] == (
         0.99 if mode == "coin" else 0.05
     )
-    assert json.loads(request.payload)["span"] == 1_000_000.0
+    assert json.loads(request.payload)["drawdown_ratio_ema_span_minutes"] == 1_000_000.0
     assert request.execution_type == ("limit" if mode == "pside" else "market")
     assert evaluate(requests)[0].action == ("normal" if mode == "coin" else "panic")
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_undated_flat_fill_quality_survives_without_market_requirements(mode):
     value = bot(mode)
     value.positions = {}
@@ -794,7 +884,7 @@ def test_undated_other_coin_diagnostic_does_not_cross_coin_scope():
     assert "unidentified_or_undated_fill" not in result[0].reasons
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("history", ["empty", "damaged", "closed"])
 def test_compact_price_transport_preserves_complete_decisions(
@@ -871,7 +961,7 @@ def test_compact_price_transport_preserves_complete_decisions(
     assert run(value, quotes(side), sources, **options) == actual
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_actual_unchanged_position_read_can_precede_fill_tail_without_forged_time(mode):
     from live.hsl_runtime import observe_positions
 
@@ -898,11 +988,10 @@ def test_actual_unchanged_position_read_can_precede_fill_tail_without_forged_tim
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["hsl"]
-        if mode == "unified"
+        value.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
-    policy["restart_after_red_policy"] = "never"
     actual_read = observe_positions(value)
     assert actual_read.observed_ms == NOW - 200
     value._ensure_freshness_ledger().stamp("positions", now_ms=NOW - 10)
@@ -933,7 +1022,7 @@ def test_position_read_cannot_be_reused_for_different_current_facts(change):
         run(value, position_observation=observed)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_flat_retained_fills_do_not_require_a_delisted_market_quote(mode):
     events = [
         event(
@@ -958,11 +1047,10 @@ def test_flat_retained_fills_do_not_require_a_delisted_market_quote(mode):
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["hsl"]
-        if mode == "unified"
+        value.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
-    policy["restart_after_red_policy"] = "never"
     decisions, unavailable = run(
         value, {}, fills_started_ms=NOW - 150, fills_completed_ms=NOW - 50
     )
@@ -993,7 +1081,7 @@ def test_recent_but_invalidated_account_observation_is_not_current(surface):
     assert not unavailable and decisions[0].action == "panic"
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("history", ["empty", "partial", "coarse", "complete"])
 def test_native_grid_transport_matches_complete_json_and_is_immutable(
@@ -1044,7 +1132,7 @@ def test_native_grid_transport_matches_complete_json_and_is_immutable(
     )
     assert not unavailable
     for request, decision in zip(requests, evaluate(requests), strict=True):
-        expected = json.loads(pbr.hsl_evaluate(request.payload))
+        expected = json.loads(pbr.hsl_v9_evaluate(request.payload))
         assert json.loads(decision.payload) == expected
         assert all(
             not pair["prices"]
@@ -1100,10 +1188,10 @@ def test_native_grid_transport_rejects_mismatched_observation(defect):
     else:
         grids[0] = {}
     with pytest.raises((ValueError, TypeError)):
-        pbr.hsl_evaluate_grids(json.dumps(value), grids)
+        pbr.hsl_v9_evaluate_grids(json.dumps(value), grids)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
     import passivbot_rust as pbr
     from live.hsl_inputs import Candle, CandleTape
@@ -1115,7 +1203,7 @@ def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
         "short": {"size": -1.0, "price": 80.0},
     }
     value.c_mults[other], value.qty_steps[other] = 1.0, 0.1
-    if mode != "unified":
+    if mode != "portfolio":
         value.config["bot"]["short"]["hsl"]["enabled"] = True
     marks = {
         **quotes(),
@@ -1153,7 +1241,7 @@ def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
     assert not unavailable
     for request, actual in zip(requests, evaluate(requests), strict=True):
         assert json.loads(actual.payload) == json.loads(
-            pbr.hsl_evaluate(request.payload)
+            pbr.hsl_v9_evaluate(request.payload)
         )
         for pair in json.loads(request.payload)["snapshot"]["pairs"]:
             assert set(pair["prices"].values()) == (
@@ -1200,6 +1288,7 @@ async def test_owner_candle_acquisition_uses_utc_with_exchange_timeline_manager(
         symbols={"long": [SYMBOL], "short": []},
         now_ms=NOW,
         utc_now_ms=utc_now,
+        observation_clock_offset_ms=offset,
         max_current_age_ms=10_000,
     )
     assert not unavailable
@@ -1208,7 +1297,7 @@ async def test_owner_candle_acquisition_uses_utc_with_exchange_timeline_manager(
     assert max(map(int, prices)) == NOW
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_targeted_permission_keeps_the_complete_relevant_scope(mode, side):
     other = "PEER/USDT:USDT"
@@ -1252,7 +1341,7 @@ def test_targeted_permission_keeps_the_complete_relevant_scope(mode, side):
     assert bool(selected_absent) == (mode != "coin")
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("cooldown", [1.0, 10.0])
 def test_historical_flat_and_cooldown_survive_newer_position_reads(
@@ -1297,12 +1386,12 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
     value = bot(mode, side=side, events=events)
     value.positions[SYMBOL][side].update(size=sign * 1.0, price=100.0)
     policy = (
-        value.config["bot"]["hsl"]
-        if mode == "unified"
+        value.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else value.config["bot"][side]["hsl"]
     )
     policy.update(
-        ema_span_minutes=1.0, cooldown_minutes_after_red=cooldown, red_threshold=0.05
+        drawdown_ratio_ema_span_minutes=1.0, cooldown_minutes_after_red=cooldown, red_threshold=0.05
     )
     marks = {SYMBOL: MarketSnapshot(SYMBOL, 100.0, 100.0, 100.0, NOW - 100, "fixture")}
     results = []
@@ -1319,17 +1408,17 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
     assert results[1:] == [results[0], results[0]]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-@pytest.mark.parametrize("lookback", ["all", 0])
-def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, lookback):
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("cap", ["all", 0])
+def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, cap):
     from live.hsl_runtime import observe_fills
 
     value = bot(mode)
     for side in ("long", "short"):
         value.config["bot"][side]["hsl"]["enabled"] = False
-    if mode == "unified":
-        value.config["bot"]["hsl"]["enabled"] = False
-    value.config["live"]["pnls_max_lookback_days"] = lookback
+    if mode == "portfolio":
+        value.config["bot"]["risk"]["hsl"]["enabled"] = False
+    value.config["live"]["risk_bootstrap_max_lookback_minutes"] = cap
     # These are not needed by HSL when it has no enabled scope. The ordinary
     # owner still validates its account receipt before any connector write.
     del value._pnls_manager, value.c_mults, value._ensure_freshness_ledger
@@ -1345,9 +1434,9 @@ def test_flat_unselected_coin_override_still_requires_hsl_history_window():
     value.coin_overrides["OTHER/USDT:USDT"] = {
         "bot": {"short": {"hsl": {"enabled": True}}}
     }
-    value.config["live"]["pnls_max_lookback_days"] = 0
+    value.config["live"]["risk_bootstrap_max_lookback_minutes"] = 0
     assert enabled(value)
-    with pytest.raises(ValueError, match="lookback"):
+    with pytest.raises(ValueError, match="bootstrap"):
         run(value)
 
 
@@ -1374,10 +1463,12 @@ def test_explicit_balance_override_is_the_current_coin_hsl_budget():
     assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.01)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
-    # A 100 realized loss leaves flat UPNL. Fixed budget 1000 means peak
-    # budget-equity 1100, whereas the actual remaining balance 900 implies 1000.
+    # Execution marks both units at 90 before the partial close: D=200. The
+    # remaining unit then recovers100 at the next minute. Current budget changes
+    # the current ratio without rewriting this ordered loss/recovery history.
+    from v9_risk_reference import coefficients, div, add, fma, f32
     value = bot(
         mode,
         events=[
@@ -1402,11 +1493,11 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
         ],
     )
     policy = (
-        value.config["bot"]["hsl"]
-        if mode == "unified"
+        value.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
-    policy.update(ema_span_minutes=1.0, red_threshold=0.095)
+    policy.update(drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.095)
     marks = {SYMBOL: replace(quotes()[SYMBOL], bid=100.0, ask=100.0, last=100.0)}
     tape = capture_candles(
         [
@@ -1419,15 +1510,19 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
     sources = {SYMBOL: Sources((tape,), (), 0)}
     value.get_raw_balance = lambda: 1000.0
     decision = run(value, marks, sources)[0][0]
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(100 / 1100)
+    _, beta = coefficients(288.0)
+    drawdown = fma(beta, 200.0, -100.0)
+    assert json.loads(decision.payload)["risk"]["drawdown"] == drawdown
+    assert json.loads(decision.payload)["decision"]["raw"] == div(drawdown, add(f32(1000), drawdown))
     assert decision.action == "normal"
     value.get_raw_balance = lambda: 900.0
     decision = run(value, marks, sources)[0][0]
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.1)
+    assert json.loads(decision.payload)["risk"]["drawdown"] == drawdown
+    assert json.loads(decision.payload)["decision"]["raw"] == div(drawdown, add(f32(900), drawdown))
     assert decision.action == "panic"
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 @pytest.mark.parametrize("source", ["config", "runtime"])
 def test_aggregate_live_override_rejected_before_history_or_account_capture(
     mode, source
@@ -1450,12 +1545,12 @@ def test_aggregate_live_override_rejected_before_history_or_account_capture(
         run(value)
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
     value = bot(mode)
     value.config["live"]["balance_override"] = 1000.0
-    if mode == "unified":
-        value.config["bot"]["hsl"]["enabled"] = False
+    if mode == "portfolio":
+        value.config["bot"]["risk"]["hsl"]["enabled"] = False
     else:
         for side in ("long", "short"):
             value.config["bot"][side]["hsl"]["enabled"] = False
@@ -1476,7 +1571,7 @@ def test_order_only_unselected_flat_pair_gets_current_hsl_decision(side):
     ]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("damage", ["empty", "undated", "unidentified"])
 def test_flat_order_only_pair_without_quote_cannot_block_current_protection(mode, damage):
     value = bot(mode)
@@ -1504,7 +1599,7 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     value = bot(side=side)
     risk = value.config["bot"][side]["risk"]
     risk.update(
-        n_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_pct=0.0
+        max_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_pct=0.0
     )
     value.positions[SYMBOL][side]["size"] = 1 if side == "long" else -1
     value.config["bot"][side]["hsl"]["red_threshold"] = 0.2

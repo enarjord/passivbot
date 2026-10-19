@@ -11,6 +11,13 @@ from optimize import ResultRecorder
 from tools.pareto_dash import load_pareto_dataframe
 
 
+def _checkpoint_config():
+    from optimization.evaluation_contract import CONTRACT_CACHE_KEY, CONTRACT_VERSION
+    return {"backtest": {}, "bot": {}, "optimize": {"objective_scenario": None}, CONTRACT_CACHE_KEY: {
+        "version": CONTRACT_VERSION, "implementation": {"test": "source-bound-fixture"},
+    }}
+
+
 class FakePool:
     def __init__(self, processes, initializer=None):
         self.processes = processes
@@ -60,6 +67,7 @@ class FakeEvaluator:
         self.limit_checks = []
         self.use_duplicate_guard = True
         self.config = {
+            **_checkpoint_config(),
             "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
             "bot": {"long": {"a": 0.0, "b": 0.0}},
             "optimize": {"scoring": list(scoring_keys), "backend": "pymoo"},
@@ -148,7 +156,7 @@ def _nsga3_config(*, population_size: int = 16, n_obj: int = 4):
                     "crossover_eta": 20.0,
                     "crossover_prob_var": 0.5,
                     "mutation_eta": 20.0,
-                    "mutation_prob_var": "auto",
+                    "mutation_prob": "auto",
                     "eliminate_duplicates": True,
                 },
                 "algorithms": {
@@ -194,13 +202,14 @@ def test_pymoo_checkpoint_callback_saves_nsga3_checkpoint(tmp_path):
         seed=1,
         verbose=False,
         copy_algorithm=False,
-        callback=pymoo_backend.PymooCheckpointCallback(str(checkpoint_path)),
+        callback=pymoo_backend.PymooCheckpointCallback(str(checkpoint_path), _checkpoint_config()),
     )
 
     assert checkpoint_path.stat().st_size > 0
     with open(checkpoint_path, "rb") as f:
         loaded = pickle.load(f)
-    assert loaded.__class__.__name__ == "NSGA3"
+    assert loaded["backend"] == "pymoo"
+    assert loaded["algorithm"].__class__.__name__ == "NSGA3"
 
 
 def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
@@ -215,7 +224,7 @@ def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
                     "crossover_eta": 20.0,
                     "crossover_prob_var": 0.5,
                     "mutation_eta": 20.0,
-                    "mutation_prob_var": "auto",
+                    "mutation_prob": "auto",
                     "eliminate_duplicates": True,
                 },
                 "algorithms": {
@@ -388,7 +397,7 @@ def test_build_algorithm_uses_auto_nsga3_population_budget_when_null():
                     "crossover_eta": 20.0,
                     "crossover_prob_var": 0.5,
                     "mutation_eta": 20.0,
-                    "mutation_prob_var": "auto",
+                    "mutation_prob": "auto",
                     "eliminate_duplicates": True,
                 },
                 "algorithms": {
@@ -459,7 +468,7 @@ def test_run_backend_records_entries(monkeypatch):
                         "crossover_prob_var": 0.5,
                         "crossover_eta": 20.0,
                         "mutation_eta": 20.0,
-                        "mutation_prob_var": 0.5,
+                        "mutation_prob": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -471,12 +480,9 @@ def test_run_backend_records_entries(monkeypatch):
         overrides_list=[],
         duplicate_counter={},
         starting_configs_path=None,
-        constraint_fitness_cls=None,
         ignore_sigint_in_worker=_ignore_sigint,
         get_starting_configs=_get_starting_configs,
         configs_to_individuals=_configs_to_individuals,
-        record_individual_result=None,
-        run_evolution=None,
         build_config_fn=_build_config,
         overrides_fn=_noop_overrides,
     )
@@ -509,7 +515,7 @@ def test_run_backend_supports_single_objective(monkeypatch):
                         "crossover_prob_var": 0.5,
                         "crossover_eta": 20.0,
                         "mutation_eta": 20.0,
-                        "mutation_prob_var": 0.5,
+                        "mutation_prob": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -521,12 +527,9 @@ def test_run_backend_supports_single_objective(monkeypatch):
         overrides_list=[],
         duplicate_counter={},
         starting_configs_path=None,
-        constraint_fitness_cls=None,
         ignore_sigint_in_worker=_ignore_sigint,
         get_starting_configs=_get_starting_configs,
         configs_to_individuals=_configs_to_individuals,
-        record_individual_result=None,
-        run_evolution=None,
         build_config_fn=_build_config,
         overrides_fn=_noop_overrides,
     )
@@ -572,7 +575,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
                         "crossover_prob_var": 0.5,
                         "crossover_eta": 20.0,
                         "mutation_eta": 20.0,
-                        "mutation_prob_var": 0.5,
+                        "mutation_prob": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -584,12 +587,9 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
         overrides_list=[],
         duplicate_counter={},
         starting_configs_path="dummy",
-        constraint_fitness_cls=None,
         ignore_sigint_in_worker=_ignore_sigint,
         get_starting_configs=_many_starting_configs,
         configs_to_individuals=_many_starting_individuals,
-        record_individual_result=None,
-        run_evolution=None,
         build_config_fn=_build_config,
         overrides_fn=_noop_overrides,
     )
@@ -612,8 +612,6 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
         callback=pymoo_backend.Callback(),
     )
     saved_random_state = copy.deepcopy(stale_algorithm.random_state.bit_generator.state)
-    with open(checkpoint_path, "wb") as f:
-        pickle.dump(stale_algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     captured = {}
 
@@ -629,8 +627,7 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
     monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)
     evaluator = FakeEvaluator(["adg", "drawdown_worst"])
 
-    result = pymoo_backend.run_backend(
-        config={
+    config = {
             "optimize": {
                 "backend": "pymoo",
                 "population_size": 4,
@@ -645,24 +642,31 @@ def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path)
                         "crossover_prob_var": 0.5,
                         "crossover_eta": 20.0,
                         "mutation_eta": 20.0,
-                        "mutation_prob_var": 0.5,
+                        "mutation_prob": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
             }
-        },
+        }
+    from optimization.evaluation_contract import CONTRACT_CACHE_KEY
+    config[CONTRACT_CACHE_KEY] = _checkpoint_config()[CONTRACT_CACHE_KEY]
+    config.setdefault("backtest", {})
+    config.setdefault("bot", {})
+    config["optimize"].update(backend="pymoo", population_size=4, iters=20, seed=99, n_cpus=1,
+                              round_to_n_significant_digits=4,
+                              scoring=["adg", "drawdown_worst"], objective_scenario=None)
+    pymoo_backend.save_checkpoint(str(checkpoint_path), stale_algorithm, config)
+    result = pymoo_backend.run_backend(
+        config=config,
         evaluator=evaluator,
         evaluator_for_pool=evaluator,
         recorder=FakeRecorder(),
         overrides_list=[],
         duplicate_counter={},
         starting_configs_path=None,
-        constraint_fitness_cls=None,
         ignore_sigint_in_worker=_ignore_sigint,
         get_starting_configs=_get_starting_configs,
         configs_to_individuals=_configs_to_individuals,
-        record_individual_result=None,
-        run_evolution=None,
         build_config_fn=_build_config,
         overrides_fn=_noop_overrides,
         checkpoint_path=str(checkpoint_path),
@@ -751,7 +755,7 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
                         "crossover_prob_var": 0.5,
                         "crossover_eta": 20.0,
                         "mutation_eta": 20.0,
-                        "mutation_prob_var": 0.5,
+                        "mutation_prob": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -763,12 +767,9 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
         overrides_list=[],
         duplicate_counter={},
         starting_configs_path=None,
-        constraint_fitness_cls=None,
         ignore_sigint_in_worker=_ignore_sigint,
         get_starting_configs=_get_starting_configs,
         configs_to_individuals=_configs_to_individuals,
-        record_individual_result=None,
-        run_evolution=None,
         build_config_fn=_build_config,
         overrides_fn=_noop_overrides,
     )
@@ -813,7 +814,7 @@ def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypat
                         "crossover_prob_var": 0.5,
                         "crossover_eta": 20.0,
                         "mutation_eta": 20.0,
-                        "mutation_prob_var": 0.5,
+                        "mutation_prob": 0.5,
                         "eliminate_duplicates": True,
                     },
                 },
@@ -825,13 +826,10 @@ def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypat
         overrides_list=[],
         duplicate_counter={},
         starting_configs_path="dummy",
-        constraint_fitness_cls=None,
         ignore_sigint_in_worker=_ignore_sigint,
         get_starting_configs=_many_starting_configs,
         configs_to_individuals=_capturing_configs_to_individuals(captured),
         optimization_shape=evaluator.optimization_shape,
-        record_individual_result=None,
-        run_evolution=None,
         build_config_fn=_build_config,
         overrides_fn=_noop_overrides,
     )

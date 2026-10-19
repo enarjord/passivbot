@@ -67,6 +67,9 @@ class ScenarioEvalContext:
     master_btc_specs: Optional[Dict[str, Any]] = None
     time_slice: Optional[Dict[str, tuple]] = None  # per-exchange (start_idx, end_idx)
     coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
+    # Actual source-column identities, including full masters on lazy paths.
+    candle_coins: Optional[Dict[str, tuple[str, ...]]] = None
+    selection_specs: Optional[Dict[str, tuple]] = None
 
 
 @simulation_data_scope
@@ -283,11 +286,20 @@ async def prepare_suite_contexts(
             )
         except ValueError as exc:
             raise ValueError(f"Suite scenario {scenario.label} could not be prepared: {exc}") from exc
+        # apply_scenario carries producer-owned dataset membership/cache metadata.
+        # Rebuild these below from the selected datasets after public formatting.
+        for key in ("coins", "cache_dir"):
+            scenario_config_raw["backtest"].pop(key, None)
         scenario_config = format_config(scenario_config_raw, verbose=False)
         scenario_config = parse_overrides(scenario_config, verbose=False)
         # Freeze the resolved patch in both candidate evaluation and resume evidence.
         # Reapplying raw file references would discard preparation's resolved values.
         scenario_overrides = deepcopy(scenario.overrides) if scenario.overrides else {}
+        if scenario_config["backtest"].get("organillo_csv") is not None:
+            # Freeze preparation's source rather than clearing its hash again
+            # when the scenario overrides are applied to each candidate.
+            scenario_overrides["backtest.organillo_csv"] = scenario_config["backtest"]["organillo_csv"]
+            scenario_overrides["backtest.organillo_sha256"] = scenario_config["backtest"]["organillo_sha256"]
         coin_keys = [
             key for key in scenario_overrides
             if key == "coin_overrides" or key.startswith("coin_overrides.")
@@ -394,6 +406,7 @@ async def prepare_suite_contexts(
                         master_btc_specs={dataset.exchange: dataset.btc_spec},
                         time_slice={dataset.exchange: (start_idx, end_idx)},
                         coin_slice_indices={dataset.exchange: coin_indices},
+                        candle_coins={dataset.exchange: tuple(dataset.coins)},
                     )
                 )
             else:
@@ -437,6 +450,7 @@ async def prepare_suite_contexts(
                         master_btc_specs=None,
                         time_slice=None,
                         coin_slice_indices=None,
+                        candle_coins={dataset.exchange: tuple(selected_coins)},
                     )
                 )
 
@@ -521,6 +535,8 @@ async def prepare_suite_contexts(
         master_btc_specs = {}
         coin_slice_indices = {}
         time_slice = {}
+        candle_coins = {ex: tuple(scenario_config["backtest"]["coins"][ex])
+                        for ex in exchanges_for_scenario}
         for exchange_key, dataset in datasets.items():
             if exchange_key == "combined":
                 continue
@@ -538,6 +554,7 @@ async def prepare_suite_contexts(
             master_hlcvs_specs[exchange_key] = dataset.hlcvs_spec
             master_btc_specs[exchange_key] = dataset.btc_spec
             coin_slice_indices[exchange_key] = coin_indices
+            candle_coins[exchange_key] = tuple(dataset.coins)
 
         contexts.append(
             ScenarioEvalContext(
@@ -557,6 +574,7 @@ async def prepare_suite_contexts(
                 master_btc_specs=master_btc_specs or None,
                 time_slice=time_slice or None,
                 coin_slice_indices=coin_slice_indices or None,
+                candle_coins=candle_coins,
             )
         )
 

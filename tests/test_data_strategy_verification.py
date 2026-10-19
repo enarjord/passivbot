@@ -10,6 +10,8 @@ from copy import deepcopy
 import pytest
 
 from config_utils import format_config, get_template_config
+from test_final_v9_schema import v8_config
+from tools.migrate_config_v9 import migrate
 from suite_runner import (
     SuiteScenario,
     build_scenarios,
@@ -395,8 +397,8 @@ class TestOverrideVariations:
                 {
                     "label": "conservative",
                     "overrides": {
-                        "bot.long.total_wallet_exposure_limit": 0.5,
-                        "bot.short.total_wallet_exposure_limit": 0.5,
+                        "bot.long.risk.total_wallet_exposure_limit": 0.5,
+                        "bot.short.risk.total_wallet_exposure_limit": 0.5,
                     },
                 }
             ],
@@ -406,8 +408,8 @@ class TestOverrideVariations:
 
         scenarios, _ = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert scenarios[0].overrides["bot.long.total_wallet_exposure_limit"] == 0.5
-        assert scenarios[0].overrides["bot.short.total_wallet_exposure_limit"] == 0.5
+        assert scenarios[0].overrides["bot.long.risk.total_wallet_exposure_limit"] == 0.5
+        assert scenarios[0].overrides["bot.short.risk.total_wallet_exposure_limit"] == 0.5
 
     def test_tc5_2_scenario_disabling_position_side(self):
         """TC5.2: Scenario disabling a position side."""
@@ -416,11 +418,11 @@ class TestOverrideVariations:
             scenarios=[
                 {
                     "label": "long_only",
-                    "overrides": {"bot.short.total_wallet_exposure_limit": 0},
+                    "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0},
                 },
                 {
                     "label": "short_only",
-                    "overrides": {"bot.long.total_wallet_exposure_limit": 0},
+                    "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
                 },
             ],
         )
@@ -429,8 +431,8 @@ class TestOverrideVariations:
 
         scenarios, _ = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert scenarios[0].overrides["bot.short.total_wallet_exposure_limit"] == 0
-        assert scenarios[1].overrides["bot.long.total_wallet_exposure_limit"] == 0
+        assert scenarios[0].overrides["bot.short.risk.total_wallet_exposure_limit"] == 0
+        assert scenarios[1].overrides["bot.long.risk.total_wallet_exposure_limit"] == 0
 
     def test_tc5_3_scenario_with_trailing_retracement_overrides(self):
         """TC5.3: Scenario with v8 trailing retracement overrides."""
@@ -474,9 +476,9 @@ class TestOverrideVariations:
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[
-                {"label": "n3", "overrides": {"bot.long.n_positions": 3}},
-                {"label": "n5", "overrides": {"bot.long.n_positions": 5}},
-                {"label": "n10", "overrides": {"bot.long.n_positions": 10}},
+                {"label": "n3", "overrides": {"bot.long.risk.max_positions": 3}},
+                {"label": "n5", "overrides": {"bot.long.risk.max_positions": 5}},
+                {"label": "n10", "overrides": {"bot.long.risk.max_positions": 10}},
             ],
         )
         formatted = format_config(deepcopy(cfg), verbose=False)
@@ -484,9 +486,9 @@ class TestOverrideVariations:
 
         scenarios, _ = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert scenarios[0].overrides["bot.long.n_positions"] == 3
-        assert scenarios[1].overrides["bot.long.n_positions"] == 5
-        assert scenarios[2].overrides["bot.long.n_positions"] == 10
+        assert scenarios[0].overrides["bot.long.risk.max_positions"] == 3
+        assert scenarios[1].overrides["bot.long.risk.max_positions"] == 5
+        assert scenarios[2].overrides["bot.long.risk.max_positions"] == 10
 
 
 # =============================================================================
@@ -552,7 +554,7 @@ class TestLegacyMigration:
 
     def test_tc7_1_old_config_with_suite_enabled(self):
         """TC7.1: Old config with suite.enabled=true."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["suite"] = {
             "enabled": True,
@@ -563,7 +565,11 @@ class TestLegacyMigration:
         cfg["backtest"].pop("scenarios", None)
         cfg["backtest"].pop("reducer", None)
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "suite" not in formatted["backtest"]
         assert formatted["backtest"]["scenarios"] == [{"label": "test"}]
@@ -571,7 +577,7 @@ class TestLegacyMigration:
 
     def test_tc7_2_old_config_with_include_base_scenario_true(self):
         """TC7.2: Old config with include_base_scenario=true."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["suite"] = {
             "enabled": True,
@@ -582,7 +588,11 @@ class TestLegacyMigration:
         cfg["backtest"].pop("scenarios", None)
         cfg["backtest"].pop("reducer", None)
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "suite" not in formatted["backtest"]
         assert len(formatted["backtest"]["scenarios"]) == 2
@@ -591,7 +601,7 @@ class TestLegacyMigration:
 
     def test_tc7_3_old_config_with_include_base_scenario_false(self):
         """TC7.3: Old config with include_base_scenario=false."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["suite"] = {
             "enabled": True,
@@ -601,7 +611,11 @@ class TestLegacyMigration:
         cfg["backtest"].pop("scenarios", None)
         cfg["backtest"].pop("reducer", None)
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "suite" not in formatted["backtest"]
         assert len(formatted["backtest"]["scenarios"]) == 1
@@ -609,7 +623,7 @@ class TestLegacyMigration:
 
     def test_tc7_6_old_config_with_include_base_scenario_true_and_empty_scenarios(self):
         """TC7.6: Old config with include_base_scenario=true but no explicit scenarios."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["suite"] = {
             "enabled": True,
@@ -620,7 +634,11 @@ class TestLegacyMigration:
         cfg["backtest"].pop("scenarios", None)
         cfg["backtest"].pop("reducer", None)
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "suite" not in formatted["backtest"]
         assert len(formatted["backtest"]["scenarios"]) == 1
@@ -628,27 +646,35 @@ class TestLegacyMigration:
 
     def test_tc7_4_old_config_with_combine_ohlcvs_true(self):
         """TC7.4: Old config with combine_ohlcvs=true."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["combine_ohlcvs"] = True
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "combine_ohlcvs" not in formatted["backtest"]
 
     def test_tc7_5_old_config_with_combine_ohlcvs_false(self):
         """TC7.5: Old config with combine_ohlcvs=false."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["combine_ohlcvs"] = False
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "combine_ohlcvs" not in formatted["backtest"]
 
     def test_tc7_6_full_legacy_migration(self):
         """TC7.6: Full legacy migration with all components."""
-        cfg = get_template_config()
+        cfg = v8_config()
         cfg["_raw"] = deepcopy(cfg)
         cfg["backtest"]["exchanges"] = ["binance", "bybit"]
         cfg["backtest"]["combine_ohlcvs"] = True
@@ -665,7 +691,11 @@ class TestLegacyMigration:
         cfg["backtest"].pop("scenarios", None)
         cfg["backtest"].pop("reducer", None)
 
-        formatted = format_config(deepcopy(cfg), verbose=False)
+        original = deepcopy(cfg)
+        with pytest.raises(ValueError, match="migrate-config-v9"):
+            format_config(cfg, verbose=False)
+        formatted = format_config(migrate(cfg, memory_span_minutes=43200.0).config, verbose=False)
+        assert cfg == original
 
         assert "combine_ohlcvs" not in formatted["backtest"]
         assert "suite" not in formatted["backtest"]
@@ -909,7 +939,7 @@ class TestScenarioFiltering:
                 "label": "custom",
                 "exchanges": ["binance"],
                 "coins": ["BTC", "ETH"],
-                "overrides": {"bot.long.n_positions": 5},
+                "overrides": {"bot.long.risk.max_positions": 5},
             },
         ]
         filtered = filter_scenarios_by_label(scenarios, ["custom"])
@@ -917,7 +947,7 @@ class TestScenarioFiltering:
         assert len(filtered) == 1
         assert filtered[0]["exchanges"] == ["binance"]
         assert filtered[0]["coins"] == ["BTC", "ETH"]
-        assert filtered[0]["overrides"]["bot.long.n_positions"] == 5
+        assert filtered[0]["overrides"]["bot.long.risk.max_positions"] == 5
 
     def test_filter_matches_normalized_scenario_label(self):
         scenarios = [{"label": " stress ", "coins": ["BTC"]}]

@@ -93,7 +93,9 @@
       hsl.signal_mode: pside
       hsl.counts.unavailable: 0
       hsl.scopes.0.action: normal
-      hsl.scopes.0.score: 0.0
+      // The completed episode retains its decaying signal after flattening.
+      // A normal action here must not require clearing that memory.
+      hsl.scopes.0.score: {min: 0.000001, max: 1.0}
     }
     summary_paths: {
       step_count: 4

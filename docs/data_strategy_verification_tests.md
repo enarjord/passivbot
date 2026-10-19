@@ -411,9 +411,9 @@ config = {
     "backtest": {
         "exchanges": ["binance"],
         "scenarios": [
-            {"label": "n3", "overrides": {"bot.long.risk.n_positions": 3}},
-            {"label": "n5", "overrides": {"bot.long.risk.n_positions": 5}},
-            {"label": "n10", "overrides": {"bot.long.risk.n_positions": 10}}
+            {"label": "n3", "overrides": {"bot.long.risk.max_positions": 3}},
+            {"label": "n5", "overrides": {"bot.long.risk.max_positions": 5}},
+            {"label": "n10", "overrides": {"bot.long.risk.max_positions": 10}}
         ]
     }
 }

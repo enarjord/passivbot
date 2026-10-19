@@ -6,12 +6,13 @@ This is the recommended way to work with Passivbot configs on the current config
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
 - The example config `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile.
-- New configs use top-level `config_version: "v8.6.0"`. Supported v8.0.0–v8.5.0 configs migrate
-  on load; review warnings and the normalized result rather than manually relabeling an old file.
-  Config-schema versions are separate from [package versions and release tags](releases.md).
-  V7 and pre-v8 configs require explicit migration.
-- The legacy `pb_multi` root shape, identified by fields such as `TWE_long`, `TWE_short`, and `universal_live_config`, is not a supported V8 input or migration format. Residual flavor-detection and formatter code is stale internal compatibility code and must not be treated as an end-to-end or live-trading support contract. Start from a canonical V8 config; for a normalized V7 trailing-grid config, use the explicit migration helper below.
-- V7 trailing-grid configs can be converted explicitly with `passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json`. Clean migrations write deprecated compatibility strategy kind `trailing_grid_v7`; if the report contains manual-review or dropped unsupported fields, the command returns nonzero and does not write output unless `--allow-manual-review-output` is passed. The tool always writes a sibling JSON migration report and validates canonical output before writing the config. Follow [Migrating v7 trailing-grid configs to v8](v7_to_v8_migration.md) for the report, backtest comparison, and review workflow. New optimization work should use the canonical `trailing_martingale` strategy unless you intentionally need v7 behavior.
+- New configs use the final `config_version: "v9.0.0"` layout. Normal loading rejects
+  unknown/retired fields and never migrates policy implicitly. Use the explicit
+  [v8 converter](v8_to_v9_migration.md) for released v8 inputs, with the required semantic
+  choices and fresh backtests. Config schema and [package release versions](releases.md)
+  are separate. Unreleased intermediate schemas, `pb_multi` and pre-v8 layouts are unsupported.
+- Retained strategies are `trailing_martingale` and `ema_anchor`. The v7 strategy and its
+  dedicated migration command have been removed.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow
@@ -45,10 +46,13 @@ dry-run/check modes and migration boundaries.
 - Keep one normal JSON or HJSON config per strategy/account instead of relying on many CLI overrides.
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
-- Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `pnls_max_lookback_days`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
-- `live.pnls_max_lookback_days` uses one shared contract across live and backtest: `0` = minimal lookback at that path's native sampling resolution, positive numbers = that many rolling days, and `"all"` = full available history.
-- Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
-- Do not paste old flat v7 trailing-grid fields into a v8 config. Run the migration helper so the fields land under `bot.<side>.strategy.trailing_grid_v7`.
+- Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
+- Risk policy belongs to its consumers: each HSL policy has its own slow and ratio-smoothing
+  spans; global unstuck uses `bot.unstuck.memory_ema_span_minutes`; global loss gate uses
+  `bot.risk.loss_gate.memory_ema_span_minutes`. Acquisition uses the separately bounded
+  live bootstrap cap. A rolling window is not an equivalent EMA span.
+- Keep new configs on the canonical schema. Use nested active strategy paths and explicit
+  [migration reports](v8_to_v9_migration.md) for released-v8 changes.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
 - Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and Passivbot's monitor tooling can follow the stable `logs/{user}.log` alias or Windows pointer.
 
@@ -57,11 +61,11 @@ dry-run/check modes and migration boundaries.
 The default profile mirrored by `configs/examples/default_trailing_martingale_long.json` is:
 
 - trailing martingale style configuration
-- long enabled with `bot.long.risk.n_positions = 7`
+- long enabled with `bot.long.risk.max_positions = 7`
 - short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
 - `bot.long.risk.total_wallet_exposure_limit = 1.5`
 - HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
-- HSL signal mode set to per-coin slots with `live.hsl_signal_mode = "coin"`
+- HSL signal mode set to per-coin slots with `bot.risk.hsl.scope = "coin"`
 - approved-coin universe seeded to the current 41-coin default list
 - optimizer backend defaulting to `pymoo`
 

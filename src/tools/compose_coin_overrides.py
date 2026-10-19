@@ -379,6 +379,11 @@ def load_single_coin_directory(
                     "duplicate single-coin configs resolve to the same market: "
                     f"{previous.coin} ({previous.path}) and {item.coin} ({item.path})"
                 )
+    _validate_shared_policies(sources)
+    return configs, master, master_was_selected
+
+
+def _validate_shared_policies(sources: list[ConfigSource]) -> None:
     strategy_kinds = {
         str(item.config.get("live", {}).get("strategy_kind")) for item in sources
     }
@@ -388,14 +393,13 @@ def load_single_coin_directory(
             + ", ".join(sorted(strategy_kinds))
         )
     signal_modes = {
-        str(item.config.get("live", {}).get("hsl_signal_mode")) for item in sources
+        str(item.config["bot"]["risk"]["hsl"]["scope"]) for item in sources
     }
     if len(signal_modes) != 1:
         raise ValueError(
-            "master and all single-coin configs must use the same live.hsl_signal_mode; found "
+            "master and all single-coin configs must use the same bot.risk.hsl.scope; found "
             + ", ".join(sorted(signal_modes))
         )
-    return configs, master, master_was_selected
 
 
 def _get_path(config: dict, path: Iterable[str]) -> Any:
@@ -526,10 +530,6 @@ def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
             not bool(item.config["bot"][side]["risk"]["total_exposure_enforcer_enabled"])
             for item in configs
         )
-        twel_entry_gate_disabled = all(
-            not bool(item.config["bot"][side]["risk"]["total_exposure_entry_gate_enabled"])
-            for item in configs
-        )
         if twel_enforcer_disabled:
             policy_default = schema["bot"][side]["risk"]["total_exposure_enforcer_policy"]
             for item in configs:
@@ -537,18 +537,6 @@ def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
                 risk["total_exposure_enforcer_enabled"] = False
                 risk["total_exposure_enforcer_policy"] = policy_default
             actions.append(f"bot.{side}.risk.total_exposure_enforcer (disabled in every input)")
-            if twel_entry_gate_disabled:
-                lower = _bound_lower(
-                    master, side, "risk", "total_exposure_enforcer_threshold"
-                )
-                for item in configs:
-                    item.config["bot"][side]["risk"][
-                        "total_exposure_enforcer_threshold"
-                    ] = lower
-                actions.append(
-                    f"bot.{side}.risk.total_exposure_enforcer_threshold "
-                    "(entry gate and enforcer disabled in every input)"
-                )
     return actions
 
 
@@ -627,7 +615,8 @@ def compose_configs(
     # the same loaded sources to compare lean and verbose output.
     configs, master_source = deepcopy((configs, master_source))
     sources = [master_source, *(item for item in configs if item.path != master_source.path)]
-    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["live"]["hsl_signal_mode"])
+    _validate_shared_policies(sources)
+    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["bot"]["risk"]["hsl"]["scope"])
     selected_paths = None
     selectors = []
     if override_params is not None:
@@ -657,9 +646,9 @@ def compose_configs(
             )
         )
         if approved[side] and float(master["bot"][side]["risk"]["total_wallet_exposure_limit"]) > 0:
-            prior_count = float(master["bot"][side]["risk"]["n_positions"])
+            prior_count = float(master["bot"][side]["risk"]["max_positions"])
             composed_count = float(len(approved[side]))
-            master["bot"][side]["risk"]["n_positions"] = composed_count
+            master["bot"][side]["risk"]["max_positions"] = composed_count
             if prior_count != composed_count:
                 position_count_changes[side] = (prior_count, composed_count)
 
@@ -672,8 +661,8 @@ def compose_configs(
     skip_paths = {
         ("live", "approved_coins", "long"),
         ("live", "approved_coins", "short"),
-        ("bot", "long", "risk", "n_positions"),
-        ("bot", "short", "risk", "n_positions"),
+        ("bot", "long", "risk", "max_positions"),
+        ("bot", "short", "risk", "max_positions"),
     }
     comparable_master = master_source.config
     for item in configs:
@@ -814,7 +803,7 @@ def print_report(report: CompositionReport, output_config: Path) -> None:
     if report.override_params:
         print(f"Pinned selectors: {', '.join(report.override_params)}")
     for side, (before, after) in sorted(report.position_count_changes.items()):
-        print(f"Set bot.{side}.risk.n_positions: {before:g} -> {after:g} (approved coin count)")
+        print(f"Set bot.{side}.risk.max_positions: {before:g} -> {after:g} (approved coin count)")
     if report.included_backtest_optimize:
         print(f"Included backtest and optimize sections from: {report.master_path}")
     else:

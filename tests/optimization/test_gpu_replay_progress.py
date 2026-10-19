@@ -90,7 +90,7 @@ def test_generation_phase_and_kernel_counts_survive_nested_interruption(caplog):
                     assert work_scope() == "gen=0 phase=seed_proxy"
                     raise KeyboardInterrupt
             assert work_scope() == "gen=7 phase=gpu_proxy"
-    assert work_scope() == "phase=gpu_proxy"
+    assert work_scope() == "phase=gpu_backtest"
     assert len(ticks) == 3
     assert "history_chunk_bars=8192" in caplog.text
     assert "kernel_dispatches=1" in caplog.text and "kernel_dispatches=2" in caplog.text
@@ -108,88 +108,10 @@ def test_optional_progress_callback_failure_does_not_abort_replay(caplog):
     assert "private detail" not in caplog.text
 
 
-def test_generation_eta_is_scoped_bounded_and_unknown_on_overrun():
-    from optimization.progress import GenerationMilestone
-
-    tick = [0.0]
-    estimate = GenerationMilestone(clock=lambda: tick[0])
-    assert estimate.eta() == "unknown"
-    estimate.begin()
-    tick[0] += 100
-    assert estimate.eta() == "unknown"  # no invented first-generation estimate
-    estimate.finish()
-    estimate.begin()
-    tick[0] += 30
-    assert estimate.eta() == "1m10s"
-    tick[0] += 100
-    assert estimate.eta() == "unknown"
-    estimate.finish()
-    assert estimate.eta() == "unknown"  # CPU admission wait isn't a GPU generation
-    for _ in range(8):
-        estimate.begin()
-        tick[0] += 60
-        estimate.finish()
-    assert len(estimate.completed) == 5
-    estimate.begin()
-    tick[0] += 10
-    assert estimate.eta() == "50s"
 
 
-def test_exact_progress_distinguishes_finished_jobs_behind_a_straggler():
-    from optimization.progress import ExactValidationProgress
-
-    class Job:
-        finished = False
-
-        def ready(self):
-            return self.finished
-
-        def get(self):
-            pytest.fail("progress must not consume a result")
-
-    tick = [0.0]
-    progress = ExactValidationProgress(clock=lambda: tick[0])
-    first, second = Job(), Job()
-    progress.submitted(first)
-    progress.submitted(second)
-    second.finished = True
-    tick[0] = 60
-    snapshot = progress.snapshot()
-    assert snapshot["exact_unfinished"] == 1
-    assert snapshot["exact_ready_unrecorded"] == 1
-    assert snapshot["oldest_exact_age"] == "1m00s"
-    assert snapshot["eta_next_exact"] == "unknown"
-    # Completion latency comes from workers, not this late collector's clock.
-    for _ in range(4):
-        sample = Job()
-        progress.submitted(sample)
-        progress.completed(sample, worker_seconds=100, queue_seconds=20)
-    assert progress.snapshot()["eta_next_exact"] == "1m00s"
-    tick[0] = 121
-    assert progress.snapshot()["eta_next_exact"] == "unknown"
-    first.finished = True
-    assert progress.snapshot()["eta_next_exact"] == "0s"
-    progress.completed(first, worker_seconds=100, queue_seconds=0)
-    progress.completed(second, worker_seconds=100, queue_seconds=0)
-    assert progress.snapshot() == {}
 
 
-def test_exact_progress_rejects_invalid_timing_and_keeps_a_bounded_window():
-    from optimization.progress import ExactValidationProgress
-
-    progress = ExactValidationProgress()
-    for work, wait in [(float("nan"), 0), (1, float("inf")), (0, 1), (1, -1)]:
-        result = object()
-        progress.submitted(result)
-        progress.completed(result, worker_seconds=work, queue_seconds=wait)
-    assert not progress.latencies
-    for _ in range(100):
-        result = object()
-        progress.submitted(result)
-        progress.completed(result, worker_seconds=1, queue_seconds=2)
-    assert len(progress.latencies) == 24
-    progress.reset_estimate()
-    assert not progress.latencies
 
 
 def test_phase_elapsed_resets_without_increasing_console_cadence(monkeypatch, caplog):
@@ -209,3 +131,73 @@ def test_phase_elapsed_resets_without_increasing_console_cadence(monkeypatch, ca
     tick[0] = 120
     progress.report()
     assert "phase_elapsed=1m00s run_elapsed=2m00s" in caplog.messages[-1]
+
+
+@pytest.mark.parametrize("candidates,total,completed,elapsed,expected", [
+    (64, 2565359, 131072, 178.0, "0.0184"),
+    (64, 1000, 250, 10.0, "1.6000"),
+    (64, 1000, 1000, 10.0, "6.4000"),
+    (1, 0, 0, 1.0, "unknown"),
+    (1, 100, 0, 0.0, "unknown"),
+])
+def test_scoped_full_history_backtest_throughput_estimate(
+    caplog, candidates, total, completed, elapsed, expected
+):
+    caplog.set_level(logging.DEBUG)
+    replay = TemporalReplayProgress(candidates, total)
+    replay.log("progress", completed, elapsed)
+    assert f"est_backtests/s={expected}" in caplog.text
+    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
+
+
+def test_throughput_estimate_does_not_count_other_scenarios_or_sides(caplog):
+    caplog.set_level(logging.INFO)
+    with suite_replay_context(pass_index=2, pass_count=3, labels=["recent"],
+                             exchanges=["combined"], evaluation_stage="full"):
+        replay = TemporalReplayProgress(10, 100)
+        replay.log("complete", 100, 5.0)
+    assert "est_backtests/s=2.0000" in caplog.text
+    assert "stage=full" in caplog.text and "group=2/3" in caplog.text
+
+
+def test_recent_throughput_and_eta_reveal_late_history_slowdown(caplog):
+    caplog.set_level(logging.INFO)
+    replay = TemporalReplayProgress(64, 100000)
+    replay.log("progress", 90000, 60)
+    replay.log("progress", 90600, 120)
+    assert "rate=10 bars/s eta_batch=15m40s" in caplog.text
+    assert "est_backtests/s=0.0064" in caplog.text
+    assert "avg_backtests/s=0.4832" in caplog.text
+    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
+
+
+def test_completed_suite_rates_exclude_restored_checkpoint_counts(monkeypatch, caplog):
+    from optimization import progress as module
+    tick = [0.0]
+    counts = {"gen": 7, "completed": 100, "screened": 300}
+    monkeypatch.setattr(module.time, "monotonic", lambda: tick[0])
+    caplog.set_level(logging.INFO)
+    progress = module.OptimizerProgress(lambda: counts)
+    progress.transition("generation")
+    tick[0] = 60
+    counts.update(completed=160, screened=420)
+    progress.report()
+    assert "completed=160 screened=420 completed/s=1.0000 screened/s=2.0000" in caplog.text
+    assert all(len(r.getMessage()) <= 240 for r in caplog.records)
+
+
+def test_completed_rates_do_not_depend_on_phase_or_timer_updates(monkeypatch, caplog):
+    from optimization import progress as module
+    tick = [0.0]
+    counts = {"gen": 1, "completed": 0, "screened": 0}
+    monkeypatch.setattr(module.time, "monotonic", lambda: tick[0])
+    caplog.set_level(logging.INFO)
+    progress = module.OptimizerProgress(lambda: counts)
+    progress.transition("screening")
+    tick[0] = 60
+    counts.update(screened=120)
+    progress.transition("generation")
+    tick[0] = 120
+    counts.update(completed=60)
+    progress.report()
+    assert "completed/s=0.5000 screened/s=1.0000" in caplog.text

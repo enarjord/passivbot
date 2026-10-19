@@ -122,13 +122,21 @@ def build_prepared_dataset_identity(
         indices = list(range(len(coins))) if indices is None else list(indices)
         if len(coins) != len(indices) or not coins:
             raise ValueError(f"Prepared coin mapping is incomplete for optimizer exchange {ex}")
-        return {
+        result = {
             "coins": coins,
             "hlcvs": [array_hash(hlcv_spec, time_slice, int(index)) for index in indices],
             "btc_usd": array_hash(btc_spec, time_slice),
             "timestamps": _array_identity(ts),
             "market_settings_sha256": _metadata_identity(mss, coins),
         }
+
+        if run_config["backtest"].get("organillo_csv") is not None:
+            from organillo import prepare_selection
+            selection = prepare_selection(run_config, coins, ts)
+            result["organillo"] = {"sha256": selection.sha256,
+                                   "values": _array_identity(selection.values),
+                                   "rows": _array_identity(selection.rows), "contract": 1}
+        return result
 
     try:
         scenarios = []

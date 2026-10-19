@@ -149,25 +149,33 @@ def test_prep_backtest_args_uses_market_orders_allowed_from_live():
     assert backtest_params["market_orders_allowed"] is True
 
 
-def test_prep_backtest_args_uses_pnls_max_lookback_days_from_live():
+def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_gate_transport():
     config = _base_config()
-    config["live"]["pnls_max_lookback_days"] = 30.0
+    config["bot"]["unstuck"]["memory_ema_span_minutes"] = 1234.5
+    config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 2345.5
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["pnls_max_lookback_days"] == 30.0
+    assert backtest_params["unstuck_memory_ema_span_minutes"] == 1234.5
+    assert backtest_params["loss_gate_memory_ema_span_minutes"] == 2345.5
+    assert "lookback_ema_span_minutes" not in backtest_params
+    assert "realized_loss_gate_lookback_minutes" not in backtest_params
+    assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_encodes_all_pnls_lookback_for_backtest():
+def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     config = _base_config()
-    config["live"]["pnls_max_lookback_days"] = "all"
+    config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.1
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["pnls_max_lookback_days"] == -1.0
+    assert backtest_params["max_realized_loss_pct"] == 0.1
+    assert "realized_loss_gate_lookback_minutes" not in backtest_params
+    assert backtest_params["loss_gate_memory_ema_span_minutes"] == 43200.0
+    assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_passes_liquidation_threshold():
+def test_prep_backtest_args_transports_equity_floor_ratio():
     config = _base_config()
-    config["backtest"]["liquidation_threshold"] = 0.07
+    config["backtest"]["equity_floor_ratio"] = 0.07
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["liquidation_threshold"] == 0.07
@@ -187,7 +195,7 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
 
 def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coin_override():
     config = _base_config()
-    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
     mss = _base_mss()
 
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
@@ -204,8 +212,8 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
         "long": ["1000ABCUSDT"],
         "short": ["ABCUSDT"],
     }
-    config["bot"]["short"]["n_positions"] = 1
-    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["max_positions"] = 1
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
     market_settings = {
         coin: {
             "maker": 0.0001,
@@ -230,7 +238,7 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
 
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     config = _base_config()
-    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
@@ -264,7 +272,7 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
 
 def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
-    config["live"]["hsl_signal_mode"] = "coin"
+    config["bot"]["risk"]["hsl"]["scope"] = "coin"
     config["bot"]["long"]["hsl"]["enabled"] = False
     config["bot"]["long"]["hsl"]["red_threshold"] = 0.2
     config["coin_overrides"] = {
@@ -418,10 +426,15 @@ def test_log_backtest_execution_settings_emits_summary(caplog):
 
     assert "[backtest] effective execution settings:" in caplog.text
     assert "market_orders_allowed" in caplog.text
-    assert "pnls_max_lookback_days" in caplog.text
+    assert "unstuck_memory_ema_span_minutes" in caplog.text
+    assert "loss_gate_memory_ema_span_minutes" in caplog.text
+    assert "realized_loss_gate_lookback_minutes" not in caplog.text
+    assert "pnls_max_lookback_days" not in caplog.text
 
 
 def test_build_backtest_payload_compiles_runtime_config_once(monkeypatch):
+    if getattr(backtest_module.pbr, "__is_stub__", False):
+        pytest.skip("requires native HlcvsBundle")
     config = _base_config()
     config["backtest"]["candle_interval_minutes"] = 1
     mss = _base_mss()
@@ -444,13 +457,16 @@ def test_build_backtest_payload_compiles_runtime_config_once(monkeypatch):
     assert call_count["count"] == 1
 
 
-def test_run_backtest_bundle_rejects_unknown_trailing_grid_v7_strategy_param():
+def _native_strategy_payload(strategy_kind):
     pbr = backtest_module.pbr
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
+    from rust_utils import verify_loaded_runtime_extension
+
+    verify_loaded_runtime_extension()
     config = _base_config()
-    config["live"]["strategy_kind"] = "trailing_grid_v7"
+    config["live"]["strategy_kind"] = strategy_kind
     config["backtest"]["candle_interval_minutes"] = 1
     mss = _base_mss()
     hlcvs = np.array(
@@ -471,13 +487,95 @@ def test_run_backtest_bundle_rejects_unknown_trailing_grid_v7_strategy_param():
         timestamps,
         skip_btc_analysis=True,
     )
+    return payload
+
+
+def _run_native_strategy_payload(payload):
+    return backtest_module.pbr.run_backtest_bundle(
+        payload.bundle,
+        payload.bot_params_list,
+        payload.strategy_params_list,
+        payload.exchange_params,
+        payload.backtest_params,
+    )
+
+
+def test_run_backtest_bundle_rejects_unknown_trailing_martingale_strategy_param():
+    payload = _native_strategy_payload("trailing_martingale")
     payload.strategy_params_list[0]["long"]["entry"]["typo_unknown_key"] = 1.0
 
     with pytest.raises(ValueError, match="typo_unknown_key"):
-        pbr.run_backtest_bundle(
-            payload.bundle,
-            payload.bot_params_list,
-            payload.strategy_params_list,
-            payload.exchange_params,
-            payload.backtest_params,
-        )
+        _run_native_strategy_payload(payload)
+
+
+@pytest.mark.parametrize("strategy_kind,section", [
+    ("trailing_martingale", ()),
+    ("trailing_martingale", ("entry",)),
+    ("trailing_martingale", ("close",)),
+    ("ema_anchor", ()),
+])
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize("key", ["typo_unknown_key", 7])
+def test_run_backtest_bundle_rejects_unrecognized_strategy_keys(strategy_kind, section, pside, key):
+    payload = _native_strategy_payload(strategy_kind)
+    target = payload.strategy_params_list[0][pside]
+    for part in section:
+        target = target[part]
+    target[key] = 1.0
+
+    expected = "typo_unknown_key" if isinstance(key, str) else "non-string key"
+    with pytest.raises(ValueError, match=expected):
+        _run_native_strategy_payload(payload)
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("key", ["typo_pair_key", 7])
+def test_run_backtest_bundle_rejects_unrecognized_strategy_pair_keys(strategy_kind, key):
+    payload = _native_strategy_payload(strategy_kind)
+    payload.strategy_params_list[0][key] = {}
+
+    expected = "typo_pair_key" if isinstance(key, str) else "non-string key"
+    with pytest.raises(ValueError, match=expected):
+        _run_native_strategy_payload(payload)
+
+
+@pytest.mark.parametrize("strategy_kind,path", [
+    ("trailing_martingale", ("volatility_ema_span_1m",)),
+    ("trailing_martingale", ("entry", "double_down_factor")),
+    ("trailing_martingale", ("close", "qty_pct")),
+    ("ema_anchor", ("offset",)),
+])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_run_backtest_bundle_rejects_nonfinite_strategy_values(strategy_kind, path, value, pside):
+    payload = _native_strategy_payload(strategy_kind)
+    target = payload.strategy_params_list[0][pside]
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+
+    with pytest.raises(ValueError, match=rf"{path[-1]} must be finite"):
+        _run_native_strategy_payload(payload)
+
+
+@pytest.mark.parametrize("strategy_kind,optional", [
+    ("trailing_martingale", [("entry", "ema_gate_mode")]),
+    ("ema_anchor", [
+        ("entry_double_down_factor",),
+        ("offset_volatility_ema_span_1m",),
+        ("offset_volatility_1m_weight",),
+        ("offset_volatility_ema_span_1h",),
+        ("offset_volatility_1h_weight",),
+    ]),
+])
+def test_run_backtest_bundle_keeps_supported_optional_strategy_defaults(strategy_kind, optional):
+    payload = _native_strategy_payload(strategy_kind)
+    for pside in ("long", "short"):
+        for path in optional:
+            target = payload.strategy_params_list[0][pside]
+            for part in path[:-1]:
+                target = target[part]
+            del target[path[-1]]
+
+    result = _run_native_strategy_payload(payload)
+    assert len(result) == 5

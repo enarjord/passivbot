@@ -2,11 +2,10 @@ from copy import deepcopy
 from typing import Optional
 
 from .access import require_config_dict
-from .pnl_lookback import normalize_pnls_max_lookback_days_config_value
+from .risk_memory import normalize_risk_memory_config
 from .schema import get_template_config
 
-HSL_RESTART_AFTER_RED_POLICIES = ("always", "never")
-HSL_SIGNAL_MODES = ("coin", "pside", "unified")
+HSL_SIGNAL_MODES = ("coin", "pside", "portfolio")
 MONITOR_BOOL_KEYS = (
     "enabled",
     "retain_price_ticks",
@@ -24,22 +23,13 @@ PYMOO_ALGORITHMS = ("auto", "nsga2", "nsga3")
 PYMOO_REF_DIR_METHODS = ("das_dennis",)
 
 
-def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
+def normalize_hsl_signal_mode(value, path: str = "bot.risk.hsl.scope") -> str:
     mode = str(value)
     if mode not in HSL_SIGNAL_MODES:
         allowed = ", ".join(HSL_SIGNAL_MODES)
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
     return mode
 
-
-def normalize_hsl_restart_after_red_policy(
-    value, path: str = "bot.<pside>.hsl.restart_after_red_policy"
-) -> str:
-    policy = str(value)
-    if policy not in HSL_RESTART_AFTER_RED_POLICIES:
-        allowed = ", ".join(HSL_RESTART_AFTER_RED_POLICIES)
-        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
-    return policy
 
 
 def normalize_monitor_config(config: dict) -> None:
@@ -194,54 +184,24 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
         else {}
     )
 
-    legacy_crossover_eta = source_optimize.get("crossover_eta")
-    legacy_crossover_probability = source_optimize.get("crossover_probability")
-    legacy_mutation_eta = source_optimize.get("mutation_eta")
-    legacy_mutation_indpb = source_optimize.get("mutation_indpb")
-
     shared_defaults = template_pymoo["shared"]
     ref_dir_defaults = template_pymoo["algorithms"]["nsga3"]["ref_dirs"]
-
-    # The released mutation_prob_var key controlled pymoo's individual gate.
-    mutation_prob = shared.get("mutation_prob", shared.get("mutation_prob_var"))
-    if mutation_prob is None:
-        if legacy_mutation_indpb is not None and float(legacy_mutation_indpb) > 0.0:
-            mutation_prob = legacy_mutation_indpb
-        else:
-            mutation_prob = shared_defaults["mutation_prob"]
+    mutation_prob = shared.get("mutation_prob", shared_defaults["mutation_prob"])
+    eliminate_duplicates = shared.get("eliminate_duplicates", shared_defaults["eliminate_duplicates"])
+    if type(eliminate_duplicates) is not bool:
+        raise TypeError("config.optimize.pymoo.shared.eliminate_duplicates must be a boolean")
 
     normalized_shared = {
         "crossover_eta": normalize_pymoo_positive_float(
-            shared.get(
-                "crossover_eta",
-                (
-                    legacy_crossover_eta
-                    if legacy_crossover_eta is not None
-                    else shared_defaults["crossover_eta"]
-                ),
-            ),
+            shared.get("crossover_eta", shared_defaults["crossover_eta"]),
             "config.optimize.pymoo.shared.crossover_eta",
         ),
         "crossover_prob_var": normalize_pymoo_probability(
-            shared.get(
-                "crossover_prob_var",
-                (
-                    legacy_crossover_probability
-                    if legacy_crossover_probability is not None
-                    else shared_defaults["crossover_prob_var"]
-                ),
-            ),
+            shared.get("crossover_prob_var", shared_defaults["crossover_prob_var"]),
             "config.optimize.pymoo.shared.crossover_prob_var",
         ),
         "mutation_eta": normalize_pymoo_positive_float(
-            shared.get(
-                "mutation_eta",
-                (
-                    legacy_mutation_eta
-                    if legacy_mutation_eta is not None
-                    else shared_defaults["mutation_eta"]
-                ),
-            ),
+            shared.get("mutation_eta", shared_defaults["mutation_eta"]),
             "config.optimize.pymoo.shared.mutation_eta",
         ),
         "mutation_prob": normalize_pymoo_probability(
@@ -257,9 +217,7 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
             "config.optimize.pymoo.shared.mutation_prob_per_variable",
             allow_auto=True,
         ),
-        "eliminate_duplicates": bool(
-            shared.get("eliminate_duplicates", shared_defaults["eliminate_duplicates"])
-        ),
+        "eliminate_duplicates": eliminate_duplicates,
     }
 
     normalized_ref_dirs = {
@@ -285,14 +243,10 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
 
 def normalize_validation_fields(config: dict, *, raw_optimize=None) -> None:
     require_config_dict(config, "monitor")
-    config["live"]["hsl_signal_mode"] = normalize_hsl_signal_mode(
-        config["live"]["hsl_signal_mode"]
+    config["bot"]["risk"]["hsl"]["scope"] = normalize_hsl_signal_mode(
+        config["bot"]["risk"]["hsl"]["scope"]
     )
-    config["live"]["pnls_max_lookback_days"] = (
-        normalize_pnls_max_lookback_days_config_value(
-            config["live"]["pnls_max_lookback_days"]
-        )
-    )
+    normalize_risk_memory_config(config)
     normalize_logging_config(config)
     normalize_monitor_config(config)
     normalize_pymoo_config(config, raw_optimize=raw_optimize)

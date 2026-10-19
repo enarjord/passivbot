@@ -2,7 +2,6 @@ matplotlib==3.8.4; python_version < "3.14"
 matplotlib==3.10.9; python_version >= "3.14"
 colorama==0.4.6
 pyecharts==1.9.1
-deap==1.4.3
 pymoo>=0.6.0
 aiohttp==3.14.1
 websockets==12.0

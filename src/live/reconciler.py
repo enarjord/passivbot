@@ -1557,7 +1557,6 @@ def _submitted_rust_input_context(
     strategy_kind = global_input.get("strategy_kind", "trailing_martingale")
     if not isinstance(strategy_kind, str) or strategy_kind not in {
         "trailing_martingale",
-        "trailing_grid_v7",
         "ema_anchor",
     }:
         raise FatalBotException(

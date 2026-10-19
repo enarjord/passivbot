@@ -34,6 +34,8 @@ def prepare_config(
     raw_snapshot: dict | None = None,
     effective_snapshot: dict | None = None,
 ) -> dict:
+    if not isinstance(config, dict):
+        raise TypeError("config must be a dict")
     source = deepcopy(config)
     if raw_snapshot is None:
         raw_snapshot = deepcopy(source.get("_raw", source))

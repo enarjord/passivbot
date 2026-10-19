@@ -193,12 +193,13 @@ def permits(bot, order):
     # All actions are scoped, including cancels and protective market orders.
     # Aggregate HSL decisions consume every contributing position on that scope.
     keys = {key}
-    config = getattr(bot, "config", {})
-    mode = config.get("live", {}).get("hsl_signal_mode", "coin")
-    if mode == "unified" and config.get("bot", {}).get("hsl", {}).get("enabled", False):
+    config = bot.config
+    policy = config["bot"]["risk"]["hsl"]
+    mode = policy["scope"]
+    if not isinstance(mode, str) or mode not in {"coin", "pside", "portfolio"}:
+        raise ValueError("invalid HSL scope in bot.risk.hsl.scope")
+    if mode == "portfolio" and policy["enabled"]:
         keys.update(gate.pending)
-    elif mode == "pside" and config.get("bot", {}).get(key[1], {}).get("hsl", {}).get(
-        "enabled", False
-    ):
+    elif mode == "pside" and config["bot"][key[1]]["hsl"]["enabled"]:
         keys.update(k for k in gate.pending if k[1] == key[1])
     return not any(gate.blocked(k) for k in keys)

@@ -15,7 +15,7 @@ def require_real_passivbot_rust_module():
         pytest.fail("directional eligibility requires the real passivbot_rust extension")
 
 
-def _ema_anchor_config(hedge_mode: bool) -> dict:
+def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dict:
     config = load_config("configs/examples/ema_anchor.json", verbose=False)
     config["live"].update(
         {
@@ -40,13 +40,12 @@ def _ema_anchor_config(hedge_mode: bool) -> dict:
     )
     for pside in ("long", "short"):
         config["bot"][pside]["risk"].update(
-            {"n_positions": 1, "total_wallet_exposure_limit": 1.5}
+            {"max_positions": 1, "total_wallet_exposure_limit": 1.5}
         )
         config["bot"][pside]["forager"].update(
             {
                 "volume_ema_span_1m": 2,
                 "volatility_ema_span_1m": 2,
-                "volume_drop_pct": 0.0,
             }
         )
         config["bot"][pside]["strategy"]["ema_anchor"].update(
@@ -75,6 +74,8 @@ def _ema_anchor_config(hedge_mode: bool) -> dict:
         "volatility": 0.0,
         "volume": 1.0,
     }
+    if not include_dataset:
+        config["backtest"].pop("coins")
     return config
 
 

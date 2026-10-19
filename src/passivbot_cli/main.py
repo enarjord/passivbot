@@ -141,9 +141,28 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.hsl_startup_preview",
         "read-only offline HSL startup preview",
     ),
-    "gpu-proxy-benchmark": CommandSpec(
-        "tools.gpu_proxy_benchmark",
-        "benchmark deterministic Apple MPS proxy workloads",
+    "organillo-validate": CommandSpec(
+        "organillo", "Validate an external historical eligibility CSV.",
+    ),
+    "gpu-parity": CommandSpec(
+        "tools.gpu_parity",
+        "compare offline CPU/GPU backtest metrics (requires full install)",
+        requires_full=True,
+    ),
+    "gpu-cohort-benchmark": CommandSpec(
+        "tools.gpu_cohort_benchmark",
+        "measure offline CPU/GPU cohorts and native CUDA service latency (requires full install)",
+        requires_full=True,
+    ),
+    "optimizer-benchmark": CommandSpec(
+        "tools.optimizer_benchmark",
+        "freeze offline candidate populations and compare optimizer implementations",
+        requires_full=True,
+    ),
+    "gpu-service-benchmark": CommandSpec(
+        "tools.gpu_service_benchmark",
+        "measure offline native CUDA suite resources and default tuning evidence (requires full install)",
+        requires_full=True,
     ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
@@ -187,17 +206,13 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "audit and repair v2 OHLCV catalog metadata (requires full install)",
         requires_full=True,
     ),
-    "migrate-historical-data": CommandSpec(
-        "tools.migrate_historical_data",
-        "migrate historical data layout (requires full install)",
+    "import-historical-data": CommandSpec(
+        "tools.import_historical_data",
+        "explicit offline import preserving source and current OHLCV rows (requires full install)",
         requires_full=True,
     ),
-    "migrate-hsl": CommandSpec(
-        "tools.migrate_hsl_config", "write a validated HSL config without deploying it"
-    ),
-    "migrate-config-v7": CommandSpec(
-        "tools.migrate_config_v7",
-        "migrate a v7 trailing-grid config to v8 trailing_grid_v7",
+    "migrate-config-v9": CommandSpec(
+        "tools.migrate_config_v9", "explicitly migrate v8 risk policy to v9 without exchange access"
     ),
     "merge-paretos": CommandSpec(
         "tools.merge_paretos",
@@ -299,7 +314,6 @@ FULL_INSTALL_MODULE_HINTS = {
     "colorama",
     "dash",
     "dash_bootstrap_components",
-    "deap",
     "dictdiffer",
     "matplotlib",
     "msgpack",

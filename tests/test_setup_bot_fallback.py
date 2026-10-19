@@ -108,30 +108,21 @@ def test_setup_bot_binance_portfolio_margin_account_type(account_type):
             assert result._order_churn_gate_enabled_for_connector is True
 
 
-@pytest.mark.parametrize(
-    ("exchange", "target"),
-    [
-        ("defx", "exchanges.defx.DefxBot"),
-        ("paradex", "exchanges.paradex.ParadexBot"),
-    ],
-)
-def test_setup_bot_unsupported_legacy_connectors_do_not_enable_churn_gate(
-    exchange, target
-):
+@pytest.mark.parametrize("exchange", ["defx", "paradex"])
+def test_setup_bot_rejects_retired_connectors_before_generic_fallback(exchange):
     from passivbot import setup_bot
 
     config = {"live": {"user": "test_user"}}
-    mock_user_info = {
-        "exchange": exchange,
-        "key": "test_key",
-        "secret": "test_secret",
-    }
-    with patch("passivbot.load_user_info", return_value=mock_user_info):
-        with patch(target) as mock_bot_cls:
-            mock_bot = MagicMock()
-            mock_bot_cls.return_value = mock_bot
+    with patch("passivbot.load_user_info", return_value={"exchange": exchange}):
+        with patch("exchanges.ccxt_bot.CCXTBot") as generic:
+            with pytest.raises(ValueError, match="retired in v9"):
+                setup_bot(config)
+    generic.assert_not_called()
 
-            result = setup_bot(config)
 
-    assert result is mock_bot
-    assert result._order_churn_gate_enabled_for_connector is False
+@pytest.mark.parametrize("exchange", ["defx", "paradex"])
+def test_offline_connector_inspection_rejects_retired_connectors(exchange):
+    from ccxt_contracts import get_bot_class
+
+    with pytest.raises(ValueError, match="retired in v9"):
+        get_bot_class(exchange)

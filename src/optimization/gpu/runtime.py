@@ -16,7 +16,7 @@ def gpu_device(torch_module=None) -> str:
         return "cuda"
     raise RuntimeError(
         "GPU optimization requires available Apple MPS or NVIDIA CUDA; "
-        "use optimize.backend='pymoo' or 'deap' for CPU optimization"
+        "use optimize.backend='pymoo' for CPU optimization"
     )
 
 

@@ -6,7 +6,11 @@ from typing import Any, Dict, Iterable, Mapping
 
 import numpy as np
 
-from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, canonical_metric_name
+from config.metrics import (
+    ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, canonical_metric_name,
+    canonicalize_metric_name, split_metric_stat_suffix
+)
+from config.ew import EW_METRICS, is_ew_metric
 
 PERIOD_KEYS = ("effective_start_date", "effective_end_date")
 
@@ -78,6 +82,21 @@ def _build_stats(values: Iterable[float]) -> MetricStats:
     }
 
 
+def validate_required_ew_metrics(analyses, required_metrics):
+    """Require each selected exchange/scenario source before any reduction."""
+    required = {
+        split_metric_stat_suffix(canonicalize_metric_name(str(metric)))[0]
+        for metric in required_metrics if is_ew_metric(metric)
+    }
+    for label, analysis in analyses.items():
+        for metric in sorted(required):
+            value = analysis.get(metric)
+            if isinstance(value, bool) or not _is_number(value):
+                raise MetricAggregationError(
+                    f"required EW metric {metric!r} unavailable for {label!r}: {value!r}"
+                )
+
+
 def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
     """Combine per-exchange analysis dicts into structured scenario metrics."""
 
@@ -103,6 +122,8 @@ def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[st
         raise MetricAggregationError("analysis payloads contained no metrics")
 
     for metric in sorted(metric_names):
+        if metric in EW_METRICS and any(metric not in analysis for analysis in analyses.values()):
+            continue
         values = []
         for label, analysis in analyses.items():
             if metric not in analysis:
@@ -116,6 +137,12 @@ def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[st
         stats[metric] = _build_stats(values)
 
     payload = {"stats": stats, **shared_evaluation_period(analyses)}
+    metadata = {
+        label: analysis["ew_metadata"]
+        for label, analysis in analyses.items() if "ew_metadata" in analysis
+    }
+    if metadata:
+        payload["ew_metadata"] = metadata
     periods = {label: evaluation_period(analysis) for label, analysis in analyses.items()}
     if any(periods.values()):
         payload["exchanges"] = periods
@@ -133,6 +160,8 @@ def build_standalone_metrics(analysis: Mapping[str, Any], exchange: str) -> Dict
         },
         **period,
     }
+    if "ew_metadata" in analysis:
+        payload["ew_metadata"] = {exchange: analysis["ew_metadata"]}
     if period:
         payload["exchanges"] = {exchange: period}
     diagnostics = {
@@ -203,6 +232,12 @@ def merge_suite_payload(
 
     payload: Dict[str, Any] = {"metrics": suite_metrics}
     if scenario_metrics:
+        metadata = {
+            label: metrics["ew_metadata"]
+            for label, metrics in scenario_metrics.items() if "ew_metadata" in metrics
+        }
+        if metadata:
+            payload["ew_metadata"] = metadata
         payload["scenario_labels"] = list(scenario_metrics.keys())
         periods = {
             label: {

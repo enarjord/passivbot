@@ -3369,7 +3369,7 @@ def _format_hsl_console(event: LiveEvent) -> str:
     parts = [
         "[risk] HSL",
         token(data.get("observation_status"), 22),
-        "mode=" + token(data.get("signal_mode"), 8),
+        "mode=" + token(data.get("signal_mode"), 9),
         *(
             f"{key}={count(key)}"
             for key in ("green", "red", "inactive", "unavailable", "estimated")

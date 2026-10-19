@@ -1,11 +1,14 @@
 import copy
+import pytest
 
 from backtest import get_cache_hash
 from config_utils import format_config
+from config.schema import CONFIG_SCHEMA_VERSION
 
 
 def _base_config():
     return {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "base_dir": "backtests",
             "compress_cache": True,
@@ -15,24 +18,15 @@ def _base_config():
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
             "gap_tolerance_ohlcvs_minutes": 120,
-            "max_warmup_minutes": 0,
-            "suite": {
-                "enabled": False,
-                "include_base_scenario": False,
-                "base_label": "base",
-                "scenarios": [],
-            },
+            "suite_enabled": False,
+            "scenarios": [],
         },
         "bot": {
             "long": {
-                "n_positions": 4,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 0.25,
+                "risk": {"max_positions": 4, "total_wallet_exposure_limit": 1.0},
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
             },
         },
         "live": {
@@ -42,15 +36,24 @@ def _base_config():
             "warmup_ratio": 0.2,
             "max_warmup_minutes": 0,
         },
-        "optimize": {"bounds": {}, "scoring": [], "suite": {"enabled": False, "scenarios": []}},
+        "optimize": {"bounds": {}, "scoring": []},
     }
 
 
 def test_format_config_normalizes_coin_sources():
     cfg = _base_config()
-    cfg["backtest"]["coin_sources"] = {"BTC": "binance", 123: None}
+    cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
     out = format_config(copy.deepcopy(cfg), verbose=False)
     assert out["backtest"]["coin_sources"] == {"BTC": "binance"}
+
+
+def test_format_config_rejects_invalid_coin_source_keys_before_pruning():
+    cfg = _base_config()
+    cfg["backtest"]["coin_sources"] = {"BTC": "binance", 123: None}
+    before = copy.deepcopy(cfg)
+    with pytest.raises(TypeError, match="coin_sources keys must be strings"):
+        format_config(cfg, verbose=False)
+    assert cfg == before
 
 
 def test_format_config_preserves_exact_coin_source_identifiers():

@@ -8,6 +8,7 @@ import pytest
 
 import procedures
 from config_utils import load_config
+from config.schema import CONFIG_SCHEMA_VERSION
 import utils
 from utils import format_approved_ignored_coins, normalize_coins_source
 
@@ -803,8 +804,9 @@ async def test_format_approved_ignored_coins_supports_explicit_per_side_all(monk
     assert config["live"]["approved_coins"]["short"] == ["BTC", "ETH", "SOL"]
 
 
-def test_load_config_migrates_legacy_global_empty_means_all_approved(tmp_path: Path, caplog):
+def test_load_config_rejects_legacy_global_empty_means_all_approved(tmp_path: Path):
     raw = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -818,26 +820,9 @@ def test_load_config_migrates_legacy_global_empty_means_all_approved(tmp_path: P
     cfg_path = tmp_path / "legacy_empty_means_all.json"
     cfg_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    with caplog.at_level("WARNING"):
-        cfg = load_config(str(cfg_path), live_only=False, verbose=False)
-
-    assert "empty_means_all_approved" not in cfg["live"]
-    assert cfg["live"]["approved_coins"] == {"long": ["all"], "short": ["all"]}
-    assert cfg["_coins_sources"]["approved_coins"] == "all"
-    assert cfg["_raw"]["live"]["empty_means_all_approved"] is True
-    changes = cfg["_transform_log"][-1]["details"]["changes"]
-    assert any(
-        event["action"] == "remove" and event["path"] == "live.empty_means_all_approved"
-        for event in changes
-    )
-    assert any(
-        event["action"] == "update"
-        and event["path"] == "live.approved_coins"
-        and event["new"] == "all"
-        for event in changes
-    )
-    messages = [rec.message for rec in caplog.records]
-    assert any("live.empty_means_all_approved is deprecated" in msg for msg in messages)
+    with pytest.raises(ValueError, match="empty_means_all_approved.*unknown"):
+        load_config(str(cfg_path), live_only=False, verbose=False)
+    assert json.loads(cfg_path.read_text()) == raw
 
 
 @pytest.mark.asyncio

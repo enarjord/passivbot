@@ -16,22 +16,20 @@ def _write_config(path, config):
 
 def _sample_config() -> dict:
     return {
-        "config_version": "v8.0.0",
+        "config_version": "v9.0.0",
         "live": {
             "user": "binance_01",
-            "exchange": "binance",
-            "hsl_signal_mode": "coin",
-            "api_key": "super-secret-api-key",
         },
         "bot": {
+            "risk": {"hsl": {"scope": "coin"}},
             "long": {
                 "hsl": {
                     "enabled": True,
                     "red_threshold": 0.10,
                     "cooldown_minutes_after_red": 45,
-                    "ema_span_minutes": 120,
+                    "memory_ema_span_minutes": 43200.0,
+                    "drawdown_ratio_ema_span_minutes": 120.0,
                     "panic_close_order_type": "limit",
-                    "restart_after_red_policy": "always",
                 }
             },
             "short": {
@@ -185,8 +183,8 @@ def test_hsl_preview_degraded_capture_never_becomes_current_by_timestamp():
 
 def test_hsl_preview_portfolio_policy_uses_explicit_block():
     config = _sample_config()
-    config["live"]["hsl_signal_mode"] = "unified"
-    config["bot"]["hsl"] = {
+    config["bot"]["risk"]["hsl"] = {
+        "scope": "portfolio",
         "enabled": True,
         "red_threshold": 0.25,
         "secret": "do-not-render",
@@ -196,7 +194,7 @@ def test_hsl_preview_portfolio_policy_uses_explicit_block():
     assert "do-not-render" not in json.dumps(report)
 
 
-def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
+def test_hsl_startup_preview_rejects_flat_hsl_aliases(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
         "hsl_enabled": True,
@@ -204,7 +202,6 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
         "hsl_cooldown_minutes_after_red": 45,
         "hsl_ema_span_minutes": 120,
         "hsl_panic_close_order_type": "limit",
-        "hsl_restart_after_red_policy": "always",
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -215,17 +212,19 @@ def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
         now_ms=62_000,
     )
 
-    assert report["ok"] is True
-    assert report["config"]["hsl"]["sides"]["long"] == {
-        "present": True,
-        "enabled": True,
-        "scale_budget_with_excess_allowance": None,
-        "red_threshold": 0.10,
-        "cooldown_minutes_after_red": 45,
-        "ema_span_minutes": 120,
-        "panic_close_order_type": "limit",
-        "restart_after_red_policy": "always",
-    }
+    assert report["ok"] is False
+    assert report["issues"][0]["code"] == "config_schema_invalid"
+
+
+def test_hsl_startup_preview_rejects_unknown_credential_fields_without_rendering_values(tmp_path):
+    config = _sample_config()
+    config["live"]["api_key"] = "super-secret-api-key"
+    path = tmp_path / "config.json"
+    _write_config(path, config)
+    report = hsl_startup_preview.build_hsl_startup_preview_report(path, monitor_root="", now_ms=1)
+    assert report["ok"] is False
+    assert report["issues"][0]["code"] == "config_schema_invalid"
+    assert "super-secret-api-key" not in json.dumps(report)
 
 
 def test_hsl_startup_preview_missing_config_path_is_user_safe():
@@ -240,6 +239,17 @@ def test_hsl_startup_preview_missing_config_path_is_user_safe():
     assert report["config_path"] == "~/passivbot/configs/missing.json"
     assert report["issues"][0]["path"] == "~/passivbot/configs/missing.json"
     assert "/root" not in rendered
+
+
+def test_hsl_startup_preview_rejects_v8_without_mislabeling_runtime_status(tmp_path):
+    config = _sample_config()
+    config["config_version"] = "v8.0.0"
+    path = tmp_path / "old.json"
+    _write_config(path, config)
+    report = hsl_startup_preview.build_hsl_startup_preview_report(path, monitor_root="", now_ms=1)
+    assert not report["ok"]
+    assert report["issues"][0]["code"] == "config_migration_required"
+    assert "migrate-config-v9" in report["issues"][0]["message"]
 
 
 def test_hsl_startup_preview_config_only_marks_runtime_inputs_unavailable(tmp_path):

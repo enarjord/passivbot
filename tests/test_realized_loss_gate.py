@@ -1,15 +1,16 @@
-"""Tests for the realized-loss gate feature (live.max_realized_loss_pct)."""
+"""Tests for the account loss gate and independent realized-loss memories."""
 
+import json
 import logging
 import types
 from copy import deepcopy
 from types import MethodType
 from unittest.mock import AsyncMock, MagicMock
 
-import numpy as np
 import pytest
 
 from passivbot import Passivbot
+from config.schema import get_template_config
 from backtest import prep_backtest_args
 from fill_events_manager import FillEventsManager
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
@@ -21,10 +22,11 @@ from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
 def _make_fill_event(
     pnl: float,
-    timestamp: float = 0.0,
+    timestamp: int = 0,
     pnl_status: str = "complete",
     fee_paid: float = 0.0,
     pnl_source: str = "authoritative",
+    event_id: str | None = None,
 ) -> types.SimpleNamespace:
     """Create a minimal fill-event namespace with a .pnl attribute."""
     return types.SimpleNamespace(
@@ -33,7 +35,7 @@ def _make_fill_event(
         timestamp=timestamp,
         pnl_status=pnl_status,
         pnl_source=pnl_source,
-        id="test-fill",
+        id=event_id or f"fill-{timestamp}-{pnl}-{fee_paid}",
         symbol="BTC/USDT:USDT",
         position_side="long",
         pb_order_type="close_grid_long",
@@ -81,10 +83,26 @@ class _RiskCache:
 _DEFAULT_RISK_CACHE = object()
 
 
+def _risk_memory_config(span_minutes=3.0):
+    config = get_template_config()
+    config["bot"]["unstuck"]["memory_ema_span_minutes"] = span_minutes
+    config["bot"]["risk"]["loss_gate"].update(
+        memory_ema_span_minutes=span_minutes, max_drawdown_ratio=.99,
+    )
+    for side in ("long", "short"):
+        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["hsl"]["enabled"] = False
+    return config
+
+
 def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     """Return a Passivbot instance with a mocked FillEventsManager."""
     bot = object.__new__(Passivbot)
     bot._orchestrator_uses_realized_pnl = lambda: True
+    bot._unstuck_uses_realized_pnl = lambda: False
+    bot._live_max_realized_loss_pct = lambda: 0.99
+    bot.config = _risk_memory_config()
+    bot.get_exchange_time = lambda: 0
     bot._pnls_manager = MagicMock()
 
     def _get_events(start_ms=None, end_ms=None, symbol=None):
@@ -131,8 +149,9 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     return bot
 
 
-def _set_pnl_lookback(bot, *, lookback_days: float | str, now_ms: int) -> None:
-    bot.config = {"live": {"pnls_max_lookback_days": lookback_days}}
+def _set_memory_horizon(bot, *, minutes: float, now_ms: int) -> None:
+    bot.config = _risk_memory_config(minutes / 5.0)
+    bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = minutes
     bot.get_exchange_time = lambda: now_ms
 
 
@@ -161,24 +180,6 @@ def _make_replay_fill(
     }
 
 
-def _rust_effective_pnl_cumsum_reference(events, *, start_ms=None):
-    active = [
-        ev
-        for ev in events
-        if start_ms is None or getattr(ev, "timestamp", 0.0) >= start_ms
-    ]
-    if not active:
-        return {"max": 0.0, "last": 0.0}
-    cumsum = 0.0
-    peak = 0.0
-    for ev in active:
-        cumsum += float(getattr(ev, "pnl", 0.0) or 0.0) + float(
-            getattr(ev, "fee_paid", 0.0) or 0.0
-        )
-        peak = max(peak, cumsum)
-    return {"max": peak, "last": cumsum}
-
-
 def _make_bot_for_logging():
     """Return a Passivbot instance with throttle state initialized."""
     bot = object.__new__(Passivbot)
@@ -193,7 +194,7 @@ class _FailingConsoleSink:
 
 
 # ---------------------------------------------------------------------------
-# _get_realized_pnl_cumsum_stats
+# Independent realized-memory consumers
 # ---------------------------------------------------------------------------
 
 
@@ -268,137 +269,283 @@ class TestRealizedPnlConsumers:
         assert bot._live_risk_uses_authoritative_pnl() is False
 
 
-class TestGetRealizedPnlCumsumStats:
-    def test_no_manager_returns_zeros(self):
-        bot = object.__new__(Passivbot)
-        bot._pnls_manager = None
-        result = bot._get_realized_pnl_cumsum_stats()
-        assert result == {"max": 0.0, "last": 0.0}
-
-    def test_empty_events_returns_zeros(self):
+class TestGetRealizedMemories:
+    def test_no_manager_with_disabled_consumers_returns_no_filter_state(self):
         bot = _make_bot_with_events([])
-        result = bot._get_realized_pnl_cumsum_stats()
-        assert result == {"max": 0.0, "last": 0.0}
+        bot._pnls_manager = None
+        bot._live_max_realized_loss_pct = lambda: 1.0
+        assert bot._get_realized_memories() == {"unstuck": None, "loss_gate": None}
+
+    def test_enabled_realized_risk_requires_manager(self):
+        bot = _make_bot_with_events([])
+        bot._pnls_manager = None
+        with pytest.raises(RuntimeError, match="canonical fill manager"):
+            bot._get_realized_memories()["loss_gate"]
 
     @pytest.mark.parametrize(
         "pnl_status,pnl_source",
         [("pending", "unknown"), ("complete", "synthetic_degraded")],
     )
     def test_disabled_consumers_do_not_read_unsafe_pnl(self, pnl_status, pnl_source):
-        bot = _make_bot_with_events(
-            [
-                _make_fill_event(
-                    -10.0,
-                    pnl_status=pnl_status,
-                    pnl_source=pnl_source,
-                )
-            ]
+        bot = _make_bot_with_events([
+            _make_fill_event(-10.0, pnl_status=pnl_status, pnl_source=pnl_source)
+        ])
+        bot._live_max_realized_loss_pct = lambda: 1.0
+        assert bot._get_realized_memories() == {"unstuck": None, "loss_gate": None}
+        bot._pnls_manager.get_events.assert_not_called()
+
+    @pytest.mark.parametrize("rows,expected", [
+        ([], 0.0),
+        ([(50.0, 0.0)], 0.0),
+        ([(-20.0, 0.0)], 20.0),
+        ([(0.0, -2.0)], 2.0),
+        ([(-20.0, 0.0), (5.0, 2.0)], 13.0),
+        ([(-20.0, 0.0), (30.0, 0.0), (-4.0, 0.0)], 4.0),
+    ])
+    def test_gate_only_uses_full_ordered_net_fill_debits(self, rows, expected):
+        events = [_make_fill_event(pnl, fee_paid=fee, event_id=f"{i:02d}")
+                  for i, (pnl, fee) in enumerate(rows)]
+        bot = _make_bot_with_events(events)
+        assert bot._unstuck_uses_realized_pnl() is False
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == expected
+        diagnostic = bot._realized_memories_diagnostics["loss_gate"]
+        assert bot._realized_memories_diagnostics["unstuck"] is None
+        assert diagnostic["unknown_prefix"] is False
+        assert diagnostic["initialization"] == "known_zero_origin"
+        assert diagnostic["initial_drawdown"] == 0.0
+
+    def test_profit_then_loss_at_same_time_is_not_netted(self):
+        bot = _make_bot_with_events([
+            _make_fill_event(-15.0, event_id="z-loss"),
+            _make_fill_event(10.0, event_id="a-profit"),
+        ])
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 15.0
+        assert bot._realized_memories_diagnostics["ambiguous_cohort_count"] == 1
+        assert bot._realized_memories_diagnostics["ordering_reasons"] == [
+            "ambiguous_same_time_realized_order"
+        ]
+
+    def test_idle_decay_once_per_minute_and_repeated_queries_are_inert(self):
+        bot = _make_bot_with_events([_make_fill_event(-20.0)])
+        for now, expected in [(0, 20.0), (59_999, 20.0), (60_000, 10.0),
+                              (60_000, 10.0), (120_000, 5.0)]:
+            bot.get_exchange_time = lambda: now
+            assert bot._get_realized_memories()["loss_gate"]["drawdown"] == expected
+
+    def test_slow_spans_are_independent_for_gate_and_unstuck(self, monkeypatch):
+        import passivbot as module
+        native = module.pbr.realized_memories_v9
+        calls = []
+
+        def replay(payload):
+            calls.append(json.loads(payload))
+            return native(payload)
+
+        monkeypatch.setattr(module.pbr, "realized_memories_v9", replay)
+        bot = _make_bot_with_events([_make_fill_event(-15.0)])
+        bot._unstuck_uses_realized_pnl = lambda: True
+        bot.get_exchange_time = lambda: 60_000
+        first = bot._get_realized_memories()
+        assert first["loss_gate"]["drawdown"] == first["unstuck"]["drawdown"] == 7.5
+        assert len(calls) == 1
+        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
+        second = bot._get_realized_memories()
+        assert second["loss_gate"]["drawdown"] == 11.25
+        assert second["unstuck"]["drawdown"] == 7.5
+        assert len(calls) == 2
+        assert [row["loss_gate"]["memory_ema_span_minutes"] for row in calls] == [3.0, 7.0]
+        assert [row["unstuck"]["memory_ema_span_minutes"] for row in calls] == [3.0, 3.0]
+        assert calls[0]["fills"] == calls[1]["fills"]
+        assert all(row["unstuck"]["enabled"] and row["loss_gate"]["enabled"] for row in calls)
+
+    def test_known_origin_restart_with_same_facts_and_clock_reproduces_memory(self):
+        rows = [_make_fill_event(-20.0), _make_fill_event(5.0, timestamp=60_000)]
+        first, restarted = _make_bot_with_events(rows), _make_bot_with_events(rows)
+        first.get_exchange_time = lambda: 60_000
+        assert first._get_realized_memories()["loss_gate"]["drawdown"] == 5.0
+        for value in (first, restarted):
+            value.get_exchange_time = lambda: 120_000
+        assert first._get_realized_memories()["loss_gate"]["drawdown"] == 2.5
+        assert first._get_realized_memories() == restarted._get_realized_memories()
+        assert first._realized_memories_diagnostics == restarted._realized_memories_diagnostics
+
+    def test_unknown_prefix_is_declared_and_not_a_rolling_expiry(self, caplog):
+        rows = [_make_fill_event(-15.0, timestamp=540_001)]
+        bot = _make_bot_with_events(rows)
+        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+        bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        bot.get_exchange_time = lambda: 600_000
+        with caplog.at_level(logging.WARNING):
+            first = bot._get_realized_memories()["loss_gate"]
+            assert bot._get_realized_memories()["loss_gate"] == first
+            assert caplog.text.count("approximate zero initializer") == 1
+        assert bot._realized_memories_diagnostics["loss_gate"]["initialization"] == "unknown_prefix_zero"
+        assert bot._realized_memories_diagnostics["loss_gate"]["unknown_prefix"] is True
+        assert 0 < bot._realized_memories_diagnostics["loss_gate"]["prefix_attenuation"] < 1
+        assert "not an economic error bound" in caplog.text
+
+        bot.get_exchange_time = lambda: 720_000
+        continuous = bot._get_realized_memories()["loss_gate"]
+        assert continuous["drawdown"] > 0
+        assert bot._realized_memories_diagnostics["loss_gate"]["start"] == 540_000
+        restarted = _make_bot_with_events(rows)
+        restarted.config = deepcopy(bot.config)
+        restarted.get_exchange_time = lambda: 720_000
+        assert restarted._get_realized_memories()["loss_gate"]["drawdown"] == 0.0
+        assert restarted._realized_memories_diagnostics["loss_gate"]["start"] == 660_000
+        assert restarted._realized_memories_diagnostics["loss_gate"]["unknown_prefix"] is True
+        # A new suffix is a new declared initializer, not exact infinite history.
+
+    def test_derived_diagnostics_loss_preserves_origin_and_decision(self):
+        bot = _make_bot_with_events([_make_fill_event(-15.0)])
+        bot.get_exchange_time = lambda: 60_000
+        before = bot._get_realized_memories()["loss_gate"]
+        origin = bot._realized_memory_origin_ms
+        del bot._realized_memories_diagnostics
+        assert bot._get_realized_memories()["loss_gate"] == before
+        assert bot._realized_memory_origin_ms == origin
+
+    @pytest.mark.parametrize("change", ["backward_clock", "larger_bootstrap_cap"])
+    def test_initialized_origin_does_not_admit_an_older_prefix(self, change, caplog):
+        bot = _make_bot_with_events([
+            _make_fill_event(-50.0, timestamp=539_999),
+            _make_fill_event(-15.0, timestamp=540_001),
+        ])
+        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+        bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        now = [600_000]
+        bot.get_exchange_time = lambda: now[0]
+        with caplog.at_level(logging.WARNING):
+            first = bot._get_realized_memories()["loss_gate"]
+            assert bot._realized_memory_origin_ms == 540_000
+            if change == "backward_clock":
+                now[0] = 599_999
+                expected = 15.0  # No elapsed minute after this fill.
+            else:
+                bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 2.0
+                expected = first["drawdown"]
+            assert bot._get_realized_memories()["loss_gate"]["drawdown"] == expected
+            assert bot._get_realized_memories()["loss_gate"]["drawdown"] == expected
+        bot._pnls_manager.get_events.assert_called_with(
+            start_ms=540_000, end_ms=now[0]
         )
-        bot._orchestrator_uses_realized_pnl = lambda: False
+        assert bot._realized_memory_origin_ms == 540_000
+        assert bot._realized_memories_diagnostics["loss_gate"]["start"] == 540_000
+        assert bot._realized_memories_diagnostics["loss_gate"]["fills"] == 1
+        assert bot._realized_memories_diagnostics["loss_gate"]["unknown_prefix"] is True
+        assert caplog.text.count("approximate zero initializer") == 1
 
-        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
+    def test_unknown_prefix_restart_with_retained_initializer_reproduces_memory(self):
+        rows = [_make_fill_event(-15.0, timestamp=540_001)]
+        first, restarted = _make_bot_with_events(rows), _make_bot_with_events(rows)
+        for bot in (first, restarted):
+            bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+            bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        first.get_exchange_time = lambda: 600_000
+        first._get_realized_memories()["loss_gate"]
+        # Supplying the same factual initializer is different from inventing
+        # the unknown prefix or persisting a prior allowance/permission.
+        restarted._realized_memory_origin_ms = first._realized_memory_origin_ms
+        for bot in (first, restarted):
+            bot.get_exchange_time = lambda: 720_000
+        assert first._get_realized_memories()["loss_gate"] == restarted._get_realized_memories()["loss_gate"]
+        assert first._realized_memories_diagnostics == restarted._realized_memories_diagnostics
 
-    def test_single_positive_event(self):
-        bot = _make_bot_with_events([_make_fill_event(50.0)])
-        result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(50.0)
-        assert result["last"] == pytest.approx(50.0)
+    @pytest.mark.parametrize("status,source", [
+        ("pending", "unknown"), ("complete", "synthetic_degraded")
+    ])
+    def test_structural_cooldown_history_does_not_rebase_realized_memory(self, status, source):
+        bot = _make_bot_with_events([
+            _make_fill_event(-50.0, timestamp=1_000, pnl_status=status, pnl_source=source),
+            _make_fill_event(-15.0, timestamp=600_000),  # No elapsed minute after this fill.
+        ])
+        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+        bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        bot.get_exchange_time = lambda: 600_000
+        bot._max_configured_entry_cooldown_minutes = lambda: 720.0
+        assert bot._required_fill_history_start_ms(600_000, pnl_start_ms=540_000) == (True, 0)
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 15.0
+        assert bot._realized_memory_origin_ms == 540_000
+        assert bot._realized_memories_diagnostics["loss_gate"]["start"] == 540_000
+        assert bot._realized_memories_diagnostics["loss_gate"]["fills"] == 1
+        assert bot._required_fill_history_start_ms(600_000, pnl_start_ms=0) == (True, 0)
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 15.0
 
-    def test_realized_loss_gate_uses_net_pnl_with_fee_paid(self):
-        bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])
-        result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(45.0)
-        assert result["last"] == pytest.approx(45.0)
+    def test_current_fact_query_excludes_future_pending_rows(self):
+        bot = _make_bot_with_events([
+            _make_fill_event(-15.0),
+            _make_fill_event(0.0, timestamp=60_001, pnl_status="pending"),
+        ])
+        bot.get_exchange_time = lambda: 60_000
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 7.5
+        bot._pnls_manager.get_events.assert_called_once_with(start_ms=0, end_ms=60_000)
 
-    def test_cumsum_peak_differs_from_last(self):
-        events = [
-            _make_fill_event(100.0),
-            _make_fill_event(-60.0),
-            _make_fill_event(10.0),
-        ]
-        # cumsum: [100, 40, 50] → max=100, last=50
-        bot = _make_bot_with_events(events)
-        result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(100.0)
-        assert result["last"] == pytest.approx(50.0)
+    def test_corrections_and_exact_duplicates_replay_without_double_debit(self):
+        loss = _make_fill_event(-20.0, event_id="loss")
+        rows = [loss, deepcopy(loss), _make_fill_event(5.0, event_id="profit")]
+        bot = _make_bot_with_events(rows)
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 15.0
+        rows[0].pnl = rows[1].pnl = -12.0
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 7.0
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 7.0
 
-    def test_all_negative_events(self):
-        events = [_make_fill_event(-10.0), _make_fill_event(-20.0)]
-        # cumsum: [-10, -30] with an explicit zero starting-balance peak.
-        bot = _make_bot_with_events(events)
-        result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(0.0)
-        assert result["last"] == pytest.approx(-30.0)
+    def test_conflicting_identity_cannot_choose_a_revision(self):
+        from live.realized_facts import RealizedFactsError
+        bot = _make_bot_with_events([
+            _make_fill_event(-20.0, event_id="same"),
+            _make_fill_event(-12.0, event_id="same"),
+        ])
+        with pytest.raises(RealizedFactsError, match="conflicting realized fill identity"):
+            bot._get_realized_memories()["loss_gate"]
 
-    def test_uses_only_events_inside_configured_lookback_window(self):
-        now_ms = 10 * 86_400_000
-        events = [
-            _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
-            _make_fill_event(-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
-            _make_fill_event(10.0, timestamp=now_ms - 60_000),
-            _make_fill_event(-5.0, timestamp=now_ms - 30_000),
-        ]
-        bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+    @pytest.mark.parametrize("field,value", [
+        ("unknown_prefix", True), ("initialization", "exact"),
+        ("initial_drawdown", 1.0), ("fills", True), ("fills", 0),
+        ("prefix_attenuation", float("nan")), ("prefix_attenuation", 1.01),
+        ("drawdown", -1.0), ("drawdown", True), ("start", True), ("now", -1),
+    ])
+    @pytest.mark.parametrize("target", ["loss_gate", "unstuck"])
+    def test_malformed_producer_initialization_is_fatal(self, monkeypatch, target, field, value):
+        import passivbot as module
+        from passivbot import FatalBotException
+        native = module.pbr.realized_memories_v9
 
-        result = bot._get_realized_pnl_cumsum_stats()
+        def corrupt(payload):
+            result = json.loads(native(payload))
+            result[target][field] = value
+            return json.dumps(result)
 
-        assert result["max"] == pytest.approx(10.0)
-        assert result["last"] == pytest.approx(5.0)
+        monkeypatch.setattr(module.pbr, "realized_memories_v9", corrupt)
+        bot = _make_bot_with_events([_make_fill_event(-20.0)])
+        bot._unstuck_uses_realized_pnl = lambda: target == "unstuck"
+        with pytest.raises(FatalBotException, match="invalid v9 realized-memories producer"):
+            bot._get_realized_memories()["loss_gate"]
 
-    def test_zero_lookback_uses_minimal_history(self):
-        now_ms = 10 * 86_400_000
-        events = [
-            _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
-            _make_fill_event(-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
-            _make_fill_event(10.0, timestamp=now_ms - 60_000),
-        ]
-        bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days=0.0, now_ms=now_ms)
+    @pytest.mark.parametrize("field,value", [
+        ("start", True), ("now", -1), ("input_fills", True),
+        ("input_fills", 0), ("unstuck", {"drawdown": 0.0}),
+    ])
+    def test_malformed_envelope_or_disabled_filter_state_is_fatal(self, monkeypatch, field, value):
+        import passivbot as module
+        from passivbot import FatalBotException
+        native = module.pbr.realized_memories_v9
 
-        result = bot._get_realized_pnl_cumsum_stats()
+        def corrupt(payload):
+            result = json.loads(native(payload))
+            assert result["unstuck"] is None
+            result[field] = value
+            return json.dumps(result)
 
-        assert result["max"] == pytest.approx(0.0)
-        assert result["last"] == pytest.approx(0.0)
-
-    def test_all_lookback_uses_full_history(self):
-        now_ms = 10 * 86_400_000
-        events = [
-            _make_fill_event(100.0, timestamp=now_ms - 3 * 86_400_000),
-            _make_fill_event(-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
-            _make_fill_event(10.0, timestamp=now_ms - 60_000),
-        ]
-        bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days="all", now_ms=now_ms)
-
-        result = bot._get_realized_pnl_cumsum_stats()
-
-        assert result["max"] == pytest.approx(100.0)
-        assert result["last"] == pytest.approx(30.0)
-
-    def test_live_cumsum_matches_rust_effective_contract_reference(self):
-        now_ms = 10 * 86_400_000
-        events = [
-            _make_fill_event(100.0, timestamp=now_ms - 4 * 86_400_000, fee_paid=-2.0),
-            _make_fill_event(50.0, timestamp=now_ms - 2 * 86_400_000),
-            _make_fill_event(-120.0, timestamp=now_ms - 86_400_000, fee_paid=-1.5),
-            _make_fill_event(190.0, timestamp=now_ms - 60_000, fee_paid=-0.5),
-        ]
-        bot = _make_bot_with_events(events)
-        _set_pnl_lookback(bot, lookback_days=2.0, now_ms=now_ms)
-        start_ms = now_ms - 2 * 86_400_000
-
-        result = bot._get_realized_pnl_cumsum_stats()
-        expected = _rust_effective_pnl_cumsum_reference(events, start_ms=start_ms)
-
-        assert result["max"] == pytest.approx(expected["max"])
-        assert result["last"] == pytest.approx(expected["last"])
+        monkeypatch.setattr(module.pbr, "realized_memories_v9", corrupt)
+        bot = _make_bot_with_events([_make_fill_event(-20.0)])
+        with pytest.raises(FatalBotException, match="invalid v9 realized-memories producer"):
+            bot._get_realized_memories()
 
     def test_pending_close_pnl_fails_loudly(self):
         bot = _make_bot_with_events([_make_fill_event(0.0, pnl_status="pending")])
 
         with pytest.raises(RuntimeError, match="realized PnL pending"):
-            bot._get_realized_pnl_cumsum_stats()
+            bot._get_realized_memories()["loss_gate"]
 
     def test_degraded_synthetic_pnl_fails_loudly(self):
         bot = _make_bot_with_events(
@@ -411,7 +558,7 @@ class TestGetRealizedPnlCumsumStats:
         )
 
         with pytest.raises(RuntimeError, match="degraded realized PnL"):
-            bot._get_realized_pnl_cumsum_stats()
+            bot._get_realized_memories()["loss_gate"]
 
     def test_missing_cache_blocks_risk_history_coverage(self):
         now_ms = 10 * 86_400_000
@@ -419,10 +566,10 @@ class TestGetRealizedPnlCumsumStats:
             [_make_fill_event(10.0, timestamp=now_ms - 60_000)],
             cache=None,
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_memory_horizon(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(RuntimeError, match="missing FillEventsManager cache"):
-            bot._get_realized_pnl_cumsum_stats()
+            bot._get_realized_memories()["loss_gate"]
 
     def test_known_gap_overlapping_lookback_fails_loudly(self):
         now_ms = 10 * 86_400_000
@@ -444,20 +591,20 @@ class TestGetRealizedPnlCumsumStats:
             [_make_fill_event(10.0, timestamp=start_ms + 180_000)],
             cache=cache,
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_memory_horizon(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(
             RuntimeError, match="fill history gap overlaps risk lookback"
         ):
-            bot._get_realized_pnl_cumsum_stats()
+            bot._get_realized_memories()["loss_gate"]
 
     def test_uncovered_empty_history_fails_loudly(self):
         now_ms = 10 * 86_400_000
         bot = _make_bot_with_events([], cache=_RiskCache(history_scope="window"))
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_memory_horizon(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(RuntimeError, match="fill history coverage unknown"):
-            bot._get_realized_pnl_cumsum_stats()
+            bot._get_realized_memories()["loss_gate"]
 
     def test_oldest_event_without_coverage_does_not_prove_risk_lookback(self):
         now_ms = 10 * 86_400_000
@@ -470,12 +617,12 @@ class TestGetRealizedPnlCumsumStats:
                 oldest_event_ts=start_ms - 60_000,
             ),
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_memory_horizon(bot, minutes=1440.0, now_ms=now_ms)
 
         with pytest.raises(RuntimeError, match="fill history coverage unknown"):
-            bot._get_realized_pnl_cumsum_stats()
+            bot._get_realized_memories()["loss_gate"]
 
-    def test_covered_empty_history_returns_zero_cumsum(self):
+    def test_covered_empty_history_returns_declared_zero_memory(self):
         now_ms = 10 * 86_400_000
         start_ms = now_ms - 86_400_000
         bot = _make_bot_with_events(
@@ -485,9 +632,9 @@ class TestGetRealizedPnlCumsumStats:
                 history_scope="window",
             ),
         )
-        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+        _set_memory_horizon(bot, minutes=1440.0, now_ms=now_ms)
 
-        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
+        assert bot._get_realized_memories()["loss_gate"]["drawdown"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -886,51 +1033,16 @@ class TestEntryCooldownDeltaGuardEvents:
 
 class TestPrepBacktestArgsMaxRealizedLossPct:
     def _make_config(self, max_realized_loss_pct=None):
-        hsl_long = {
-            "hsl_enabled": False,
-            "hsl_red_threshold": 0.25,
-            "hsl_ema_span_minutes": 60.0,
-            "hsl_cooldown_minutes_after_red": 0.0,
-            "hsl_panic_close_order_type": "market",
-            "hsl_restart_after_red_policy": "always",
-        }
-        hsl_short = deepcopy(hsl_long)
-        config = {
-            "backtest": {
-                "coins": {"binance": ["BTC"]},
-                "starting_balance": 10000,
-                "btc_collateral_cap": 0.5,
-                "btc_collateral_ltv_cap": None,
-                "filter_by_min_effective_cost": False,
-                "hsl_detailed_report": False,
-                "dynamic_wel_by_tradability": True,
-                "limit_order_fill_buffer_pct": 0.0,
-            },
-            "bot": {
-                "long": {
-                    **hsl_long,
-                    "n_positions": 1,
-                    "total_wallet_exposure_limit": 1.0,
-                    "wallet_exposure_limit": 0.5,
-                },
-                "short": {
-                    **hsl_short,
-                    "n_positions": 1,
-                    "total_wallet_exposure_limit": 0.0,
-                    "wallet_exposure_limit": 0.0,
-                },
-            },
-            "live": {
-                "approved_coins": {"long": ["BTC"], "short": []},
-                "hedge_mode": True,
-                "hsl_signal_mode": "coin",
-                "max_realized_loss_pct": 1.0,
-                "pnls_max_lookback_days": 30.0,
-            },
-            "coin_overrides": {},
-        }
+        config = get_template_config()
+        config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
+                                  btc_collateral_cap=.5)
+        config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+        config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
+        config["bot"]["long"]["wallet_exposure_limit"] = .5
+        config["bot"]["short"]["wallet_exposure_limit"] = 0.0
         if max_realized_loss_pct is not None:
-            config["live"]["max_realized_loss_pct"] = max_realized_loss_pct
+            config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = max_realized_loss_pct
         return config
 
     def _make_mss(self):
@@ -950,14 +1062,21 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config = self._make_config()
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(1.0)
-        assert bp["pnls_max_lookback_days"] == pytest.approx(30.0)
+        assert bp["loss_gate_memory_ema_span_minutes"] == pytest.approx(43200.0)
+        assert bp["unstuck_memory_ema_span_minutes"] == pytest.approx(43200.0)
+        assert "lookback_ema_span_minutes" not in bp
+        assert "realized_loss_gate_lookback_minutes" not in bp
 
     def test_explicit_value_passthrough(self):
         config = self._make_config(max_realized_loss_pct=0.05)
-        config["live"]["pnls_max_lookback_days"] = 14
+        config["bot"]["unstuck"]["memory_ema_span_minutes"] = 3.0
+        config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.05)
-        assert bp["pnls_max_lookback_days"] == pytest.approx(14.0)
+        assert "realized_loss_gate_lookback_minutes" not in bp
+        assert bp["loss_gate_memory_ema_span_minutes"] == pytest.approx(7.0)
+        assert bp["unstuck_memory_ema_span_minutes"] == pytest.approx(3.0)
+        assert "lookback_ema_span_minutes" not in bp
 
     def test_zero_disables_lossy_closes(self):
         config = self._make_config(max_realized_loss_pct=0.0)
@@ -1005,9 +1124,9 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         policy = dict(
             enabled=True,
             red_threshold=0.3,
-            ema_span_minutes=45.5,
+            drawdown_ratio_ema_span_minutes=45.5,
+            memory_ema_span_minutes=123.5,
             cooldown_minutes_after_red=30.0,
-            restart_after_red_policy="never",
             panic_close_order_type="limit",
         )
         config = self._make_config(policy)
@@ -1021,7 +1140,8 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         [
             ({"cooldown_minutes_after_red": -1.0}, "cooldown_minutes_after_red"),
             ({"red_threshold": 0.0}, "red_threshold"),
-            ({"ema_span_minutes": 0.5}, "ema_span_minutes"),
+            ({"drawdown_ratio_ema_span_minutes": 0.5}, "drawdown_ratio_ema_span_minutes"),
+            ({"memory_ema_span_minutes": 0.5}, "memory_ema_span_minutes"),
             ({"restart_after_red_policy": "threshold"}, "restart_after_red_policy"),
         ],
     )

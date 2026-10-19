@@ -36,6 +36,7 @@ import utils
 from hlcv_preparation import HLCVManager, prepare_hlcvs, prepare_hlcvs_combined
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from ohlcv_catalog import OhlcvCatalog
+from ohlcv_legacy_import import import_legacy_range_into_store
 from ohlcv_store import OhlcvStore, month_start_ts
 
 LEGACY_DTYPE = np.dtype(
@@ -2051,7 +2052,6 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
         int(start_ts + 120_000),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         use_v2_local=True,
     )
 
@@ -2108,7 +2108,6 @@ async def test_fetch_data_for_coin_and_exchange_counts_sparse_v2_valid_rows(tmp_
         int(start_ts + 120_000),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         use_v2_local=True,
     )
 
@@ -2923,7 +2922,6 @@ async def test_load_combined_coin_candidates_raises_failed_non_forced_exchange(m
             force_refetch_gaps=False,
             catalog=catalog,
             store=store,
-            legacy_root=None,
             exchanges_to_consider=("binanceusdm", "bybit"),
             candidate_report=report,
         )
@@ -2976,7 +2974,6 @@ async def test_load_combined_coin_candidates_tolerates_failed_normalization_only
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
         candidate_report=report,
     )
@@ -3024,7 +3021,6 @@ async def test_load_combined_coin_candidates_bounds_normalization_only_exchange_
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
     )
 
@@ -3078,7 +3074,6 @@ async def test_load_combined_coin_candidates_can_bypass_v2_for_source_dir(monkey
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
         use_v2_local=False,
         candidate_report=candidate_report,
@@ -3148,7 +3143,6 @@ async def test_combined_force_refetch_uses_v2_resolver_for_large_internal_gap(
         force_refetch_gaps=True,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
         candidate_report=report,
     )
@@ -3225,7 +3219,6 @@ async def test_combined_force_refetch_btc_prices_rejects_truncated_v2_range(monk
         force_refetch_gaps=True,
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     # The resolver truncates at the unsupported internal gap. A partial BTC
@@ -3273,7 +3266,6 @@ async def test_combined_btc_source_dir_uses_source_dir_only(monkeypatch, tmp_pat
         force_refetch_gaps=False,
         catalog=catalog,
         store=OhlcvStore(tmp_path / "ohlcvs", catalog),
-        legacy_root=None,
         ohlcv_source_dir=str(tmp_path / "source"),
         use_v2_local=False,
     )
@@ -3309,6 +3301,14 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
     btc_source_symbol_dir = legacy_root / "binance" / "1m" / "BTC_USDT:USDT"
     btc_source_symbol_dir.mkdir(parents=True, exist_ok=True)
     np.save(btc_source_symbol_dir / "2026-04-01.npy", btc_arr)
+    current_root = tmp_path / "caches" / "ohlcvs"
+    catalog = OhlcvCatalog(current_root / "catalog.sqlite")
+    store = OhlcvStore(current_root, catalog)
+    for symbol in ("ETH/USDT:USDT", "BTC/USDT:USDT"):
+        assert import_legacy_range_into_store(
+            store=store, legacy_root=legacy_root, exchange="binance", timeframe="1m",
+            symbol=symbol, start_ts=int(start_ts), end_ts=int(start_ts),
+        ) == 1
     with open(tmp_path / "caches" / "binance" / "first_timestamps.json", "w", encoding="utf-8") as f:
         json.dump({"ETH": int(start_ts), "BTC": int(start_ts)}, f)
 

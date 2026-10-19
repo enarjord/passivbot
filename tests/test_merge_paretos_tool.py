@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tools.merge_paretos import build_merged_configs, main, _load_fronts
+from tools.merge_paretos import _side_is_enabled
 
 
 SCORING = [
@@ -245,6 +246,63 @@ def test_merge_paretos_supports_nested_v8_side_risk_and_bounds(tmp_path: Path):
         1.4,
         0.01,
     ]
+
+
+def test_merge_paretos_supports_canonical_v9_risk_and_bound_union(tmp_path: Path):
+    fronts = [_make_nested_front(tmp_path, side, enabled_side=side) for side in ("long", "short")]
+    originals = {}
+    for front in fronts:
+        for path in (front / "pareto").glob("*.json"):
+            entry = json.loads(path.read_text())
+            for side in ("long", "short"):
+                risk = entry["bot"][side]["risk"]
+                risk["max_positions"] = risk.pop("n_positions")
+                bounds = entry["optimize"]["bounds"][side]["risk"]
+                bounds["max_positions"] = bounds.pop("n_positions")
+            path.write_text(json.dumps(entry))
+            originals[path] = path.read_bytes()
+    output = tmp_path / "canonical-merged"
+    assert main([str(p) for p in fronts] + [str(output), "--max", "5"]) == 0
+    index = json.loads((output / "index.json").read_text())
+    assert index["count"] == 5
+    for filename in index["files"]:
+        merged = json.loads((output / filename).read_text())
+        for side, exposure_bounds in [("long", [.75, 1.5, .01]), ("short", [.65, 1.4, .01])]:
+            assert merged["bot"][side]["risk"]["max_positions"] == 1.0
+            assert "n_positions" not in merged["bot"][side]["risk"]
+            bounds = merged["optimize"]["bounds"][side]["risk"]
+            assert bounds["max_positions"] == [1, 1, 1]
+            assert "n_positions" not in bounds
+            assert bounds["total_wallet_exposure_limit"] == exposure_bounds
+    assert all(path.read_bytes() == raw for path, raw in originals.items())
+
+
+@pytest.mark.parametrize("count,exposure,enabled", [(2, .5, True), (0, .5, False), (2, 0, False)])
+def test_canonical_pareto_side_enablement(count, exposure, enabled):
+    assert _side_is_enabled({"risk": {"max_positions": count, "total_wallet_exposure_limit": exposure}}) is enabled
+
+
+@pytest.mark.parametrize("alias_patch", [
+    {"n_positions": 0},
+    {"total_wallet_exposure_limit": 0},
+    {"risk": {"n_positions": 0}},
+])
+def test_canonical_pareto_policy_rejects_conflicting_historical_aliases(alias_patch):
+    side = {"risk": {"max_positions": 2, "total_wallet_exposure_limit": .5}}
+    for key, value in alias_patch.items():
+        if key == "risk":
+            side[key].update(value)
+        else:
+            side[key] = value
+    with pytest.raises(ValueError, match="Conflicting"):
+        _side_is_enabled(side)
+
+
+def test_historical_pareto_reader_accepts_consistent_duplicate_policy_values():
+    assert _side_is_enabled({
+        "n_positions": 2, "total_wallet_exposure_limit": .5,
+        "risk": {"max_positions": 2, "n_positions": 2, "total_wallet_exposure_limit": .5},
+    })
 
 
 def test_merge_paretos_fills_after_core_until_max(tmp_path: Path):

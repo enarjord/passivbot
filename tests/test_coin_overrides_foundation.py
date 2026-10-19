@@ -1,4 +1,7 @@
 from copy import deepcopy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -18,13 +21,21 @@ def _prepared_config(overrides):
 
 
 def _parse(overrides, *, loaded=None, symbol_normalizer=lambda coin: coin):
-    prepared = _prepared_config(overrides)
-    return parse_overrides(
-        prepared,
-        verbose=False,
-        override_loader=lambda config, coin: deepcopy(loaded or {}),
-        symbol_normalizer=symbol_normalizer,
-    )
+    with TemporaryDirectory() as directory:
+        overrides = deepcopy(overrides)
+        for patch in overrides.values():
+            if "override_config_path" in patch:
+                path = Path(directory) / "override.json"
+                path.write_text(json.dumps(loaded or {}))
+                patch["override_config_path"] = str(path)
+        prepared = _prepared_config(overrides)
+        return parse_overrides(
+            prepared,
+            verbose=False,
+            override_loader=lambda config, coin: deepcopy(loaded or {}),
+            symbol_normalizer=symbol_normalizer,
+        )
+
 
 
 def test_explicit_inline_values_equal_to_global_are_retained():
@@ -153,15 +164,15 @@ def test_unstuck_ema_distance_validation_applies_to_effective_config():
 
 
 def test_effective_validation_normalization_is_retained_in_patch():
-    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"threshold": 1e-12}}}}})
+    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"exposure_trigger_ratio": 1e-12}}}}})
 
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["threshold"] == 0.0
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] == 0.0
 
 
 def test_runtime_compilation_must_follow_override_parsing():
     source = get_template_config()
     source["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"filter_volume_drop_pct": 0.25}}}
+        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.25}}}}
     }
     runtime_config = prepare_config(
         source,
@@ -180,20 +191,26 @@ def test_runtime_compilation_must_follow_override_parsing():
         log_config_transforms=False,
         target="live",
     )
-    with pytest.raises(
-        ValueError,
-        match=r"coin_overrides\.BTC\.bot\.long\.filter_volume_drop_pct is not overridable",
-    ):
-        parse_overrides(canonical_config, verbose=False)
+    parsed = parse_overrides(canonical_config, verbose=False)
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_pct"] == 0.25
+
+
+def test_retired_volume_filter_fails_before_runtime_compilation():
+    source = get_template_config()
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"filter_volume_drop_pct": 0.25}}}}
+    original = deepcopy(source)
+    with pytest.raises(ValueError, match=r"filter_volume_drop_pct.*retired"):
+        prepare_config(source, verbose=False, runtime="live")
+    assert source == original
 
 
 def test_runtime_compilation_after_parsing_preserves_normalized_patch():
-    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"threshold": 1e-12}}}}})
+    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"exposure_trigger_ratio": 1e-12}}}}})
 
     runtime_config = compile_runtime_config(parsed, runtime="live")
 
     assert (
-        runtime_config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["threshold"]
+        runtime_config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
         == 0.0
     )
 
@@ -257,7 +274,7 @@ def test_override_file_strategy_kind_mismatch_fails():
             {"BTC": {"override_config_path": "unused-by-test.json"}},
             loaded={
                 "bot": {
-                    "long": {"strategy": {"ema_anchor": {"entry": {"ema_dist": -0.01}}}}
+                    "long": {"strategy": {"ema_anchor": {"ema_span_0": 17.5}}}
                 }
             },
         )
@@ -392,7 +409,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                             "ema_gating_enabled": side["unstuck"]["ema_gating_enabled"],
                             "enabled": side["unstuck"]["enabled"],
                             "loss_allowance_pct": side["unstuck"]["loss_allowance_pct"],
-                            "threshold": side["unstuck"]["threshold"],
+                            "exposure_trigger_ratio": side["unstuck"]["exposure_trigger_ratio"],
                         },
                         "wallet_exposure_limit": 0.1,
                     }

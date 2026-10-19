@@ -88,10 +88,10 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
         "short": ["COIN1", "COIN2", "COIN3", "COIN4"],
     }
     config["live"]["ignored_coins"] = {"long": [], "short": []}
-    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    config["bot"]["long"]["n_positions"] = 3
-    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
-    config["bot"]["short"]["n_positions"] = 4
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["max_positions"] = 3
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["max_positions"] = 4
     mss = {
         coin: {
             "qty_step": 0.001,
@@ -213,8 +213,8 @@ def test_build_backtest_payload_marks_normal_forced_coin_active():
     config["backtest"]["coins"] = {"binance": ["BTC", "OM"]}
     config["live"]["approved_coins"] = {"long": ["BTC", "OM"], "short": []}
     config["live"]["ignored_coins"] = {"long": [], "short": []}
-    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    config["bot"]["long"]["n_positions"] = 2
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["max_positions"] = 2
     config["coin_overrides"] = {"OM": {"live": {"forced_mode_long": "normal"}}}
     mss = {
         coin: {
@@ -892,8 +892,8 @@ def test_build_backtest_payload_allows_empty_multicoin_valid_window():
     config["backtest"]["coins"] = {"binance": coins}
     config["live"]["approved_coins"] = {"long": coins, "short": []}
     config["live"]["ignored_coins"] = {"long": [], "short": []}
-    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
-    config["bot"]["long"]["n_positions"] = 2
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["risk"]["max_positions"] = 2
     mss = {
         coin: {
             "qty_step": 0.001,

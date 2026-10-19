@@ -34,7 +34,14 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
             raise TypeError(
                 "config.optimize.fixed_runtime_overrides keys must be dotted strings"
             )
+        if dotted_path == "optimize.prefilter" or dotted_path.startswith("optimize.prefilter."):
+            raise ValueError("prefilter policy belongs in optimize.prefilter, not runtime overrides")
         resolved = require_existing_config_path(config, dotted_path)
+        if resolved in (("backtest", "organillo_csv"), ("backtest", "organillo_sha256")):
+            raise ValueError(
+                "Organillo is a prepared dataset input; configure backtest.organillo_csv "
+                "or a scenario override before preparation, rather than optimize.fixed_runtime_overrides"
+            )
         prior = resolved_sources.get(resolved)
         if prior is not None:
             raise ValueError(
@@ -97,6 +104,15 @@ def validate_config(
 ) -> None:
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
+    from .prefilter import resolve_prefilter, prefilter_enabled
+
+    backend = str(config["optimize"]["backend"] or "pymoo").strip().lower()
+    if backend not in {"pymoo", "gpu"}:
+        raise ValueError("optimize.backend must be one of ['pymoo', 'gpu']")
+    config["optimize"]["backend"] = backend
+    policy = resolve_prefilter(config["optimize"].get("prefilter"))
+    if prefilter_enabled(policy) and config["live"]["strategy_kind"] != "trailing_martingale":
+        raise ValueError("enabled config prefilters currently require trailing_martingale")
 
     from .hsl import normalize_hsl
     from .schema import get_template_config
@@ -109,6 +125,9 @@ def validate_config(
     validate_limit_order_fill_buffer_pct(
         config["backtest"]["limit_order_fill_buffer_pct"]
     )
+    from .ew import validate_ew_config
+
+    validate_ew_config(config)
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
     fixed_runtime = {
@@ -187,7 +206,9 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
             )
-    normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
+    normalize_hsl_signal_mode(config["bot"]["risk"]["hsl"]["scope"])
+    if config["live"]["disapproved_position_mode"] not in {"graceful_stop", "manual"}:
+        raise ValueError("live.disapproved_position_mode must be graceful_stop or manual")
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")

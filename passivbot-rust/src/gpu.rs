@@ -6,6 +6,50 @@
 
 use std::sync::LazyLock;
 
+/// Private replay ABI: sorted strategy band, authored unstuck band (0, 1, derived),
+/// minute range, completed-hour range, forager quote volume, forager log range.
+pub const MARKET_EMA_BOOTSTRAP_COUNT_COLS: usize = 10;
+
+pub fn market_ema_bootstrap_counts(
+    spans: [f64; 8],
+    interval_minutes: f64,
+    available: u64,
+) -> Result<[i32; MARKET_EMA_BOOTSTRAP_COUNT_COLS], &'static str> {
+    if !interval_minutes.is_finite() || interval_minutes < 1.0 {
+        return Err("GPU EMA bootstrap interval must be finite and at least one minute");
+    }
+    if available == 0 || available > i32::MAX as u64 {
+        return Err("GPU EMA bootstrap history must fit a positive int32 sample count");
+    }
+    if spans.iter().any(|span| !span.is_finite() || *span < 0.0) {
+        return Err("GPU EMA bootstrap spans must be finite and nonnegative");
+    }
+    // Match CPU derivation order: derive in original minutes, sort, then scale.
+    // Do not recover counts from an alpha or a float32 transport value.
+    let mut price = [spans[0], spans[1], (spans[0] * spans[1]).sqrt()];
+    price.sort_by(f64::total_cmp);
+    let sources = [
+        price[0],
+        price[1],
+        price[2],
+        spans[2],
+        spans[3],
+        (spans[2] * spans[3]).sqrt(),
+        spans[4],
+        spans[5],
+        spans[6],
+        spans[7],
+    ];
+    Ok(std::array::from_fn(|index| {
+        let span_samples = if index == 7 {
+            sources[index]
+        } else {
+            sources[index] / interval_minutes
+        };
+        crate::utils::ema_bootstrap_count(span_samples, available) as i32
+    }))
+}
+
 const MPS_DECIMAL_ROUNDING_SOURCE: &str = include_str!("gpu/mps_decimal_rounding.metal");
 
 const MPS_ADAPTIVE_TIMING_SOURCE: &str = include_str!("gpu/mps_adaptive_timing.metal");
@@ -13,6 +57,7 @@ const MPS_UNSTUCK_EMA_MARKER: &str = "// PASSIVBOT_UNSTUCK_EMA_COMMON";
 const MPS_UNSTUCK_EMA_COMMON_SOURCE: &str = include_str!("gpu/mps_unstuck_ema_common.metal");
 
 const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
+const MPS_HSL_DECAY_SOURCE: &str = include_str!("gpu/mps_hsl_decay.metal");
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_HSL_SOURCE: &str = include_str!("gpu/mps_hsl.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
@@ -24,24 +69,11 @@ const MPS_ENTRY_INTERVAL_MARKER: &str = "// PASSIVBOT_ENTRY_INTERVAL_COMMON";
 const MPS_ENTRY_INTERVAL_COMMON_SOURCE: &str = include_str!("gpu/mps_entry_interval_common.metal");
 const MPS_MULTICOIN_MARKER: &str = "// PASSIVBOT_MULTICOIN_COMMON";
 const MPS_MULTICOIN_COMMON_SOURCE: &str = include_str!("gpu/mps_multicoin_common.metal");
-const MPS_EMA_ANCHOR_BODY: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
-const MPS_TRAILING_MARTINGALE_BODY: &str =
-    include_str!("gpu/mps_trailing_martingale_directional.metal");
 const MPS_EMA_ANCHOR_MULTICOIN_BODY: &str = include_str!("gpu/mps_ema_anchor_multicoin_long.metal");
 const MPS_TRAILING_MARTINGALE_MULTICOIN_BODY: &str =
     include_str!("gpu/mps_trailing_martingale_multicoin.metal");
 const MPS_STRATEGY_EQ_RECOVERY_DISTRIBUTION_SOURCE: &str =
     include_str!("gpu/mps_strategy_eq_recovery_distribution.metal");
-const MPS_TRAILING_LONG_NO_HSL_PREAMBLE: &str =
-    "#define PASSIVBOT_TRAILING_LONG_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
-const MPS_TRAILING_SHORT_NO_HSL_PREAMBLE: &str =
-    "#define PASSIVBOT_TRAILING_SHORT_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
-const MPS_TRAILING_LONG_HSL_PREAMBLE: &str = "#define PASSIVBOT_TRAILING_LONG_ONLY 1\n";
-const MPS_TRAILING_SHORT_HSL_PREAMBLE: &str = "#define PASSIVBOT_TRAILING_SHORT_ONLY 1\n";
-const MPS_EMA_LONG_NO_HSL_PREAMBLE: &str =
-    "#define PASSIVBOT_EMA_LONG_ONLY 1\n#define PASSIVBOT_EMA_HSL_DISABLED 1\n";
-const MPS_EMA_SHORT_NO_HSL_PREAMBLE: &str =
-    "#define PASSIVBOT_EMA_SHORT_ONLY 1\n#define PASSIVBOT_EMA_HSL_DISABLED 1\n";
 
 fn compose_hsl_source(body: &str) -> String {
     assert_eq!(body.matches(MPS_UNSTUCK_EMA_MARKER).count(), 1);
@@ -65,33 +97,42 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared entry-interval marker"
     );
-    body.replacen(
-        "// PASSIVBOT_DECIMAL_ROUNDING\n",
-        MPS_DECIMAL_ROUNDING_SOURCE,
-        1,
-    )
-    .replacen(
-        "// PASSIVBOT_ADAPTIVE_TIMING",
-        MPS_ADAPTIVE_TIMING_SOURCE,
-        1,
-    )
-    .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
-    .replacen(
-        MPS_HSL_MARKER,
-        &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
-        1,
-    )
-    .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
-    .replacen(
-        MPS_EQUITY_BALANCE_DIFF_MARKER,
-        MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
-        1,
-    )
-    .replacen(
-        MPS_ENTRY_INTERVAL_MARKER,
-        MPS_ENTRY_INTERVAL_COMMON_SOURCE,
-        1,
-    )
+    let source = body
+        .replacen(
+            "using namespace metal;",
+            &format!("using namespace metal;\n{MPS_HSL_DECAY_SOURCE}"),
+            1,
+        )
+        .replacen(
+            "// PASSIVBOT_DECIMAL_ROUNDING\n",
+            MPS_DECIMAL_ROUNDING_SOURCE,
+            1,
+        )
+        .replacen(
+            "// PASSIVBOT_ADAPTIVE_TIMING",
+            MPS_ADAPTIVE_TIMING_SOURCE,
+            1,
+        )
+        .replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
+        .replacen(
+            MPS_HSL_MARKER,
+            &format!("{}\n{}", MPS_HSL_SOURCE, MPS_HSL_COMMON_SOURCE),
+            1,
+        )
+        .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
+        .replacen(
+            MPS_EQUITY_BALANCE_DIFF_MARKER,
+            MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
+            1,
+        )
+        .replacen(
+            MPS_ENTRY_INTERVAL_MARKER,
+            MPS_ENTRY_INTERVAL_COMMON_SOURCE,
+            1,
+        );
+    // Authored risk helpers fence their own arithmetic, including inlining.
+    // Preserve ordinary strategy contraction outside those definitions.
+    source
 }
 
 fn compose_multicoin_source(body: &str) -> String {
@@ -100,59 +141,25 @@ fn compose_multicoin_source(body: &str) -> String {
         1,
         "MPS multi-coin source must contain exactly one shared-common marker"
     );
-    compose_hsl_source(&body.replacen(
+    let body = body.replacen(
         MPS_MULTICOIN_MARKER,
         &format!(
             "{}\n{}",
             MPS_DECIMAL_ROUNDING_SOURCE, MPS_MULTICOIN_COMMON_SOURCE
         ),
         1,
+    );
+    compose_hsl_source(&format!(
+        "{}{}",
+        include_str!("gpu/mps_organillo.metal"),
+        body
     ))
 }
 
-fn compose_trailing_topology_source(preamble: &str) -> String {
-    format!(
-        "{preamble}{}",
-        compose_hsl_source(MPS_TRAILING_MARTINGALE_BODY)
-    )
-}
-
-fn compose_ema_topology_source(preamble: &str) -> String {
-    format!("{preamble}{}", compose_hsl_source(MPS_EMA_ANCHOR_BODY))
-}
-
-pub static MPS_EMA_ANCHOR_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_hsl_source(MPS_EMA_ANCHOR_BODY));
-pub static MPS_EMA_ANCHOR_LONG_NO_HSL_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_ema_topology_source(MPS_EMA_LONG_NO_HSL_PREAMBLE));
-pub static MPS_EMA_ANCHOR_SHORT_NO_HSL_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_ema_topology_source(MPS_EMA_SHORT_NO_HSL_PREAMBLE));
 pub static MPS_EMA_ANCHOR_MULTICOIN_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_multicoin_source(MPS_EMA_ANCHOR_MULTICOIN_BODY));
-pub static MPS_TRAILING_MARTINGALE_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_hsl_source(MPS_TRAILING_MARTINGALE_BODY));
-pub static MPS_TRAILING_MARTINGALE_LONG_HSL_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_LONG_HSL_PREAMBLE));
-pub static MPS_TRAILING_MARTINGALE_SHORT_HSL_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_SHORT_HSL_PREAMBLE));
-pub static MPS_TRAILING_MARTINGALE_LONG_NO_HSL_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_LONG_NO_HSL_PREAMBLE));
-pub static MPS_TRAILING_MARTINGALE_SHORT_NO_HSL_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_SHORT_NO_HSL_PREAMBLE));
 pub static MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_multicoin_source(MPS_TRAILING_MARTINGALE_MULTICOIN_BODY));
-
-pub fn mps_ema_anchor_source() -> &'static str {
-    MPS_EMA_ANCHOR_SOURCE.as_str()
-}
-
-pub fn mps_ema_anchor_long_no_hsl_source() -> &'static str {
-    MPS_EMA_ANCHOR_LONG_NO_HSL_SOURCE.as_str()
-}
-
-pub fn mps_ema_anchor_short_no_hsl_source() -> &'static str {
-    MPS_EMA_ANCHOR_SHORT_NO_HSL_SOURCE.as_str()
-}
 
 pub fn mps_ema_anchor_multicoin_source() -> &'static str {
     MPS_EMA_ANCHOR_MULTICOIN_SOURCE.as_str()
@@ -160,26 +167,6 @@ pub fn mps_ema_anchor_multicoin_source() -> &'static str {
 
 pub fn mps_ema_anchor_multicoin_long_source() -> &'static str {
     MPS_EMA_ANCHOR_MULTICOIN_SOURCE.as_str()
-}
-
-pub fn mps_trailing_martingale_source() -> &'static str {
-    MPS_TRAILING_MARTINGALE_SOURCE.as_str()
-}
-
-pub fn mps_trailing_martingale_long_hsl_source() -> &'static str {
-    MPS_TRAILING_MARTINGALE_LONG_HSL_SOURCE.as_str()
-}
-
-pub fn mps_trailing_martingale_short_hsl_source() -> &'static str {
-    MPS_TRAILING_MARTINGALE_SHORT_HSL_SOURCE.as_str()
-}
-
-pub fn mps_trailing_martingale_long_no_hsl_source() -> &'static str {
-    MPS_TRAILING_MARTINGALE_LONG_NO_HSL_SOURCE.as_str()
-}
-
-pub fn mps_trailing_martingale_short_no_hsl_source() -> &'static str {
-    MPS_TRAILING_MARTINGALE_SHORT_NO_HSL_SOURCE.as_str()
 }
 
 pub fn mps_trailing_martingale_multicoin_source() -> &'static str {
@@ -194,13 +181,124 @@ pub fn mps_strategy_eq_recovery_distribution_source() -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bootstrap_counts_preserve_original_f64_precision_and_derived_order() {
+        let near = f64::from_bits(3.0_f64.to_bits() + 1);
+        let spans = [near, near, near, near, near, near, near, near];
+        assert_eq!(
+            market_ema_bootstrap_counts(spans, 1.0, 100).unwrap(),
+            [7; 10]
+        );
+        assert_eq!(
+            market_ema_bootstrap_counts([3.0; 8], 1.0, 100).unwrap(),
+            [6; 10]
+        );
+        let a = f64::from_bits(1.0_f64.to_bits() + 1);
+        let counts = market_ema_bootstrap_counts(
+            [a, 9.0, a, 9.0, near * 3.0, near, near * 3.0, near * 3.0],
+            3.0,
+            100,
+        )
+        .unwrap();
+        // sqrt(a*b)/3 is just above 1; sqrt((a/3)*(b/3)) rounds to 1.
+        assert_eq!(&counts[..3], &[1, 3, 6]);
+        assert_eq!(&counts[3..], &[1, 6, 3, 7, 7, 7, 7]);
+        let values = [1000.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        assert!((crate::utils::ema_last_f64(&values, near) - 8.866141732283465).abs() < 1e-12);
+        assert_eq!(crate::utils::ema_last_f64(&values, 3.0), 1.0);
+    }
+
+    #[test]
+    fn bootstrap_counts_clip_huge_spans_without_integer_wrap_or_span_rounding() {
+        assert_eq!(
+            market_ema_bootstrap_counts([f64::MAX; 8], 60.0, 73).unwrap(),
+            [73; 10]
+        );
+        assert_eq!(
+            market_ema_bootstrap_counts([1e-100; 8], 60.0, 73).unwrap(),
+            [1; 10]
+        );
+        assert_eq!(
+            market_ema_bootstrap_counts([0.0; 8], 1.0, 73).unwrap(),
+            [1; 10]
+        );
+        assert!(market_ema_bootstrap_counts([3.0; 8], 0.0, 73).is_err());
+        assert!(market_ema_bootstrap_counts([f64::NAN; 8], 1.0, 73).is_err());
+        assert!(market_ema_bootstrap_counts([3.0; 8], 1.0, 0).is_err());
+        assert!(market_ema_bootstrap_counts([3.0; 8], 1.0, i32::MAX as u64 + 1).is_err());
+    }
+
+    #[test]
+    fn replay_exports_share_v9_risk_arithmetic_and_explicit_contraction() {
+        for source in [
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            let off = source.matches("#pragma STDC FP_CONTRACT OFF").count();
+            assert!(off >= 2);
+            assert_eq!(off, source.matches("#pragma STDC FP_CONTRACT ON").count());
+            assert!(!source.starts_with("#pragma STDC FP_CONTRACT OFF"));
+            let contract_at = |definition: &str| {
+                let prefix = &source[..source.find(definition).unwrap()];
+                match prefix.rfind("#pragma STDC FP_CONTRACT OFF") {
+                    None => true,
+                    Some(off) => prefix
+                        .rfind("#pragma STDC FP_CONTRACT ON")
+                        .is_some_and(|on| on > off),
+                }
+            };
+            for definition in [
+                "inline bool hsl_decay_policy(",
+                "inline bool hsl_decay_observe(",
+                "inline bool hsl_decay_auto_allowance(",
+                "inline bool hsl_current_scope_facts(",
+                "inline void observe_hsl_event(",
+            ] {
+                assert!(
+                    !contract_at(definition),
+                    "risk definition must not contract: {definition}"
+                );
+            }
+            for definition in [
+                "inline void advance_joint_realized_memory(",
+                "inline float allowed_wallet_exposure_limit(",
+                "inline float coin_hsl_budget_multiplier(",
+            ] {
+                if source.contains(definition) {
+                    assert!(
+                        !contract_at(definition),
+                        "risk definition must not contract: {definition}"
+                    );
+                }
+            }
+            if source.contains("inline void record_joint_portfolio_fill(") {
+                assert!(contract_at("inline void record_joint_portfolio_fill("));
+            }
+            assert_eq!(source.matches("struct HslDecayPolicy {").count(), 1);
+            assert_eq!(source.matches("inline bool hsl_decay_observe(").count(), 1);
+            assert!(source.contains(MPS_HSL_DECAY_SOURCE));
+            assert!(
+                source.find("struct HslDecayPolicy {").unwrap()
+                    < source
+                        .find("struct JointPortfolioAccount {")
+                        .unwrap_or(usize::MAX)
+            );
+        }
+    }
+
     fn assert_shared_hsl_contract(source: &str) {
         assert!(!source.contains(MPS_HSL_MARKER));
         assert!(source.contains(MPS_HSL_COMMON_SOURCE));
+        assert!(source.contains(MPS_HSL_DECAY_SOURCE));
+        assert!(!source.contains("replay_factual_hsl("));
+        assert!(!source.contains("hsl_compose_scope("));
+        assert!(!source.contains("never_restart"));
+        assert_eq!(source.matches("inline void hsl_before_fill(").count(), 1);
+        assert_eq!(source.matches("inline void hsl_after_fill(").count(), 1);
         assert_eq!(source.matches("struct HslState").count(), 1);
         assert_eq!(source.matches("inline HslState load_hsl(").count(), 1);
         assert_eq!(source.matches("inline void observe_hsl(").count(), 1);
-        assert_eq!(source.matches("inline bool hsl_observe(").count(), 1);
+        assert_eq!(source.matches("inline bool hsl_decay_observe(").count(), 1);
         assert_eq!(source.matches("inline void update_hsl(").count(), 1);
         assert_eq!(
             source.matches("inline bool update_dual_side_hsl(").count(),
@@ -326,39 +424,6 @@ mod tests {
         assert!(source.contains("device int* counts"));
     }
 
-    fn assert_directional_recovery_sampling_contract(source: &str, separate_sample_capacity: bool) {
-        assert_eq!(source.matches("device float* recovery_samples").count(), 2);
-        assert!(source.contains("#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"));
-        assert!(source.contains("const int last_valid = sizes[6]"));
-        assert!(source.contains("const int recovery_stride = sizes[7]"));
-        if separate_sample_capacity {
-            assert!(source.contains("const int recovery_sample_capacity = sizes[8]"));
-            assert!(source.contains("const int recovery_sample_count = sizes[11]"));
-            assert!(source.contains("int(b) * recovery_sample_capacity + sample_index"));
-        } else {
-            assert!(source.contains("const int recovery_sample_count = sizes[8]"));
-            assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
-        }
-        assert!(source.contains("int recovery_start_k = -1"));
-        assert!(source.contains("const bool recovery_terminal = liq || k == T - 2"));
-        assert!(source.contains("(recovery_elapsed + recovery_stride - 1) / recovery_stride"));
-        assert!(source.contains("const bool after_valid_tail = k > last_valid"));
-        assert!(source.contains("bool active = eq_started && alive"));
-        assert!(!source.contains("eq_started && alive && (valid || after_valid_tail)"));
-        assert!(source.contains("const bool hsl_step = gen || (eq_started && after_valid_tail)"));
-        assert!(source.contains("bool long_blocking_orders = valid &&"));
-        assert!(source.contains("bool short_blocking_orders = valid &&"));
-        assert!(source.contains("if (!valid) {"));
-        assert!(
-            source.contains("clear_pending_ema_orders(long_side);")
-                || source.contains("clear_pending_tm_orders(long_side);")
-        );
-        assert!(
-            source.contains("clear_pending_ema_orders(short_side);")
-                || source.contains("clear_pending_tm_orders(short_side);")
-        );
-    }
-
     #[test]
     fn strategy_eq_recovery_distribution_source_preserves_strict_rust_contract() {
         let source = mps_strategy_eq_recovery_distribution_source();
@@ -374,7 +439,13 @@ mod tests {
 
     fn assert_shared_multicoin_contract(source: &str) {
         assert!(!source.contains(MPS_MULTICOIN_MARKER));
-        assert!(source.contains(MPS_MULTICOIN_COMMON_SOURCE));
+        assert!(
+            source.contains(
+                &MPS_MULTICOIN_COMMON_SOURCE
+                    .replace(" ORGANILLO_PASS", "")
+                    .replace(" ORGANILLO_ARGS", "")
+            ) || source.contains(MPS_MULTICOIN_COMMON_SOURCE)
+        );
         assert_eq!(source.matches("struct GpuDecimal {").count(), 1);
         for signature in [
             "inline float round_step(",
@@ -394,7 +465,7 @@ mod tests {
             "inline float joint_portfolio_equity(",
             "inline bool joint_portfolio_can_generate(",
             "inline bool update_joint_pside_hsl(",
-            "inline int joint_pside_hsl_global_tier(",
+            "inline int joint_hsl_report_tier(",
         ] {
             assert_eq!(source.matches(signature).count(), 1, "{signature}");
         }
@@ -417,68 +488,17 @@ mod tests {
         assert!(source.contains("account.realized_pnl_long, account.realized_pnl_short"));
     }
 
-    fn assert_directional_hsl_accounting_contract(source: &str) {
-        assert!(source.contains("thread float& realized_pnl_cumsum_long"));
-        assert!(source.contains("thread float& realized_pnl_cumsum_short"));
-        assert!(source.contains("if (is_long) realized_pnl_cumsum_long += net_pnl"));
-        assert!(source.contains("else realized_pnl_cumsum_short += net_pnl"));
-        assert_eq!(source.matches("update_dual_side_hsl(").count(), 2);
-        assert!(source.contains("realized_pnl_cumsum_long, realized_pnl_cumsum_short"));
-        assert!(source.contains("long_unreal, short_unreal"));
-        assert!(source.contains("long_side.psize > 0.0f, short_side.psize > 0.0f"));
-        assert!(source.contains("long_blocking_orders, short_blocking_orders"));
-        assert!(source.contains(
-            "const bool hsl_modes_valid = long_hsl.signal_mode == short_hsl.signal_mode"
-        ));
-        assert!(source.contains("bool hsl_update_valid = update_dual_side_hsl("));
-        assert!(source.contains("if (!hsl_update_valid)"));
-        assert!(source.contains("alive = false"));
-        assert!(source.contains("liq_day = di"));
-        assert_eq!(source.matches("force_close_delisted_position(").count(), 3);
-        assert!(source.contains("const bool forced_delist = valid && k == last_valid"));
-        assert!(source.contains("last_valid + 1400 < T"));
-        assert!(source.contains("close, !is_long, market_order_slippage_pct, price_step"));
-        assert!(source.contains("const float fee = close_qty * close_price * c_mult * taker_fee"));
-        assert!(source.contains("record_hsl_panic_fill("));
-        assert!(source.contains("if (gen && !forced_delist_closed_any)"));
-    }
-
-    #[test]
-    fn directional_sources_compose_one_shared_hsl_controller() {
-        assert_eq!(MPS_EMA_ANCHOR_BODY.matches(MPS_HSL_MARKER).count(), 1);
-        assert_eq!(
-            MPS_TRAILING_MARTINGALE_BODY.matches(MPS_HSL_MARKER).count(),
-            1
-        );
-        assert!(!MPS_EMA_ANCHOR_BODY.contains("struct HslState"));
-        assert!(!MPS_TRAILING_MARTINGALE_BODY.contains("struct HslState"));
-        assert_shared_hsl_contract(mps_ema_anchor_source());
-        assert_shared_hsl_contract(mps_trailing_martingale_source());
-        assert_directional_hsl_accounting_contract(mps_ema_anchor_source());
-        assert_directional_hsl_accounting_contract(mps_trailing_martingale_source());
-    }
-
     #[test]
     fn all_strategy_sources_compose_one_shared_btc_risk_controller() {
         for body in [
-            MPS_EMA_ANCHOR_BODY,
             MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_BODY,
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
         ] {
             assert_eq!(body.matches(MPS_BTC_RISK_MARKER).count(), 1);
             assert!(!body.contains("struct BtcRiskState"));
         }
         for source in [
-            mps_ema_anchor_source(),
-            mps_ema_anchor_long_no_hsl_source(),
-            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_source(),
-            mps_trailing_martingale_long_hsl_source(),
-            mps_trailing_martingale_short_hsl_source(),
-            mps_trailing_martingale_long_no_hsl_source(),
-            mps_trailing_martingale_short_no_hsl_source(),
             mps_trailing_martingale_multicoin_source(),
         ] {
             assert_shared_btc_risk_contract(source);
@@ -491,22 +511,14 @@ mod tests {
     #[test]
     fn all_strategy_sources_compose_one_shared_equity_balance_diff_controller() {
         for body in [
-            MPS_EMA_ANCHOR_BODY,
             MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_BODY,
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
         ] {
             assert_eq!(body.matches(MPS_EQUITY_BALANCE_DIFF_MARKER).count(), 1);
             assert!(!body.contains("struct EquityBalanceDiffState"));
         }
         for source in [
-            mps_ema_anchor_source(),
-            mps_ema_anchor_long_no_hsl_source(),
-            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_source(),
-            mps_trailing_martingale_long_no_hsl_source(),
-            mps_trailing_martingale_short_no_hsl_source(),
             mps_trailing_martingale_multicoin_source(),
         ] {
             assert_shared_equity_balance_diff_contract(source);
@@ -518,22 +530,14 @@ mod tests {
     #[test]
     fn all_strategy_sources_compose_one_shared_entry_interval_accumulator() {
         for body in [
-            MPS_EMA_ANCHOR_BODY,
             MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_BODY,
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
         ] {
             assert_eq!(body.matches(MPS_ENTRY_INTERVAL_MARKER).count(), 1);
             assert!(!body.contains("inline void record_initial_entry_interval("));
         }
         for source in [
-            mps_ema_anchor_source(),
-            mps_ema_anchor_long_no_hsl_source(),
-            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_source(),
-            mps_trailing_martingale_long_no_hsl_source(),
-            mps_trailing_martingale_short_no_hsl_source(),
             mps_trailing_martingale_multicoin_source(),
         ] {
             assert_shared_entry_interval_contract(source);
@@ -543,93 +547,15 @@ mod tests {
     #[test]
     fn strategy_sources_do_not_include_high_exposure_replay() {
         for source in [
-            MPS_EMA_ANCHOR_BODY,
             MPS_EMA_ANCHOR_MULTICOIN_BODY,
-            MPS_TRAILING_MARTINGALE_BODY,
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
-            mps_ema_anchor_source(),
-            mps_ema_anchor_long_no_hsl_source(),
-            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
-            mps_trailing_martingale_source(),
-            mps_trailing_martingale_long_no_hsl_source(),
-            mps_trailing_martingale_short_no_hsl_source(),
             mps_trailing_martingale_multicoin_source(),
         ] {
             assert!(!source.contains("PASSIVBOT_HIGH_EXPOSURE"));
             assert!(!source.contains("HighExposureState"));
             assert!(!source.contains("high_exposure_output"));
         }
-    }
-
-    #[test]
-    fn trailing_martingale_specialized_sources_pin_one_side() {
-        let variants = [
-            (
-                mps_trailing_martingale_long_hsl_source(),
-                "#define PASSIVBOT_TRAILING_LONG_ONLY 1",
-                false,
-            ),
-            (
-                mps_trailing_martingale_short_hsl_source(),
-                "#define PASSIVBOT_TRAILING_SHORT_ONLY 1",
-                false,
-            ),
-            (
-                mps_trailing_martingale_long_no_hsl_source(),
-                "#define PASSIVBOT_TRAILING_LONG_ONLY 1",
-                true,
-            ),
-            (
-                mps_trailing_martingale_short_no_hsl_source(),
-                "#define PASSIVBOT_TRAILING_SHORT_ONLY 1",
-                true,
-            ),
-        ];
-        for (source, side_define, hsl_disabled) in variants {
-            assert!(source.starts_with(side_define));
-            assert_eq!(
-                source.contains("#define PASSIVBOT_TRAILING_HSL_DISABLED 1"),
-                hsl_disabled
-            );
-            assert!(source.contains("#if defined(PASSIVBOT_TRAILING_LONG_ONLY)"));
-            assert!(source.contains("#elif defined(PASSIVBOT_TRAILING_SHORT_ONLY)"));
-            assert!(source.contains("#if defined(PASSIVBOT_TRAILING_HSL_DISABLED)"));
-            assert!(source.contains("update_one_side_hsl("));
-            assert_shared_hsl_contract(source);
-            assert_directional_hsl_accounting_contract(source);
-        }
-        let generic = mps_trailing_martingale_source();
-        assert!(!generic.contains("#define PASSIVBOT_TRAILING_LONG_ONLY 1"));
-        assert!(!generic.contains("#define PASSIVBOT_TRAILING_SHORT_ONLY 1"));
-        assert!(!generic.contains("#define PASSIVBOT_TRAILING_HSL_DISABLED 1"));
-    }
-
-    #[test]
-    fn ema_anchor_specialized_sources_pin_one_side_without_hsl() {
-        let variants = [
-            (
-                mps_ema_anchor_long_no_hsl_source(),
-                "#define PASSIVBOT_EMA_LONG_ONLY 1",
-            ),
-            (
-                mps_ema_anchor_short_no_hsl_source(),
-                "#define PASSIVBOT_EMA_SHORT_ONLY 1",
-            ),
-        ];
-        for (source, side_define) in variants {
-            assert!(source.starts_with(side_define));
-            assert!(source.contains("#define PASSIVBOT_EMA_HSL_DISABLED 1"));
-            assert!(source.contains("#if defined(PASSIVBOT_EMA_LONG_ONLY)"));
-            assert!(source.contains("#elif defined(PASSIVBOT_EMA_SHORT_ONLY)"));
-            assert!(source.contains("#if defined(PASSIVBOT_EMA_HSL_DISABLED)"));
-            assert_shared_hsl_contract(source);
-            assert_directional_hsl_accounting_contract(source);
-        }
-        let generic = mps_ema_anchor_source();
-        assert!(!generic.contains("#define PASSIVBOT_EMA_LONG_ONLY 1"));
-        assert!(!generic.contains("#define PASSIVBOT_EMA_SHORT_ONLY 1"));
-        assert!(!generic.contains("#define PASSIVBOT_EMA_HSL_DISABLED 1"));
     }
 
     #[test]
@@ -652,9 +578,17 @@ mod tests {
             assert!(body.contains("thread float& balance = account.balance"));
             assert!(body
                 .contains("thread float& realized_pnl_cumsum_last = account.realized_pnl_total"));
-            assert!(
-                body.contains("thread float& realized_pnl_cumsum_max = account.realized_pnl_peak")
+            // Both independent consumers retain the actual-fill producer;
+            // neither policy takes its rate from a side's HSL controller.
+            assert!(body.contains("joint_realized_loss_allowance("));
+            assert_eq!(
+                body.matches("configure_joint_realized_memory(account, params[po +")
+                    .count(),
+                2
             );
+            assert!(!body.contains("account.realized_decay_beta ="));
+            assert!(!body.contains("volume_drop"));
+            assert!(!body.contains("unstuck_pnl_values"));
             assert_eq!(
                 body.matches("record_realized_net(").count(),
                 expected_account_record_sites
@@ -668,6 +602,58 @@ mod tests {
             assert!(body.contains("ordinary_market_fill_price("));
             assert!(body.contains("record_hsl_panic_fill("));
         }
+    }
+
+    #[test]
+    fn market_emas_bootstrap_at_the_first_causal_usable_boundary() {
+        assert!(!MPS_MULTICOIN_COMMON_SOURCE.contains("ceil(2.0f * span)"));
+        assert!(MPS_MULTICOIN_COMMON_SOURCE.contains("min(requested_count, k - first_valid + 1)"));
+        assert!(MPS_MULTICOIN_COMMON_SOURCE.contains("numerator = fma(beta, numerator, sample)"));
+        assert!(MPS_MULTICOIN_COMMON_SOURCE.contains("denominator = fma(beta, denominator, 1.0f)"));
+        for source in [
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            assert_eq!(
+                source.matches("inline float bootstrap_market_ema(").count(),
+                1
+            );
+            assert!(source.contains("planning_ready && k >= int(coin_settings[coin_offset + 8])"));
+            assert!(source.contains("if (can_bootstrap && !side.market_ema_bootstrapped[c])"));
+            assert!(source.contains("side.market_ema_bootstrapped[c] = true"));
+            assert!(source.contains("!side.hourly_ema_bootstrapped[c]"));
+            assert_eq!(source.matches("constant int* bootstrap_counts,").count(), 6);
+            assert_eq!(source.matches("bootstrap_counts[c * 10 +").count(), 10);
+            for offset in [
+                "int(b) * C * 10",
+                "int(b) * 2 * C * 10",
+                "(int(b) * 2 + 1) * C * 10",
+            ] {
+                assert!(source.contains(&format!("bootstrap_counts + {offset}")));
+            }
+            assert!(!source.contains("PASSIVBOT_WEIGHTED"));
+        }
+    }
+
+    #[test]
+    fn realized_memory_consumers_have_separate_rates_and_one_economic_ledger() {
+        let source = MPS_MULTICOIN_COMMON_SOURCE;
+        assert!(source.contains("RealizedDecayMemory unstuck_memory"));
+        assert!(source.contains("RealizedDecayMemory loss_gate_memory"));
+        assert!(source.contains("if (account.unstuck_memory.enabled)"));
+        assert!(source.contains("if (account.loss_gate_memory.enabled)"));
+        assert_eq!(
+            source.matches("hsl_decay_realized_fill(net_pnl,").count(),
+            2
+        );
+        assert_eq!(source.matches("account.balance = next;").count(), 1);
+        assert_eq!(
+            source
+                .matches("account.realized_pnl_total += net_pnl;")
+                .count(),
+            1
+        );
+        assert!(source.contains("account.balance, fraction, account.loss_gate_memory.drawdown"));
     }
 
     #[test]
@@ -685,106 +671,29 @@ mod tests {
     }
 
     #[test]
-    fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_ema_anchor_source();
-        assert_shared_hsl_contract(source);
-        assert_directional_recovery_sampling_contract(source, false);
-        assert_directional_hsl_accounting_contract(source);
-        assert!(source.contains("kernel void passivbot_ema_anchor"));
-        assert!(source.contains("constant int DAILY_COLS = 8"));
-        assert!(source.contains("constant int SCALAR_COLS = 66"));
-        assert!(source.contains("constant int SCALAR_COLS = 68"));
-        assert!(source.contains("constant int SCALAR_COLS = 72"));
-        assert!(source.contains("record_gross_pnl"));
-        assert!(source.contains("scalars[so + 42] = loss_sum"));
-        assert!(source.contains("scalars[so + 43] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 44] = long_enabled"));
-        assert!(source.contains("scalars[so + 45] = short_enabled"));
-        assert!(source.contains("scalars[so + 46] = total_wallet_exposure_max"));
-        assert!(source.contains("scalars[so + 47] = total_wallet_exposure_mean"));
-        assert!(source.contains("scalars[so + 48] = fill_count"));
-        assert!(source.contains("scalars[so + 49] = fill_count_entry"));
-        assert!(source.contains("scalars[so + 50] = fill_count_long"));
-        assert!(source.contains("scalars[so + 51] = fills_active_days_count"));
-        assert!(source.contains("const float fill_day_candles = 86400000.0f / interval_ms"));
-        assert!(source.contains(
-            "int active_fill_day = elapsed_fill_day_bucket(\n                    kf, first_eq_k, interval_ms"
-        ));
-        assert!(source.contains("scalars[so + 52] = pnl_recovery_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 53] = held_sum_min * interval_ms"));
-        assert!(source.contains("scalars[so + 54] = held_count"));
-        assert!(source.contains("scalars[so + 55] = account_recovery_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 56] = profit_sum_long"));
-        assert!(source.contains("scalars[so + 59] = loss_sum_short"));
-        assert!(source.contains("scalars[so + 62] = hsl_strategy_equity_recovery_max_steps("));
-        assert!(source.contains("scalars[so + 63] = hsl_strategy_equity_recovery_max_steps("));
-        assert!(source.contains("scalars[so + 64] = hsl_drawdown_ema_mean_worst_1pct("));
-        assert!(source.contains("scalars[so + 65] = hsl_drawdown_ema_mean_worst_1pct("));
-        assert!(source.contains("scalars[so + 66] = hsl_strategy_equity_drawdown_max("));
-        assert!(source.contains("scalars[so + 67] = hsl_strategy_equity_drawdown_max("));
-        assert!(source.contains("if (eqf >= account_peak)"));
-        assert!(source.contains("constant int SIDE_PARAMS = 40"));
-        assert!(source.contains("float base_wel = params[po + 30]"));
-        assert!(source.contains("side.base_wel = base_wel"));
-        assert!(source.contains("current_we / fmax(side.base_wel"));
-        assert!(source.contains("struct HslState"));
-        assert!(source.contains("update_hsl("));
-        assert!(source.contains("hsl_tier_samples_total"));
-        assert!(source.contains("h.restart_retrigger_count"));
-        assert!(source.contains("h.halt_duration_sum_steps"));
-        assert!(source.contains("record_hsl_panic_fill("));
-        assert!(source.contains("h.panic_loss_drawdown_sum"));
-        assert!(source.contains("h.slot_count"));
-        assert!(source.contains("bool red = fmin(score.x, score.y) > threshold"));
-        assert!(source.contains("load_hsl(params, po, 23)"));
-        assert!(source.contains("load_hsl(params, po + SIDE_PARAMS, 23)"));
-        assert!(source.contains("total_exposure_reducer_qty"));
-        assert!(source.contains("unstuck_reducer_variant"));
-        assert!(source.contains("unstuck_ema_gating_enabled"));
-        assert!(source.contains("unstuck_loss_allowance_pct"));
-        assert!(source.contains("Exact Rust emits at most one global unstuck intent"));
-        assert!(source.contains("secondary_close_qty"));
-        assert!(source.contains("generate_short_orders"));
-        assert!(source.contains("const bool hedge_mode"));
-        assert!(source.contains("const bool filter_by_min_effective_cost"));
-        assert!(source.contains("passes_min_effective_cost"));
-        assert!(source.contains("projected_cost_lower"));
-        assert!(source.contains("float guaranteed_balance_lower"));
-        assert_eq!(
-            source.matches("bool min_cost_exact_open_uncertain").count(),
-            1
-        );
-        assert!(source.contains("guaranteed_balance_lower = 0.0f"));
-        assert!(source.contains("realized_loss_gate_allows"));
-        assert!(source.contains("float32_floor_nonnegative"));
-        assert!(source.contains("record_realized_net"));
-        assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
-        assert!(source.contains("const float taker_fee = settings[15]"));
-        assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
-        assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
-        assert!(source.contains("const bool short_hsl_panic_market = settings[18] > 0.5f"));
-        assert!(source.contains("const bool market_orders_allowed = settings[19] > 0.5f"));
-        assert!(source
-            .contains("const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"));
-        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
-        assert!(source.contains("ordinary_market_fill_price("));
-        assert!(source.contains("resize_market_close_qty("));
-        assert!(source.contains("position_size <= requested_qty"));
-        assert!(source.contains("remainder + tolerance < minimum_qty"));
-        assert!(!source.contains("accumulate_min_cost_balance_error"));
-        assert_eq!(source.matches("= fma(").count(), 10);
-        assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 11").count(), 1);
-        assert_eq!(source.matches("const int touch_down_tick").count(), 1);
-        assert_eq!(source.matches("const int touch_up_tick").count(), 1);
-        assert_eq!(source.matches("high_fill_max_tick").count(), 4);
-        assert_eq!(source.matches("low_nonfill_max_tick").count(), 4);
-        assert!(!source.contains("nextafter("));
+    fn multicoin_temporal_kernel_buffers_use_untyped_state_transport() {
+        for source in [
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            for kernel in source.split("kernel void ").skip(1) {
+                let signature = kernel.split('{').next().unwrap();
+                assert!(!signature.contains("ReplayState* replay_states"));
+            }
+            assert_eq!(
+                source.matches("device char* replay_state_bytes,").count(),
+                3
+            );
+            assert!(source.contains("reinterpret_cast<device "));
+        }
     }
 
     #[test]
     fn ema_anchor_multicoin_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_ema_anchor_multicoin_source();
+        let normalized = mps_ema_anchor_multicoin_source()
+            .replace(" ORGANILLO_PASS", "")
+            .replace(" ORGANILLO_ARGS", "");
+        let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin"));
@@ -792,30 +701,25 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 47"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 32"));
+        assert!(source.contains("constant int PARAM_COLS = 48"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 34"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 19"));
-        assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 25"));
+        assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 27"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
-        assert_eq!(source.matches("float min_cost_balance_lower =").count(), 2);
-        assert!(source.contains("long_has_position || short_has_position"));
-        assert!(source.contains("multicoin_min_cost_rejection_possible"));
-        assert_eq!(
-            source.matches("bool min_cost_exact_open_uncertain").count(),
-            2
-        );
-        assert!(source.contains("never reuse the equity-derived liquidation floor"));
+        assert!(source.contains("filter_by_min_effective_cost, account.balance"));
+        assert!(!source.contains("min_cost_exact_open_uncertain"));
+        assert!(!source.contains("multicoin_min_cost_rejection_possible"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
-        assert!(source.contains("constant int SCALAR_COLS = 61"));
-        assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
+        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 68"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -836,9 +740,6 @@ mod tests {
         assert!(source.contains("forced_normal_count"));
         assert!(source.contains("retains the separate dynamic-WEL denominator"));
         assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
-        assert!(source.contains("flat_selected_became_ineligible"));
-        assert!(source.contains("candle_eligibility_changed"));
-        assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(
             source.matches("if (!managed_candidate) continue;").count(),
             3
@@ -863,8 +764,12 @@ mod tests {
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
         assert!(source.contains("float twe_abs = fabs(net_position_cost / account.balance)"));
-        assert!(source.contains("account.balance = 0.0f"));
-        assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(
+            source.contains("hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C)")
+        );
+        assert!(
+            source.contains("hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C)")
+        );
         assert!(source.contains("select_ema_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
         assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
@@ -897,16 +802,15 @@ mod tests {
             source
                 .matches("!post_fill_balance_depleted && past_activation_guard")
                 .count(),
-            2
+            4
         );
-        assert!(source.contains("side.previous_effective_n_positions = effective_n_positions"));
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
         assert!(source.contains("thread HslState* coin_hsl = side.coin_hsl"));
         assert!(source.contains("thread float* psize = side.psize"));
         assert!(source.contains("thread int* entry_tick = side.entry_tick"));
         assert!(source.contains("thread bool* selected = side.selected"));
-        assert!(source.contains("load_hsl(params, po, 31)"));
+        assert!(source.contains("load_hsl(params, po, 30)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
         assert_eq!(
@@ -921,7 +825,6 @@ mod tests {
                 .count(),
             1
         );
-        assert!(source.contains("coin_hsl_eligibility_changed"));
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
         assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("const bool market_orders_allowed = run_settings[9] > 0.5f"));
@@ -967,7 +870,9 @@ mod tests {
         );
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
-        assert!(source.contains("config.volume_drop = clamp(params[po + 14]"));
+        assert!(!source.contains("volume_drop"));
+        assert!(source.contains("config.forager_volume_span = params[po + 12]"));
+        assert!(source.contains("config.w_volume = params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
@@ -976,7 +881,7 @@ mod tests {
             source.contains("if (alive && !post_fill_balance_depleted && past_activation_guard)")
         );
         assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
-        assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
+        assert!(source.contains("incumbent[c] = side.entry_qty[c] > 0.0f && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
         assert!(source.contains("allowed_wallet_exposure_limit"));
@@ -999,325 +904,41 @@ mod tests {
         assert!(source.contains("one global auto-unstuck intent"));
         assert!(source.contains("unstuck_loss_allowance_pct"));
         assert!(!source.contains("hard_stop"));
-        assert_eq!(source, mps_ema_anchor_multicoin_long_source());
-    }
-
-    #[test]
-    fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_trailing_martingale_source();
-        assert_shared_hsl_contract(source);
-        assert_shared_entry_interval_contract(source);
-        assert_directional_recovery_sampling_contract(source, true);
-        assert_directional_hsl_accounting_contract(source);
-        assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("const int bounded_history_start = sizes[9]"));
-        assert!(source.contains("const int bounded_trade_start = sizes[10]"));
-        assert!(source.contains("const bool recent_history_window"));
-        assert!(source.contains("const int loop_start = recent_history_window"));
-        assert!(source.contains("k >= bounded_trade_start"));
-        assert!(source.contains("const int recovery_sample_capacity = sizes[8]"));
-        assert!(source.contains("const int recovery_sample_count = sizes[11]"));
-        assert!(source.contains("const int bounded_first_hour_step = sizes[12]"));
-        assert!(source.contains("const bool bounded_first_hour_ready = sizes[13] != 0"));
-        assert!(source.contains("const int bounded_first_next_window_start = sizes[14]"));
-        assert!(source.contains("const bool hour_boundary = (hour_flags & 2)"));
-        assert!(source.contains("(hour_flags & 4) != 0"));
-        assert!(source.contains("(hour_flags & 8) != 0"));
-        assert!(source.contains("bounded_hour_latest_valid"));
-        assert!(source.contains("bounded_hour_synced"));
-        assert!(!source.contains("k > bounded_hour_start_k + 1"));
-        assert_eq!(source.matches("record_initial_entry_interval(").count(), 3);
-        assert!(source.contains("long_last_initial_entry_k"));
-        assert!(source.contains("short_last_initial_entry_k"));
-        assert!(source.contains("long_side.entry_gen_psize <= 0.0f"));
-        assert!(source.contains("short_side.entry_gen_psize <= 0.0f"));
-        assert!(source.contains("constant int SIDE_PARAMS = 81"));
-        assert!(source.contains("float base_wel = p[o + 47]"));
-        assert!(source.contains("struct HslState"));
-        assert!(source.contains("update_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 66"));
-        assert!(source.contains("constant int SCALAR_COLS = 68"));
-        assert!(source.contains("constant int SCALAR_COLS = 72"));
-        assert!(source.contains("record_gross_pnl"));
-        assert!(source.contains("scalars[so + 42] = loss_sum"));
-        assert!(source.contains("scalars[so + 43] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 44] = long_enabled"));
-        assert!(source.contains("scalars[so + 45] = short_enabled"));
-        assert!(source.contains("scalars[so + 46] = total_wallet_exposure_max"));
-        assert!(source.contains("scalars[so + 47] = total_wallet_exposure_mean"));
-        assert!(source.contains("scalars[so + 48] = fill_count"));
-        assert!(source.contains("scalars[so + 49] = fill_count_entry"));
-        assert!(source.contains("scalars[so + 50] = fill_count_long"));
-        assert!(source.contains("scalars[so + 51] = fills_active_days_count"));
-        assert!(source.contains("const float fill_day_candles = 86400000.0f / interval_ms"));
-        assert!(source.contains(
-            "int active_fill_day = elapsed_fill_day_bucket(\n                    kf, first_eq_k, interval_ms"
-        ));
-        assert!(source.contains("scalars[so + 52] = pnl_recovery_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 53] = held_sum_min * interval_ms"));
-        assert!(source.contains("scalars[so + 54] = held_count"));
-        assert!(source.contains("scalars[so + 55] = account_recovery_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 56] = profit_sum_long"));
-        assert!(source.contains("scalars[so + 59] = loss_sum_short"));
-        assert!(source.contains("scalars[so + 62] = hsl_strategy_equity_recovery_max_steps("));
-        assert!(source.contains("scalars[so + 63] = hsl_strategy_equity_recovery_max_steps("));
-        assert!(source.contains("scalars[so + 64] = hsl_drawdown_ema_mean_worst_1pct("));
-        assert!(source.contains("scalars[so + 65] = hsl_drawdown_ema_mean_worst_1pct("));
-        assert!(source.contains("scalars[so + 66] = hsl_strategy_equity_drawdown_max("));
-        assert!(source.contains("scalars[so + 67] = hsl_strategy_equity_drawdown_max("));
-        assert!(source.contains("if (eqf >= account_peak)"));
-        assert!(source.contains("hsl_tier_samples_total"));
-        assert!(source.contains("h.restart_retrigger_count"));
-        assert!(source.contains("h.halt_duration_sum_steps"));
-        assert!(source.contains("record_hsl_panic_fill("));
-        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
-        assert!(source.contains("h.panic_loss_drawdown_sum"));
-        assert!(source.contains("&& !long_side.close_is_panic"));
-        assert!(source.contains("&& !short_side.close_is_panic"));
-        assert!(source.contains("if (!long_side.close_is_panic"));
-        assert!(source.contains("if (!short_side.close_is_panic"));
-        assert!(source.contains("h.slot_count"));
-        assert!(source.contains("bool red = fmin(score.x, score.y) > threshold"));
-        assert!(source.contains("load_hsl(params, po, 40)"));
-        assert!(source.contains("load_hsl(params, po + SIDE_PARAMS, 40)"));
-        assert!(source.contains("unstuck_reducer_qty"));
-        assert!(source.contains("unstuck_ema_gating_enabled"));
-        assert!(source.contains("unstuck_loss_allowance_pct"));
-        assert!(source.contains("grid_source.unstuck_enabled = false"));
-        assert!(source.contains("min_since_open"));
-        assert!(source.contains("max_since_min"));
-        assert!(source.contains("max_since_open"));
-        assert!(source.contains("min_since_max"));
-        assert!(source.contains("if (we_if <= s.allowed_wel * 1.01f) return fmax(qty, mq)"));
-        assert!(source.contains("s.allowed_wel * balance - cost"));
-        assert!(source.contains("s.entry_cap * balance - current_cost"));
-        assert!(source.contains("s.allowed_wel"));
-        assert!(source.contains("s.wel_enforcer_enabled"));
-        assert!(source.contains("wel_target"));
-        assert!(source.contains("s.twel_enforcer_enabled"));
-        assert!(source.contains("twel_target"));
-        assert!(source.contains("price_now * 0.9995f / price_step"));
-        assert!(source.contains("finalized_wel_qty = finalized_reducer_qty"));
-        assert!(source.contains("finalized_reducer_qty_with_ordinary"));
-        assert!(source.contains("float finalized_twel_qty = ordinary_can_accompany_reducer"));
-        assert!(source.contains("finalized_twel_qty > finalized_wel_qty"));
-        assert!(source.contains("float reducer_qty = use_unstuck"));
-        assert!(source.contains("? unstuck_qty : (use_twel ? twel_qty : wel_qty)"));
-        assert!(source.contains("secondary_close_qty"));
-        assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(
-            source
-                .matches("ladder_side.twel_entry_gate_enabled = false")
-                .count(),
-            2
+            mps_ema_anchor_multicoin_source(),
+            mps_ema_anchor_multicoin_long_source()
         );
-        assert_eq!(
-            source.matches("if (twel_boundary_partial) break;").count(),
-            2
-        );
-        for field in ["vol1h", "vol1m", "ema0", "ema1", "ema2"] {
-            assert_eq!(
-                MPS_TRAILING_MARTINGALE_BODY
-                    .matches(&format!("s.{field} = fma("))
-                    .count(),
-                1
-            );
-        }
-        assert!(source.contains("float close_target = fma(s.pprice, is_long ? ct : -ct, s.pprice)"));
-        assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 11").count(), 1);
-        assert_eq!(source.matches("const int touch_down_tick").count(), 1);
-        assert_eq!(source.matches("const int touch_up_tick").count(), 1);
-        assert_eq!(source.matches("high_fill_max_tick").count(), 14);
-        assert_eq!(source.matches("low_nonfill_max_tick").count(), 14);
-        // Quantity-unit recovery bounds float spacing with nextafter; price
-        // tick comparisons must still avoid physical-price perturbations.
-        let (before_qty_difference, qty_and_rest) = source
-            .split_once("inline float aligned_qty_difference(")
-            .unwrap();
-        let (_, after_qty_difference) = qty_and_rest
-            .split_once("inline float min_entry_qty(")
-            .unwrap();
-        let price_prefix = before_qty_difference
-            .split_once("// PASSIVBOT_DECIMAL_ROUNDING_END")
-            .map_or(before_qty_difference, |(_, rest)| rest);
-        assert!(!price_prefix.contains("nextafter("));
-        assert!(!after_qty_difference.contains("nextafter("));
-        assert!(source.contains("int cticks = touch_controls ? touch_nearest_ticks : target_ticks"));
-        assert!(source.contains("remainder == mq && mq_relation > 0"));
-        assert!(!source.contains("entry_raw_touch"));
-        assert!(!source.contains("close_raw_touch"));
-        assert!(source.contains("close_touch > target_ticks"));
-        assert!(source.contains("close_touch < target_ticks"));
-        assert!(source.contains("touch_down_ticks >= band_ticks"));
-        assert!(source.contains("touch_up_ticks <= band_ticks"));
-        assert!(source.contains("touch_down_ticks >= raw_reentry_ticks"));
-        assert!(source.contains("touch_up_ticks <= raw_reentry_ticks"));
-        assert!(source.contains("entry_gen_balance"));
-        assert!(source.contains("close_gen_balance"));
-        assert!(source.contains("recursive_close_groups"));
-        assert!(source.contains("recursive_strategy_close_would_expand"));
-        assert!(source.contains("selected.market = should_use_ordinary_market_execution"));
-        assert_eq!(source.matches("bool all_below_min").count(), 1);
-        assert_eq!(
-            source.matches("quantity_is_meaningfully_below(").count(),
-            10
-        );
-        assert!(!source.contains("trimmed_qty + 1.0e-6f"));
-        assert!(!source.contains("trimmed_group_qty + 1.0e-6f"));
-        assert!(!source.contains("close_gen_psize + 1.0e-6f"));
-        assert_eq!(source.matches("bool normalize_close_groups").count(), 3);
-        assert_eq!(source.matches("int collapse_ordinary_rank").count(), 3);
-        assert_eq!(source.matches("recursive_close_allocation(").count(), 7);
-        assert_eq!(source.matches("select_recursive_close_reducer(").count(), 3);
-        assert_eq!(
-            source.matches("#if PASSIVBOT_TM_REDUCERS_DISABLED").count(),
-            2
-        );
-        assert_eq!(source.matches("ReducerCandidate candidates[3]").count(), 2);
-        assert_eq!(
-            source
-                .matches("candidate_allocations[candidate_idx]")
-                .count(),
-            4
-        );
-        assert_eq!(
-            source
-                .matches("candidates[candidate_idx].finalized_qty")
-                .count(),
-            4
-        );
-        assert_eq!(
-            source
-                .matches("int prefix_merge_ticks = strategy_wel_qty > 0.0f")
-                .count(),
-            2
-        );
-        assert_eq!(
-            source
-                .matches("float prefix_merge_qty = strategy_wel_qty > 0.0f")
-                .count(),
-            2
-        );
-        assert!(!source.contains("int prefix_merge_ticks = selected_strategy_wel"));
-        assert!(!source.contains("float prefix_merge_qty = selected_strategy_wel"));
-        assert_eq!(
-            source.matches("close_gen_psize - strategy_wel_qty").count(),
-            2
-        );
-        assert!(!source.contains("strategy_wel_qty = reducer_qty"));
-        assert!(source.contains("realized_loss_proxy_allows_close"));
-        assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
-        assert!(source.contains("const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED"));
-        assert!(source.contains("const float taker_fee = settings[15]"));
-        assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
-        assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
-        assert!(source.contains("const bool short_hsl_panic_market = settings[18] > 0.5f"));
-        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
-        assert!(source.contains("close * (1.0f - market_order_slippage_pct)"));
-        assert!(source.contains("close * (1.0f + market_order_slippage_pct)"));
-        assert!(source
-            .contains("const bool market_orders_allowed = !PASSIVBOT_TM_MARKET_ORDERS_DISABLED"));
-        assert!(source.contains("#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY"));
-        assert!(source.contains("#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY"));
-        assert!(source.contains("#ifndef PASSIVBOT_TM_REDUCERS_DISABLED"));
-        assert!(source.contains("#ifndef PASSIVBOT_TM_VOLATILITY_DISABLED"));
-        assert!(source.contains("#if !PASSIVBOT_TM_VOLATILITY_DISABLED"));
-        assert!(source
-            .contains("const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"));
-        assert!(source.contains("should_use_ordinary_market_execution("));
-        assert!(source.contains("ordinary_market_fill_price("));
-        assert!(source.contains("resize_market_close_qty("));
-        assert!(source.contains("entry_gen_market_price"));
-        assert!(source.contains("close_gen_market_price"));
-        assert!(!source.contains("close_reducer_requested_qty, qty_step"));
-        assert!(source.contains("preferred.finalized_qty, gate_price"));
-        assert!(source.contains("source.close_gen_market_price, !is_long"));
-        assert!(source.contains("source.close_gen_balance"));
-        assert!(source.contains("close_gen_realized_pnl_cumsum_last"));
-        assert!(source.contains("close_gen_realized_pnl_cumsum_max"));
-        assert_eq!(source.matches("for (int allocation_pass = 0;").count(), 1);
-        assert!(source.contains("reducer_below_min && !all_below_min"));
-        assert!(source.contains("include_reducer = false"));
-        assert!(source.contains("allocation.normalize_close_groups = allocation_pass > 0"));
-        assert!(source.contains(
-            "source.close_gen_realized_pnl_cumsum_last,\n                source.close_gen_realized_pnl_cumsum_max"
-        ));
-        assert!(!source.contains("reducer_qty, reducer_fill_price"));
-        assert!(!source.contains("adj, reducer_fill_price"));
-        assert_eq!(source.matches("float group_gate_price").count(), 2);
-        assert!(source.contains(
-            "long_side.close_gen_market_price, false,\n                        market_order_slippage_pct"
-        ));
-        assert!(source.contains(
-            "short_side.close_gen_market_price, true,\n                        market_order_slippage_pct"
-        ));
-        assert!(source.contains("adj, group_gate_price, long_side.pprice, true"));
-        assert!(source.contains("adj, group_gate_price, short_side.pprice, false"));
-        assert!(source.contains("the proxy uses a zero-loss envelope"));
-        assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
-        assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));
-        assert!(source.contains("short_side.close_gen_psize - strategy_wel_qty"));
-        assert!(source.contains("(use_twel || use_unstuck) && wel_qty <= 0.0f"));
-        assert!(source.contains("long_side.secondary_close_price"));
-        assert!(source.contains("short_side.secondary_close_price"));
-        assert!(source.contains("dust_remainder"));
-        assert!(!source.contains("float primary_diff = fabs"));
-        assert_eq!(source.matches("bool reducer_before_group").count(), 2);
-        assert!(source.contains("long_expand_close_grid = long_expand_close_grid"));
-        assert!(source.contains("short_expand_close_grid = short_expand_close_grid"));
-        assert!(source.contains("const bool filter_by_min_effective_cost"));
-        assert!(source.contains("passes_min_effective_cost"));
-        assert!(source.contains("projected_cost_lower"));
-        assert!(source.contains("float guaranteed_balance_lower"));
-        // The temporal replay record also preserves this mutable gate state.
-        assert_eq!(
-            source.matches("bool min_cost_exact_open_uncertain").count(),
-            2
-        );
-        assert!(source.contains("kernel void passivbot_tm_single_coin_replay_state_bytes"));
-        assert!(source.contains("guaranteed_balance_lower = 0.0f"));
-        assert!(!source.contains("accumulate_min_cost_balance_error"));
-        assert!(source.contains("for (int rung = 0; rung < 500; ++rung)"));
-        assert!(source.contains("cooldown_min != 0.0f"));
-        assert!(!source.contains("price_now > rounded_target"));
-        assert!(!source.contains("price_now < rounded_target"));
-        assert!(!source.contains("nearest_ticks("));
     }
 
     #[test]
     fn trailing_martingale_multicoin_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_trailing_martingale_multicoin_source();
+        let normalized = mps_trailing_martingale_multicoin_source()
+            .replace(" ORGANILLO_PASS", "")
+            .replace(" ORGANILLO_ARGS", "");
+        let source = normalized.as_str();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
         assert_shared_entry_interval_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 88"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 73"));
+        assert!(source.contains("constant int PARAM_COLS = 89"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 75"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
-        assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 40"));
-        assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 41"));
-        assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 42"));
+        assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 42"));
+        assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 43"));
+        assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 44"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
-        assert_eq!(source.matches("float min_cost_balance_lower =").count(), 2);
-        assert!(source.contains("long_has_position || short_has_position"));
-        assert!(source.contains("multicoin_min_cost_rejection_possible"));
-        assert_eq!(
-            source
-                .matches("bool min_cost_exact_open_uncertain =")
-                .count(),
-            2
-        );
-        assert!(source.contains("never reuse the equity-derived liquidation floor"));
-        assert!(source.contains("constant int SCALAR_COLS = 61"));
-        assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
+        assert!(source.contains("filter_by_min_effective_cost, account.balance"));
+        assert!(!source.contains("min_cost_exact_open_uncertain"));
+        assert!(!source.contains("multicoin_min_cost_rejection_possible"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
+        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 68"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")
@@ -1386,7 +1007,12 @@ mod tests {
         assert!(source.contains("const TrailingMartingaleMulticoinSideConfig long_config ="));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
-        assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(
+            source.contains("hsl_multicoin_failure_status(long_side.hsl, long_side.coin_hsl, C)")
+        );
+        assert!(
+            source.contains("hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C)")
+        );
         assert!(source.contains("select_tm_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
         assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
@@ -1402,7 +1028,7 @@ mod tests {
         assert!(source.contains("multicoin_active_fill_day("));
         assert!(!MPS_TRAILING_MARTINGALE_MULTICOIN_BODY.contains("start_hour_minute"));
         assert!(source.contains(
-            "bool any_fill = process_tm_multicoin_side_fills(\n            side, config, account, fills"
+            "bool any_fill = process_tm_multicoin_side_fills(\n            market_execution_ticks,\n            side, config, account, fills"
         ));
         assert!(source.contains(
             "update_tm_multicoin_side_selection(\n                side, config, bars, coin_settings, coin_overrides"
@@ -1425,9 +1051,9 @@ mod tests {
             source
                 .matches("!post_fill_balance_depleted && past_activation_guard")
                 .count(),
-            2
+            4
         );
-        assert!(source.contains("load_hsl(params, po, 48)"));
+        assert!(source.contains("load_hsl(params, po, 47)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
         assert_eq!(
@@ -1455,7 +1081,7 @@ mod tests {
             4
         );
         assert!(source.contains("next_recursive_grid_entry("));
-        assert!(source.contains("entry_recursive_market_mode"));
+        assert!(source.contains("entry_recursive_mode"));
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("update_tm_multicoin_position_fill_timestamp(")
@@ -1523,11 +1149,18 @@ mod tests {
         assert!(source.contains("twel_enforcer_enabled"));
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
         assert!(source.contains("twel_close_qty"));
-        assert!(source.contains("realized_loss_proxy_allows_close"));
-        assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
-        assert!(source.contains("float projected_close_fee = close_market[c]"));
-        assert!(source.contains("float twel_gate_fee = twel_reducer_market"));
-        assert!(source.contains("float unstuck_gate_fee = unstuck_reducer_market"));
+        assert!(!source.contains("realized_loss_proxy_allows_close"));
+        assert!(source.contains("const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED"));
+        assert!(source.contains("prepare_tm_close_admission"));
+        assert!(source.contains("tm_projected_close_pnl"));
+        assert!(source.contains("source.finalized_reducer_qty"));
+        assert!(source.contains("source.admitted_groups[group / 32]"));
+        assert_eq!(
+            source
+                .matches("&& !apply_tm_multicoin_close_admission(")
+                .count(),
+            2
+        );
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
         ));

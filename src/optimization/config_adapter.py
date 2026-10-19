@@ -12,6 +12,7 @@ from config.bot import validate_unstuck_ema_dist_value
 from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
+    iter_optimizer_key_paths,
     resolve_optimizer_key_path,
     require_existing_config_path,
 )
@@ -66,30 +67,46 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
     strategy_path_map = _strategy_path_map(config)
     cooldown_ranges = {}
-    for bound_key in optimize_bounds:
-        if not isinstance(bound_key, str):
-            continue
+    for bound_key, resolved in iter_optimizer_key_paths(
+        config, (key for key in optimize_bounds if isinstance(key, str))
+    ):
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
-        resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             raise KeyError(
                 f"optimize bound {bound_key} does not map to a known bot parameter"
             )
+        if resolved in {
+            ("bot", "unstuck", "memory_ema_span_minutes"),
+            ("bot", "risk", "loss_gate", "memory_ema_span_minutes"),
+        }:
+            from config.risk_memory import normalize_memory_ema_span_minutes
+
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            for endpoint in (bound.low, bound.high):
+                normalize_memory_ema_span_minutes(endpoint, field=f"optimize.bounds.{bound_key}")
+            continue
         if "hsl" in resolved:
             from config.hsl import _number
 
             name = resolved[-1]
             constraints = {
                 "red_threshold": dict(minimum=0, maximum=1, strict=True),
-                "ema_span_minutes": dict(minimum=1),
+                "memory_ema_span_minutes": dict(minimum=1),
+                "drawdown_ratio_ema_span_minutes": dict(minimum=1),
                 "cooldown_minutes_after_red": dict(minimum=0),
             }
             if name in constraints:
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
+                    if name in {"memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes"}:
+                        from config.risk_memory import normalize_memory_ema_span_minutes
+
+                        normalize_memory_ema_span_minutes(
+                            endpoint, field=f"optimize.bounds.{bound_key}"
+                        )
         adaptive_domain = {
             ("forager", "unilateralness_ema_span_1m"): (1.0, 100_000.0),
             ("forager", "score_weights", "unilateralness"): (0.0, math.inf),
@@ -115,8 +132,8 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             ("entry_cooldown", "max_duration_minutes"),
         ):
             cooldown_ranges[resolved[1], resolved[-1]] = bound
-        if resolved[:2] == ("bot", "hsl"):
-            value = bot_config["hsl"].get(resolved[-1])
+        if resolved[:3] == ("bot", "risk", "hsl"):
+            value = bot_config["risk"]["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise KeyError(
                     f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter"
@@ -133,13 +150,13 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             raise KeyError(
                 f"optimize bound {bound_key} resolved to invalid path {resolved!r}"
             ) from exc
-        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
         key = canonical_key.split("_", 1)[1] if "_" in canonical_key else canonical_key
-        if key not in flat_pside_cfg:
-            raise KeyError(
-                f"optimize bound {bound_key} does not map to bot.{pside}.{key}"
-            )
-        value = flat_pside_cfg[key]
+        value = config
+        try:
+            for part in resolved:
+                value = value[part]
+        except (KeyError, TypeError) as exc:
+            raise KeyError(f"optimize bound {bound_key} has no canonical value at {resolved!r}") from exc
         if isinstance(value, dict):
             raise KeyError(
                 f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}"
@@ -218,17 +235,16 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
-    template = get_template_config()
     bot_config = config.get("bot")
     if bot_config is None:
-        bot_config = template["bot"]
+        bot_config = get_template_config()["bot"]
     strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
     strategy_path_map = _strategy_path_map(config)
     optimize_bounds = _flatten_required_optimize_bounds(config)
-    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
-    for bound_key in sorted(optimize_bounds):
-        if not isinstance(bound_key, str):
-            continue
+    validate_optimize_bounds_against_bot_config(config, config["optimize"]["bounds"])
+    for bound_key, resolved in iter_optimizer_key_paths(
+        config, (key for key in sorted(optimize_bounds) if isinstance(key, str))
+    ):
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
@@ -237,27 +253,25 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             and canonical_key in COUPLED_UNSTUCK_EMA_BOUND_KEYS
         ):
             continue
-        resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             continue
-        if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS or resolved[:2] == ("bot", "hsl"):
+        if (canonical_key in OPTIMIZABLE_BOT_KEY_PATHS
+            or resolved[:3] == ("bot", "risk", "hsl")
+            or resolved in {("bot", "unstuck", "memory_ema_span_minutes"),
+                            ("bot", "risk", "loss_gate", "memory_ema_span_minutes")}):
             key_paths.append((bound_key, resolved))
             continue
         if canonical_key in strategy_path_map:
             key_paths.append((bound_key, resolved))
             continue
-        pside, key = canonical_key.split("_", 1)
-        if pside not in ("long", "short"):
-            continue
-        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
-        if key not in flat_pside_cfg:
-            raise KeyError(
-                f"optimize bound {bound_key} does not map to bot.{pside}.{key}"
-            )
-        if isinstance(flat_pside_cfg[key], dict):
-            raise KeyError(
-                f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}"
-            )
+        value = config
+        try:
+            for part in resolved:
+                value = value[part]
+        except (KeyError, TypeError) as exc:
+            raise KeyError(f"optimize bound {bound_key} has no canonical value at {resolved!r}") from exc
+        if isinstance(value, dict):
+            raise KeyError(f"optimize bound {bound_key} must map to a scalar at {resolved!r}")
         key_paths.append((bound_key, resolved))
     return key_paths
 

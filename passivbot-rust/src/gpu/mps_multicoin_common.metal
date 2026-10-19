@@ -4,8 +4,57 @@
 // and the future joint-side portfolio kernel compose this module so rounding,
 // fill accounting, override lookup, and exposure allowance cannot drift apart.
 
-#ifndef PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS
-#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS 0
+
+
+// Ordinary market EMAs finalize one normalized, causal warmup scalar.
+// source_kind: 0 close, 1 minute log range, 2 quote volume, 3 completed hour.
+// Risk decay and directionality RMS use their separate initialization contracts.
+inline float bootstrap_market_ema(
+    constant float* bars, constant float* hour_log_ranges,
+    int k, int first_valid, int coin, int coin_count, float span, int requested_count, int source_kind,
+    thread bool& observed
+) {
+    observed = false;
+    if (!(isfinite(span) && span > 0.0f) || k < first_valid) return 0.0f;
+    const float alpha = clamp(2.0f / (span + 1.0f), 0.0f, 1.0f);
+    const float beta = 1.0f - alpha;
+    const int capacity = min(requested_count, k - first_valid + 1);
+    int start = k;
+    int count = 0;
+    for (int j = k; j >= first_valid && count < capacity; --j) {
+        if (source_kind == 3 && hour_log_ranges[j * coin_count + coin] < 0.0f) continue;
+        start = j;
+        ++count;
+    }
+    float numerator = 0.0f;
+    float denominator = 0.0f;
+    for (int j = start; j <= k && count > 0; ++j) {
+        float sample;
+        if (source_kind == 3) {
+            sample = hour_log_ranges[j * coin_count + coin];
+            if (sample < 0.0f) continue;
+        } else {
+            const int offset = (j * coin_count + coin) * 4;
+            const float high = bars[offset], low = bars[offset + 1], close = bars[offset + 2];
+            sample = source_kind == 0 ? close : (source_kind == 1
+                ? log(high / low) : fmax(bars[offset + 3], 0.0f) * ((high + low + close) / 3.0f));
+        }
+        numerator = fma(beta, numerator, sample);
+        denominator = fma(beta, denominator, 1.0f);
+    }
+    observed = denominator > 0.0f;
+    return observed ? numerator / denominator : 0.0f;
+}
+
+#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED
+// Observational raw portfolio risk; account liquidation values remain separate.
+inline void update_raw_strategy_risk(
+    float equity, thread float& peak, thread float& daily_worst
+) {
+    peak = fmax(peak, equity);
+    daily_worst = fmax(daily_worst,
+        (peak - equity) / fmax(fabs(peak), 1.0e-12f));
+}
 #endif
 
 inline float round_step(float value, float step) {
@@ -114,22 +163,27 @@ inline bool should_use_ordinary_market_execution(
         <= fmax(near_touch_threshold, 0.0f);
 }
 
-inline float ordinary_market_fill_price(
-    float close,
-    bool buy_order,
-    float market_order_slippage_pct,
-    float price_step
+inline int market_execution_tick_at(
+    constant int* market_execution_ticks,
+    int k, int coin, int coin_count, bool buy_order
 ) {
-    float slipped = close * (
-        buy_order
-            ? 1.0f + market_order_slippage_pct
-            : 1.0f - market_order_slippage_pct
-    );
-    return fmax(
-        buy_order ? ceil_step(slipped, price_step)
-                  : floor_step(slipped, price_step),
-        price_step
-    );
+    return market_execution_ticks[(k * coin_count + coin) * 2 + int(buy_order)];
+}
+
+inline int clamped_market_execution_tick(
+    constant int* market_execution_ticks, constant float* coin_settings,
+    int k, int coin, int coin_count, bool buy_order
+) {
+    int offset = coin * COIN_COLS;
+    int market_k = clamp(k, int(coin_settings[offset + 6]), int(coin_settings[offset + 7]));
+    return market_execution_tick_at(market_execution_ticks, market_k, coin, coin_count, buy_order);
+}
+
+inline float ordinary_market_fill_price(int execution_tick, float price_step) {
+    // Native market execution clamps only its effective step to f64::EPSILON.
+    // max after f32 encoding is identical to encoding max(original f64 step, 2^-52).
+    const float effective_step = fmax(price_step, 2.2204460492503131e-16f);
+    return float(execution_tick) * effective_step;
 }
 
 inline float resize_market_close_qty(
@@ -191,178 +245,27 @@ inline bool realized_loss_gate_allows(
         || -net_pnl <= remaining_loss_budget;
 }
 
-// Finite realized-PnL window used by auto-unstuck, independent of HSL.
-struct RollingPnlWindow {
-    int event_head;
-    int event_count;
-    int peak_head;
-    int peak_count;
-    float absolute_cumulative;
-    bool overflowed;
-};
-
-struct RollingPnlSignal {
-    float peak;
-    float current;
-};
-
-inline RollingPnlWindow init_rolling_pnl_window() {
-    RollingPnlWindow window;
-    window.event_head = 0;
-    window.event_count = 0;
-    window.peak_head = 0;
-    window.peak_count = 0;
-    window.absolute_cumulative = 0.0f;
-    window.overflowed = false;
-    return window;
-}
-
-inline void reset_rolling_pnl_window(
-    thread RollingPnlWindow& window
-) {
-    window.event_head = 0;
-    window.event_count = 0;
-    window.peak_head = 0;
-    window.peak_count = 0;
-}
-
-inline void prune_rolling_pnl_window(
-    thread RollingPnlWindow& window,
-    device float2* values,
-    device int2* indices,
-    int base,
-    int capacity,
-    int k,
-    int lookback_bars
-) {
-    if (lookback_bars <= 0 || window.overflowed) return;
-    while (window.event_count > 0) {
-        int slot = window.event_head;
-        if (k - indices[base + slot].x <= lookback_bars) break;
-        if (window.peak_count > 0
-            && indices[base + window.peak_head].y == slot) {
-            window.peak_head = (window.peak_head + 1) % capacity;
-            window.peak_count -= 1;
-        }
-        window.event_head = (window.event_head + 1) % capacity;
-        window.event_count -= 1;
-    }
-}
-
-inline void record_rolling_pnl(
-    thread RollingPnlWindow& window,
-    device float2* values,
-    device int2* indices,
-    int base,
-    int capacity,
-    int k,
-    int lookback_bars,
-    bool active,
-    float pnl
-) {
-    if (!active || lookback_bars <= 0 || window.overflowed) return;
-    window.absolute_cumulative += pnl;
-    prune_rolling_pnl_window(
-        window, values, indices, base, capacity, k, lookback_bars
-    );
-    if (window.event_count > 0) {
-        int slot = (window.event_head + window.event_count - 1) % capacity;
-        if (indices[base + slot].x == k) {
-            values[base + slot].y = fmax(
-                values[base + slot].y, window.absolute_cumulative
-            );
-            if (window.peak_count > 0) {
-                int peak_tail = (
-                    window.peak_head + window.peak_count - 1
-                ) % capacity;
-                if (indices[base + peak_tail].y == slot) {
-                    window.peak_count -= 1;
-                }
-            }
-            while (window.peak_count > 0) {
-                int back = (
-                    window.peak_head + window.peak_count - 1
-                ) % capacity;
-                int peak_slot = indices[base + back].y;
-                if (values[base + peak_slot].y
-                    > values[base + slot].y) break;
-                window.peak_count -= 1;
-            }
-            int peak_tail = (
-                window.peak_head + window.peak_count
-            ) % capacity;
-            indices[base + peak_tail].y = slot;
-            window.peak_count += 1;
-            return;
-        }
-    }
-    if (window.event_count >= capacity || window.peak_count >= capacity) {
-        window.overflowed = true;
-        return;
-    }
-    int slot = (window.event_head + window.event_count) % capacity;
-    values[base + slot] = float2(
-        window.absolute_cumulative - pnl, window.absolute_cumulative
-    );
-    indices[base + slot].x = k;
-    window.event_count += 1;
-
-    while (window.peak_count > 0) {
-        int back = (window.peak_head + window.peak_count - 1) % capacity;
-        int peak_slot = indices[base + back].y;
-        if (values[base + peak_slot].y > window.absolute_cumulative) break;
-        window.peak_count -= 1;
-    }
-    int peak_tail = (window.peak_head + window.peak_count) % capacity;
-    indices[base + peak_tail].y = slot;
-    window.peak_count += 1;
-}
-
-inline RollingPnlSignal effective_rolling_pnl(
-    thread RollingPnlWindow& window,
-    device float2* values,
-    device int2* indices,
-    int base,
-    int capacity,
-    int k,
-    int lookback_bars
-) {
-    RollingPnlSignal signal;
-    signal.peak = 0.0f;
-    signal.current = 0.0f;
-    if (lookback_bars <= 0 || window.overflowed) return signal;
-    prune_rolling_pnl_window(
-        window, values, indices, base, capacity, k, lookback_bars
-    );
-    if (window.event_count == 0) return signal;
-    float base_cumulative = values[base + window.event_head].x;
-    int peak_slot = indices[base + window.peak_head].y;
-    signal.current = window.absolute_cumulative - base_cumulative;
-    signal.peak = fmax(
-        values[base + peak_slot].y - base_cumulative,
-        fmax(signal.current, 0.0f)
-    );
-    return signal;
-}
-
 // Joint-side account state for the fused multi-coin portfolio path. Exact
 // Rust processes every long fill before every short fill for a candle; callers
 // preserve that ordering while this state owns the one shared cash balance and
 // the realized-PnL scopes consumed by liquidation, loss gates, and HSL.
+struct RealizedDecayMemory {
+    float beta;
+    float drawdown;
+    long minute;
+    bool enabled;
+};
+
 struct JointPortfolioAccount {
     float balance;
+    float balance_correction;
     float realized_pnl_total;
-    float realized_pnl_peak;
     float realized_pnl_long;
     float realized_pnl_short;
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    RollingPnlWindow unstuck_pnl;
-    device float2* unstuck_pnl_values;
-    device int2* unstuck_pnl_indices;
-    int unstuck_pnl_base;
-    int unstuck_pnl_k;
-    float unstuck_pnl_drawdown;
-#endif
+    RealizedDecayMemory unstuck_memory;
+    RealizedDecayMemory loss_gate_memory;
+    int realized_decay_interval_minutes;
+    bool realized_decay_valid;
 };
 
 inline JointPortfolioAccount init_joint_portfolio_account(
@@ -370,76 +273,87 @@ inline JointPortfolioAccount init_joint_portfolio_account(
 ) {
     JointPortfolioAccount account;
     account.balance = starting_balance;
+    account.balance_correction = 0.0f;
     account.realized_pnl_total = 0.0f;
-    account.realized_pnl_peak = 0.0f;
     account.realized_pnl_long = 0.0f;
     account.realized_pnl_short = 0.0f;
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    account.unstuck_pnl = init_rolling_pnl_window();
-    account.unstuck_pnl_values = nullptr;
-    account.unstuck_pnl_indices = nullptr;
-    account.unstuck_pnl_base = 0;
-    account.unstuck_pnl_k = 0;
-    account.unstuck_pnl_drawdown = 0.0f;
-#endif
+    account.unstuck_memory.beta = account.loss_gate_memory.beta = 0.0f;
+    account.unstuck_memory.drawdown = account.loss_gate_memory.drawdown = 0.0f;
+    account.unstuck_memory.minute = account.loss_gate_memory.minute = 0;
+    account.unstuck_memory.enabled = account.loss_gate_memory.enabled = false;
+    account.realized_decay_interval_minutes = 1;
+    account.realized_decay_valid = true;
     return account;
 }
+
+// Each policy consumes every actual account net fill once. Independent rates
+// own independent state; projected losses reserve allowance without changing it.
+inline bool joint_realized_loss_allowance(
+    thread JointPortfolioAccount& account, float fraction, thread float& allowance
+) {
+    if (!hsl_decay_realized_allowance(
+            account.balance, fraction, account.loss_gate_memory.drawdown, allowance)) {
+        account.realized_decay_valid = false;
+        return false;
+    }
+    return true;
+}
+
+inline void configure_joint_realized_memory(
+    thread JointPortfolioAccount& account, float unstuck_span, float loss_gate_span,
+    bool unstuck_enabled, bool loss_gate_enabled, int interval_minutes
+) {
+    float alpha;
+    account.realized_decay_valid = account.realized_decay_valid
+        && hsl_decay_rate(unstuck_span, alpha, account.unstuck_memory.beta)
+        && hsl_decay_rate(loss_gate_span, alpha, account.loss_gate_memory.beta);
+    account.unstuck_memory.enabled = unstuck_enabled;
+    account.loss_gate_memory.enabled = loss_gate_enabled;
+    account.realized_decay_interval_minutes = interval_minutes;
+}
+
+#pragma STDC FP_CONTRACT OFF
+inline void advance_realized_memory(
+    thread RealizedDecayMemory& memory, long minute,
+    thread bool& valid
+) {
+    if (!memory.enabled) return;
+    if (minute < memory.minute) { valid = false; return; }
+    for (long m = memory.minute; m < minute; ++m)
+        memory.drawdown = fma(memory.beta, memory.drawdown, 0.0f);
+    memory.minute = minute;
+}
+
+inline void advance_joint_realized_memory(thread JointPortfolioAccount& account, int bar_index) {
+    const long minute = long(bar_index) * long(account.realized_decay_interval_minutes);
+    advance_realized_memory(account.unstuck_memory, minute, account.realized_decay_valid);
+    advance_realized_memory(account.loss_gate_memory, minute, account.realized_decay_valid);
+}
+#pragma STDC FP_CONTRACT ON
 
 inline void record_joint_portfolio_fill(
     thread JointPortfolioAccount& account,
     float net_pnl,
     bool is_long
 ) {
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    record_rolling_pnl(
-        account.unstuck_pnl, account.unstuck_pnl_values,
-        account.unstuck_pnl_indices, account.unstuck_pnl_base,
-        PASSIVBOT_UNSTUCK_PNL_CAPACITY, account.unstuck_pnl_k,
-        PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS, true, net_pnl
-    );
-#endif
-    account.balance += net_pnl;
+    if (account.unstuck_memory.enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_realized_fill(net_pnl, account.unstuck_memory.drawdown);
+    }
+    if (account.loss_gate_memory.enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_realized_fill(net_pnl, account.loss_gate_memory.drawdown);
+    }
+    // Keep small fees/profits from disappearing into the larger cash balance.
+    // The residual travels with account state through temporal dispatches.
+    float adjusted = net_pnl - account.balance_correction;
+    float next = account.balance + adjusted;
+    account.balance_correction = (next - account.balance) - adjusted;
+    account.balance = next;
     account.realized_pnl_total += net_pnl;
-    account.realized_pnl_peak = fmax(
-        account.realized_pnl_peak, account.realized_pnl_total
-    );
     if (is_long) account.realized_pnl_long += net_pnl;
     else account.realized_pnl_short += net_pnl;
 }
-
-// Auto-unstuck uses the configured fill-PnL window; HSL and the conservative
-// realized-loss gate retain their independent accounting contracts.
-inline float unstuck_pnl_drawdown(thread const JointPortfolioAccount& account) {
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    return account.unstuck_pnl_drawdown;
-#else
-    return account.realized_pnl_peak - account.realized_pnl_total;
-#endif
-}
-
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-inline void bind_unstuck_pnl_window(
-    thread JointPortfolioAccount& account,
-    device float2* values,
-    device int2* indices,
-    int candidate
-) {
-    account.unstuck_pnl_values = values;
-    account.unstuck_pnl_indices = indices;
-    account.unstuck_pnl_base = candidate * PASSIVBOT_UNSTUCK_PNL_CAPACITY;
-}
-
-inline bool refresh_unstuck_pnl_window(thread JointPortfolioAccount& account) {
-    RollingPnlSignal signal = effective_rolling_pnl(
-        account.unstuck_pnl, account.unstuck_pnl_values,
-        account.unstuck_pnl_indices, account.unstuck_pnl_base,
-        PASSIVBOT_UNSTUCK_PNL_CAPACITY, account.unstuck_pnl_k,
-        PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS
-    );
-    account.unstuck_pnl_drawdown = fmax(signal.peak - signal.current, 0.0f);
-    return !account.unstuck_pnl.overflowed;
-}
-#endif
 
 inline void record_realized_net(
     float net_pnl,
@@ -455,6 +369,7 @@ inline void record_realized_net(
     bool is_entry,
     bool is_long
 ) {
+    advance_joint_realized_memory(account, int(fill_k));
     record_joint_portfolio_fill(account, net_pnl, is_long);
     day_fill_count += 1.0f;
     fill_count += 1.0f;
@@ -493,13 +408,22 @@ inline int wallet_exposure_denominator_n_positions(
 #endif
 }
 
+#ifndef PASSIVBOT_COIN_OVERRIDES_ABSENT
+#define PASSIVBOT_COIN_OVERRIDES_ABSENT 0
+#endif
+
 inline float coin_override_or(
     constant float* coin_overrides, int coin, int column, float fallback
 ) {
+#if PASSIVBOT_COIN_OVERRIDES_ABSENT
+    return fallback;
+#else
     float value = coin_overrides[coin * OVERRIDE_COLS + column];
     return isfinite(value) ? value : fallback;
+#endif
 }
 
+#pragma STDC FP_CONTRACT OFF
 inline float allowed_wallet_exposure_limit(
     float base_limit, float total_limit, float allowance_pct) {
     if (!(isfinite(base_limit) && base_limit > 0.0f)) return 0.0f;
@@ -514,6 +438,8 @@ inline float coin_hsl_budget_multiplier(
     bool scale, float twel, int slots, constant float* overrides,
     int coin, int wel_col, int allowance_col, float allowance
 ) {
+    scale = coin_override_or(overrides, coin, HSL_OVERRIDE_START + 7,
+                             float(scale)) > 0.5f;
     if (!scale || slots <= 0) return 1.0f;
     float authored_wel = coin_override_or(overrides, coin, wel_col, -1.0f);
     float base = authored_wel >= 0.0f ? authored_wel : twel / float(slots);
@@ -538,81 +464,27 @@ inline void prepare_coin_hsl_budgets(
 #endif
 }
 
+#pragma STDC FP_CONTRACT ON
+
 inline bool passes_multicoin_min_effective_cost(
-    bool enabled, float guaranteed_balance_lower, float wel,
-    float initial_qty_pct, float max_effective_min_cost
+    bool enabled, float balance, float wel,
+    float initial_qty_pct, float price,
+    constant float* coin_settings ORGANILLO_ARGS, int coin_offset
 ) {
     if (!enabled) return true;
-    float rounded_projected_cost = guaranteed_balance_lower * wel * initial_qty_pct;
-    // Discount by 16 float32 unit roundoffs. This covers upward encoding and
-    // multiply rounding of all three operands before the conservative compare.
-    float projected_cost_lower = rounded_projected_cost
-        * (1.0f - 9.5367431640625e-7f);
-    return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
-        && projected_cost_lower >= max_effective_min_cost;
-}
-
-inline bool multicoin_min_cost_rejection_possible(
-    thread const float* psize,
-    thread HslState* coin_hsl,
-    bool coin_hsl_mode,
-    int current_hsl_mode,
-    float twel,
-    float allowance_pct,
-    float initial_qty_pct,
-    constant float* bars,
-    constant float* coin_settings,
-    constant float* coin_overrides,
-    int wel_override_col,
-    int allowance_override_col,
-    int initial_qty_override_col,
-    int k,
-    int coin_count,
-    int effective_n_positions,
-    float guaranteed_balance_lower
-) {
-    if (effective_n_positions <= 0 || !(guaranteed_balance_lower > 0.0f)) {
-        return false;
-    }
-    for (int c = 0; c < coin_count; ++c) {
-        if (psize[c] > 0.0f) continue;
-        const int coin_offset = c * COIN_COLS;
-        const int bar_offset = (k * coin_count + c) * 4;
-        const float coin_wel = coin_override_or(
-            coin_overrides, c, wel_override_col, -1.0f
-        );
-        const int coin_mode = coin_hsl_mode
-            ? hsl_mode(coin_hsl[c], false) : current_hsl_mode;
-        if (k < int(coin_settings[coin_offset + 8])
-            || k > int(coin_settings[coin_offset + 7])
-            || !finite_positive(bars[bar_offset + 2])
-            || coin_wel == 0.0f
-            || coin_mode != 0) {
-            continue;
-        }
-        const float base_limit = coin_wel >= 0.0f
-            ? coin_wel : twel / fmax(float(effective_n_positions), 1.0f);
-        const float allowed_wel = allowed_wallet_exposure_limit(
-            base_limit, twel,
-            coin_override_or(
-                coin_overrides, c, allowance_override_col, allowance_pct
-            ));
-        if (!passes_multicoin_min_effective_cost(
-            true, guaranteed_balance_lower, allowed_wel,
-            coin_override_or(
-                coin_overrides, c, initial_qty_override_col,
-                initial_qty_pct
-            ),
-            coin_settings[coin_offset + 12]
-        )) {
-            return true;
-        }
-    }
-    return false;
+    if (!finite_positive(price)) return false;
+    const float c_mult = coin_settings[coin_offset + 4];
+    const float minimum_cost = min_entry_qty(
+        price, coin_settings[coin_offset + 0], coin_settings[coin_offset + 2],
+        coin_settings[coin_offset + 3], c_mult
+    ) * price * c_mult;
+    const float projected_cost = balance * wel * initial_qty_pct;
+    return isfinite(projected_cost) && projected_cost > 0.0f
+        && projected_cost >= minimum_cost;
 }
 
 inline float clamped_market_price(
-    constant float* bars, constant float* coin_settings,
+    constant float* bars, constant float* coin_settings ORGANILLO_ARGS,
     int k, int coin, int coin_count
 ) {
     int coin_offset = coin * COIN_COLS;
@@ -671,11 +543,11 @@ inline bool update_joint_pside_hsl(
     );
 }
 
-inline int joint_pside_hsl_global_tier(
+inline int joint_hsl_report_tier(
     thread const HslState& long_hsl,
     thread const HslState& short_hsl
 ) {
-    return max(long_hsl.tier, short_hsl.tier);
+    return max(hsl_report_tier(long_hsl), hsl_report_tier(short_hsl));
 }
 
 // Unheld unavailable coins need no valuation. Held positions must remain
@@ -683,7 +555,7 @@ inline int joint_pside_hsl_global_tier(
 inline bool held_positions_have_missing_prices(
     thread const float* psize,
     constant float* bars,
-    constant float* coin_settings,
+    constant float* coin_settings ORGANILLO_ARGS,
     int k,
     int coin_count
 ) {
@@ -699,3 +571,74 @@ inline bool held_positions_have_missing_prices(
     }
     return false;
 }
+
+// Compact candle-level moments used by the native CUDA result contract.
+#ifndef PASSIVBOT_EXPOSURE_RMS_ENABLED
+#define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
+#endif
+#if PASSIVBOT_EXPOSURE_RMS_ENABLED
+struct ExposureRmsState {
+    float sum[7];
+    float correction[7];
+    uint samples;
+    float base_wel[2 * MAX_COINS];
+};
+inline ExposureRmsState init_exposure_rms() {
+    ExposureRmsState state;
+    state.samples = 0;
+    for (int i = 0; i < 7; ++i) { state.sum[i] = 0.0f; state.correction[i] = 0.0f; }
+    for (int i = 0; i < 2 * MAX_COINS; ++i) state.base_wel[i] = 0.0f;
+    return state;
+}
+inline void update_exposure_rms_budgets(
+    thread ExposureRmsState& state, constant float* bars,
+    constant float* settings, constant float* overrides,
+    int k, int coins, int slots, bool short_side, float twel, int wel_col
+) {
+    for (int c = 0; c < coins; ++c) {
+        const int offset = c * COIN_COLS;
+        const float authored = coin_override_or(overrides, c, wel_col, -1.0f);
+        // Runtime WEL updates follow tradability, independently of selection,
+        // minimum cost, HSL, and whether a next entry order was generated.
+        if (k >= int(settings[offset + 8]) && k <= int(settings[offset + 7])
+            && finite_positive(bars[(k * coins + c) * 4 + 2]) && authored != 0.0f) {
+            state.base_wel[int(short_side) * MAX_COINS + c] = authored >= 0.0f
+                ? authored : (slots > 0 ? twel / float(slots) : 0.0f);
+        }
+    }
+}
+inline float exposure_rms_position_moment(float e, float wel, float limit) {
+    if (e == 0.0f) return 0.0f;
+    return finite_positive(e) && finite_positive(wel) && finite_positive(limit)
+        ? e * (e / wel) / limit : NAN;
+}
+inline float exposure_rms_ratio(float exposure, float limit) {
+    if (exposure == 0.0f) return 0.0f;
+    return finite_positive(exposure) && finite_positive(limit) ? exposure / limit : NAN;
+}
+inline void record_exposure_rms(thread ExposureRmsState& state,
+    float long_exposure, float short_exposure, float long_moment, float short_moment,
+    float long_limit, float short_limit
+) {
+    const float long_ratio = exposure_rms_ratio(long_exposure, long_limit);
+    const float short_ratio = exposure_rms_ratio(short_exposure, short_limit);
+    const float gross = long_exposure + short_exposure;
+    const float values[7] = {long_exposure * long_exposure, short_exposure * short_exposure,
+        gross * gross, long_ratio * long_ratio, short_ratio * short_ratio,
+        long_moment, short_moment};
+    ++state.samples;
+    for (int i = 0; i < 7; ++i) {
+        // Compensated sums prevent long float32 histories losing small samples.
+        const float y = values[i] - state.correction[i];
+        const float next = state.sum[i] + y;
+        state.correction[i] = (next - state.sum[i]) - y;
+        state.sum[i] = next;
+    }
+}
+inline void finish_exposure_rms(thread const ExposureRmsState& state,
+    device float* scalars, int offset
+) {
+    for (int i = 0; i < 7; ++i)
+        scalars[offset + i] = state.samples > 0 ? sqrt(state.sum[i] / float(state.samples)) : NAN;
+}
+#endif

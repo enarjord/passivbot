@@ -11,8 +11,8 @@ Allowed fields are intentionally limited:
 - **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
   selected risk fields (position-exposure enforcer settings and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
-  `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `threshold`); and
-  every HSL field when the global `live.hsl_signal_mode` is `"coin"`; and
+  `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `exposure_trigger_ratio`); and
+  every HSL field when the global `bot.risk.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
@@ -25,8 +25,7 @@ nested v8 strategy path instead.
 
 `bot.<side>.risk.we_excess_allowance_pct` can vary per coin. Excess allowance is
 always bounded by side TWEL. `bot.<side>.hsl.scale_budget_with_excess_allowance`
-is a global per-side policy and cannot be overridden per coin; it uses each coin's
-effective allowance when enabled in coin HSL mode.
+may vary per coin in coin scope, using that coin's effective allowance when enabled.
 
 The complete cooldown override group is:
 
@@ -44,17 +43,18 @@ Forager scoring weights and the RMS span remain global, not per-coin overrides.
 The complete conditional HSL override group is:
 
 - `hsl.enabled`
+- `hsl.scale_budget_with_excess_allowance`
 - `hsl.red_threshold`
-- `hsl.ema_span_minutes`
+- `hsl.memory_ema_span_minutes`
+- `hsl.drawdown_ratio_ema_span_minutes`
 - `hsl.cooldown_minutes_after_red`
-- `hsl.restart_after_red_policy`
 - `hsl.panic_close_order_type`
 
 These fields are per `coin+side` only when the main config selects
-`live.hsl_signal_mode = "coin"`. The signal mode itself remains global and is not overridable.
-An inline HSL patch in `pside` or `unified` mode is rejected. HSL values in a complete override
+`bot.risk.hsl.scope = "coin"`. The signal mode itself remains global and is not overridable.
+An inline HSL patch in `pside` or `portfolio` mode is rejected. HSL values in a complete override
 file are warned about and ignored in those modes, while other eligible fields in that file still
-apply. A `live.hsl_signal_mode` value inside an override file or inline patch cannot authorize the
+apply. A `bot.risk.hsl.scope` value inside an override file or inline patch cannot authorize the
 HSL patch; the main config's effective global mode always decides.
 
 ## How overrides are loaded
@@ -112,9 +112,8 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           "hsl": {
             "enabled": true,
             "red_threshold": 0.08,
-            "ema_span_minutes": 10.0,
+            "drawdown_ratio_ema_span_minutes": 10.0,
             "cooldown_minutes_after_red": 60.0,
-            "restart_after_red_policy": "always",
             "panic_close_order_type": "market"
           },
           "wallet_exposure_limit": 0.18
@@ -234,7 +233,7 @@ passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 
 The tool rejects input aliases that resolve to the same configured
 venue market, combines the per-side approved coin lists, removes approved market aliases from the
-master's ignored lists, and expands `n_positions` to the approved-coin count on active sides.
+master's ignored lists, and expands `max_positions` to the approved-coin count on active sides.
 Exchange-qualified identifiers contribute their explicit venue to alias resolution. Legal per-coin
 values are written according to `--override-mode`; differing account-wide or
 otherwise non-overridable values retain the master value and are listed in the command output.
@@ -277,7 +276,7 @@ fields are errors, including typos, inactive-strategy paths, and HSL selectors o
 
 For example, append `--override-mode verbose` to preserve the per-coin parameters when editing the
 master afterward. This does not make each coin a standalone configuration: global values such as
-`total_wallet_exposure_limit`, `n_positions`, Forager settings, and the HSL signal mode remain
+Aggregate side `total_wallet_exposure_limit`, `max_positions`, Forager settings, and the HSL scope remain
 shared. Runtime-derived wallet exposure is not automatically frozen. HSL fields can be pinned
 only in `coin` signal mode. Verbose mode also pins the disabled side, so its values survive a later
 global enablement change.
@@ -321,4 +320,4 @@ excluded from discovery, but other JSON/HJSON files in that directory are treate
 - Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
   coerced into trading parameters.
 - Conditional HSL: setting HSL fields in a coin patch while the main config uses `pside` or
-  `unified` mode is invalid; changing `live.hsl_signal_mode` inside the patch does not change that.
+  `portfolio` mode is invalid; changing `bot.risk.hsl.scope` inside the patch does not change that.

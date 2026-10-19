@@ -25,10 +25,9 @@ def _single_coin_config(coin: str) -> dict:
     config["live"]["ignored_coins"] = {"long": [], "short": []}
     config["live"]["user"] = "test_user"
     config["coin_overrides"] = {}
-    config["bot"]["hsl"] = deepcopy(config["bot"]["long"]["hsl"])
     for side in ("long", "short"):
         risk = config["bot"][side]["risk"]
-        risk["n_positions"] = 1.0
+        risk["max_positions"] = 1.0
         risk["position_exposure_enforcer_enabled"] = False
         risk["total_exposure_enforcer_enabled"] = False
         config["bot"][side]["hsl"]["enabled"] = False
@@ -40,12 +39,10 @@ def _single_coin_config(coin: str) -> dict:
 def _write(path: Path, config: dict) -> None:
     config = deepcopy(config)
     inner = config.get("config", config)
-    if inner["live"]["hsl_signal_mode"] == "unified":
+    if inner["bot"]["risk"]["hsl"]["scope"] == "portfolio":
+        inner["bot"]["risk"]["hsl"] = {**deepcopy(inner["bot"]["long"]["hsl"]), **inner["bot"]["risk"]["hsl"]}
         for side in ("long", "short"):
             inner["optimize"]["bounds"][side].pop("hsl", None)
-            inner["optimize"]["fixed_runtime_overrides"].pop(
-                f"bot.{side}.hsl.restart_after_red_policy", None
-            )
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
@@ -92,8 +89,8 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
         "long": ["BTC", "ETH"],
         "short": ["BTC", "ETH"],
     }
-    assert composed["bot"]["long"]["risk"]["n_positions"] == 2.0
-    assert composed["bot"]["short"]["risk"]["n_positions"] == 1.0
+    assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
+    assert composed["bot"]["short"]["risk"]["max_positions"] == 1.0
     assert report.position_count_changes == {"long": (1.0, 2.0)}
     assert composed["bot"]["long"]["hsl"]["enabled"] is False
     assert composed["bot"]["long"]["hsl"]["red_threshold"] == 0.03
@@ -153,10 +150,10 @@ def test_mixed_feature_enablement_omits_inert_dependent_overrides(tmp_path: Path
         config["bot"]["long"]["unstuck"]["enabled"] = True
         config["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = True
     disabled["bot"]["long"]["hsl"].update(
-        {"enabled": False, "red_threshold": 0.24, "ema_span_minutes": 12.0}
+        {"enabled": False, "red_threshold": 0.24, "drawdown_ratio_ema_span_minutes": 12.0}
     )
     disabled["bot"]["long"]["unstuck"].update(
-        {"enabled": False, "threshold": 0.88, "close_pct": 0.11}
+        {"enabled": False, "exposure_trigger_ratio": 0.88, "close_pct": 0.11}
     )
     disabled["bot"]["long"]["risk"].update(
         {
@@ -192,20 +189,80 @@ def test_rejects_non_single_and_precomposed_inputs(tmp_path: Path):
         compose_directory(tmp_path)
 
 
-def test_rejects_nested_precomposed_input(tmp_path: Path):
+def test_rejects_retired_config_wrapper(tmp_path: Path):
     _write(tmp_path / "a.json", _single_coin_config("BTC"))
     nested = _single_coin_config("ETH")
     nested["coin_overrides"] = {"ETH": {"live": {"leverage": 4}}}
     _write(tmp_path / "b.json", {"config": nested})
 
-    with pytest.raises(ValueError, match="must not contain coin_overrides"):
+    with pytest.raises(ValueError, match="explicit migration"):
         compose_directory(tmp_path)
+
+
+@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Path, scope):
+    first = _single_coin_config("BTC")
+    second = _single_coin_config("ETH")
+    for source in (first, second):
+        source["bot"]["risk"]["hsl"]["scope"] = scope
+    first["bot"]["unstuck"]["memory_ema_span_minutes"] = 12.5
+    second["bot"]["unstuck"]["memory_ema_span_minutes"] = 25.0
+    first["bot"]["risk"]["loss_gate"].update(memory_ema_span_minutes=31.5, max_drawdown_ratio=0.1)
+    second["bot"]["risk"]["loss_gate"].update(memory_ema_span_minutes=63.0, max_drawdown_ratio=0.2)
+    if scope == "portfolio":
+        first["bot"]["risk"]["hsl"].update(enabled=True, red_threshold=0.03)
+        second["bot"]["risk"]["hsl"].update(enabled=True, red_threshold=0.07)
+    _write(tmp_path / "a.json", first)
+    _write(tmp_path / "b.json", second)
+
+    composed, report = compose_directory(tmp_path)
+
+    assert composed["bot"]["unstuck"]["memory_ema_span_minutes"] == 12.5
+    assert composed["bot"]["risk"]["loss_gate"] == first["bot"]["risk"]["loss_gate"]
+    assert "bot.unstuck.memory_ema_span_minutes" in report.account_wide_conflicts
+    assert "bot.risk.loss_gate.memory_ema_span_minutes" in report.account_wide_conflicts
+    assert "bot.risk.loss_gate.max_drawdown_ratio" in report.account_wide_conflicts
+    if scope == "portfolio":
+        assert composed["bot"]["risk"]["hsl"]["red_threshold"] == 0.03
+        assert "bot.risk.hsl.red_threshold" in report.account_wide_conflicts
+    for patch in composed["coin_overrides"].values():
+        assert "risk" not in patch.get("bot", {})
+        assert "unstuck" not in patch.get("bot", {})
+
+
+def test_direct_composition_rejects_mixed_global_hsl_scopes(tmp_path: Path):
+    first = _single_coin_config("BTC")
+    second = _single_coin_config("ETH")
+    second["bot"]["risk"]["hsl"]["scope"] = "pside"
+    sources = [
+        compose_tool.SingleCoinConfig(path=tmp_path / "a.json", config=first, coin="BTC", approved_sides=frozenset({"long"})),
+        compose_tool.SingleCoinConfig(path=tmp_path / "b.json", config=second, coin="ETH", approved_sides=frozenset({"long"})),
+    ]
+    with pytest.raises(ValueError, match="same bot.risk.hsl.scope"):
+        compose_tool.compose_configs(sources)
+
+
+def test_entry_cap_threshold_differences_survive_disabled_total_enforcer(tmp_path: Path):
+    first = _single_coin_config("BTC")
+    second = _single_coin_config("ETH")
+    for source, threshold in ((first, 0.8), (second, 0.9)):
+        source["bot"]["long"]["risk"].update(
+            total_exposure_enforcer_enabled=False,
+            total_exposure_enforcer_threshold=threshold,
+        )
+    _write(tmp_path / "a.json", first)
+    _write(tmp_path / "b.json", second)
+
+    composed, report = compose_directory(tmp_path)
+
+    assert composed["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"] == 0.8
+    assert "bot.long.risk.total_exposure_enforcer_threshold" in report.account_wide_conflicts
 
 
 def test_rejects_all_as_single_coin(tmp_path: Path):
     _write(tmp_path / "a.json", _single_coin_config("BTC"))
     wildcard = _single_coin_config("ETH")
-    wildcard["live"]["approved_coins"] = "all"
+    wildcard["live"]["approved_coins"] = {"long": ["all"], "short": ["all"]}
     _write(tmp_path / "b.json", wildcard)
 
     with pytest.raises(ValueError, match="'all' sentinel"):
@@ -225,9 +282,8 @@ def test_rejects_duplicate_coin_and_missing_master(tmp_path: Path):
 
 
 @pytest.mark.parametrize("relative_path", [False, True])
-@pytest.mark.parametrize("wrapped", [False, True])
 def test_external_master_supplies_baseline_without_adding_coins(
-    tmp_path: Path, monkeypatch, relative_path: bool, wrapped: bool
+    tmp_path: Path, monkeypatch, relative_path: bool
 ):
     inputs = tmp_path / "inputs"
     inputs.mkdir()
@@ -245,7 +301,7 @@ def test_external_master_supplies_baseline_without_adding_coins(
         config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = cooldown
         _write(inputs / name, config)
     master_path = tmp_path / "master.hjson"
-    _write(master_path, {"config": master} if wrapped else master)
+    _write(master_path, master)
     selected = master_path
     if relative_path:
         monkeypatch.chdir(tmp_path)
@@ -266,7 +322,7 @@ def test_external_master_supplies_baseline_without_adding_coins(
     assert composed["live"]["ignored_coins"]["long"] == ["DOGE"]
     assert composed["live"]["leverage"] == 7
     assert composed["bot"]["long"]["forager"]["volume_ema_span_1m"] == 777.0
-    assert composed["bot"]["long"]["risk"]["n_positions"] == 2.0
+    assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
     assert composed["optimize"]["backend"] == "gpu"
     assert composed["optimize"]["iters"] == 321
     assert composed["backtest"]["start_date"] == "2021-01-01"
@@ -306,7 +362,7 @@ def test_external_single_coin_master_is_not_an_extra_input(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "key,value", [("strategy_kind", "ema_anchor"), ("hsl_signal_mode", "unified")]
+    "key,value", [("strategy_kind", "ema_anchor"), ("hsl_signal_mode", "portfolio")]
 )
 def test_external_master_must_match_input_strategy_and_hsl_mode(
     tmp_path: Path, key, value
@@ -316,21 +372,24 @@ def test_external_master_must_match_input_strategy_and_hsl_mode(
     _write(inputs / "a.json", _single_coin_config("BTC"))
     _write(inputs / "b.json", _single_coin_config("ETH"))
     master = _single_coin_config("SOL")
-    master["live"][key] = value
+    if key == "hsl_signal_mode":
+        master["bot"]["risk"]["hsl"]["scope"] = value
+    else:
+        master["live"][key] = value
     _write(tmp_path / "master.json", master)
-    with pytest.raises(ValueError, match=f"same live.{key}"):
+    expected_path = "bot.risk.hsl.scope" if key == "hsl_signal_mode" else f"live.{key}"
+    with pytest.raises(ValueError, match=f"same {expected_path}"):
         compose_directory(inputs, master_config=tmp_path / "master.json")
 
 
-@pytest.mark.parametrize("wrapped", [False, True])
-def test_external_master_rejects_existing_overrides(tmp_path: Path, wrapped: bool):
+def test_external_master_rejects_existing_overrides(tmp_path: Path):
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     _write(inputs / "a.json", _single_coin_config("BTC"))
     _write(inputs / "b.json", _single_coin_config("ETH"))
     master = _single_coin_config("SOL")
     master["coin_overrides"] = {"BTC": {"live": {"leverage": 10}}}
-    _write(tmp_path / "master.json", {"config": master} if wrapped else master)
+    _write(tmp_path / "master.json", master)
     with pytest.raises(
         ValueError, match="master config must not contain coin_overrides"
     ):
@@ -505,7 +564,7 @@ def test_retains_gpu_optimizer_with_coin_overrides(tmp_path: Path, strategy_kind
     assert composed["optimize"]["iters"] == 123
     assert composed["backtest"]["start_date"] == "2021-01-01"
     assert composed["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
-    assert composed["bot"]["long"]["risk"]["n_positions"] == 2.0
+    assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
     assert composed["coin_overrides"] == {
         "ETH": {"bot": {"long": {"strategy": {strategy_kind: expected_strategy}}}}
     }
@@ -527,7 +586,7 @@ def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, c
     report_output = capsys.readouterr().out
     assert "Master source (alphabetically first)" in report_output
     assert (
-        "Set bot.long.risk.n_positions: 1 -> 2 (approved coin count)" in report_output
+        "Set bot.long.risk.max_positions: 1 -> 2 (approved coin count)" in report_output
     )
 
     assert main([str(inputs), str(output)]) == 2
@@ -535,7 +594,7 @@ def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, c
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl_signal_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl_signal_mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("external_master", [False, True])
 def test_verbose_overrides_survive_master_edits(
     tmp_path: Path, strategy_kind: str, hsl_signal_mode: str, external_master: bool
@@ -545,7 +604,7 @@ def test_verbose_overrides_survive_master_edits(
     for name, coin in (("a.json", "BTC"), ("b.json", "ETH")):
         config = _single_coin_config(coin)
         config["live"]["strategy_kind"] = strategy_kind
-        config["live"]["hsl_signal_mode"] = hsl_signal_mode
+        config["bot"]["risk"]["hsl"]["scope"] = hsl_signal_mode
         config["live"]["leverage"] = 3
         config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
         config["bot"]["long"]["hsl"]["red_threshold"] = 0.123
@@ -601,7 +660,7 @@ def test_verbose_overrides_survive_master_edits(
         assert effective["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 7.0
         assert effective["bot"]["long"]["strategy"] == source.config["bot"]["long"]["strategy"]
         assert effective["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.0
-        assert "n_positions" not in patch["bot"]["long"]["risk"]
+        assert "max_positions" not in patch["bot"]["long"]["risk"]
         if hsl_signal_mode == "coin":
             assert effective["bot"]["long"]["hsl"]["enabled"] is False
             assert effective["bot"]["long"]["hsl"]["red_threshold"] == 0.123
@@ -756,7 +815,7 @@ def test_custom_params_pin_selection_and_inherit_global_unstuck(
     inputs.mkdir()
     master = _single_coin_config("SOL")
     master["live"]["strategy_kind"] = strategy_kind
-    master["bot"]["long"]["unstuck"].update({"enabled": False, "threshold": 0.83})
+    master["bot"]["long"]["unstuck"].update({"enabled": False, "exposure_trigger_ratio": 0.83})
     master["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
     master_path = tmp_path / "master.json"
     _write(master_path, master)
@@ -764,11 +823,11 @@ def test_custom_params_pin_selection_and_inherit_global_unstuck(
         source = deepcopy(master)
         source["live"]["approved_coins"] = {"long": [coin], "short": [coin]}
         source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = cooldown
-        source["bot"]["long"]["unstuck"].update({"enabled": True, "threshold": 0.6})
+        source["bot"]["long"]["unstuck"].update({"enabled": True, "exposure_trigger_ratio": 0.6})
         _write(inputs / f"{coin}.json", source)
 
     output = tmp_path / "result.json"
-    selectors = "long.strategy,long.risk.entry_cooldown_minutes"
+    selectors = "long.strategy,long.entry_cooldown.base_duration_minutes"
     assert (
         main(
             [
@@ -794,25 +853,25 @@ def test_custom_params_pin_selection_and_inherit_global_unstuck(
             }}
         }
     assert composed["bot"]["long"]["unstuck"] == master["bot"]["long"]["unstuck"]
-    composed["bot"]["long"]["unstuck"].update({"enabled": True, "threshold": 0.91})
+    composed["bot"]["long"]["unstuck"].update({"enabled": True, "exposure_trigger_ratio": 0.91})
     composed["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 100.0
     prepared = prepare_config(composed, verbose=False, log_config_transforms=False)
     parsed = parse_overrides(prepared, verbose=False)
     policy = get_allowed_modifications(
-        hsl_signal_mode=prepared["live"]["hsl_signal_mode"]
+        hsl_signal_mode=prepared["bot"]["risk"]["hsl"]["scope"]
     )
     for coin, cooldown in (("BTC", 7.0), ("ETH", 9.0)):
         effective = apply_allowed_modifications(prepared, parsed["coin_overrides"][coin], policy)
         assert effective["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == cooldown
         assert effective["bot"]["long"]["unstuck"]["enabled"] is True
-        assert effective["bot"]["long"]["unstuck"]["threshold"] == 0.91
+        assert effective["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] == 0.91
 
 
 @pytest.mark.parametrize(
     "selectors",
     [
-        "bot.long.risk.entry_cooldown_minutes",
-        " long.risk.entry_cooldown_minutes , bot.long.risk.entry_cooldown_minutes ",
+        "bot.long.entry_cooldown.base_duration_minutes",
+        " long.entry_cooldown.base_duration_minutes , bot.long.entry_cooldown.base_duration_minutes ",
     ],
 )
 def test_custom_leaf_aliases_and_overlap_are_deduplicated(tmp_path: Path, selectors):
@@ -828,7 +887,7 @@ def test_custom_leaf_aliases_and_overlap_are_deduplicated(tmp_path: Path, select
 
 
 @pytest.mark.parametrize(
-    "selector", ["*.risk.entry_cooldown_minutes", "entry_cooldown_minutes"]
+    "selector", ["*.entry_cooldown.base_duration_minutes", "base_duration_minutes"]
 )
 def test_custom_wildcards_and_leaf_suffixes_match_both_sides(tmp_path: Path, selector):
     for coin in ("BTC", "ETH"):
@@ -850,7 +909,7 @@ def test_custom_wildcards_and_leaf_suffixes_match_both_sides(tmp_path: Path, sel
         "long..strategy",
         "long.stratgey",
         "long.strategy,long.stratgey",
-        "long.risk.n_positions",
+        "long.risk.max_positions",
         "long.forager",
         "long.strategy.ema_anchor",
     ],
@@ -867,7 +926,9 @@ def test_custom_rejects_empty_invalid_or_non_overridable_selectors(
 def test_custom_group_only_includes_allowed_leaves(tmp_path: Path):
     for coin in ("BTC", "ETH"):
         _write(tmp_path / f"{coin}.json", _single_coin_config(coin))
-    composed, _ = compose_directory(tmp_path, override_params="long.risk,live.leverage")
+    composed, _ = compose_directory(
+        tmp_path, override_params="long.risk,long.entry_cooldown,live.leverage"
+    )
     for patch in composed["coin_overrides"].values():
         assert "base_duration_minutes" in patch["bot"]["long"]["entry_cooldown"]
         assert set(patch["bot"]["long"]["risk"]) == {
@@ -912,7 +973,7 @@ def test_custom_hsl_selection_obeys_signal_mode_and_preserves_inactive_value(
     }
     for coin in ("BTC", "ETH"):
         config["live"]["approved_coins"] = {"long": [coin], "short": [coin]}
-        config["live"]["hsl_signal_mode"] = "unified"
+        config["bot"]["risk"]["hsl"]["scope"] = "portfolio"
         _write(tmp_path / f"{coin}.json", config)
     with pytest.raises(ValueError, match="matches no overridable input fields"):
         compose_directory(tmp_path, override_params="long.hsl")

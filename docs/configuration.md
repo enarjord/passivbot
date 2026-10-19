@@ -11,15 +11,17 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 ## Config version
 
 `config_version` is a top-level schema field, not a backtest setting or package version.
-Current configs use `v8.6.0`; supported v8.0.0–v8.5.0 inputs migrate on load. Review migration
-warnings and normalized settings. For v7 trailing-grid configs, use the explicit
-[migration helper](v7_to_v8_migration.md). See [release status](releases.md) for the distinction
-between schemas, package versions, and tags.
+Current configs use the final `v9.0.0` layout. Released v8 inputs require
+[explicit migration](v8_to_v9_migration.md), semantic choices and fresh backtests.
+Normal loading rejects unknown/retired fields and applies documented defaults. Pre-v8,
+`pb_multi` and unreleased intermediate layouts are unsupported. See [release status](releases.md)
+for the distinction between schema, package version and tags.
 
 ## Backtest Settings
 
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
+- **ew_half_life_days**: `null` by default (disabled), or a finite number at least `1`, including fractional days such as `180.5`. Required when scoring or limits select an `_ew` metric. Applies globally across exchanges and scenarios; scenario overrides are rejected. CLI: `--backtest.ew_half_life_days 180.5` (or `null` to disable). See [exponential metric definitions](metrics.md#exponential-recency-weighting).
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The most exercised choices are `binance` and `bybit`, which are also the current default profile. `bitget` and `gateio` are supported, with the GateIO history caveat below. `kucoin` has archive-fetch support but should be treated as experimental for backtesting until broader real-data smoke coverage is collected. Use short exchange names in configs; Passivbot converts to CCXT-specific IDs such as `binanceusdm` and `kucoinfutures` only when it talks to CCXT.
   Binance backtests fill missing v2 1m data from Binance Vision monthly archives first, eligible
@@ -60,11 +62,11 @@ between schemas, package versions, and tags.
   excess allowance)
   would fall below the exchange’s effective minimum cost.
 - **dynamic_wel_by_tradability**: Backtest-only WEL denominator mode.
-  - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).
-  - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
+  - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(max_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).
+  - `false`: fixed denominator, same as live: `wallet_exposure_limit = total_wallet_exposure_limit / max_positions`.
 - **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before the backtest loop runs. `1` keeps native 1m behavior; values above `1` speed up backtests and optimizer runs at the cost of losing intra-interval fill ordering.
 - **gap_tolerance_ohlcvs_minutes**: Maximum internal hole size that can be filled in prepared OHLCV data. Larger or persistent gaps are repaired from local v2 data, legacy shards, and targeted remote fetches; if a large internal gap remains, it is excluded from the returned tradable window rather than made tradable with synthetic candles. Verified exchange-side late starts and early ends do not by themselves abort a run, but local corruption, malformed candles, missing BTC benchmark data, or no tradable candles still fail loudly.
-- **liquidation_threshold**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * liquidation_threshold`, and `backtest_completion_ratio` will fall below `1.0`. Example: with `starting_balance = 1000` and `liquidation_threshold = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= liquidation_threshold < 1.0`.
+- **equity_floor_ratio**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * equity_floor_ratio`, and `backtest_completion_ratio` will fall below `1.0`. Example: with `starting_balance = 1000` and `equity_floor_ratio = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= equity_floor_ratio < 1.0`.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override`.
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override`.
 - **limit_order_fill_buffer_pct**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
@@ -92,10 +94,10 @@ Suite configuration uses a flattened structure directly under `backtest`:
 - **backtest.reducer**: Dict of metric-specific reduction modes (default `mean`). Keys fall back to the `default` entry if unspecified.
 
 `reducer` is the canonical field name for suite reduction in `backtest`, `optimize.scoring`, and
-`optimize.limits`. The legacy input aliases `aggregate`, `stat`, and `scenario_stat` remain accepted
-at those schema positions; `field` also remains accepted for legacy limit entries. Loaded or dumped
-configs always emit `reducer`. Supplying multiple aliases with the same value is allowed and
-collapses to `reducer`; conflicting values are rejected.
+`optimize.limits`. Final v9 configs use `reducer` and `metric` explicitly; normal loading rejects
+retired structural aliases such as `aggregate`, `stat`, `scenario_stat`, and limit `field`.
+The explicit released-v8 converter normalizes supported historical spellings and reports the
+changes; conflicting values are rejected.
 
 See [Suite Examples](suite_examples.md) for practical examples and suggested usage.
 
@@ -151,13 +153,14 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 ### Equity Hard Stop Loss
 
 HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/pside modes,
-and explicit `bot.hsl` for unified mode. Supported leaves are `enabled`,
-`red_threshold`, `ema_span_minutes`, `cooldown_minutes_after_red`,
-`restart_after_red_policy`, and `panic_close_order_type`.
+and explicit `bot.risk.hsl` for portfolio mode. Supported leaves are `enabled`,
+`red_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
+`cooldown_minutes_after_red`, and `panic_close_order_type`. Coin scope also supports
+`scale_budget_with_excess_allowance`.
 HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
 
-`live.hsl_signal_mode` selects `coin` (default), `pside`, or `unified` signal construction.
+`bot.risk.hsl.scope` selects `coin` (default), `pside`, or `portfolio` signal construction.
 
 For parameter definitions, RED handling, cooldown/restart rules, per-coin overrides, and
 backtest behavior, see [Equity Hard Stop Loss](equity_hard_stop_loss.md) and the
@@ -176,26 +179,23 @@ behavior.
     - `ema_band_upper = max(emas)`
   - These bands govern entry gating, forager entry readiness, and one-way entry arbitration.
   - Auto-unstuck uses its own `unstuck.ema_span_0/1`; ordinary trailing-martingale closes do not use the entry price band.
-  - Schema v8.4.0 migrates old strategy-root spans into `entry`; conflicting explicit new values win with warnings.
-- **n_positions**: Maximum number of positions to open. Set to `0` to disable long/short.
+  - Final v9 loading requires these entry paths. The explicit released-v8 converter moves old
+    strategy-root spans into `entry` and rejects conflicting authored values.
+- **max_positions**: Maximum number of positions to open. Set to `0` to disable long/short.
 - **total_wallet_exposure_limit**: Maximum exposure allowed.
   - Example: `total_wallet_exposure_limit = 0.75` means 75% of (unleveraged) wallet balance is used.
   - Example: `total_wallet_exposure_limit = 1.6` means 160% of (unleveraged) wallet balance is used.
-  - Live denominator is fixed: `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
+  - Live denominator is fixed: `wallet_exposure_limit = total_wallet_exposure_limit / max_positions`.
   - Backtest denominator is controlled by `backtest.dynamic_wel_by_tradability`.
   - See more: `docs/risk_management.md`.
 
 ### Trailing Martingale Entries
 
-The canonical V8 strategy kind is `trailing_martingale`. It replaces the v7 `trailing_grid` schema with threshold/retracement fields. If retracement is disabled, threshold behaves like recursive DCA/grid spacing. If retracement is enabled, threshold is the required excursion and retracement is the confirmation move.
-
-V8 also includes `trailing_grid_v7` as deprecated compatibility for migrating v7 trailing-grid configs without immediate re-optimization. Convert old configs explicitly with:
-
-```bash
-passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json
-```
-
-Clean migrations write canonical v8 shape with `live.strategy_kind = "trailing_grid_v7"` and strategy parameters under `bot.<side>.strategy.trailing_grid_v7`. If the transform report contains manual-review or dropped unsupported fields, the command returns nonzero and does not write output unless `--allow-manual-review-output` is passed. The helper does not convert v7 parameters into `trailing_martingale`, and normal v8 loading does not silently accept old flat trailing-grid fields.
+The retained strategy kinds are `trailing_martingale` and `ema_anchor`.
+Trailing Martingale uses threshold/retracement fields: with retracement disabled the threshold
+acts as recursive DCA spacing; with retracement enabled it is the required excursion before
+confirmation. The v7 strategy and its dedicated migration command have been removed.
+Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 
 - **strategy.trailing_martingale.entry.double_down_factor**:
   - Quantity of the next re-entry is position size times the double down factor.
@@ -262,7 +262,7 @@ Close threshold/retracement mirrors entries, but close threshold is additive so 
 - **strategy.trailing_martingale.close.retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
   - Close retracement is widened multiplicatively by volatility only. There is intentionally no close retracement wallet-exposure weight.
 
-The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_pct`. Those v7 concepts are preserved only by the deprecated `trailing_grid_v7` compatibility strategy.
+The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_pct`. The v7 compatibility strategy is removed.
 
 ### Unstuck Parameters
 
@@ -274,7 +274,7 @@ allowance: `effective_wel = wallet_exposure_limit * (1 + effective_we_excess_all
 - **unstuck.close_pct**:
   - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
   - Before quantity rounding and other constraints, `close_qty_abs = balance * effective_wel * close_pct / (close_price * c_mult)`.
-  - Rust applies quantity-step rounding, exchange minimums, remaining-position sizing and loss-allowance scaling. There is no additional cap to stop precisely at `unstuck.threshold`.
+  - Rust applies quantity-step rounding, exchange minimums, remaining-position sizing and loss-allowance scaling. There is no additional cap to stop precisely at `unstuck.exposure_trigger_ratio`.
 - **unstuck.ema_dist**:
   - Offset for the EMA eligibility trigger, not the submitted order price:
     - Long: current price must reach `upper_EMA_band * (1 + ema_dist)`, rounded up to the price tick.
@@ -290,7 +290,7 @@ allowance: `effective_wel = wallet_exposure_limit * (1 + effective_we_excess_all
   - Example: A reconstructed peak balance of `$10,000`, `loss_allowance_pct = 0.02`, and `total_wallet_exposure_limit = 1.5` give a `$9,700` floor. At a current balance of `$9,800`, the remaining allowance is `$100`.
   - This is a pacing budget: exchange minimum sizing may exceed it. See the [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
   - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_pct`; the selected coin+side then uses that percentage in the same account-wide formula.
-- **unstuck.threshold**:
+- **unstuck.exposure_trigger_ratio**:
   - Exposure eligibility trigger: `wallet_exposure / effective_wel > threshold`. Equality does not qualify.
   - Wallet exposure uses the position's average entry price: `abs(position_size) * position_price * c_mult / balance`.
   - This is not a target remaining exposure or a floor on the close. An eligible position can finish below the threshold after a close sized by `close_pct`.
@@ -307,10 +307,9 @@ Final reducer quantities compete largest-first across the shared batch loss allo
 
 ### Filter Parameters
 
-Forager coin selection now uses a two-stage model: coarse volume pruning, then weighted ranking across volume, EMA readiness, and volatility.
+Forager ranks eligible candidates using volume, EMA readiness, volatility and unilateralness.
+The old volume-drop filter is removed; volume continues to contribute through its configured weight.
 
-- **forager_volume_drop_pct**: Coarse low-volume prune. Drops the lowest relative-volume fraction before final ranking, while still retaining enough candidates to fill the configured slots.
-  - Example: `forager_volume_drop_pct = 0.1` drops the bottom 10% by relative volume. Set to `0` to skip the prune stage.
 - **forager_volatility_ema_span_1m / forager_volume_ema_span_1m**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
   - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
   - These spans control the raw inputs to forager ranking; they are separate from strategy volatility spans such as `volatility_ema_span_1h` and `offset_volatility_ema_span_1h`.
@@ -353,22 +352,21 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         entry_cooldown.base_duration_minutes,
         risk.we_excess_allowance_pct,
         hsl.cooldown_minutes_after_red,
-        hsl.ema_span_minutes,
+        hsl.drawdown_ratio_ema_span_minutes,
         hsl.enabled,
         hsl.panic_close_order_type,
         hsl.red_threshold,
-        hsl.restart_after_red_policy,
         unstuck.close_pct,
         unstuck.ema_dist,
         unstuck.ema_gating_enabled,
         unstuck.enabled,
         unstuck.loss_allowance_pct,
-        unstuck.threshold,
+        unstuck.exposure_trigger_ratio,
         wallet_exposure_limit
       ]
       ```
       The `hsl.*` entries are eligible only when the main config's global
-      `live.hsl_signal_mode` is `"coin"`. The signal mode is not itself overridable.
+      `bot.risk.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
     - `config.live`:
     ```
     [forced_mode_long, forced_mode_short, leverage]
@@ -400,19 +398,15 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - The explicit value `"all"` means all eligible coins for the affected side:
     - `approved_coins = "all"` enables all eligible coins for both sides
     - `approved_coins = {"long": "all", "short": ["BTC", "ETH"]}` enables all eligible longs and curated shorts
-  - Older configs using `live.empty_means_all_approved=true` still migrate for now:
-    - A globally empty `approved_coins` input is converted to `approved_coins = "all"`
-    - The parser logs that `live.empty_means_all_approved` is deprecated
-- **auto_gs**: Automatically enable graceful stop for positions on disapproved coins.
-  - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
-  - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
+- **disapproved_position_mode**: Policy for existing positions on disapproved coins.
+  `graceful_stop` keeps managing the current position and prevents reopening after flat;
+  `manual` delegates management to the operator. Default is `graceful_stop`.
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
 - **enable_forager_ws_candles**: Persists proven-final public 1m WebSocket candles for flat forager candidates when the exchange supports CCXT Pro `watchOHLCV`. The first nonempty snapshot of each watcher session only primes provenance. Changed values may correct an existing canonical timestamp, but extending canonical history requires fresh-successor proof, and persistence is read-verified before cache/EMA exposure. REST remains the complete fallback for startup basis, gaps, reconnect recovery, prolonged silence, and forced periodic integrity overlaps. WebSocket silence never proves a no-trade candle, and unstable streams cool down while REST maintenance continues. The lightweight reconciler stays ready for later runtime transitions into forager mode. Default is `true`; set `false` to use REST-only candidate maintenance. A zero `max_ohlcv_fetches_per_minute` disables this network path too.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **exchange_symbol_unavailable_cooldown_hours**: RAM-only, per-symbol entry cooldown after a connector proves from an exact exchange-specific error code that API trading is temporarily unavailable for that symbol. Default is `6.0` hours; `0` disables the cooldown; the maximum is `876600` hours (100 years). Flat affected symbols are excluded from new planning, while held symbols retain close and panic management with normal entries suppressed. Expiry retries the symbol automatically, a repeated qualifying response starts a fresh cooldown, and restarting the bot deliberately clears all cooldowns so the symbol is tried immediately. WEEX currently classifies only structured error code `-1058`; other exchanges require their own exact, fixture-tested classifier before using this policy.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 
-- **hsl_signal_mode**: Selects whether HSL drawdown is tracked from one combined account-level strategy signal (`"unified"`), independently per side (`"pside"`), or per `coin+pside` slot (`"coin"`, default). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default is `200_000`.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
@@ -420,8 +414,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **filter_by_min_effective_cost**: If `true`, disallows coins where
   `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
-  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `trailing_grid_v7`, it is
-  `bot.<side>.strategy.trailing_grid_v7.entry.initial_qty_pct`; for `ema_anchor`, it is
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
   `bot.<side>.strategy.ema_anchor.base_qty_pct`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 - **forced_mode_long**, **forced_mode_short**: Force all coins long/short to a given mode.
@@ -457,8 +450,13 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **order_replacement_churn_gate_window_minutes**: Window for per-symbol Rust-ideal history and account-wide create-attempt accounting. Default `10.0` minutes. State is RAM-only and resets on bot restart.
 - **order_replacement_churn_gate_stability_minutes**: Minimum observed duration needed to prove sustained monotonic price or quantity drift, or repeated exclusive reappearance of the same semantic order cohort. Exclusive switching requires at least three appearances of the current cohort while every recurring cohort retains its ladder cardinality; its duration is fixed from the preceding appearance to the current run's start, while first appearance and first reappearance remain fail-open. A newest contiguous tight-match duration of the same length clears older evidence and its completed stable prefix becomes the symbol's observable switching-history boundary. Default `2.0` minutes.
 - **order_replacement_churn_gate_market_dist_pct**: Final side-aware market-distance threshold inside which a current limit order is always exempt from churn-allowance waiting. Default `0.005` (0.5%). This never preserves a stale actual order or bypasses cancel-first sequencing.
-  - Churn history uses `order_match_tolerance_pct`; there is no wider churn-only tolerance. Canonical configs containing the retired `order_replacement_churn_gate_tracking_tolerance_pct` key drop it during migration.
-  - Canonical V8 configs containing the retired `initial_entry_exec_max_market_dist_pct` migrate automatically. A positive value becomes `order_replacement_churn_gate_market_dist_pct`, with other missing churn-gate settings supplied from the canonical defaults. A `null` or non-positive value, which disabled the retired gate, becomes `order_replacement_churn_gate_activation_count = 0`. Conflicting explicit old and new settings fail with an actionable error instead of choosing silently. This compatibility does not make the legacy pre-V8 `pb_multi` root shape a supported V8 input.
+  - Churn history uses `order_match_tolerance_pct`; there is no wider churn-only tolerance.
+    Normal loading rejects the retired `order_replacement_churn_gate_tracking_tolerance_pct`
+    and `initial_entry_exec_max_market_dist_pct` fields.
+  - The explicit released-v8 converter removes the retired tracking tolerance. A positive old
+    distance becomes `order_replacement_churn_gate_market_dist_pct`; a `null` or non-positive
+    value becomes `order_replacement_churn_gate_activation_count = 0`. Conflicting authored
+    values fail. The pre-v8 `pb_multi` root shape is unsupported.
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution. Must be greater than `max_n_creations_per_batch` so the bot can make room before posting replacement orders.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution. Must be lower than `max_n_cancellations_per_batch`.
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
@@ -478,34 +476,40 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
 - **fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
-- **pnls_max_lookback_days**: How far into the past to fetch PnL history. This also feeds the rolling realized-PnL window used by both live risk logic and backtests. Ownership is `config.live`; `config.backtest` does not accept an override.
-  - `0`: minimal lookback window at the consumer's native sampling resolution (resets as often as that path can meaningfully observe).
-  - `> 0`: rolling window of that many days.
-  - `"all"`: full available history.
-  - Live and backtest use the same contract for realized-PnL risk windows: filter realized fill events to the active lookback window, then recompute cumulative PnL, current value, and peak from only that filtered sequence.
+- Risk memory controls are consumer-owned: `bot.<side>.hsl.memory_ema_span_minutes`
+  (or `bot.risk.hsl.memory_ema_span_minutes` in portfolio scope),
+  `bot.unstuck.memory_ema_span_minutes`, and `bot.risk.loss_gate.memory_ema_span_minutes`.
+  HSL ratio smoothing separately uses `drawdown_ratio_ema_span_minutes`. All are EMA spans,
+  not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
+  equivalence from an old rolling duration.
+- **risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
 - **position_exposure_enforcer_threshold**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer_threshold`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer_enabled = false` to disable.
-- **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+pside. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. The deprecated `trailing_grid_v7` compatibility strategy is the exception: at zero cooldown it preserves v7's internally bounded simultaneous grid leg, whose generator stops before stacking retracement-dependent trailing orders. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
+- **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+pside. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
   This field may be overridden per coin+side as
   `coin_overrides.<coin>.bot.<side>.entry_cooldown.base_duration_minutes`.
-  Schema v8.5.0 moves this field out of `risk` without changing numeric defaults or timing.
-  Legacy `risk.entry_cooldown_minutes` configs, dotted/underscore CLI flags, and short CLI aliases
-  remain supported. Conflicting new and old grouped values in the same input produce a warning;
-  the new grouped value wins. Optimizer bounds use `optimize.bounds.<side>.entry_cooldown.base_duration_minutes`;
-  the internal optimizer key `long/short_risk_entry_cooldown_minutes` remains stable. Legacy `risk`
-  group selectors still include cooldown for compatibility; `entry_cooldown` selects only cooldown.
+  Normal loading requires this canonical path and rejects `risk.entry_cooldown_minutes`.
+  The explicit released-v8 converter moves the old leaf and rejects conflicting authored values.
+  Supported CLI spellings write the canonical destination. Optimizer bounds use
+  `optimize.bounds.<side>.entry_cooldown.base_duration_minutes`; the internal optimizer key
+  `long/short_risk_entry_cooldown_minutes` remains stable. In `fixed_params` and fine-tune
+  matching, documented `risk` group selectors still include the original cooldown leaf;
+  `entry_cooldown` selects the cooldown block. Authored fixed/runtime and scenario patches use
+  literal full canonical paths.
   Optional additive exposure and adverse-RMS weights, a floor and a ceiling live in the same
   `entry_cooldown` block. See [adaptive entry cooldown](adaptive_entry_cooldown.md) for formulas,
   zero-base behavior, per-coin overrides, shared EMA span and GPU screening support.
-- **total_exposure_entry_gate_enabled**: Enables the TWEL entry cap for bot-generated entries. When enabled, entries are blocked or cropped before projected snapped-balance TWE, including existing same-side exchange positions, can exceed `min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`. When disabled, excess allowance may let entries push same-side TWE above raw TWEL.
-- **total_exposure_enforcer_enabled**: Enables TWEL auto-reduce repair for already-over-target same-side exchange exposure. Manual and panic exposure counts toward the trigger, but only managed positions can receive TWEL auto-reduce orders. Disable this independently from the TWEL entry gate when you want entry capping without repair closes, or repair closes without entry capping.
+- The total-exposure entry cap always applies. Bot-generated entries are blocked or cropped
+  before projected snapped-balance TWE, including existing same-side positions, exceeds
+  `min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`.
+- **total_exposure_enforcer_enabled**: Enables TWEL auto-reduce repair for already-over-target same-side exchange exposure. Manual and panic exposure counts toward the trigger, but only managed positions can receive TWEL auto-reduce orders. Disabling repair leaves the unconditional entry cap active.
 - **total_exposure_enforcer_policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer_threshold / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
-- **total_exposure_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` used by TWEL entry gating and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL when the entry gate is enabled; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
+- **total_exposure_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` used by the unconditional entry cap and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
 - **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **max_realized_loss_pct**: Global realized-loss gate for close orders, anchored to peak realized balance from fill history. For each close order, if projected realized PnL would push balance below `peak_balance * (1 - max_realized_loss_pct)`, the order is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
+- **bot.risk.loss_gate.max_drawdown_ratio**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
   - Default: `1.0` (disabled).
-  - `<= 0.0`: block all lossy closes.
+  - `0.0`: block all lossy closes; negative or nonfinite values are invalid.
   - `>= 1.0`: disable the gate.
-  - Example: with peak balance `$10,000` and `max_realized_loss_pct = 0.05`, lossy closes are blocked once projected balance would fall below `$9,500`.
+  - Example: with raw balance `$10,000`, remembered realized loss D=`$200` and r=`0.05`, remaining allowance is `$310`. Ordered net fills and elapsed-minute decay change D; deposits and UPNL do not.
 - **fee_pct_fallback**: Fallback fee percentage used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
 - **fee_pct_sanity_abs_max**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fee_pct_fallback`.
 - **fee_conversion_max_age_ms**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
@@ -541,7 +545,7 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
 
 **When to Use Stepped Bounds:**
 
-- **Integer parameters**: Use step `1` for parameters that should be integers (e.g., `n_positions`)
+- **Integer parameters**: Use step `1` for parameters that should be integers (e.g., `max_positions`)
 - **Coarse search**: Use larger steps to reduce search space and speed up optimization
 - **Known granularity**: When you know the parameter only makes sense at certain intervals
 
@@ -560,7 +564,7 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
 ```
 
 In this example:
-- `n_positions`: Integers from 1 to 20
+- `max_positions`: Integers from 1 to 20
 - `total_wallet_exposure_limit`: Values 0.1, 0.2, 0.3, ..., 2.0
 - `entry_grid_spacing_pct`: Values 0.005, 0.01, 0.015, ..., 0.05
 - `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
@@ -568,16 +572,17 @@ In this example:
 HSL bounds now use side-specific prefixes:
 
 1. `long_hsl_red_threshold`
-2. `long_hsl_ema_span_minutes`
+2. `long_hsl_drawdown_ratio_ema_span_minutes`
 3. `long_hsl_cooldown_minutes_after_red`
 4. `short_hsl_red_threshold`
-5. `short_hsl_ema_span_minutes`
+5. `short_hsl_drawdown_ratio_ema_span_minutes`
 6. `short_hsl_cooldown_minutes_after_red`
 
-Unified HSL uses portfolio bounds under `optimize.bounds.hsl`; coin and pside modes use
-side-specific bounds. Set an explicit `restart_after_red_policy` of `always` or `never`
-for each enabled policy. Constrain optimization with the canonical `*_strategy_eq`
-metrics; saved fitness must be recomputed after migrating HSL semantics.
+Portfolio HSL uses `optimize.bounds.hsl`; coin and pside modes use directional bounds.
+Independent slow spans use their canonical consumer-owned bound blocks. There is no
+restart-policy field. Use independent ordinary account-equity definitions for cross-version
+economic comparison; HSL signal metrics are model-dependent and all fitness is recomputed
+after migration.
 
 **Validation:**
 
@@ -589,29 +594,19 @@ metrics; saved fitness must be recomputed after migrating HSL semantics.
 - **compress_results_file**: If `true`, compresses optimize output results file to save space.
 - **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
   - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_pct` > `strategy.trailing_martingale.close.retracement_base_pct`. This prevents retracement from triggering before reaching the minimum profit threshold.
-  - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These overrides remain rejected for `trailing_grid_v7`; tune the migrated close-grid bounds directly instead.
+  - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These retired overrides are rejected.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `live.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
-- **crossover_probability**: Probability of performing crossover between two individuals in the genetic algorithm. Determines how often parents exchange genetic information to create offspring.
-- **crossover_eta**: Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring to move farther away from their parents; higher values keep them closer. Default is `20.0`.
 - **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_pct` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
-- **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use this to choose an explicit HSL restart policy during optimization while keeping the saved live/backtest policy unchanged.
+- **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
 - **iters**: Number of backtests per optimize session.
-- **mutation_probability**: Probability of mutating an individual in the genetic algorithm. Determines how often random changes are introduced to maintain diversity.
-- **mutation_eta**: Crowding factor (η) for polynomial mutation. Smaller values (<20) produce heavier-tailed steps that explore more aggressively, while larger values confine mutations near the current value. Default is `20.0`.
-- **mutation_indpb**: Probability that each attribute mutates when a mutation is triggered. Set to `0` (default) to auto-scale to `1 / number_of_parameters`, or supply an explicit probability between `0` and `1`.
 - **n_cpus**: Number of CPU cores utilized in parallel.
-- **offspring_multiplier**: Multiplier applied to `population_size` to determine how many offspring (`λ`) are produced each generation in the μ+λ evolution strategy. Values >1.0 increase exploration by sampling more children per generation. Default is `1.0`.
 - **pareto_max_size**: Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding (least diverse removed first, while per-objective extremes are preserved), not by age. Default is `1000`.
 - **population_size**: Size of population for genetic optimization algorithm. With the default `pymoo` backend, `null` means auto: NSGA-II resolves to `250`, while NSGA-III resolves to a default population budget of `500` and chooses the finest auto reference-direction grid that fits inside that budget. Set an explicit integer to change the NSGA-III per-generation evaluation budget and auto reference-direction coarseness.
-- **backend**: Optimizer backend. Default is `pymoo`. Supported values are `deap`, `pymoo`, and
-  experimental `gpu`. The GPU backend currently supports Apple MPS, single-coin EMA-anchor and
-  trailing-martingale runs in long-only, short-only, and long+short modes; single-side and
-  dual-side hedge-mode multi-coin runs for both strategies; anchored fine-tuning with `--start` plus
-  `--fine-tune-params`; and the V8
-  `mirror_short_from_long` and `lossless_close_trailing` optimizer overrides. See
-  `docs/optimizing.md` for its fail-closed scope and `optimize.gpu` settings.
-  With the default `optimize.pymoo.algorithm: "auto"`, Passivbot uses `nsga2` for `3` or fewer
-  objectives and `nsga3` for `4+`.
+- **backend**: `pymoo` (default) or `gpu`; both use pymoo NSGA-II/NSGA-III search.
+  `optimize.pymoo.algorithm="auto"` selects NSGA-II for at most three objectives and NSGA-III
+  for four or more. Operator controls live under `optimize.pymoo.shared`. GPU execution uses
+  supported shared-account native replay and fails explicitly for unsupported capabilities.
+  See [optimizing](optimizing.md) for device scope and checkpoint compatibility.
 - **round_to_n_significant_digits**: Quantization precision used when hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively; higher values preserve more distinct variants.
 - **scoring**:
   - The optimizer minimizes the configured objective list and keeps the Pareto front.
@@ -622,7 +617,6 @@ metrics; saved fitness must be recomputed after migrating HSL semantics.
     `median`. It is invalid when the objective resolves to a named scenario.
   - The current default profile uses:
     - `adg_strategy_eq`
-    - `adg_strategy_eq_w`
     - `mdg_strategy_eq`
     - `sortino_ratio_strategy_eq`
     - `volume_pct_per_day_avg`
@@ -635,9 +629,11 @@ metrics; saved fitness must be recomputed after migrating HSL semantics.
   - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.
   - Built-in shorthand metrics and their default goals are registered in
     `src/config/scoring.py`; see `docs/optimizing.md` for metric descriptions.
-  - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
-  - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`, `["adg_pnl_w", "hard_stop_time_in_red_pct", "hard_stop_panic_close_loss_sum"]`
-    - Note: metrics may be suffixed with `_usd` or `_btc` to select denomination. If `config.backtest.btc_collateral_cap` is `0`, BTC values still represent the USD equity translated into BTC terms.
+  - Legacy `_w` formulas and dependent aliases are removed. Select ordinary metrics or explicit
+    `_ew` formulas deliberately; migration requires a replacement and formula acknowledgment.
+  - Authored scoring is a list of objects, for example
+    `[{"metric":"adg_strategy_eq","goal":"max"},{"metric":"drawdown_worst_strategy_eq","goal":"min"}]`.
+    Currency metrics may use `_usd` or `_btc` to select denomination.
 - **write_all_results**: Controls whether every evaluated candidate is appended to `all_results.bin`. Keep `true` for full replay/analysis history; set `false` to reduce disk writes and store only the maintained Pareto/state artifacts.
 
 ### Optimizer Suites
@@ -753,71 +749,51 @@ ignored by persistence helpers to keep user configs tidy.
 
 ## Retired excess allowance selector
 
-Excess allowance is always bounded. On loading older configs, an explicit
-`we_excess_allowance_mode="bounded"` (including the flat risk alias) is removed
-with a warning in the normalized copy. Source files remain unchanged. An explicit
-`"legacy_raw"` or any unsupported value stops configuration loading with the full
-field path and migration instructions. Review the reduced exposure headroom, remove
-the field, and re-backtest before use; raw sizing cannot be preserved automatically.
+Excess allowance is always bounded. Final v9 loading rejects the retired
+`we_excess_allowance_mode` field and its flat risk spelling. Remove this selector explicitly
+before converting a released-v8 config. An input using `"legacy_raw"` also requires a policy
+review: bounded sizing can reduce exposure headroom, and raw sizing cannot be preserved
+automatically. Re-backtest the resulting policy before use.
 The same check includes coin overrides, external override files, optimizer fixed
 overrides and suite scenarios.
 
 ## HSL configuration
 
-See [Equity Hard Stop Loss](equity_hard_stop_loss.md) for formulas and lifecycle behavior.
+V9 requires `config_version="v9.0.0"` and the explicit
+[v8-to-v9 migration](v8_to_v9_migration.md) before using older configurations. Relabeling a
+v8 file does not convert its policy. Main configs reject retired fields in root, CLI,
+coin/scenario overrides and optimizer policy. There is no engine selector or restart policy.
 
-Live, offline fake execution, backtesting and CPU/GPU optimization share one HSL
-implementation; no engine selector is needed. See the [HSL guide](equity_hard_stop_loss.md)
-for formulas, reconstruction, cooldown and input requirements. Use existing local market data
-for an offline backtest; normal data preparation can otherwise download public candles.
+Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`pside` modes. `portfolio` requires an
+explicit `bot.risk.hsl` block with `enabled`, `red_threshold`, `drawdown_ratio_ema_span_minutes`,
+`memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_minutes_after_red`. Side policy is never silently
+promoted to portfolio authority. `scale_budget_with_excess_allowance` defaults to `false`
+and may vary per coin in coin scope.
 
-Backtests save HSL summaries and RED/flat/restart transitions by default.
-Set `backtest.hsl_detailed_report=true` (CLI: `--backtest.hsl_detailed_report true`)
-to also retain per-minute drawdown, EMA and controller samples and enable HSL drawdown
-plots. This diagnostic option increases runtime and memory use; it does not change fills,
-equity or analysis metrics. Disabling plots does not override an explicit report opt-in.
-Metrics-only optimizer evaluations always omit sample and event lists.
+Each HSL policy's slow `memory_ema_span_minutes` drives decaying currency drawdown. Its
+`drawdown_ratio_ema_span_minutes` independently smooths its sampled ratio, starting from zero at a known
+new episode. Both spans preserve fractional minutes and require a finite supported f32
+recurrence. The [risk reference](v9_risk_model.md) specifies sampling, arithmetic,
+bootstrap and malformed-input behavior; the [HSL guide](equity_hard_stop_loss.md) explains
+scopes and finite cooldown.
 
-For `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. `unified`
-requires an explicitly supplied `bot.hsl` block, even when side settings match or HSL
-is disabled. Supply all six fields: `enabled`, `red_threshold`, `ema_span_minutes`,
-`panic_close_order_type`, `cooldown_minutes_after_red`, and `restart_after_red_policy`.
-No side or template is silently promoted to portfolio authority. The optional
-`scale_budget_with_excess_allowance` field defaults to `false`; `true` is supported
-only for coin mode and multiplies the slot budget by that coin's bounded exposure
-headroom. Set it globally per side; the excess percentage itself remains coin-overridable.
-This affects current RED and terminal cooldown reconstruction. See the HSL guide
-for the formula.
+A flatten starts finite cooldown when the latest pre-final-fill assessment **or** the
+post-final-accounting assessment is RED. Once qualified, later GREEN/budget changes do not
+cancel or renew the integer deadline. New actual exposure starts a new episode. Zero
+cooldown allows immediate restart subject to ordinary gates. There is no `never` option;
+permanent shutdown belongs to the operator or an external supervisor.
 
-An enabled active scope must explicitly choose `restart_after_red_policy="always"`
-or `"never"`; missing choices and legacy `"threshold"` fail with migration guidance.
-A disabled scope can defer this choice, but later CLI/scenario/coin enablement must
-supply it. New configurations generated by `config.hsl.generated_template`
-write `"always"` explicitly. Existing configs are never assigned that choice by hydration.
-Pre-v8.6 policies with HSL enabled require explicit migration after CLI changes.
-Disabled legacy policies warn and load, clearing their retired engine selector and restart
-choices in the normalized copy; later enablement needs a current explicit policy.
-The gate includes override files, optimizer fixed overrides and suite scenarios.
-See the [HSL migration guide](equity_hard_stop_loss.md) for the seed-only exception.
+Portfolio optimizer bounds use `optimize.bounds.risk.hsl`; local HSL bounds use their side
+blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.unstuck` and
+`optimize.bounds.risk.loss_gate`. Omitted slow-span bounds freeze configured values;
+conversion never widens new dimensions implicitly. Per-coin override support does not create
+per-coin optimizer genes. Schema, policies, inputs and implementation participate in saved-fitness
+identity; incompatible checkpoints fail and migrated numeric seeds require fresh evaluation.
 
-HSL removes `tier_ratios`, `orange_tier_mode`, and
-`no_restart_drawdown_threshold`. Ordinary supplied fields are removed with migration
-warnings; optimizer bounds, explicit patches, and fixed overrides targeting them are
-rejected. Removed yellow/orange time metrics are rejected as objectives or limits.
-`live.hsl_position_during_cooldown_policy` is also removed from HSL configurations
-with a warning; any renewed exposure clears cooldown.
-The legacy recovery settings `hsl_unavailable_grace_seconds`,
-`hsl_accept_incomplete_history` and `risk_input_max_attempts` are also removed
-with a warning; they cannot be used as optimizer or scenario parameters.
-Explicit optimizer/scenario overrides targeting the removed parameter are rejected.
-Enabled HSL requires
-`live.pnls_max_lookback_days` in **[1, 90]**, including fractional days; invalid values
-fail rather than being clamped. EMA spans remain fractional and at least one minute.
+Backtests retain HSL summaries and transitions. Set `backtest.hsl_detailed_report=true`
+for optional per-minute risk samples and plots; optimizer replay omits additional diagnostic
+arrays. Independent ordinary account-equity metrics remain required even when HSL
+reporting is disabled. See [metrics](metrics.md) and [qualification](hsl_testing.md).
 
-Unified optimizer bounds use `optimize.bounds.hsl` and resolve to `bot.hsl` fields;
-fixed overrides use explicit paths such as `bot.hsl.restart_after_red_policy`.
-Side HSL bounds/overrides and per-coin HSL patches are rejected in unified mode.
-Per-coin HSL patches are supported only in coin mode. The calculation contract and effective HSL parameters
-participate in the saved-fitness contract; old scores cannot be treated as current
-results. Rolling back the implementation requires an older source version and a
-matching configuration; there is no legacy engine inside this version.
+Rollback requires version-matched source/runtime and the original config backup. Offline
+validation and migration authorize no bot startup, deployment or account action.

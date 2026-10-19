@@ -148,7 +148,8 @@ from config.strategy import (
 )
 from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
-from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.pnl_lookback import PnlsLookback
+from config.risk_memory import risk_bootstrap_horizon_minutes
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from risk_limits import (
@@ -1317,7 +1318,7 @@ class Passivbot:
         """Initialise the bot with configuration, user context, and runtime caches."""
         from config.hsl import require_runtime_support, require_live_balance_support
 
-        require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+        require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
         require_live_balance_support(config)
         self.config = config
         try:
@@ -1710,11 +1711,8 @@ class Passivbot:
             tail_slack_hours = 0.0
         self.candle_disk_check_tail_slack_hour_ms = int(tail_slack_hours * 60 * 60_000)
         self._candle_disk_check_last_ms = 0
-        auto_gs = bool(self.live_value("auto_gs"))
-        self.PB_mode_stop = {
-            "long": "graceful_stop" if auto_gs else "manual",
-            "short": "graceful_stop" if auto_gs else "manual",
-        }
+        disapproved_mode = self.live_value("disapproved_position_mode")
+        self.PB_mode_stop = {"long": disapproved_mode, "short": disapproved_mode}
 
         # FillEventsManager for PnL tracking (replaces legacy self.pnls list)
         self._pnls_manager: Optional[FillEventsManager] = None
@@ -1853,8 +1851,7 @@ class Passivbot:
                 )
 
     def _live_max_realized_loss_pct(self) -> float:
-        value = self.live_value("max_realized_loss_pct")
-        return 1.0 if value is None else float(value)
+        return float(require_config_value(self.config, "bot.risk.loss_gate.max_drawdown_ratio"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -1885,7 +1882,7 @@ class Passivbot:
         )
 
     def _live_risk_uses_authoritative_pnl(self) -> bool:
-        return self._orchestrator_uses_realized_pnl() or False
+        return self._orchestrator_uses_realized_pnl()
 
     def bot_value(self, pside: str, key: str):
         bot_side = self.config.get("bot", {}).get(pside, {})
@@ -1910,15 +1907,47 @@ class Passivbot:
         if stage is not None:
             self._log_silence_watchdog_stage = str(stage)
 
+    def _realized_memory_start_ms(self, now_ms: int) -> int:
+        """Keep one factual bootstrap origin throughout an uninterrupted run.
+
+        Moving a finite replay suffix forward on every query would silently turn
+        exponential memory back into rolling memory. Corrections replay from the
+        same origin, including after clock or bootstrap-horizon changes. A restart
+        declares a new approximate bounded origin.
+        """
+        minutes, _ = risk_bootstrap_horizon_minutes(self.config)
+        requested = max(0, int(now_ms) - int(math.floor(minutes * 60_000 + 0.5)))
+        origin = getattr(self, "_realized_memory_origin_ms", None)
+        origin = requested if origin is None else origin
+        self._realized_memory_origin_ms = origin
+        return origin
+
+    def _pnl_history_acquisition_lookback(self):
+        now_ms = int(self.get_exchange_time())
+        starts = []
+        if self._live_risk_uses_authoritative_pnl():
+            starts.append(self._strict_pnl_history_start_ms(now_ms))
+        if hsl_live.runtime.enabled(self):
+            starts.append(hsl_live.runtime.history_start_ms(self, now_ms))
+        if any(start is None for start in starts):
+            return PnlsLookback("all", math.inf)
+        if not starts:
+            minutes, _ = risk_bootstrap_horizon_minutes(self.config)
+            starts.append(max(0, now_ms - int(math.floor(minutes * 60_000 + 0.5))))
+        # Legacy internal acquisition helper uses days; the public v9 fields and
+        # the risk recurrence are expressed in minutes.
+        return PnlsLookback("window", (now_ms - min(starts)) / 86_400_000.0)
+
+    def _strict_pnl_history_start_ms(self, now_ms):
+        if self._orchestrator_uses_realized_pnl():
+            return self._realized_memory_start_ms(now_ms)
+        return None
+
     def _pnls_lookback_start_ms(self) -> Optional[int]:
         config = getattr(self, "config", None)
         if config is None:
             return None
-        lookback = parse_pnls_max_lookback_days(
-            require_live_value(config, "pnls_max_lookback_days"),
-            field_name="live.pnls_max_lookback_days",
-        )
-        return lookback.event_history_start_ms(self.get_exchange_time())
+        return self._strict_pnl_history_start_ms(int(self.get_exchange_time()))
 
     def _fill_history_coverage_status(
         self,
@@ -1948,10 +1977,7 @@ class Passivbot:
 
     def _fill_history_coverage_ready(self) -> bool:
         try:
-            lookback = parse_pnls_max_lookback_days(
-                self.live_value("pnls_max_lookback_days"),
-                field_name="live.pnls_max_lookback_days",
-            )
+            lookback = self._pnl_history_acquisition_lookback()
             now_ms = self.get_exchange_time()
             pnl_start_ms = lookback.fill_cache_age_limit_ms(now_ms)
             coverage_required, start_ms = self._required_fill_history_start_ms(
@@ -2035,7 +2061,7 @@ class Passivbot:
     ) -> tuple[bool, Optional[int]]:
         """Return the earliest fill whose PnL an enabled risk consumer needs."""
         return (
-            (True, pnl_start_ms)
+            (True, self._strict_pnl_history_start_ms(now_ms))
             if self._live_risk_uses_authoritative_pnl()
             else (False, None)
         )
@@ -2044,9 +2070,6 @@ class Passivbot:
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return whether planning needs historical coverage and its earliest timestamp."""
-        orchestrator_pnl_required = self._live_risk_uses_authoritative_pnl()
-        if orchestrator_pnl_required:
-            return True, pnl_start_ms
         pnl_required, pnl_start_ms = self._required_pnl_history_start_ms(
             now_ms,
             pnl_start_ms=pnl_start_ms,
@@ -2084,14 +2107,6 @@ class Passivbot:
         return [
             event for event in events if int(event.timestamp) >= int(required_start_ms)
         ]
-
-    def _get_effective_pnl_events(self) -> list:
-        if self._pnls_manager is None:
-            return []
-        start_ms = self._pnls_lookback_start_ms()
-        if start_ms is None:
-            return self._pnls_manager.get_events()
-        return self._pnls_manager.get_events(start_ms=start_ms)
 
     def _assert_no_pending_pnl_events(self, events: list, *, context: str) -> None:
         FillEventsManager.assert_no_pending_pnl(events, context=context)
@@ -2625,33 +2640,24 @@ class Passivbot:
         if self._pnls_manager is None:
             return {"status": "no_pnl_manager"}
 
-        events = self._get_effective_pnl_events()
-        if not events:
-            return {"status": "no_history"}
-        self._assert_no_pending_pnl_events(
-            events, context="unstuck allowance logging realized PnL"
-        )
-
-        pnls_cumsum = np.array(
-            [fill_event_net_pnl(ev) for ev in events], dtype=float
-        ).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), float(
-            pnls_cumsum[-1]
-        )
-
+        memory = self._get_realized_memories()["unstuck"]
+        if memory is None:
+            return {"status": "unstuck_disabled"}
+        drawdown = memory["drawdown"]
         balance_raw = self.get_raw_balance()
-        balance_peak = balance_raw + (pnls_cumsum_max - pnls_cumsum_last)
+        balance_peak = balance_raw + drawdown
         pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
-        # Raw allowance WITHOUT .max(0.0) - can be negative
-        allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
+        allowance = float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, pct, twel, drawdown))
         override_allowances = {
-            symbol: balance_peak * (override_pct * twel + pct_from_peak / 100.0)
+            symbol: float(pbr.calc_auto_unstuck_allowance_v9(balance_raw, override_pct, twel, drawdown))
             for symbol, override_pct in override_pcts.items()
         }
 
         return {
             "status": "ok",
-            "allowance": allowance_raw,
+            "allowance": allowance,
+            # Signed deficit is observability only; execution uses Rust output.
+            "raw_allowance": pct * twel * balance_peak - drawdown,
             "peak": balance_peak,
             "pct_from_peak": pct_from_peak,
             "loss_allowance_pct": pct,
@@ -4590,7 +4596,7 @@ class Passivbot:
                 symbol=symbol,
                 pside=pside,
                 error_label="live warmup",
-                optional=strategy_kind == "trailing_grid_v7",
+                optional=False,
                 paths=(
                     ("close", "threshold_volatility_1h_weight"),
                     ("close", "retracement_volatility_1h_weight"),
@@ -8059,17 +8065,6 @@ class Passivbot:
             else None
         )
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
-        if strategy_kind == "trailing_grid_v7":
-            return (
-                float(
-                    strategy_cfg.get("entry", {}).get("trailing_grid_ratio", 0.0) or 0.0
-                )
-                != 0.0
-                or float(
-                    strategy_cfg.get("close", {}).get("trailing_grid_ratio", 0.0) or 0.0
-                )
-                != 0.0
-            )
         return (
             float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0)
             > 0.0
@@ -9870,7 +9865,6 @@ class Passivbot:
         Steps (for forager mode):
         - Filter by age and effective min cost
         - Rank by 1m EMA quote volume
-        - Drop the lowest filter_volume_drop_pct fraction
         - Rank remaining by 1m EMA log range
         - Return up to n_positions most volatile symbols
         For non-forager mode, returns all approved candidates.
@@ -9909,9 +9903,6 @@ class Passivbot:
             feature_unavailable_count = 0
             volatility_dropped_count = 0
             # filter coins by relative volume and log range
-            clip_pct = self.bot_value(pside, "forager_volume_drop_pct")
-            if not clip_pct:
-                clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             weights = self.bot_value(pside, "forager_score_weights")
             if not isinstance(weights, dict):
@@ -9950,7 +9941,7 @@ class Passivbot:
                     fetch_budget = max(0, int(max_network_fetches))
                 except Exception:
                     fetch_budget = 0
-            if clip_pct > 0.0:
+            if float(weights["volume"]) != 0.0:
                 volumes, log_ranges = await self.calc_volumes_and_log_ranges(
                     pside,
                     symbols=candidates,
@@ -10009,7 +10000,6 @@ class Passivbot:
                         selected_symbols=[],
                         slots_open=slots_open,
                         max_n_positions=max_n_positions,
-                        clip_pct=clip_pct,
                         volatility_drop_pct=volatility_drop,
                         max_age_ms=max_age_ms,
                         fetch_budget=fetch_budget,
@@ -10040,7 +10030,6 @@ class Passivbot:
                         selected_symbols=[],
                         slots_open=slots_open,
                         max_n_positions=max_n_positions,
-                        clip_pct=clip_pct,
                         volatility_drop_pct=volatility_drop,
                         max_age_ms=max_age_ms,
                         fetch_budget=fetch_budget,
@@ -10063,7 +10052,6 @@ class Passivbot:
             selected = pbr.select_coin_indices_py(
                 features,
                 max_n_positions,
-                clip_pct,
                 weights,
                 True,
             )
@@ -10076,7 +10064,6 @@ class Passivbot:
                 selected_symbols=ideal_coins,
                 slots_open=slots_open,
                 max_n_positions=max_n_positions,
-                clip_pct=clip_pct,
                 volatility_drop_pct=volatility_drop,
                 max_age_ms=max_age_ms,
                 fetch_budget=fetch_budget,
@@ -10377,7 +10364,7 @@ class Passivbot:
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
             return float(strategy_cfg["base_qty_pct"])
-        if strategy_kind in {"trailing_martingale", "trailing_grid_v7"}:
+        if strategy_kind == "trailing_martingale":
             entry_cfg = strategy_cfg.get("entry")
             if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
                 raise KeyError(
@@ -11793,10 +11780,7 @@ class Passivbot:
                 )
 
             async def rebuild_fill_cache_from_lookback() -> None:
-                lookback = parse_pnls_max_lookback_days(
-                    self.live_value("pnls_max_lookback_days"),
-                    field_name="live.pnls_max_lookback_days",
-                )
+                lookback = self._pnl_history_acquisition_lookback()
                 age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
                 start_ms = None if age_limit is None else int(age_limit)
                 history_scope = "all" if lookback.is_all else "window"
@@ -12274,12 +12258,9 @@ class Passivbot:
             return False
 
         try:
-            # Use the same lookback window
-            lookback_config_value = self.live_value("pnls_max_lookback_days")
-            lookback = parse_pnls_max_lookback_days(
-                lookback_config_value,
-                field_name="live.pnls_max_lookback_days",
-            )
+            # Acquisition/coverage is separate from exponential risk memory.
+            lookback = self._pnl_history_acquisition_lookback()
+            lookback_config_value = lookback.display_value
             exchange_time_ms = self.get_exchange_time()
             pnl_age_limit = lookback.fill_cache_age_limit_ms(exchange_time_ms)
             pnl_required, required_pnl_start_ms = self._required_pnl_history_start_ms(
@@ -13023,28 +13004,95 @@ class Passivbot:
                 self._log_fill_event(event),
             )
 
-    def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
-        """Return net realized pnl cumsum peak/current from FillEventsManager history."""
-        if getattr(self, "_pnls_manager", None) is None:
-            return {"max": 0.0, "last": 0.0}
-        if not self._orchestrator_uses_realized_pnl():
-            return {"max": 0.0, "last": 0.0}
-        start_ms = self._pnls_lookback_start_ms()
-        events = self._get_effective_pnl_events()
-        self._assert_pnl_history_safe_for_risk(
-            events,
-            context="orchestrator realized PnL cumsum",
-            start_ms=start_ms,
-        )
-        if not events:
-            return {"max": 0.0, "last": 0.0}
-        pnls_cumsum = np.array(
-            [fill_event_net_pnl(ev) for ev in events], dtype=float
-        ).cumsum()
-        return {
-            "max": max(0.0, float(pnls_cumsum.max())),
-            "last": float(pnls_cumsum[-1]),
+    def _get_realized_memories(self) -> dict:
+        """Fold one canonical factual stream into independently enabled memories.
+
+        Both filters retain this run's fixed origin. An unknown prefix starts
+        explicitly at zero; attenuation does not bound omitted economic losses.
+        Corrections replay the same retained facts and factual initializer.
+        """
+        controls = {
+            "unstuck": {
+                "enabled": self._unstuck_uses_realized_pnl(),
+                "memory_ema_span_minutes": require_config_value(
+                    self.config, "bot.unstuck.memory_ema_span_minutes"
+                ),
+            },
+            "loss_gate": {
+                "enabled": self._live_max_realized_loss_pct() < 1.0,
+                "memory_ema_span_minutes": require_config_value(
+                    self.config, "bot.risk.loss_gate.memory_ema_span_minutes"
+                ),
+            },
         }
+        if not any(control["enabled"] for control in controls.values()):
+            return {"unstuck": None, "loss_gate": None}
+        if getattr(self, "_pnls_manager", None) is None:
+            raise RuntimeError("realized risk requires the canonical fill manager")
+        from live.realized_facts import canonical_realized_facts
+
+        now_ms = int(self.get_exchange_time())
+        origin = self._realized_memory_start_ms(now_ms)
+        events = self._pnls_manager.get_events(start_ms=origin, end_ms=now_ms)
+        self._assert_pnl_history_safe_for_risk(
+            events, context="account realized-loss memories", start_ms=origin, end_ms=now_ms,
+        )
+        ordered = canonical_realized_facts(events)
+        known_origin = origin == 0
+        initialization = "known_zero_origin" if known_origin else "unknown_prefix_zero"
+        payload = {
+            "start": origin, "now": now_ms, "known_origin": known_origin,
+            "fills": list(ordered.fills), **controls,
+        }
+        try:
+            memories = json.loads(pbr.realized_memories_v9(json.dumps(payload, allow_nan=False)))
+            if (type(memories["start"]) is not int or memories["start"] != origin
+                or type(memories["now"]) is not int or memories["now"] != now_ms
+                or type(memories["input_fills"]) is not int
+                or memories["input_fills"] != len(ordered.fills)):
+                raise ValueError("invalid realized-memories envelope")
+            for name, control in controls.items():
+                memory = memories[name]
+                if not control["enabled"]:
+                    if memory is not None:
+                        raise ValueError("disabled realized filter produced state")
+                    continue
+                if (not isinstance(memory, dict)
+                    or type(memory["start"]) is not int or memory["start"] != origin
+                    or type(memory["now"]) is not int or memory["now"] != now_ms
+                    or type(memory["drawdown"]) not in (int, float)
+                    or not math.isfinite(memory["drawdown"]) or memory["drawdown"] < 0
+                    or type(memory["fills"]) is not int or memory["fills"] != len(ordered.fills)
+                    or type(memory["unknown_prefix"]) is not bool
+                    or memory["unknown_prefix"] != (not known_origin)
+                    or memory["initialization"] != initialization
+                    or type(memory["initial_drawdown"]) not in (int, float)
+                    or memory["initial_drawdown"] != 0.0
+                    or type(memory["prefix_attenuation"]) not in (int, float)
+                    or not 0.0 <= memory["prefix_attenuation"] <= 1.0
+                    or type(memory["span_minutes"]) not in (int, float)
+                    or memory["span_minutes"] != control["memory_ema_span_minutes"]):
+                    raise ValueError(f"invalid {name} realized-memory envelope")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise FatalBotException("invalid v9 realized-memories producer output") from exc
+        memories["ordering_reasons"] = list(ordered.reasons)
+        memories["ambiguous_cohort_count"] = ordered.ambiguous_cohort_count
+        memories["proven_pair_chain_count"] = ordered.proven_pair_chain_count
+        previous = getattr(self, "_realized_memories_diagnostics", None)
+        for name, control in controls.items():
+            memory = memories[name]
+            if memory is None or known_origin:
+                continue
+            prior = previous.get(name) if previous is not None else None
+            if prior is None or prior["start"] != origin or prior["span_minutes"] != memory["span_minutes"]:
+                logging.warning(
+                    "[risk] %s realized-loss memory uses an approximate zero initializer "
+                    "for unknown history before %s; span_minutes=%s prefix_attenuation=%s "
+                    "(attenuation is not an economic error bound)",
+                    name, origin, memory["span_minutes"], memory["prefix_attenuation"],
+                )
+        self._realized_memories_diagnostics = memories
+        return memories
 
     @staticmethod
     def _fill_event_increases_position(pside: str, side: str, qty: float) -> bool:
@@ -13304,7 +13352,7 @@ class Passivbot:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                    "adjust live.max_realized_loss_pct to change behavior",
+                    "adjust bot.risk.loss_gate.max_drawdown_ratio to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,
@@ -13436,7 +13484,7 @@ class Passivbot:
                     effective_min_cost,
                 )
             logging.debug(
-                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.n_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
+                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
@@ -13754,7 +13802,6 @@ class Passivbot:
                 slots_open=slots_to_fill > 0,
                 max_n_positions=None,
                 slots_to_fill=slots_to_fill,
-                clip_pct=None,
                 volatility_drop_pct=None,
                 score_hysteresis_pct=float(
                     selection.get("score_hysteresis_pct") or 0.0
@@ -14859,7 +14906,6 @@ class Passivbot:
         bool_keys = {
             "risk_wel_enforcer_enabled",
             "risk_twel_enforcer_enabled",
-            "risk_twel_entry_gate_enabled",
             "unstuck_enabled",
             "unstuck_ema_gating_enabled",
         }
@@ -14910,7 +14956,6 @@ class Passivbot:
             "entry_trailing_threshold_pct",
             "forager_volatility_ema_span_1m",
             "forager_volume_ema_span_1m",
-            "forager_volume_drop_pct",
             "forager_score_weights",
             "risk_entry_cooldown_minutes",
             "entry_cooldown_min_duration_minutes",
@@ -14924,7 +14969,6 @@ class Passivbot:
             "risk_wel_enforcer_threshold",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
-            "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
             "unstuck_enabled",
@@ -15285,18 +15329,18 @@ class Passivbot:
         return self._pnls_manager is not None and self._unstuck_uses_realized_pnl()
 
     def _calc_orchestrator_unstuck_allowance_for_symbol(
-        self, pside: str, symbol: str, realized_pnl_cumsum: dict
+        self, pside: str, symbol: str, realized_memory: dict
     ) -> float:
         pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
         if pct <= 0.0 or twel <= 0.0:
             return 0.0
         return float(
-            pbr.calc_auto_unstuck_allowance(
+            pbr.calc_auto_unstuck_allowance_v9(
                 self.get_raw_balance(),
-                pct * twel,
-                float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
-                float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
+                pct,
+                twel,
+                float(realized_memory["unstuck"]["drawdown"]),
             )
         )
 
@@ -15596,19 +15640,11 @@ class Passivbot:
                 symbol="",
             )
 
-        def _forager_volume_drop_pct(pside: str) -> float:
-            return Passivbot._positive_finite_warmup_value(
-                self.bot_value(pside, "forager_volume_drop_pct"),
-                context=f"forager {pside}.volume_drop_pct",
-                symbol="",
-            )
-
         required_forager_volume_spans: set[float] = set()
         required_forager_m1_lr_spans: set[float] = set()
         if bool(is_forager_mode("long")):
             if vol_span_long > 0.0 and (
-                _forager_volume_drop_pct("long") > 0.0
-                or _forager_score_weight("long", "volume") != 0.0
+                _forager_score_weight("long", "volume") != 0.0
             ):
                 required_forager_volume_spans.add(vol_span_long)
             if (
@@ -15618,8 +15654,7 @@ class Passivbot:
                 required_forager_m1_lr_spans.add(lr_span_long)
         if bool(is_forager_mode("short")):
             if vol_span_short > 0.0 and (
-                _forager_volume_drop_pct("short") > 0.0
-                or _forager_score_weight("short", "volume") != 0.0
+                _forager_score_weight("short", "volume") != 0.0
             ):
                 required_forager_volume_spans.add(vol_span_short)
             if (
@@ -17621,8 +17656,7 @@ class Passivbot:
             if not bool(is_forager_mode(pside)):
                 continue
             volume_required = volume_span > 0.0 and (
-                _forager_volume_drop_pct(pside) > 0.0
-                or _forager_score_weight(pside, "volume") != 0.0
+                _forager_score_weight(pside, "volume") != 0.0
             )
             log_range_required = (
                 log_range_span > 0.0
@@ -17817,9 +17851,9 @@ class Passivbot:
         )
 
         # Python only proves the realized-PnL inputs are safe to expose; Rust
-        # owns unstuck emission from the cumsum facts below, and duplicate
+        # owns both realized-loss consumers from their own memories below; duplicate
         # order risk rides normal live reconciliation like any other order.
-        realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        realized_memory = self._get_realized_memories()
         auto_unstuck_allowed = self._auto_unstuck_configured_live()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
@@ -17862,11 +17896,13 @@ class Passivbot:
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
                 "max_realized_loss_pct": max_realized_loss_pct,
-                "realized_pnl_cumsum_max": float(
-                    realized_pnl_cumsum.get("max", 0.0) or 0.0
+                "unstuck_realized_pnl_drawdown": (
+                    float(realized_memory["unstuck"]["drawdown"])
+                    if realized_memory["unstuck"] is not None else 0.0
                 ),
-                "realized_pnl_cumsum_last": float(
-                    realized_pnl_cumsum.get("last", 0.0) or 0.0
+                "loss_gate_realized_pnl_drawdown": (
+                    float(realized_memory["loss_gate"]["drawdown"])
+                    if realized_memory["loss_gate"] is not None else 0.0
                 ),
                 "sort_global": True,
                 "global_bot_params": global_bp,
@@ -18139,7 +18175,7 @@ class Passivbot:
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
                     allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
-                        pside, symbol, realized_pnl_cumsum
+                        pside, symbol, realized_memory
                     )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
@@ -20327,6 +20363,8 @@ class Passivbot:
 def setup_bot(config):
     """Instantiate the correct exchange bot implementation based on configuration."""
     user_info = load_user_info(require_live_value(config, "user"))
+    if user_info["exchange"] in {"defx", "paradex"}:
+        raise ValueError(f"Exchange {user_info['exchange']!r} was retired in v9")
     if user_info["exchange"] == "bybit":
         from exchanges.bybit import BybitBot
 
@@ -20360,10 +20398,6 @@ def setup_bot(config):
         from exchanges.gateio import GateIOBot
 
         bot = GateIOBot(config)
-    elif user_info["exchange"] == "defx":
-        from exchanges.defx import DefxBot
-
-        bot = DefxBot(config)
     elif user_info["exchange"] == "kucoin":
         from exchanges.kucoin import KucoinBot
 
@@ -20376,10 +20410,6 @@ def setup_bot(config):
         from exchanges.weex import WeexBot
 
         bot = WeexBot(config)
-    elif user_info["exchange"] == "paradex":
-        from exchanges.paradex import ParadexBot
-
-        bot = ParadexBot(config)
     elif user_info["exchange"] == "fake":
         from exchanges.fake import FakeBot
 
@@ -20524,7 +20554,7 @@ async def _run_live(startup_context: dict):
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

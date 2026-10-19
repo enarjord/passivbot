@@ -63,7 +63,7 @@ def _suite_context(prepared, *, label="slice", time_slice=(1, 6), indices=(2, 0)
     )
 
 
-@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+@pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 @pytest.mark.parametrize("suite", [False, True])
 @pytest.mark.parametrize(
     "changed", ["candle", "btc", "fee", "source", "ohlcv_source", "btc_source", "valid_tail", "timestamps"]

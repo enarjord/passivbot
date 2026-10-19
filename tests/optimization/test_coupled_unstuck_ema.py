@@ -33,7 +33,7 @@ def config_for(kind="trailing_martingale"):
 
 
 @pytest.mark.parametrize(
-    "kind", ["trailing_martingale", "ema_anchor", "trailing_grid_v7"]
+    "kind", ["trailing_martingale", "ema_anchor"]
 )
 def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_spans(
     kind,
@@ -95,7 +95,7 @@ def test_independent_default_and_mirror_fixed_override_order():
         "mirror_short_from_long",
     ]
     config["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.strategy.trailing_martingale.ema_span_0": 61.25,
+        "bot.long.strategy.trailing_martingale.entry.ema_span_0": 61.25,
         "bot.short.unstuck.ema_span_0": 1.5,
     }
     candidate = _finalize_optimizer_vector_config(deepcopy(config))
@@ -113,7 +113,7 @@ def test_coupling_materializes_scenario_dependencies_for_plain_saved_suite_repla
         {
             "label": "alternate",
             "overrides": {
-                "bot.long.strategy.trailing_martingale.ema_span_0": 301.25,
+                "bot.long.strategy.trailing_martingale.entry.ema_span_0": 301.25,
                 "bot.long.unstuck.ema_span_0": 3.0,
                 "coin_overrides.BTC.bot.long.unstuck.ema_span_0": 5.0,
             },
@@ -144,7 +144,7 @@ def test_coupling_contract_ignores_derived_coin_values_but_tracks_mode_and_sourc
     ] = 501.25
     assert build_evaluation_contract(config) == first
     config["coin_overrides"]["BTC"]["bot"]["long"]["strategy"] = {
-        "trailing_martingale": {"ema_span_0": 71.5}
+        "trailing_martingale": {"entry": {"ema_span_0": 71.5}}
     }
     assert build_evaluation_contract(config) != first
     config["optimize"]["enable_overrides"] = []
@@ -152,20 +152,79 @@ def test_coupling_contract_ignores_derived_coin_values_but_tracks_mode_and_sourc
 
 
 @pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("single", [True, False])
+def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
+    from optimize import _resume_config_mismatches
+    from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
+
+    config = config_for(kind)
+    strategy_path = f"strategy.{kind}" + (".entry" if kind == "trailing_martingale" else "")
+    strategy = {"ema_span_0": 71.5}
+    if kind == "trailing_martingale":
+        strategy = {"entry": strategy}
+    config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"strategy": {kind: strategy}}}},
+        "ETH": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}},
+    }
+    config["backtest"].update(suite_enabled=True, scenarios=[
+        {"label": "base", "coins": ["BTC", "ETH"], "start_date": "2024-01-01"},
+        {"label": "alternate", "overrides": {
+            f"bot.long.{strategy_path}.ema_span_1": 301.25,
+            "coin_overrides.ETH.bot.long.unstuck.close_pct": 0.075,
+        }},
+    ])
+    saved = deepcopy(config)
+    spans = saved["bot"]["long"]["strategy"][kind]
+    if kind == "trailing_martingale":
+        spans = spans["entry"]
+    spans["ema_span_0"] = 20.0
+    entry = clean_config(_finalize_optimizer_vector_config(saved))
+    entry["suite_metrics"] = {"scenario_labels": ["base", "alternate"]}
+    entry[CONTRACT_KEY] = build_evaluation_contract(config)
+    before = deepcopy(config)
+    assert entry["backtest"]["scenarios"] != config["backtest"]["scenarios"]
+    assert _resume_config_mismatches(entry, config) == []
+    assert config == before
+
+    changes = [
+        (0, "coins", ["BTC"]),
+        (0, "start_date", "2024-01-02"),
+        (1, "overrides", {f"bot.long.{strategy_path}.ema_span_1": 401.25}),
+        (1, "overrides", {f"coin_overrides.BTC.bot.long.{strategy_path}.ema_span_0": 80.5}),
+        (1, "overrides", {"coin_overrides.ETH.bot.long.unstuck.close_pct": 0.08}),
+    ]
+    for index, key, value in changes:
+        changed = deepcopy(config)
+        if key == "overrides":
+            changed["backtest"]["scenarios"][index][key].update(value)
+        else:
+            changed["backtest"]["scenarios"][index][key] = value
+        assert any("backtest.scenarios" in item
+                   for item in _resume_config_mismatches(entry, changed))
+
+    corrupted = deepcopy(entry)
+    corrupted["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.ema_span_0"] = 99.0
+    assert any("backtest.scenarios" in item
+               for item in _resume_config_mismatches(corrupted, config))
+    changed = deepcopy(config)
+    changed["optimize"]["enable_overrides"] = []
+    assert any("enable_overrides" in item
+               for item in _resume_config_mismatches(entry, changed))
+
+
+@pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
 def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
-    kind, single
+    kind
 ):
     from optimization.gpu import model, service
 
-    cls = service.MpsSingleCoinProxy if single else service.MpsMulticoinProxy
+    cls = service.SharedAccountReplay
     proxy = cls.__new__(cls)
     proxy.hsl_signal_mode = "coin"
 
     prefix = "EMA_ANCHOR" if kind == "ema_anchor" else "TRAILING_MARTINGALE"
     keys = getattr(
         model,
-        prefix + ("_SINGLE_COIN_PARAM_KEYS" if single else "_MULTICOIN_PARAM_KEYS"),
+        prefix + "_MULTICOIN_PARAM_KEYS",
     )
     proxy.param_keys = keys
     proxy.sides = ["long", "short"]
@@ -181,12 +240,8 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
             "long_unstuck_ema_span_1": 9.0,
         }
     ]
-    matrix = (
-        proxy._parameter_matrix(candidates)
-        if single
-        else proxy._parameter_matrix(candidates, side="long")
-    )
-    assert matrix[0, keys.index("unstuck_ema_span_0")] == (71.5 if single else 17.25)
+    matrix = proxy._parameter_matrix(candidates, side="long")
+    assert matrix[0, keys.index("unstuck_ema_span_0")] == 17.25
     assert matrix[0, keys.index("unstuck_ema_span_1")] == 211.75
 
 
@@ -195,7 +250,7 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
 def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pinned(
     kind, side
 ):
-    from optimization.gpu import model, service
+    from optimization.gpu import model
 
     prefix = "EMA_ANCHOR" if kind == "ema_anchor" else "TRAILING_MARTINGALE"
     strategy_keys = (
@@ -228,6 +283,8 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
         backtest_params={
             "coins": ["BTC"],
             "dynamic_wel_by_tradability": True,
+            "unstuck_memory_ema_span_minutes": config["bot"]["unstuck"]["memory_ema_span_minutes"],
+            "loss_gate_memory_ema_span_minutes": config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"],
             "equity_hard_stop_loss": {
                 "engine": "hsl",
                 "mode": "coin",
@@ -245,12 +302,10 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
             }
         ],
     )
-    build = (
-        service._build_multicoin_ema_coin_overrides
-        if kind == "ema_anchor"
-        else service._build_multicoin_tm_coin_overrides
-    )
-    matrix, _ = build(
+    from optimization.gpu.coin_parameters import build_coin_override_parameters
+
+    matrix, _ = build_coin_override_parameters(
+        strategy_kind=kind,
         config=config,
         mss={"BTC": {}},
         exchange="bybit",
@@ -298,7 +353,8 @@ def test_anchored_search_derives_spans_from_selected_anchor_and_tunable_strategy
         "ema_span_0"
     ] = 401.75
     install_anchored_fine_tune_plan(
-        config, ["long.ema_span_1"], "<memory>", starting_configs_override=anchors
+        config, ["bot.long.strategy.trailing_martingale.entry.ema_span_1"],
+        "<memory>", starting_configs_override=anchors
     )
     shape = build_optimization_shape(config)
     assert [key for key, _ in shape.key_paths] == ["__anchor_id__", "long_ema_span_1"]
@@ -319,7 +375,7 @@ def test_exact_suite_finalization_couples_after_context_overrides_without_mutati
     ctx = SimpleNamespace(
         config=deepcopy(config),
         overrides={
-            "bot.long.strategy.trailing_martingale.ema_span_0": 401.5,
+            "bot.long.strategy.trailing_martingale.entry.ema_span_0": 401.5,
             "bot.long.unstuck.ema_span_0": 4.5,
         },
     )
@@ -353,10 +409,9 @@ def test_scenario_override_file_is_resolved_before_materializing_coupled_spans(
     import json
 
     config = config_for()
-    file_config = clean_config(config)
-    file_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
-        ema_span_0=71.25, ema_span_1=99.5
-    )
+    file_config = {"bot": {"long": {"strategy": {"trailing_martingale": {
+        "entry": {"ema_span_0": 71.25, "ema_span_1": 99.5},
+    }}}}}
     path = tmp_path / "coin.json"
     path.write_text(json.dumps(file_config))
     config["backtest"]["scenarios"] = [
@@ -369,7 +424,7 @@ def test_scenario_override_file_is_resolved_before_materializing_coupled_spans(
                         "bot": {
                             "long": {
                                 "strategy": {
-                                    "trailing_martingale": {"ema_span_1": 211.5}
+                                    "trailing_martingale": {"entry": {"ema_span_1": 211.5}}
                                 }
                             }
                         },
@@ -389,7 +444,7 @@ def test_coupled_saved_scenario_preserves_explicit_coin_override_clear():
     config = config_for()
     config["coin_overrides"] = {
         "BTC": {
-            "bot": {"long": {"strategy": {"trailing_martingale": {"ema_span_0": 71.5}}}}
+            "bot": {"long": {"strategy": {"trailing_martingale": {"entry": {"ema_span_0": 71.5}}}}}
         }
     }
     config["backtest"]["scenarios"] = [
@@ -408,20 +463,20 @@ def test_coupled_saved_scenario_preserves_explicit_coin_override_clear():
         {
             "bot": {
                 "long": {
-                    "strategy": {"trailing_martingale": {"ema_span_0": 71.25}},
+                    "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 71.25}}},
                     "unstuck": {"ema_span_0": 3.0},
                 }
             }
         },
-        {"long.ema_span_0": 71.25, "long.unstuck_ema_span_0": 3.0},
-        {"bot.long.ema_span_0": 71.25, "bot.long.unstuck_ema_span_0": 3.0},
+        {"bot.long.strategy.trailing_martingale.entry.ema_span_0": 71.25,
+         "bot.long.unstuck.ema_span_0": 3.0},
     ],
 )
-def test_coupled_saved_scenarios_normalize_nested_and_legacy_aliases(overrides):
+def test_coupled_saved_scenarios_preserve_nested_and_dotted_canonical_paths(overrides):
     import json
 
     config = config_for()
-    config["backtest"]["scenarios"] = [{"label": "legacy", "overrides": overrides}]
+    config["backtest"]["scenarios"] = [{"label": "canonical", "overrides": overrides}]
     candidate = _finalize_optimizer_vector_config(config)
     saved = json.loads(json.dumps(clean_config(candidate), sort_keys=True))
     saved["optimize"]["enable_overrides"] = []
@@ -431,3 +486,145 @@ def test_coupled_saved_scenarios_normalize_nested_and_legacy_aliases(overrides):
         == 71.25
     )
     assert saved["bot"]["long"]["unstuck"]["ema_span_0"] == 71.25
+
+
+@pytest.mark.parametrize("path", [
+    "long.ema_span_0",
+    "bot.long.ema_span_0",
+    "bot.long.strategy.trailing_martingale.ema_span_0",
+])
+def test_coupled_scenario_rejects_retired_authored_strategy_paths(path):
+    config = clean_config(config_for())
+    config["backtest"]["scenarios"] = [{"label": "retired", "overrides": {path: 71.25}}]
+    with pytest.raises(ValueError, match="unknown|canonical"):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_finalization_keeps_file_coupling_and_repeated_candidates_canonical(tmp_path, kind):
+    import json
+    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+
+    config = config_for(kind)
+    strategy_suffix = f"strategy.{kind}" + (".entry" if kind == "trailing_martingale" else "")
+    file_strategy = {"ema_span_0": 71.25, "ema_span_1": 99.5}
+    inline_strategy = {"ema_span_1": 211.5}
+    if kind == "trailing_martingale":
+        file_strategy = {"entry": file_strategy}
+        inline_strategy = {"entry": inline_strategy}
+    path = tmp_path / "canonical-coin.json"
+    path.write_text(json.dumps({"bot": {"long": {
+        "strategy": {kind: file_strategy},
+        "entry_cooldown": {"base_duration_minutes": 3.5},
+        "unstuck": {"ema_span_0": 4.5},
+    }}}))
+    source_bytes = path.read_bytes()
+    config["coin_overrides"] = {"BTC": {
+        "override_config_path": str(path),
+        "bot": {"long": {"strategy": {kind: inline_strategy}}},
+    }}
+    config["bot"]["long"]["forager"]["score_weights"] = {
+        "volume": 1, "ema_readiness": 3, "volatility": 0, "unilateralness": 0,
+    }
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long", "couple_unstuck_ema_spans"]
+    config["optimize"]["fixed_runtime_overrides"][f"bot.long.{strategy_suffix}.ema_span_0"] = 31.25
+    config["backtest"]["scenarios"] = [{"label": "canonical", "overrides": {
+        f"bot.long.{strategy_suffix}.ema_span_1": 301.25,
+        f"coin_overrides.BTC.bot.long.{strategy_suffix}.ema_span_0": 81.25,
+    }}]
+    before = deepcopy(config)
+    candidate = _finalize_optimizer_vector_config(deepcopy(config))
+    assert config == before and path.read_bytes() == source_bytes
+    for side in ("long", "short"):
+        assert candidate["bot"][side]["unstuck"]["ema_span_0"] == 31.25
+        assert not (set(candidate["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH))
+        assert candidate["bot"][side]["forager"]["score_weights"] == {
+            "volume": .25, "ema_readiness": .75, "volatility": 0.0, "unilateralness": 0.0,
+        }
+    patch = candidate["coin_overrides"]["BTC"]
+    assert "override_config_path" not in patch
+    assert patch["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 3.5
+    assert patch["bot"]["long"]["unstuck"]["ema_span_0"] == 71.25
+    assert patch["bot"]["long"]["unstuck"]["ema_span_1"] == 211.5
+    scenario = candidate["backtest"]["scenarios"][0]["overrides"]
+    assert scenario["bot.long.unstuck.ema_span_1"] == 301.25
+    assert scenario["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0"] == 81.25
+    assert scenario["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_1"] == 211.5
+    saved = clean_config(candidate)
+    repeated = _finalize_optimizer_vector_config(deepcopy(candidate))
+    assert clean_config(repeated) == saved
+    for side in ("long", "short"):
+        assert not (set(repeated["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH))
+    assert path.read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("anchored", [False, True])
+def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind, anchored):
+    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+    from optimize import install_anchored_fine_tune_plan
+
+    config = config_for(kind)
+    config["optimize"]["enable_overrides"] = [
+        "mirror_short_from_long", "couple_unstuck_ema_spans",
+    ]
+    config["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.1, 0.5, 0.01]
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.hsl.cooldown_minutes_after_red": 1.0,
+    }
+    config["bot"]["long"]["forager"]["score_weights"] = {
+        "volume": 1.0, "ema_readiness": 3.0, "volatility": 0.0, "unilateralness": 0.0,
+    }
+    vector = [0.35]
+    if anchored:
+        install_anchored_fine_tune_plan(
+            config, ["bot.long.hsl.red_threshold"], "<memory>",
+            starting_configs_override=[deepcopy(config)],
+        )
+        vector = [0.0, *vector]
+    # Derived aliases can survive in internal templates after authored ingestion.
+    for side in ("long", "short"):
+        config["bot"][side]["hsl_red_threshold"] = 0.15
+        config["bot"][side]["hsl_cooldown_minutes_after_red"] = 0.3
+        config["bot"][side]["forager_score_weights"] = {
+            "volume": 0.9, "ema_readiness": 0.05, "volatility": 0.05,
+        }
+    before = deepcopy(config)
+
+    candidate = build_optimizer_vector_config(
+        vector, config,
+        key_paths=[("long_hsl_red_threshold", ("bot", "long", "hsl", "red_threshold"))],
+    )
+
+    assert config == before
+    for side in ("long", "short"):
+        assert candidate["bot"][side]["hsl"]["red_threshold"] == pytest.approx(0.35)
+        assert candidate["bot"][side]["hsl"]["cooldown_minutes_after_red"] == 1.0
+        assert candidate["bot"][side]["forager"]["score_weights"] == {
+            "volume": 0.25, "ema_readiness": 0.75, "volatility": 0.0, "unilateralness": 0.0,
+        }
+        assert not (set(candidate["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH))
+    assert _finalize_optimizer_vector_config(deepcopy(candidate)) == candidate
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("origin", ["root", "external"])
+def test_authored_shared_aliases_remain_rejected_before_optimizer_finalization(tmp_path, kind, origin):
+    import json
+
+    config = clean_config(config_for(kind))
+    if origin == "root":
+        config["bot"]["long"]["n_positions"] = 2
+        error = r"bot\.long\.n_positions is retired"
+    else:
+        path = tmp_path / "retired-coin.json"
+        path.write_text(json.dumps({"bot": {"long": {"n_positions": 2}}}))
+        source_bytes = path.read_bytes()
+        config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
+        error = r"coin_overrides\.BTC\.override_config_path.*bot\.long\.n_positions is retired"
+    before = deepcopy(config)
+    with pytest.raises(ValueError, match=error):
+        parse_overrides(prepare_config(config, verbose=False), verbose=False)
+    assert config == before
+    if origin == "external":
+        assert path.read_bytes() == source_bytes

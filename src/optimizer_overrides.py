@@ -5,16 +5,12 @@ from config.access import require_config_value
 from config.shared_bot import BOT_SHARED_GROUPS
 from config.strategy import DEFAULT_STRATEGY_KIND, normalize_strategy_kind
 
-TRAILING_GRID_V7_STRATEGY_KIND = "trailing_grid_v7"
-
 COUPLED_UNSTUCK_EMA_BOUND_KEYS = frozenset(
     f"{side}_unstuck_ema_span_{i}" for side in ("long", "short") for i in (0, 1)
 )
 
 KNOWN_OPTIMIZER_OVERRIDES = frozenset(
     {
-        "backward_tp_grid",
-        "forward_tp_grid",
         "lossless_close_trailing",
         "mirror_short_from_long",
         "couple_unstuck_ema_spans",
@@ -166,43 +162,6 @@ def _require_trailing_martingale_side(config, pside):
     return strategy_cfg
 
 
-def _require_trailing_grid_v7_side(config, pside):
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    if strategy_kind != TRAILING_GRID_V7_STRATEGY_KIND:
-        raise ValueError(
-            "optimizer override requires live.strategy_kind = "
-            f"{TRAILING_GRID_V7_STRATEGY_KIND!r}; got {strategy_kind!r}"
-        )
-    strategy_cfg = require_config_value(
-        config,
-        f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND}",
-    )
-    if not isinstance(strategy_cfg, dict):
-        raise TypeError(
-            f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND} must be a dict; "
-            f"got {type(strategy_cfg).__name__}"
-        )
-    return strategy_cfg
-
-
-def _set_trailing_grid_v7_tp_grid_order(config, pside, *, forward: bool):
-    strategy_cfg = _require_trailing_grid_v7_side(config, pside)
-    start = require_config_value(
-        config,
-        f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND}.close.grid_markup_start",
-    )
-    end = require_config_value(
-        config,
-        f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND}.close.grid_markup_end",
-    )
-    lower = min(start, end)
-    upper = max(start, end)
-    close_cfg = strategy_cfg.setdefault("close", {})
-    close_cfg["grid_markup_start"] = lower if forward else upper
-    close_cfg["grid_markup_end"] = upper if forward else lower
-    return config
-
-
 def optimizer_overrides(overrides_list, config, pside=None):
     if not overrides_list:
         # No overrides to apply
@@ -233,11 +192,5 @@ def optimizer_overrides(overrides_list, config, pside=None):
                 f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.retracement_base_pct",
             )
             strategy_cfg.setdefault("close", {})["threshold_base_pct"] = max(threshold, retracement)
-
-        elif override == "forward_tp_grid":
-            config = _set_trailing_grid_v7_tp_grid_order(config, pside, forward=True)
-
-        elif override == "backward_tp_grid":
-            config = _set_trailing_grid_v7_tp_grid_order(config, pside, forward=False)
 
     return config

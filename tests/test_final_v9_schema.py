@@ -1,0 +1,513 @@
+"""Final-v9 loading is strict; released-v8 conversion is explicit and reported."""
+
+from copy import deepcopy
+import json
+
+import pytest
+
+from config import prepare_config
+from config.overrides import parse_overrides
+from config.parse import load_raw_config
+from config.risk_memory import risk_bootstrap_horizon_minutes, risk_memory_spans
+from config.schema import get_template_config
+from tools.migrate_config_v9 import main, migrate
+
+
+def v8_config():
+    config = get_template_config()
+    config["config_version"] = "v8.6.0"
+    bot, live = config["bot"], config["live"]
+    live["hsl_signal_mode"] = bot.pop("risk")["hsl"]["scope"]
+    live["max_realized_loss_pct"] = 1.0
+    live["auto_gs"] = live.pop("disapproved_position_mode") == "graceful_stop"
+    live["pnls_max_lookback_days"] = 30.0
+    bot.pop("unstuck")
+    backtest = config["backtest"]
+    backtest["liquidation_threshold"] = backtest.pop("equity_floor_ratio")
+    for side in ("long", "short"):
+        policy = bot[side]["hsl"]
+        policy["ema_span_minutes"] = policy.pop("drawdown_ratio_ema_span_minutes")
+        policy.pop("memory_ema_span_minutes")
+        policy["restart_after_red_policy"] = "always"
+        risk = bot[side]["risk"]
+        risk["n_positions"] = risk.pop("max_positions")
+        risk["total_exposure_entry_gate_enabled"] = True
+        local = bot[side]["unstuck"]
+        local["threshold"] = local.pop("exposure_trigger_ratio")
+        bot[side]["forager"]["volume_drop_pct"] = 0.25
+        bounds = config["optimize"]["bounds"][side]
+        bounds["risk"]["n_positions"] = bounds["risk"].pop("max_positions")
+        bounds["unstuck"]["threshold"] = bounds["unstuck"].pop("exposure_trigger_ratio")
+        bounds["hsl"]["ema_span_minutes"] = bounds["hsl"].pop("drawdown_ratio_ema_span_minutes")
+        bounds["forager"]["volume_drop_pct"] = [0.1, 0.5]
+    return config
+
+
+def test_canonical_defaults_and_sparse_defaults_load():
+    complete = prepare_config(get_template_config(), verbose=False)
+    sparse = prepare_config({"config_version": "v9.0.0", "bot": {}, "live": {}}, verbose=False)
+    assert complete["bot"]["risk"]["hsl"] == {"scope": "coin"}
+    assert sparse["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert sparse["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert complete["live"]["disapproved_position_mode"] == "graceful_stop"
+
+
+@pytest.mark.parametrize("path", [
+    ("typo",), ("live", "unknown"), ("bot", "long", "risk", "maximum_positions"),
+    ("bot", "long", "strategy", "trailing_martingale", "entry", "wrong_span"),
+    ("optimize", "bounds", "long", "risk", "wrong_limit"),
+])
+def test_unknown_authored_fields_fail_before_pruning(path):
+    config = get_template_config()
+    target = config
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = 1.0
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("section,key,value", [
+    ("live", "hsl_signal_mode", "coin"), ("live", "lookback_ema_span_minutes", 60.0),
+    ("live", "auto_gs", True), ("backtest", "liquidation_threshold", 0.05),
+])
+def test_retired_names_cannot_be_smuggled_into_final_schema(section, key, value):
+    config = get_template_config()
+    config[section][key] = value
+    with pytest.raises(ValueError, match="final canonical"):
+        prepare_config(config, verbose=False)
+
+
+def test_conflicting_json_members_are_rejected_before_mapping_overwrite(tmp_path):
+    path = tmp_path / "duplicate.json"
+    path.write_text('{"config_version":"v9.0.0","live":{"leverage":1,"leverage":2}}')
+    with pytest.raises(ValueError, match="defined more than once"):
+        load_raw_config(str(path), log_errors=False)
+
+
+def test_nested_and_dotted_patch_conflict_is_rejected():
+    config = get_template_config()
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "live": {"leverage": 1}, "live.leverage": 2,
+    }
+    with pytest.raises(ValueError, match="defined more than once"):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("owner", ["scenario", "fixed_runtime"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("same_value", [False, True])
+def test_authored_object_and_descendant_authority_rejects_in_both_orders(owner, reverse, same_value):
+    config = get_template_config()
+    risk = deepcopy(config["bot"]["long"]["risk"])
+    risk["max_positions"] = 2
+    entries = [("bot.long.risk", risk),
+               ("bot.long.risk.max_positions", 2 if same_value else 3)]
+    patch = dict(reversed(entries) if reverse else entries)
+    if owner == "scenario":
+        config["backtest"]["scenarios"] = [{"label": "overlap", "overrides": patch}]
+    else:
+        config["optimize"]["fixed_runtime_overrides"] = patch
+    original = deepcopy(config)
+    with pytest.raises(ValueError, match="overlapping configuration paths"):
+        prepare_config(config, verbose=False)
+    assert config == original
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_authored_patch_accepts_one_object_or_distinct_canonical_siblings(structured):
+    config = get_template_config()
+    risk = deepcopy(config["bot"]["long"]["risk"])
+    risk.update(max_positions=2, total_wallet_exposure_limit=1.25)
+    patch = ({"bot.long.risk": risk} if structured else {
+        "bot.long.risk.max_positions": 2,
+        "bot.long.risk.total_wallet_exposure_limit": 1.25,
+    })
+    config["backtest"]["scenarios"] = [{"label": "canonical", "overrides": patch}]
+    prepared = prepare_config(config, verbose=False)
+    assert prepared["backtest"]["scenarios"][0]["overrides"] == patch
+
+
+def test_coin_hsl_span_and_budget_scaling_override_are_local():
+    config = get_template_config()
+    config["coin_overrides"] = {"BTC": {"bot": {"long": {"hsl": {
+        "memory_ema_span_minutes": 19.5, "scale_budget_with_excess_allowance": True,
+    }}}}}
+    result = parse_overrides(prepare_config(config, verbose=False), verbose=False)
+    policy = result["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]
+    assert policy["memory_ema_span_minutes"] == 19.5
+    assert policy["scale_budget_with_excess_allowance"] is True
+    assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 43200.0
+
+
+@pytest.mark.parametrize("patch", [
+    {"bot": {"long": {"risk": {"max_positions": 2}}}},
+    {"bot": {"long": {"risk": {"total_wallet_exposure_limit": 2.0}}}},
+    {"bot": {"unstuck": {"memory_ema_span_minutes": 1.0}}},
+    {"bot": {"risk": {"loss_gate": {"max_drawdown_ratio": 0.2}}}},
+])
+def test_aggregate_controls_cannot_be_coin_overridden(patch):
+    config = get_template_config()
+    config["coin_overrides"] = {"BTC": patch}
+    with pytest.raises(ValueError, match="not overridable"):
+        prepare_config(config, verbose=False)
+
+
+def test_new_memory_dimensions_default_fixed_at_effective_config_values():
+    config = get_template_config()
+    config["bot"]["unstuck"]["memory_ema_span_minutes"] = 71.5
+    config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 83.5
+    config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 19.5
+    result = prepare_config(config, verbose=False)
+    bounds = result["optimize"]["bounds"]
+    assert bounds["unstuck"]["memory_ema_span_minutes"] == [71.5, 71.5]
+    assert bounds["risk"]["loss_gate"]["memory_ema_span_minutes"] == [83.5, 83.5]
+    assert bounds["long"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
+
+
+def test_independent_gate_only_memory_contributes_to_bootstrap():
+    config = get_template_config()
+    for side in ("long", "short"):
+        config["bot"][side]["unstuck"]["enabled"] = False
+    config["bot"]["risk"]["loss_gate"].update(max_drawdown_ratio=0.1, memory_ema_span_minutes=17.5)
+    config = prepare_config(config, verbose=False)
+    assert risk_memory_spans(config) == (17.5,)
+    assert risk_bootstrap_horizon_minutes(config) == (87.5, False)
+
+
+def test_explicit_v8_conversion_reports_renames_and_independent_memories():
+    source = v8_config()
+    before = deepcopy(source)
+    result = migrate(source, memory_span_minutes=123.5)
+    assert source == before
+    bot = result.config["bot"]
+    assert bot["long"]["risk"]["max_positions"] == 7
+    assert bot["long"]["hsl"]["memory_ema_span_minutes"] == 123.5
+    assert bot["short"]["hsl"]["memory_ema_span_minutes"] == 123.5
+    assert bot["unstuck"]["memory_ema_span_minutes"] == 123.5
+    assert bot["risk"]["loss_gate"]["memory_ema_span_minutes"] == 123.5
+    assert "volume_drop_pct" not in json.dumps(result.config)
+    assert any("volume_drop_pct" in change["path"] for change in result.changes)
+    assert migrate(result.config).changes == []
+
+
+@pytest.mark.parametrize("window", [-1.0, 0.0, 90.0])
+def test_legacy_gate_windows_require_ack_and_are_never_converted_as_spans(window):
+    source = v8_config()
+    source["live"].update(max_realized_loss_pct=0.1, realized_loss_gate_lookback_minutes=window)
+    with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+        migrate(source, memory_span_minutes=123.5)
+    result = migrate(source, memory_span_minutes=123.5,
+                     acknowledge_realized_loss_gate_memory_change=True)
+    assert result.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == 123.5
+    assert any(change["old"] == window and "retired rolling gate window" in change["reason"]
+               for change in result.changes)
+
+
+def test_explicit_converter_rejects_conflicting_renamed_values():
+    source = v8_config()
+    source["bot"]["long"]["risk"]["max_positions"] = 99
+    with pytest.raises(ValueError, match="conflicts"):
+        migrate(source, memory_span_minutes=123.5)
+
+
+def test_converter_explicit_independent_span_choices_do_not_widen_search():
+    result = migrate(v8_config(), memory_span_minutes=123.5, memory_span_choices={
+        "bot.unstuck.memory_ema_span_minutes": 71.5,
+        "bot.risk.loss_gate.memory_ema_span_minutes": 83.5,
+        "bot.long.hsl.memory_ema_span_minutes": 19.5,
+    })
+    assert result.config["bot"]["short"]["hsl"]["memory_ema_span_minutes"] == 123.5
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 71.5
+    assert result.config["optimize"]["bounds"]["long"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
+
+
+def test_portfolio_memory_and_smoothing_are_separate_from_scope():
+    config = get_template_config()
+    policy = deepcopy(config["bot"]["long"]["hsl"])
+    policy.update(scope="portfolio", memory_ema_span_minutes=17.5,
+                  drawdown_ratio_ema_span_minutes=9.5, enabled=True)
+    config["bot"]["risk"]["hsl"] = policy
+    for side in ("long", "short"):
+        config["optimize"]["bounds"][side].pop("hsl")
+    result = prepare_config(config, verbose=False)
+    assert result["bot"]["risk"]["hsl"] == policy
+    assert result["optimize"]["bounds"]["risk"]["hsl"]["memory_ema_span_minutes"] == [17.5, 17.5]
+
+
+def test_referenced_coin_patch_unknowns_fail_during_prepare(tmp_path):
+    path = tmp_path / "coin.json"
+    path.write_text(json.dumps({"bot": {"long": {"hsl": {"wrong_memory": 4.0}}}}))
+    config = get_template_config()
+    config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
+    with pytest.raises(
+        ValueError,
+        match=r"config\.bot\.long\.hsl\.wrong_memory is an unknown configuration field",
+    ):
+        prepare_config(config, verbose=False)
+
+
+def test_scenario_retired_gate_control_is_converted_and_acknowledged():
+    source = v8_config()
+    source["backtest"]["scenarios"] = [{"label": "gate", "overrides": {
+        "live.max_realized_loss_pct": 0.1, "live.realized_loss_gate_lookback_minutes": -1,
+    }}]
+    with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+        migrate(source, memory_span_minutes=123.5)
+    result = migrate(source, memory_span_minutes=123.5,
+                     acknowledge_realized_loss_gate_memory_change=True)
+    assert result.config["backtest"]["scenarios"][0]["overrides"] == {
+        "bot.risk.loss_gate.max_drawdown_ratio": 0.1,
+    }
+
+
+def test_migration_cli_writes_private_report_without_modifying_source(tmp_path):
+    source, output, report = (tmp_path / name for name in ("v8.json", "v9.json", "report.json"))
+    config = v8_config()
+    config["backtest"].update(start_date="2020-01-02", end_date="2020-03-04",
+                              maker_fee_override=0.00017, taker_fee_override=0.00029)
+    config["backtest"]["scenarios"] = [{"label": "chosen", "coins": ["BTC", "ETH"]}]
+    source.write_text(json.dumps(config))
+    original = source.read_bytes()
+    assert main([str(source), str(output), "--lookback-ema-span-minutes", "123.5",
+                 "--report", str(report)]) == 0
+    assert source.read_bytes() == original
+    converted = json.loads(output.read_text())
+    for key in ("start_date", "end_date", "maker_fee_override", "taker_fee_override", "scenarios"):
+        assert converted["backtest"][key] == config["backtest"][key]
+    assert report.stat().st_mode & 0o777 == 0o600
+    assert json.loads(report.read_text())["target_version"] == "v9.0.0"
+
+
+def test_invalid_intermediate_schema_never_creates_migration_output(tmp_path):
+    source, output = tmp_path / "intermediate.json", tmp_path / "output.json"
+    source.write_text(json.dumps({**get_template_config(), "config_version": "v9.1.0"}))
+    with pytest.raises(SystemExit):
+        main([str(source), str(output), "--lookback-ema-span-minutes", "123.5"])
+    assert not output.exists()
+
+
+def test_coin_only_unstuck_enablement_requires_global_memory_history():
+    config = get_template_config()
+    for side in ("long", "short"):
+        config["bot"][side]["unstuck"]["enabled"] = False
+    config["bot"]["unstuck"]["memory_ema_span_minutes"] = 71.5
+    config["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"enabled": True}}}}}
+    config = prepare_config(config, verbose=False)
+    assert risk_memory_spans(config) == (71.5,)
+    assert risk_bootstrap_horizon_minutes(config) == (357.5, False)
+
+
+def test_local_wallet_limit_is_validated_without_inventing_a_global_field(tmp_path):
+    config = get_template_config()
+    path = tmp_path / "coin.json"
+    path.write_text(json.dumps({"bot": {"long": {"wallet_exposure_limit": 0.12}}}))
+    config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
+    parsed = parse_overrides(prepare_config(config, verbose=False), verbose=False)
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["wallet_exposure_limit"] == 0.12
+    assert "wallet_exposure_limit" not in parsed["bot"]["long"]
+
+
+def test_explicit_file_conversion_preserves_sparse_override_inheritance(tmp_path):
+    config = v8_config()
+    path = tmp_path / "coin.json"
+    path.write_text(json.dumps({"bot": {"long": {"unstuck": {"close_pct": 0.02}}}}))
+    config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
+    result = migrate(config, memory_span_minutes=123.5, base_config_path=str(tmp_path / "base.json"))
+    assert result.config["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"close_pct": 0.02}}}}
+
+
+def test_released_pymoo_fallback_is_explicitly_materialized():
+    config = v8_config()
+    config["optimize"]["pymoo"]["shared"].pop("crossover_eta")
+    config["optimize"]["crossover_eta"] = 31.5
+    result = migrate(config, memory_span_minutes=123.5)
+    assert result.config["optimize"]["pymoo"]["shared"]["crossover_eta"] == 31.5
+    assert "crossover_eta" not in result.config["optimize"]
+    assert any("effective released pymoo fallback" in item["reason"] for item in result.changes)
+
+
+def test_deap_retirement_requires_separate_search_acknowledgment():
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_probability=0.3)
+    with pytest.raises(ValueError, match="acknowledge-search-backend-change"):
+        migrate(config, memory_span_minutes=123.5)
+    result = migrate(config, memory_span_minutes=123.5, acknowledge_search_backend_change=True)
+    assert result.config["optimize"]["backend"] == "pymoo"
+    assert any(item["path"] == "optimize.mutation_probability" and item["old"] == 0.3
+               for item in result.changes)
+
+
+def test_weighted_metric_retirement_requires_choice_and_distinct_formula_ack():
+    config = v8_config()
+    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq_w", "goal": "max"}]
+    config["backtest"]["visible_metrics"] = ["adg_strategy_eq_w"]
+    with pytest.raises(ValueError, match="metric-replacement"):
+        migrate(config, memory_span_minutes=123.5)
+    choices = {"adg_strategy_eq_w": "adg_strategy_eq"}
+    with pytest.raises(ValueError, match="acknowledge-metric-formula-change"):
+        migrate(config, memory_span_minutes=123.5, metric_replacements=choices)
+    result = migrate(config, memory_span_minutes=123.5, metric_replacements=choices,
+                     acknowledge_metric_formula_change=True)
+    assert result.config["optimize"]["scoring"] == [{"metric": "adg_strategy_eq", "goal": "max"}]
+    assert result.config["backtest"]["visible_metrics"] == ["adg_strategy_eq"]
+
+
+@pytest.mark.parametrize("key", ["crossover_eta", "crossover_probability", "mutation_eta",
+                                 "mutation_indpb", "mutation_probability", "offspring_multiplier"])
+def test_retired_search_controls_are_not_normal_runtime_fields(key):
+    config = get_template_config()
+    config["optimize"][key] = 1.0
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        prepare_config(config, verbose=False)
+
+
+def test_invalid_authored_constraint_is_not_replaced_by_default_limits():
+    config = get_template_config()
+    config["optimize"]["limits"] = [{"metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than", "value": "invalid"}]
+    with pytest.raises(ValueError, match="numeric"):
+        prepare_config(config, verbose=False)
+
+
+def test_v8_legacy_limits_are_explicitly_converted_and_reported():
+    config = v8_config()
+    config["optimize"]["limits"] = {"penalize_if_greater_than_drawdown_worst_strategy_eq": 0.7}
+    result = migrate(config, memory_span_minutes=123.5)
+    assert result.config["optimize"]["limits"] == [{"metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than", "value": 0.7}]
+    assert any(item["path"] == "optimize.limits" for item in result.changes)
+
+
+def test_inactive_retired_strategy_subtree_is_reported_without_substitution():
+    config = v8_config()
+    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0": 17.5}
+    result = migrate(config, memory_span_minutes=123.5)
+    assert "trailing_grid_v7" not in result.config["bot"]["long"]["strategy"]
+    assert any("inactive retired strategy" in item["reason"] for item in result.changes)
+
+
+def test_active_retired_strategy_requires_explicit_replacement():
+    config = v8_config()
+    config["live"]["strategy_kind"] = "trailing_grid_v7"
+    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0": 17.5}
+    with pytest.raises(ValueError, match="choose a retained strategy explicitly"):
+        migrate(config, memory_span_minutes=123.5)
+
+
+@pytest.mark.parametrize("metric", ["adg_strategy_eq_w_per_exposure_long",
+                                   "adg_w_per_exposure_short", "adg_w_usd_max"])
+def test_dependent_weighted_metric_variants_require_explicit_formula_choice(metric):
+    config = v8_config()
+    config["optimize"]["scoring"] = [{"metric": metric, "goal": "max"}]
+    with pytest.raises(ValueError, match="metric-replacement"):
+        migrate(config, memory_span_minutes=123.5)
+    result = migrate(config, memory_span_minutes=123.5,
+                     metric_replacements={metric: "adg_strategy_eq"},
+                     acknowledge_metric_formula_change=True)
+    assert result.config["optimize"]["scoring"] == [{"metric": "adg_strategy_eq", "goal": "max"}]
+
+
+def test_clean_export_preserves_explicit_global_portfolio_policy_and_fixed_span():
+    from config.hsl import generated_template
+    from config_utils import sanitize_prepared_config_for_dump
+
+    source = generated_template(get_template_config(), "portfolio")
+    source["bot"]["risk"]["hsl"].update(enabled=True, memory_ema_span_minutes=123.5,
+                                        drawdown_ratio_ema_span_minutes=7.5)
+    prepared = prepare_config(source, verbose=False)
+    exported = sanitize_prepared_config_for_dump(prepared)
+    assert exported["bot"]["risk"]["hsl"] == prepared["bot"]["risk"]["hsl"]
+    assert exported["optimize"]["bounds"]["risk"]["hsl"]["memory_ema_span_minutes"] == [123.5, 123.5]
+    loaded = prepare_config(exported, verbose=False)
+    assert loaded["bot"]["risk"]["hsl"] == prepared["bot"]["risk"]["hsl"]
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+def test_cli_independent_global_risk_controls_use_canonical_paths(command):
+    import argparse
+    from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
+
+    config = get_template_config()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    add_config_arguments(parser, project_template_config_for_cli(config, command), command=command)
+    args = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5",
+                              "--loss-gate-memory-ema-span-minutes", "23.5",
+                              "--loss-gate-max-drawdown-ratio", "0.12", "--hsl-scope", "coin"])
+    update_config_with_args(config, args)
+    assert config["bot"]["unstuck"]["memory_ema_span_minutes"] == 17.5
+    assert config["bot"]["risk"]["loss_gate"] == {"memory_ema_span_minutes": 23.5,
+                                                 "max_drawdown_ratio": 0.12}
+    assert config["bot"]["risk"]["hsl"]["scope"] == "coin"
+    for retired in ("--lookback-ema-span-minutes", "--hsl-signal-mode", "--max-realized-loss-pct"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([retired, "1"])
+
+
+@pytest.mark.parametrize("changed", [{"goal": "min"}, {"scenario": "other"}, {"reducer": "min"}])
+def test_conflicting_repeated_objectives_are_never_silently_discarded(changed):
+    source = get_template_config()
+    objective = {"metric": "adg_strategy_eq", "goal": "max"}
+    source["optimize"]["scoring"] = [objective, {**objective, **changed}]
+    with pytest.raises(ValueError, match="conflicts with another objective"):
+        prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("scoring", [
+    ["adg_strategy_eq", "drawdown_worst_strategy_eq"],
+    ["adg_strategy_eq", {"metric": "drawdown_worst_strategy_eq", "goal": "min"}],
+])
+def test_final_v9_scoring_shorthand_reaches_canonical_normalizer(scoring):
+    config = get_template_config()
+    config["optimize"]["scoring"] = deepcopy(scoring)
+    before = deepcopy(config)
+    prepared = prepare_config(config, verbose=False)
+    assert prepared["optimize"]["scoring"] == [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+    ]
+    assert config == before
+
+
+def test_public_scoring_cli_shorthand_loads_through_prepare_config():
+    import argparse
+    from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
+
+    config = get_template_config()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    allowed = add_config_arguments(
+        parser, project_template_config_for_cli(config, "optimize"), command="optimize",
+    )
+    args = parser.parse_args(["--scoring", "adg_strategy_eq,drawdown_worst_strategy_eq"])
+    update_config_with_args(config, args, allowed_keys=allowed)
+    assert prepare_config(config, verbose=False)["optimize"]["scoring"] == [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+    ]
+
+
+@pytest.mark.parametrize("metric,match", [
+    ("unknown_objective", "no default optimization goal"),
+    ("adg_strategy_eq_w", "retired"),
+])
+def test_scoring_shorthand_preserves_unknown_and_retired_metric_rejection(metric, match):
+    config = get_template_config()
+    config["optimize"]["scoring"] = [metric]
+    with pytest.raises(ValueError, match=match):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("record", [None, True, 1, 1.0, ["adg_strategy_eq"]])
+def test_scoring_shorthand_does_not_admit_other_record_types(record):
+    config = get_template_config()
+    config["optimize"]["scoring"] = [record]
+    with pytest.raises(TypeError, match="must be a dict"):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("section,key", [("optimize", "limits"), ("backtest", "scenarios")])
+def test_scoring_shorthand_does_not_relax_other_record_lists(section, key):
+    config = get_template_config()
+    config[section][key] = ["adg_strategy_eq"]
+    with pytest.raises(TypeError, match="must be a dict"):
+        prepare_config(config, verbose=False)

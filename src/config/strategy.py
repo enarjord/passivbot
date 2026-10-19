@@ -226,7 +226,6 @@ def reject_legacy_flat_strategy_fields(config: dict) -> None:
             )
 
 
-reject_trailing_grid_v7_flat_fields_for_trailing_martingale = reject_legacy_flat_strategy_fields
 
 
 def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = None) -> None:

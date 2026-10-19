@@ -68,11 +68,12 @@ fine-tune anchors: non-tuned optimizer-bound bot params are fixed from the selec
 only the fine-tune selectors are optimized. Runtime policy from the base config still wins, and
 seed/anchor values outside `optimize.bounds` are clamped with aggregated source/key logging.
 
-CPU optimizers exact-evaluate every deduplicated `--start` config. The GPU backend defaults to
-`optimize.gpu.seed_bootstrap.mode=auto`: it exact-evaluates pools of at most 128 seeds and
-proxy-screens larger pools before capped exact validation. Use `mode=exact` only when the startup
-cost of exact-evaluating the complete pool is intentional. GPU bootstrap exact work is additional
-to `optimize.iters`.
+CPU optimizers evaluate every deduplicated `--start` config with Rust CPU backtests.
+The CUDA GPU optimizer fully evaluates every deduplicated seed through its GPU service
+before population trimming, without CPU validation. Seed evaluations are additional to
+`optimize.iters`; suite scenario screening applies only to later offspring.
+Explicitly enabled config prefilters may complete seeds or offspring with penalty-only evaluations
+before replay. See `../../config_prefilter.md`; all checks are disabled by default.
 
 ## Rust
 
@@ -97,8 +98,8 @@ passivbot tool clean-config configs/private/input.json configs/private/clean.jso
 passivbot tool clean-config configs/private/input.json configs/private/live.json --mode live
 passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
-passivbot tool migrate-config-v7 config_v7.json config_v8.json
-passivbot tool compare-backtests path/to/v7/result path/to/v8/result
+passivbot tool migrate-config-v9 config_v8.json config_v9.json --lookback-ema-span-minutes 43200.0 --report migration-report.json
+passivbot tool compare-backtests path/to/v8/result path/to/v9/result
 ```
 
 ## High-Signal Gotcha

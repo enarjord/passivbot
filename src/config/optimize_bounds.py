@@ -35,16 +35,16 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "score_weights_volatility": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
         "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-        "volume_drop_pct": "forager_volume_drop_pct",
         "volume_ema_span_1m": "forager_volume_ema_span_1m",
     },
     "hsl": {
         "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
-        "ema_span_minutes": "hsl_ema_span_minutes",
+        "drawdown_ratio_ema_span_minutes": "hsl_drawdown_ratio_ema_span_minutes",
+        "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "red_threshold": "hsl_red_threshold",
     },
     "risk": {
-        "n_positions": "n_positions",
+        "max_positions": "n_positions",
         "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
         "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
@@ -56,7 +56,7 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "ema_span_0": "unstuck_ema_span_0",
         "ema_span_1": "unstuck_ema_span_1",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",
-        "threshold": "unstuck_threshold",
+        "exposure_trigger_ratio": "unstuck_threshold",
     },
 }
 SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY = {
@@ -76,17 +76,16 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
             "volatility_ema_span_1m": [10, 2880, 1],
-            "volume_drop_pct": [0.02, 1, 0.01],
             "volume_ema_span_1m": [180, 2880, 1]
         },
         "hsl": {
             "cooldown_minutes_after_red": [2160, 2160, 10],
-            "ema_span_minutes": [720, 720, 1],
+            "drawdown_ratio_ema_span_minutes": [720, 720, 1],
             "red_threshold": [0.15, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
-            "n_positions": [7, 7, 1],
+            "max_positions": [7, 7, 1],
             "position_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
@@ -98,7 +97,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_0": [60, 2880, 10],
             "ema_span_1": [60, 2880, 10],
             "loss_allowance_pct": [0.005, 0.2, 0.0001],
-            "threshold": [0.4, 0.9, 0.001],
+            "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
     },
     "short": {
@@ -107,17 +106,16 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
             "volatility_ema_span_1m": [10, 1440, 1],
-            "volume_drop_pct": [0.02, 1, 0.01],
             "volume_ema_span_1m": [180, 2880, 1]
         },
         "hsl": {
             "cooldown_minutes_after_red": [2160, 4320, 10],
-            "ema_span_minutes": [1, 720, 1],
+            "drawdown_ratio_ema_span_minutes": [1, 720, 1],
             "red_threshold": [0.01, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
-            "n_positions": [5, 5, 1],
+            "max_positions": [5, 5, 1],
             "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
             "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
             "total_wallet_exposure_limit": [0, 0],
@@ -129,7 +127,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_0": [60, 2880, 10],
             "ema_span_1": [60, 2880, 10],
             "loss_allowance_pct": [0.005, 0.2, 0.0001],
-            "threshold": [0.4, 0.9, 0.001],
+            "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
     },
 }
@@ -155,8 +153,11 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     }
     if not isinstance(bounds, dict):
         return flat
-    for key, value in bounds.get("hsl", {}).items():
-        flat[f"hsl_{key}"] = deepcopy(value)
+    for key, value in bounds.get("unstuck", {}).items():
+        flat[f"unstuck_{key}"] = deepcopy(value)
+    for group in ("hsl", "loss_gate"):
+        for key, value in bounds.get("risk", {}).get(group, {}).items():
+            flat[f"{group}_{key}"] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
         side_bounds = bounds.get(pside, {})
         if not isinstance(side_bounds, dict):
@@ -182,11 +183,6 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
             for key, value in shared_items:
                 flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name, {}).get(key, key)
                 flat[f"{pside}_{flat_key}"] = deepcopy(value)
-    # Flat leaves take precedence when legacy and grouped bounds are mixed.
-    flat.update({
-        key: deepcopy(value) for key, value in bounds.items()
-        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
-    })
     return flat
 
 
@@ -253,6 +249,25 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
                     tracker.update(path, target[leaf], frozen)
             target[leaf] = frozen
 
+    from .param_paths import resolve_optimizer_key_path
+    span_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
+    if config["bot"]["risk"]["hsl"]["scope"] == "portfolio":
+        span_keys.append("hsl_memory_ema_span_minutes")
+    else:
+        for side in BOT_POSITION_SIDES:
+            span_keys.append(f"{side}_hsl_memory_ema_span_minutes")
+    for key in span_keys:
+        path = resolve_optimizer_key_path(config, key)
+        value = config
+        for part in path:
+            # Cleaning can preserve a sparse portfolio policy. A missing
+            # authorization value cannot supply an implicit optimizer bound.
+            if not isinstance(value, dict) or part not in value:
+                break
+            value = value[part]
+        else:
+            set_flat_optimize_bound(bounds, kind, key, authored.get(key, [value, value]))
+
 
 def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     """Keep explicit search dimensions without adding them to default searches."""
@@ -268,7 +283,7 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     }
     target = template["optimize"]["bounds"]
     for key, value in flat.items():
-        if key.split("_", 1)[-1] in optional:
+        if key in {"unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"} or "hsl_memory_ema_span_minutes" in key or key.split("_", 1)[-1] in optional:
             set_flat_optimize_bound(target, kind, key, value)
     # Input also accepts nested score_weights before canonical bound sorting.
     for side in BOT_POSITION_SIDES:
@@ -287,8 +302,14 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
 
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
     normalized_kind = normalize_strategy_kind(strategy_kind)
+    if flat_key == "unstuck_memory_ema_span_minutes":
+        bounds.setdefault("unstuck", {})["memory_ema_span_minutes"] = deepcopy(value)
+        return
+    if flat_key == "loss_gate_memory_ema_span_minutes":
+        bounds.setdefault("risk", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
+        return
     if flat_key.startswith("hsl_"):
-        bounds.setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
+        bounds.setdefault("risk", {}).setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
         return
     pside, key = flat_key.split("_", 1)
     if pside not in BOT_POSITION_SIDES:

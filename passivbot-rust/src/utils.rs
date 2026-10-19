@@ -508,6 +508,64 @@ fn canonical_step_value(count: f64, step: f64) -> Option<f64> {
     format!("{}e{}", coefficient, exponent).parse::<f64>().ok()
 }
 
+pub const GPU_MARKET_EXECUTION_SELL_LANE: usize = 0;
+pub const GPU_MARKET_EXECUTION_BUY_LANE: usize = 1;
+
+/// Recover only an exact, unique positive int32 venue count. The quotient
+/// selects candidates; canonical decimal equality is the acceptance proof.
+fn gpu_market_price_tick_count(price: f64, step: f64) -> Result<i32, &'static str> {
+    if !price.is_finite() || price <= 0.0 || !step.is_finite() || step <= 0.0 {
+        return Err("GPU market price and effective step must be finite and positive");
+    }
+    let nearest = (price / step).round();
+    if !nearest.is_finite() || nearest < 0.0 || nearest > i32::MAX as f64 + 1.0 {
+        return Err("GPU market price count exceeds the positive int32 domain");
+    }
+    let mut proven = None;
+    for count in [nearest - 1.0, nearest, nearest + 1.0] {
+        if count < 1.0 || count > i32::MAX as f64 {
+            continue;
+        }
+        if canonical_step_value(count, step) != Some(price) {
+            continue;
+        }
+        if proven.is_some()
+            || canonical_step_value(count - 1.0, step) == Some(price)
+            || canonical_step_value(count + 1.0, step) == Some(price)
+        {
+            return Err("GPU market price does not have a unique venue count");
+        }
+        proven = Some(count as i32);
+    }
+    proven.ok_or("GPU market price does not exactly round-trip through its venue count")
+}
+
+/// Prepare SELL then BUY counts using the existing CPU market-fill rounding.
+/// Invalid active data or an unprovable count is an error, never a sentinel.
+pub fn gpu_market_execution_tick_counts(
+    close: f64,
+    price_step: f64,
+    slippage: f64,
+) -> Result<[i32; 2], &'static str> {
+    if !close.is_finite() || close <= 0.0 {
+        return Err("Active GPU market closes must be finite and positive");
+    }
+    if !price_step.is_finite() || price_step < 0.0 {
+        return Err("GPU market price steps must be finite and nonnegative");
+    }
+    if !slippage.is_finite() || slippage < 0.0 {
+        return Err("GPU market slippage must be finite and nonnegative");
+    }
+    let close = close.max(f64::EPSILON);
+    let step = price_step.max(f64::EPSILON);
+    let sell = round_dn(close * (1.0 - slippage), step).max(step);
+    let buy = round_up(close * (1.0 + slippage), step).max(step);
+    let mut counts = [0; 2];
+    counts[GPU_MARKET_EXECUTION_SELL_LANE] = gpu_market_price_tick_count(sell, step)?;
+    counts[GPU_MARKET_EXECUTION_BUY_LANE] = gpu_market_price_tick_count(buy, step)?;
+    Ok(counts)
+}
+
 /// Recover a venue count only when the quantity uniquely round-trips in the
 /// direction which could make a remaining position smaller.
 fn close_operand_step_count(quantity: f64, step: f64, upward: bool) -> Option<u64> {
@@ -827,30 +885,38 @@ pub fn hysteresis(val: f64, prev_val: f64, pct: f64) -> f64 {
     }
 }
 
-pub fn ema_last_f64(values: &[f64], span: f64) -> f64 {
-    let alpha = 2.0 / (span + 1.0);
-    let one_minus = 1.0 - alpha;
-    let mut num: Option<f64> = None;
-    let mut den = 1.0;
-    for &value in values {
-        if !value.is_finite() {
-            continue;
-        }
-        match num {
-            None => num = Some(value),
-            Some(previous) => {
-                let next = alpha * value + one_minus * previous;
-                den = alpha + one_minus * den;
-                if den <= f64::MIN_POSITIVE {
-                    num = Some(alpha * value);
-                    den = alpha;
-                } else {
-                    num = Some(next);
-                }
-            }
+/// Normalize the available completed-sample bootstrap, then discard its weights.
+/// The caller bounds the historical prefix and owns subsequent scalar advances.
+pub fn ema_bootstrap_f64(values: impl IntoIterator<Item = f64>, alpha: f64) -> f64 {
+    let decay = 1.0 - alpha.clamp(0.0, 1.0);
+    let mut numerator = 0.0;
+    let mut denominator = 0.0;
+    for value in values {
+        if value.is_finite() {
+            numerator = value + decay * numerator;
+            denominator = 1.0 + decay * denominator;
         }
     }
-    num.map(|value| value / den).unwrap_or(f64::NAN)
+    if denominator > 0.0 {
+        numerator / denominator
+    } else {
+        f64::NAN
+    }
+}
+
+/// Bootstrap from at most two spans of the available completed suffix.
+pub fn ema_bootstrap_count(span_samples: f64, available: u64) -> u64 {
+    // Float-to-integer saturation also bounds overflow of two very large spans.
+    ((2.0 * span_samples).ceil().max(1.0) as u64).min(available)
+}
+
+pub fn ema_last_f64(values: &[f64], span: f64) -> f64 {
+    let count = ema_bootstrap_count(span, values.len() as u64) as usize;
+    let start = values.len().saturating_sub(count);
+    ema_bootstrap_f64(
+        values[start..].iter().copied(),
+        (2.0 / (span + 1.0)).min(1.0),
+    )
 }
 
 #[pyfunction(name = "ema_last")]
@@ -1048,20 +1114,6 @@ pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) ->
     Ok(diff)
 }
 
-#[pyfunction]
-pub fn calc_auto_unstuck_allowance(
-    balance: f64,
-    loss_allowance_pct: f64,
-    pnl_cumsum_max: f64,
-    pnl_cumsum_last: f64,
-) -> f64 {
-    // allow up to x% drop from balance peak for auto unstuck
-
-    let balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last);
-    let drop_since_peak_pct = balance / balance_peak - 1.0;
-    (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
-}
-
 pub fn calc_ema_price_bid(
     price_step: f64,
     order_book_bid: f64,
@@ -1093,7 +1145,11 @@ mod tests {
         use super::{classify_close_wave_remainder, CloseWaveRemainder};
         for (position, clips, step) in [
             (8192.0, vec![8191.999999999999], 1e-12),
-            (f64::from_bits(32768.0_f64.to_bits() - 1), vec![32767.99999999999], 1e-12),
+            (
+                f64::from_bits(32768.0_f64.to_bits() - 1),
+                vec![32767.99999999999],
+                1e-12,
+            ),
             (8192.0, vec![4096.0, 4095.999999999999], 1e-12),
         ] {
             assert_eq!(
@@ -1159,6 +1215,98 @@ mod tests {
         ema_last_f64, round_, round_dn, round_up, tolerant_round_dn_preserve_step,
         tolerant_round_up_preserve_step,
     };
+
+    #[test]
+    fn gpu_market_ticks_preserve_the_native_f64_market_boundary() {
+        let close = 167.84391568013112_f64;
+        let step = 0.01_f64;
+        let slippage = 0.0005_f64;
+        let ticks = super::gpu_market_execution_tick_counts(close, step, slippage).unwrap();
+        assert_eq!(ticks, [16775, 16793]);
+        let old_sell = ((close as f32 * (1.0_f32 - slippage as f32)) / step as f32).floor() as i32;
+        assert_eq!(old_sell, 16776);
+        assert_eq!(
+            super::canonical_step_value(ticks[0] as f64, step),
+            Some(round_dn(close * (1.0 - slippage), step).max(step))
+        );
+        assert_eq!(
+            super::canonical_step_value(ticks[1] as f64, step),
+            Some(round_up(close * (1.0 + slippage), step).max(step))
+        );
+    }
+
+    #[test]
+    fn gpu_market_ticks_match_existing_rounding_at_neighboring_boundaries() {
+        for (close, expected) in [
+            (0.3_f64.next_down(), [2, 3]),
+            (0.3, [3, 3]),
+            (0.3_f64.next_up(), [3, 4]),
+        ] {
+            assert_eq!(
+                super::gpu_market_execution_tick_counts(close, 0.1, 0.0).unwrap(),
+                expected
+            );
+        }
+        for (close, authored_step, slippage) in [
+            (1e-30_f64, 0.0_f64, 0.0_f64),
+            (1e-30, 1e-300, 0.0),
+            (1e-10, 3e-12, 0.0),
+            (3e200, 1e200, 0.0),
+            (1e300, 1e300, 0.0),
+            (0.1, 0.01, 1.0),
+            (0.1, 0.01, 2.0),
+        ] {
+            let step = authored_step.max(f64::EPSILON);
+            let close = close.max(f64::EPSILON);
+            let actual =
+                super::gpu_market_execution_tick_counts(close, authored_step, slippage).unwrap();
+            assert_eq!(
+                super::canonical_step_value(actual[0] as f64, step),
+                Some(round_dn(close * (1.0 - slippage), step).max(step))
+            );
+            assert_eq!(
+                super::canonical_step_value(actual[1] as f64, step),
+                Some(round_up(close * (1.0 + slippage), step).max(step))
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_market_tick_proof_rejects_off_grid_values_and_int32_overflow() {
+        assert_eq!(super::gpu_market_price_tick_count(0.01, 0.01), Ok(1));
+        let maximum = super::canonical_step_value(i32::MAX as f64, 0.01).unwrap();
+        assert_eq!(
+            super::gpu_market_price_tick_count(maximum, 0.01),
+            Ok(i32::MAX)
+        );
+        let overflow = super::canonical_step_value(i32::MAX as f64 + 1.0, 0.01).unwrap();
+        for price in [
+            0.0,
+            -0.01,
+            f64::NAN,
+            f64::INFINITY,
+            0.3_f64.next_up(),
+            overflow,
+        ] {
+            assert!(super::gpu_market_price_tick_count(price, 0.01).is_err());
+        }
+        assert!(super::gpu_market_price_tick_count(0.3_f64.next_up(), 0.1).is_err());
+        assert!(super::gpu_market_execution_tick_counts(overflow, 0.01, 0.0).is_err());
+        assert!(super::gpu_market_execution_tick_counts(f64::MAX, 1.0, 1.0).is_err());
+    }
+
+    #[test]
+    fn gpu_market_ticks_reject_invalid_active_operands() {
+        for close in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(super::gpu_market_execution_tick_counts(close, 0.01, 0.0).is_err());
+        }
+        for step in [-0.01, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(super::gpu_market_execution_tick_counts(1.0, step, 0.0).is_err());
+        }
+        for slippage in [-0.001, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(super::gpu_market_execution_tick_counts(1.0, 0.01, slippage).is_err());
+        }
+    }
 
     #[test]
     fn public_rounding_cleans_float_noise_without_truncating_tiny_steps() {
@@ -1386,15 +1534,23 @@ mod tests {
     }
 
     #[test]
-    fn ema_last_matches_sequential_reference_and_skips_nonfinite_values() {
-        let values = [f64::NAN, 1.0, 2.0, f64::INFINITY, -3.0, 8.0, 13.0];
-        let span = 10.0;
-        let alpha = 2.0 / (span + 1.0);
-        let mut expected = 1.0;
-        for value in [2.0, -3.0, 8.0, 13.0] {
-            expected = alpha * value + (1.0 - alpha) * expected;
-        }
-        assert_eq!(ema_last_f64(&values, span), expected);
-        assert!(ema_last_f64(&[f64::NAN, f64::INFINITY], span).is_nan());
+    fn ema_bootstrap_normalizes_then_uses_scalar_forward_recurrence() {
+        let seed = ema_last_f64(&[2.0, 4.0], 3.0);
+        assert!((seed - 10.0 / 3.0).abs() < 1e-12);
+        let advanced = 0.5 * seed + 0.5 * 8.0;
+        assert!((advanced - 17.0 / 3.0).abs() < 1e-12);
+        assert!((advanced - ema_last_f64(&[2.0, 4.0, 8.0], 3.0)).abs() > 0.1);
+        assert_eq!(ema_last_f64(&[2.0], 3.25), 2.0);
+        assert_eq!(
+            ema_last_f64(&[f64::NAN, 2.0, f64::INFINITY, 4.0], 3.0),
+            seed
+        );
+        assert!(ema_last_f64(&[f64::NAN, f64::INFINITY], 3.0).is_nan());
+        let values = [99.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(
+            ema_last_f64(&values, 2.25),
+            ema_last_f64(&values[1..], 2.25)
+        );
+        assert_eq!(ema_last_f64(&[2.0, 4.0], 0.5), 4.0);
     }
 }

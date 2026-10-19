@@ -19,10 +19,10 @@ def _base_config() -> dict:
         "short": ["A"],
     }
     cfg["live"]["ignored_coins"] = {"long": [], "short": []}
-    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 0.0
-    cfg["bot"]["long"]["n_positions"] = 3
-    cfg["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
-    cfg["bot"]["short"]["n_positions"] = 1
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["long"]["risk"]["max_positions"] = 3
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["short"]["risk"]["max_positions"] = 1
     return cfg
 
 
@@ -80,14 +80,14 @@ def test_effective_backtest_data_coins_supports_canonical_grouped_bot_config():
     assert "total_wallet_exposure_limit" not in cfg["bot"]["long"]
     assert "n_positions" not in cfg["bot"]["short"]
     assert cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
-    assert cfg["bot"]["short"]["risk"]["n_positions"] == 1
+    assert cfg["bot"]["short"]["risk"]["max_positions"] == 1
     assert effective_backtest_data_coins(cfg) == ["A"]
 
 
 def test_hlcvs_cache_hash_changes_when_disabled_side_becomes_enabled():
     disabled_long = _base_config()
     enabled_long = deepcopy(disabled_long)
-    enabled_long["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    enabled_long["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
 
     assert effective_backtest_data_coins(disabled_long) == ["A"]
     assert effective_backtest_data_coins(enabled_long) == ["A", "B", "C"]
@@ -186,7 +186,7 @@ def test_effective_backtest_data_coins_rejects_missing_approved_side():
 
 def test_effective_backtest_data_coins_rejects_null_approved_side():
     cfg = _base_config()
-    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     cfg["live"]["approved_coins"]["long"] = None
 
     with pytest.raises(TypeError, match="approved coin sides"):

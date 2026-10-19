@@ -16,8 +16,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     template = get_template_config()
     config = {
         "bot": {
-            "long": {"risk": {"n_positions": 5}, "_note": "keep me?"},
-            "short": {"risk": {"n_positions": 3}},
+            "long": {"risk": {"max_positions": 5}, "_note": "keep me?"},
+            "short": {"risk": {"max_positions": 3}},
         },
         "coin_overrides": {
             "BTC": {
@@ -35,8 +35,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert "_transform_log" not in cleaned
     assert "_raw" not in cleaned
     assert "_raw_effective" not in cleaned
-    assert cleaned["bot"]["long"]["risk"]["n_positions"] == 5
-    assert cleaned["bot"]["short"]["risk"]["n_positions"] == 3
+    assert cleaned["bot"]["long"]["risk"]["max_positions"] == 5
+    assert cleaned["bot"]["short"]["risk"]["max_positions"] == 3
     assert (
         cleaned["bot"]["long"]["forager"]["volume_ema_span_1m"]
         == template["bot"]["long"]["forager"]["volume_ema_span_1m"]
@@ -137,7 +137,7 @@ def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
             "cache_dir": "tmp/cache",
             "coins": {"binance": ["BTC"]},
         },
-        "bot": {"long": {"n_positions": 3}, "short": {"n_positions": 0}},
+        "bot": {"long": {"risk": {"max_positions": 3}}, "short": {"risk": {"max_positions": 0}}},
     }
 
     sanitized = sanitize_prepared_config_for_dump(config)
@@ -152,40 +152,24 @@ def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
     assert "coins" not in sanitized["backtest"]
 
 
-def test_dump_config_clean_migrates_backtest_aggregate_overrides_to_reducer(tmp_path):
-    cfg_path = tmp_path / "in.json"
-    out_path = tmp_path / "out.json"
-    cfg_path.write_text(
-        json.dumps(
-            {
-                "backtest": {
-                    "aggregate": {"adg_pnl": "max"},
-                    "base_dir": "backtests",
-                    "compress_cache": True,
-                    "end_date": "2025-01-01",
-                    "start_date": "2024-01-01",
-                    "exchanges": ["binance"],
-                    "btc_collateral_cap": 1.0,
-                    "gap_tolerance_ohlcvs_minutes": 120,
-                    "max_warmup_minutes": 0,
-                },
-                "bot": {"long": {"n_positions": 4}, "short": {"n_positions": 4}},
-                "live": {
-                    "approved_coins": {"long": [], "short": []},
-                    "ignored_coins": {"long": [], "short": []},
-                    "minimum_coin_age_days": 30,
-                    "warmup_ratio": 0.2,
-                    "max_warmup_minutes": 0,
-                },
-                "optimize": {"bounds": {}, "scoring": []},
-            }
-        )
-    )
 
-    loaded = load_config(str(cfg_path), verbose=False)
-    dump_config(loaded, str(out_path), clean=True)
+def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
+    from config import prepare_config
+    from config.migrations.v9 import migrate_v8_to_v9
+    source = get_template_config()
+    source["config_version"] = "v8.6.0"
+    source["backtest"].pop("reducer")
+    source["backtest"]["aggregate"] = {"adg_pnl": "max"}
+    before = deepcopy(source)
+    cfg_path, out_path = tmp_path / "in.json", tmp_path / "out.json"
+    cfg_path.write_text(json.dumps(source))
+    with pytest.raises(ValueError, match="explicit migration"):
+        load_config(str(cfg_path), verbose=False)
+    migrated = migrate_v8_to_v9(source, memory_span_minutes=43200.0)
+    dump_config(prepare_config(migrated.config, verbose=False), str(out_path), clean=True)
     dumped = json.loads(out_path.read_text())
-
+    assert source == before
+    assert json.loads(cfg_path.read_text()) == before
     assert dumped["backtest"]["reducer"]["adg_pnl"] == "max"
     assert dumped["backtest"]["reducer"]["default"] == "mean"
     assert "aggregate" not in dumped["backtest"]
@@ -214,14 +198,14 @@ def test_clean_config_preserves_sparse_backtest_reducer():
     assert cleaned["backtest"]["reducer"] == {"default": "mean"}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     from config.hsl import generated_template, REMOVED_FIELDS
 
     cfg = generated_template(get_template_config(), mode)
     cfg["bot"]["long"]["hsl"]["enabled"] = True
-    if mode == "unified":
-        cfg["bot"]["hsl"].update(enabled=True, restart_after_red_policy="never")
+    if mode == "portfolio":
+        cfg["bot"]["risk"]["hsl"].update(enabled=True)
     original = deepcopy(cfg)
     cleaned = clean_config(cfg)
     assert cfg == original
@@ -229,26 +213,27 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     for side in ["long", "short"]:
         assert not REMOVED_FIELDS.intersection(cleaned["bot"][side]["hsl"])
         assert cleaned["bot"][side]["hsl"] == cfg["bot"][side]["hsl"]
-    if mode == "unified":
-        assert cleaned["bot"]["hsl"] == cfg["bot"]["hsl"]
-        assert cleaned["optimize"]["bounds"]["hsl"] == cfg["optimize"]["bounds"]["hsl"]
+    if mode == "portfolio":
+        assert cleaned["bot"]["risk"]["hsl"] == cfg["bot"]["risk"]["hsl"]
+        expected_bounds = {**cfg["optimize"]["bounds"]["risk"]["hsl"],
+                           "memory_ema_span_minutes": [cfg["bot"]["risk"]["hsl"]["memory_ema_span_minutes"]] * 2}
+        assert cleaned["optimize"]["bounds"]["risk"]["hsl"] == expected_bounds
     else:
         assert "hsl" not in cleaned["bot"]
     assert clean_config(cleaned) == cleaned
     assert sanitize_prepared_config_for_dump(cfg) == cleaned
 
 
+
 def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
     from config.hsl import generated_template
-
-    cfg = generated_template(get_template_config(), "unified")
-    del cfg["bot"]["hsl"]["restart_after_red_policy"]
-    assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["hsl"]
-    del cfg["bot"]["hsl"]
-    assert "hsl" not in clean_config(cfg)["bot"]
+    cfg = generated_template(get_template_config(), "portfolio")
+    assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["risk"]["hsl"]
+    cfg["bot"]["risk"]["hsl"] = {"scope": "portfolio"}
+    assert clean_config(cfg)["bot"]["risk"]["hsl"] == {"scope": "portfolio"}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     from config.hsl import generated_template
     from optimization.evaluation_contract import build_evaluation_contract
@@ -259,23 +244,26 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     contract = build_evaluation_contract(cfg)
     assert "hsl_engine" not in contract["live"]
     block = (
-        contract["bot"]["hsl"] if mode == "unified" else contract["bot"]["long"]["hsl"]
+        contract["bot"]["risk"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
     )
-    assert block["restart_after_red_policy"] == "always"
+    assert "restart_after_red_policy" not in block
+    assert contract["version"] == 5
+    assert "independent_loss_memories" in contract["risk_model"]
+    assert contract["risk_model"].startswith("v9_")
     assert "red_threshold" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     assert _resume_config_mismatches(record, cfg) == []
     candidate_block = (
-        cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+        cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     )
     candidate_block["red_threshold"] = 0.031
     assert _resume_config_mismatches(record, cfg) == []
     path = (
-        "bot.hsl.restart_after_red_policy"
-        if mode == "unified"
-        else "bot.long.hsl.restart_after_red_policy"
+        "bot.risk.hsl.panic_close_order_type"
+        if mode == "portfolio"
+        else "bot.long.hsl.panic_close_order_type"
     )
-    cfg["optimize"]["fixed_runtime_overrides"][path] = "never"
+    cfg["optimize"]["fixed_runtime_overrides"][path] = "market"
     assert any(
         "evaluation.bot" in diff for diff in _resume_config_mismatches(record, cfg)
     )
@@ -285,16 +273,15 @@ def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
     from config.hsl import generated_template, REMOVED_FIELDS
     from config_utils import format_config
 
-    cfg = generated_template(get_template_config(), "unified")
-    cfg["bot"]["hsl"].update(
+    cfg = generated_template(get_template_config(), "portfolio")
+    cfg["bot"]["risk"]["hsl"].update(
         enabled=True,
-        ema_span_minutes=12.5,
+        drawdown_ratio_ema_span_minutes=12.5,
         red_threshold=0.07,
-        restart_after_red_policy="never",
     )
-    cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [0.02, 0.2]}
+    cfg["optimize"]["bounds"]["risk"]["hsl"] = {"red_threshold": [0.02, 0.2]}
     exported = sanitize_prepared_config_for_dump(cfg)
     loaded = format_config(json.loads(json.dumps(exported)), verbose=False)
-    assert loaded["bot"]["hsl"] == cfg["bot"]["hsl"]
-    assert loaded["optimize"]["bounds"]["hsl"]["red_threshold"] == [0.02, 0.2]
+    assert loaded["bot"]["risk"]["hsl"] == cfg["bot"]["risk"]["hsl"]
+    assert loaded["optimize"]["bounds"]["risk"]["hsl"]["red_threshold"] == [0.02, 0.2]
     assert not REMOVED_FIELDS.intersection(loaded["bot"]["long"]["hsl"])

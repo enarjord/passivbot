@@ -1,7 +1,6 @@
 pub mod ema_anchor;
 pub mod registry;
 pub mod spec;
-pub mod trailing_grid_v7;
 pub mod trailing_martingale;
 
 use crate::types::{
@@ -18,7 +17,6 @@ pub enum StrategyKind {
     #[serde(rename = "trailing_martingale")]
     TrailingMartingale,
     EmaAnchor,
-    TrailingGridV7,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -129,52 +127,10 @@ impl Default for EmaAnchorParams {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TrailingGridV7Params {
-    pub ema_span_0: f64,
-    pub ema_span_1: f64,
-    pub entry: TrailingGridV7EntryParams,
-    pub close: TrailingGridV7CloseParams,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TrailingGridV7EntryParams {
-    pub grid_double_down_factor: f64,
-    pub grid_spacing_pct: f64,
-    pub grid_spacing_we_weight: f64,
-    pub grid_spacing_volatility_weight: f64,
-    pub initial_ema_dist: f64,
-    pub initial_qty_pct: f64,
-    pub trailing_double_down_factor: f64,
-    pub trailing_grid_ratio: f64,
-    pub trailing_retracement_pct: f64,
-    pub trailing_retracement_we_weight: f64,
-    pub trailing_retracement_volatility_weight: f64,
-    pub trailing_threshold_pct: f64,
-    pub trailing_threshold_we_weight: f64,
-    pub trailing_threshold_volatility_weight: f64,
-    pub volatility_ema_span_hours: f64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TrailingGridV7CloseParams {
-    pub grid_markup_start: f64,
-    pub grid_markup_end: f64,
-    pub grid_qty_pct: f64,
-    pub trailing_grid_ratio: f64,
-    pub trailing_qty_pct: f64,
-    pub trailing_retracement_pct: f64,
-    pub trailing_threshold_pct: f64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StrategyParams {
     TrailingMartingale(TrailingMartingaleParams),
     EmaAnchor(EmaAnchorParams),
-    TrailingGridV7(TrailingGridV7Params),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,23 +199,15 @@ pub fn parse_strategy_params(
                 .map(StrategyParams::EmaAnchor)
                 .map_err(|err| format!("failed to parse ema_anchor strategy params: {err}"))
         }
-        StrategyKind::TrailingGridV7 => {
-            let value = raw.ok_or_else(|| {
-                "trailing_grid_v7 requires per-side strategy_params in orchestrator input"
-                    .to_string()
-            })?;
-            serde_json::from_value::<TrailingGridV7Params>(value.clone())
-                .map(StrategyParams::TrailingGridV7)
-                .map_err(|err| format!("failed to parse trailing_grid_v7 strategy params: {err}"))
-        }
     }
 }
 
 pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
     match params {
-        StrategyParams::TrailingMartingale(params) => (params.entry.ema_span_0, params.entry.ema_span_1),
+        StrategyParams::TrailingMartingale(params) => {
+            (params.entry.ema_span_0, params.entry.ema_span_1)
+        }
         StrategyParams::EmaAnchor(params) => (params.ema_span_0, params.ema_span_1),
-        StrategyParams::TrailingGridV7(params) => (params.ema_span_0, params.ema_span_1),
     }
 }
 
@@ -267,7 +215,6 @@ pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f
     match params {
         StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1h),
         StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1h),
-        StrategyParams::TrailingGridV7(params) => Some(params.entry.volatility_ema_span_hours),
     }
 }
 
@@ -275,7 +222,6 @@ pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Optio
     match params {
         StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1m),
         StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1m),
-        StrategyParams::TrailingGridV7(_) => Some(0.0),
     }
 }
 
@@ -283,7 +229,6 @@ pub fn strategy_initial_entry_offset(params: &StrategyParams) -> f64 {
     match params {
         StrategyParams::TrailingMartingale(params) => params.entry.initial_ema_dist,
         StrategyParams::EmaAnchor(params) => params.offset,
-        StrategyParams::TrailingGridV7(params) => params.entry.initial_ema_dist,
     }
 }
 
@@ -291,7 +236,6 @@ pub fn strategy_initial_qty_pct(params: &StrategyParams) -> f64 {
     match params {
         StrategyParams::TrailingMartingale(params) => params.entry.initial_qty_pct,
         StrategyParams::EmaAnchor(params) => params.base_qty_pct,
-        StrategyParams::TrailingGridV7(params) => params.entry.initial_qty_pct,
     }
 }
 
@@ -299,20 +243,11 @@ pub fn strategy_entry_retracement_enabled(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => params.entry.retracement_base_pct > 0.0,
         StrategyParams::EmaAnchor(_) => false,
-        StrategyParams::TrailingGridV7(params) => {
-            params.entry.trailing_grid_ratio != 0.0 && params.entry.trailing_retracement_pct > 0.0
-        }
     }
 }
 
 pub fn strategy_requires_sequential_entry_staging(params: &StrategyParams) -> bool {
-    match params {
-        // The v7 generator emits only its deterministic grid leg and stops before it would stack
-        // a retracement-dependent trailing order, so an outer throttle would discard valid v7
-        // grid orders rather than protect trailing-state sequencing.
-        StrategyParams::TrailingGridV7(_) => false,
-        _ => strategy_entry_retracement_enabled(params),
-    }
+    strategy_entry_retracement_enabled(params)
 }
 
 pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
@@ -339,7 +274,6 @@ pub fn strategy_needs_log_range_1m_for_request(
                 && params.offset_volatility_1m_weight != 0.0
                 && params.offset_volatility_ema_span_1m > 0.0
         }
-        StrategyParams::TrailingGridV7(_) => false,
     }
 }
 
@@ -367,13 +301,6 @@ pub fn strategy_needs_log_range_1h_for_request(
                 && params.offset_volatility_1h_weight != 0.0
                 && params.offset_volatility_ema_span_1h > 0.0
         }
-        StrategyParams::TrailingGridV7(params) => {
-            wants_entries
-                && (params.entry.grid_spacing_volatility_weight != 0.0
-                    || params.entry.trailing_threshold_volatility_weight != 0.0
-                    || params.entry.trailing_retracement_volatility_weight != 0.0)
-                && params.entry.volatility_ema_span_hours > 0.0
-        }
     }
 }
 
@@ -392,10 +319,6 @@ pub fn strategy_needs_trailing_for_request(
                 || (wants_closes && params.close.retracement_base_pct > 0.0)
         }
         StrategyParams::EmaAnchor(_) => false,
-        StrategyParams::TrailingGridV7(params) => {
-            (wants_entries && params.entry.trailing_grid_ratio != 0.0)
-                || (wants_closes && params.close.trailing_grid_ratio != 0.0)
-        }
     }
 }
 
@@ -407,23 +330,16 @@ pub fn generate_orders(
     match kind {
         StrategyKind::TrailingMartingale => trailing_martingale::generate_orders(side, request),
         StrategyKind::EmaAnchor => ema_anchor::generate_orders(side, request),
-        StrategyKind::TrailingGridV7 => trailing_grid_v7::generate_orders(side, request),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_strategy_params, strategy_needs_log_range_1h,
-        strategy_needs_log_range_1h_for_request, strategy_needs_trailing_for_request,
-        EmaAnchorParams, StrategyKind, StrategyParams, StrategySide, TrailingGridV7Params,
-        TrailingMartingaleParams,
-    };
-    use crate::types::BotParams;
+    use super::*;
     use serde_json::json;
 
     #[test]
-    fn trailing_input_needs_are_request_scoped_for_all_strategy_kinds() {
+    fn trailing_input_needs_are_request_scoped_for_supported_strategies() {
         let mut martingale = TrailingMartingaleParams::default();
         martingale.entry.retracement_base_pct = 0.01;
         let martingale = StrategyParams::TrailingMartingale(martingale);
@@ -437,71 +353,22 @@ mod tests {
             false,
             true
         ));
-
-        let mut v7 = TrailingGridV7Params::default();
-        v7.close.trailing_grid_ratio = 0.5;
-        let v7 = StrategyParams::TrailingGridV7(v7);
-        assert!(!strategy_needs_trailing_for_request(&v7, true, false));
-        assert!(strategy_needs_trailing_for_request(&v7, false, true));
-
+        assert!(strategy_requires_sequential_entry_staging(&martingale));
         let ema_anchor = StrategyParams::EmaAnchor(EmaAnchorParams::default());
         assert!(!strategy_needs_trailing_for_request(
             &ema_anchor,
             true,
             true
         ));
+        assert!(!strategy_requires_sequential_entry_staging(&ema_anchor));
     }
 
     #[test]
-    fn trailing_grid_v7_parse_rejects_missing_required_leaf() {
-        let raw = json!({
-            "ema_span_0": 200.0,
-            "ema_span_1": 800.0,
-            "entry": {
-                "grid_double_down_factor": 1.0,
-                "grid_spacing_pct": 0.01,
-                "grid_spacing_we_weight": 0.0,
-                "grid_spacing_volatility_weight": 0.0,
-                "initial_ema_dist": 0.0,
-                "initial_qty_pct": 0.01,
-                "trailing_double_down_factor": 1.0,
-                "trailing_grid_ratio": 0.0,
-                "trailing_retracement_pct": 0.01,
-                "trailing_retracement_we_weight": 0.0,
-                "trailing_retracement_volatility_weight": 0.0,
-                "trailing_threshold_pct": 0.01,
-                "trailing_threshold_we_weight": 0.0,
-                "trailing_threshold_volatility_weight": 0.0,
-                "volatility_ema_span_hours": 1.0
-            },
-            "close": {
-                "grid_markup_start": 0.01,
-                "grid_markup_end": 0.005,
-                "grid_qty_pct": 0.2,
-                "trailing_grid_ratio": 0.0,
-                "trailing_qty_pct": 0.1,
-                "trailing_retracement_pct": 0.005
-            }
-        });
-
-        let err = parse_strategy_params(
-            StrategyKind::TrailingGridV7,
-            StrategySide::Long,
-            Some(&raw),
-            &BotParams::default(),
-        )
-        .expect_err("missing close.trailing_threshold_pct must fail");
-
-        assert!(err.contains("trailing_threshold_pct"), "{err}");
-    }
-
-    #[test]
-    fn trailing_grid_v7_entry_volatility_is_not_required_for_close_only_request() {
-        let mut params = TrailingGridV7Params::default();
-        params.entry.grid_spacing_volatility_weight = 1.0;
-        params.entry.volatility_ema_span_hours = 4.0;
-        let params = StrategyParams::TrailingGridV7(params);
-
+    fn martingale_entry_volatility_is_not_required_for_close_only_request() {
+        let mut params = TrailingMartingaleParams::default();
+        params.entry.threshold_volatility_1h_weight = 1.0;
+        params.volatility_ema_span_1h = 4.0;
+        let params = StrategyParams::TrailingMartingale(params);
         assert!(strategy_needs_log_range_1h(&params));
         assert!(strategy_needs_log_range_1h_for_request(
             &params, true, false
@@ -509,5 +376,18 @@ mod tests {
         assert!(!strategy_needs_log_range_1h_for_request(
             &params, false, true
         ));
+    }
+
+    #[test]
+    fn martingale_rejects_retired_grid_fields_instead_of_reinterpreting_them() {
+        let raw = json!({"entry":{"trailing_grid_ratio":0.5}});
+        let error = parse_strategy_params(
+            StrategyKind::TrailingMartingale,
+            StrategySide::Long,
+            Some(&raw),
+            &BotParams::default(),
+        )
+        .unwrap_err();
+        assert!(error.contains("trailing_grid_ratio"));
     }
 }

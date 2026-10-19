@@ -1,138 +1,62 @@
-"""Canonical configuration through the internal hsl GPU screening service."""
+"""Canonical v9 policy transport through the one-coin shared-account route."""
 
 from copy import deepcopy
 
 import numpy as np
 import pytest
-from config import prepare_config
-from config.hsl import generated_template
-from config.schema import get_template_config
-from optimization.gpu.service import MpsSingleCoinProxy
-from tools.gpu_proxy_benchmark import _synthetic_hlcvs
 
 torch = pytest.importorskip("torch")
 pytestmark = pytest.mark.skipif(
-    not (torch.backends.mps.is_available() or torch.cuda.is_available()),
-    reason="GPU unavailable",
-)
+    not (torch.backends.mps.is_available() or torch.cuda.is_available()), reason="GPU required")
 
 
-def make_proxy(
-    mode, strategy="trailing_martingale", override=None, lookback=1, enabled=True
-):
-    config = generated_template(get_template_config(), mode)
-    config["live"].update(
-        strategy_kind=strategy,
-        approved_coins={"long": ["AAA"], "short": ["AAA"]},
-        ignored_coins={"long": [], "short": []},
-        pnls_max_lookback_days=lookback,
-        max_warmup_minutes=60,
-    )
-    config["backtest"].update(
-        coins={"binance": ["AAA"]}, starting_balance=1000.0, btc_collateral_cap=0.0
-    )
-    for side in ("long", "short"):
-        config["bot"][side]["risk"].update(
-            n_positions=1,
-            total_wallet_exposure_limit=2,
-            position_exposure_enforcer_enabled=False,
-        )
-        config["bot"][side]["hsl"].update(
-            enabled=enabled and mode != "unified",
-            red_threshold=0.02,
-            ema_span_minutes=2.5,
-            cooldown_minutes_after_red=5,
-            restart_after_red_policy="always",
-        )
-    if mode == "unified":
-        config["bot"]["hsl"].update(
-            enabled=enabled,
-            red_threshold=0.015,
-            ema_span_minutes=2.75,
-            cooldown_minutes_after_red=7,
-            restart_after_red_policy="never",
-        )
-    if override:
-        config["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": override}}}}
-    config = prepare_config(config, verbose=False, target="canonical", runtime=None)
-    config["backtest"]["coins"] = {"binance": ["AAA"]}
-    candles, timestamps = _synthetic_hlcvs(3000, 1, 43)
-    markets = {
-        "AAA": dict(
-            qty_step=0.001,
-            price_step=0.01,
-            min_qty=0.001,
-            min_cost=1.0,
-            c_mult=1.0,
-            maker=0.0002,
-            taker=0.0005,
-            exchange="binance",
-        )
-    }
-    proxy = MpsSingleCoinProxy(
-        config=config,
-        hlcvs=candles,
-        mss=markets,
-        btc=np.full(3000, 50000.0),
-        timestamps=timestamps,
-        exchange="binance",
-        batch_size=3,
-        needed_metrics={"adg_usd"},
-        max_dispatch_candidate_bars=100000,
-    )
-    return proxy, config
-
-
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_canonical_hsl_policy_reaches_shader(mode, strategy):
-    proxy, config = make_proxy(mode, strategy)
-    assert proxy.runner.hsl_capacity > 0
-    assert proxy.runner.pnl_lookback_bars == 1440
-    assert (
-        proxy.checkpoint_contract["backtest"]["equity_hard_stop_loss"]["engine"]
-        == "hsl"
-    )
-    matrix = proxy._parameter_matrix([{}])
-    for side in ("long", "short"):
-        expected = (
-            config["bot"]["hsl"] if mode == "unified" else config["bot"][side]["hsl"]
-        )
-        assert (
-            proxy.base_params[side]["hsl_ema_span_minutes"]
-            == expected["ema_span_minutes"]
-        )
-        assert proxy.base_params[side]["hsl_red_threshold"] == expected["red_threshold"]
-    result = proxy.runner.run(matrix)
+def test_canonical_hsl_policy_reaches_shared_native_shader(mode, strategy):
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    proxy = make_proxy(mode, strategy, coin_count=1, minutes=128)
+    runner, result = raw(proxy, [{}])
+    assert runner.hsl_capacity == 2
+    assert runner.hsl_fact_capacity == 0
+    for side in proxy.sides:
+        assert proxy.base_params[side]["hsl_drawdown_ratio_ema_span_minutes"] == 2.5
+        assert proxy.base_params[side]["hsl_memory_ema_span_minutes"] == 1440.0
+        assert proxy.base_params[side]["hsl_red_threshold"] == pytest.approx(.02)
     assert torch.isfinite(result["balance"]).all()
-    assert float(result["fill_count"].sum()) > 0
+    assert result["fill_count"].item() > 0
 
 
-def test_shared_portfolio_candidate_and_static_coin_override_precedence():
-    proxy, _ = make_proxy("unified")
-    candidates = [{"hsl_red_threshold": 0.03}, {"hsl_red_threshold": 0.06}]
+def test_portfolio_candidate_and_static_coin_override_precedence():
+    from optimization.gpu.model import TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
+    from test_gpu_hsl_multicoin import make_proxy
+
+    proxy = make_proxy("portfolio", coin_count=1, minutes=128)
+    candidates = [{"hsl_red_threshold": .03}, {"hsl_red_threshold": .06}]
     before = deepcopy(candidates)
-    matrix = proxy._parameter_matrix(candidates)
-    i = proxy.param_keys.index("hsl_red_threshold")
-    np.testing.assert_array_equal(matrix[:, i], [0.03, 0.06])
-    np.testing.assert_array_equal(matrix[:, len(proxy.param_keys) + i], [0.03, 0.06])
+    for side in proxy.sides:
+        matrix = proxy._parameter_matrix(candidates, side)
+        np.testing.assert_allclose(matrix[:, proxy.param_keys.index("hsl_red_threshold")], [.03, .06])
     assert candidates == before
-    coin, _ = make_proxy(
-        "coin", override={"red_threshold": 0.07, "ema_span_minutes": 4.5}
-    )
-    matrix = coin._parameter_matrix(
-        [{"long_hsl_red_threshold": 0.03, "short_hsl_red_threshold": 0.04}]
-    )
-    i = coin.param_keys.index("hsl_red_threshold")
-    assert matrix[0, i] == pytest.approx(0.07)
-    assert matrix[0, len(coin.param_keys) + i] == pytest.approx(0.04)
+    coin = make_proxy("coin", coin_count=1, minutes=128,
+                       override={"red_threshold": .07, "ema_span_minutes": 4.5})
+    matrix = coin._parameter_matrix([{"long_hsl_red_threshold": .03}], "long")
+    assert matrix[0, coin.param_keys.index("hsl_red_threshold")] == pytest.approx(.03)
+    runner = coin.fused_runner or coin.runners["long"]
+    start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
+    # The authored coin policy remains a separate override after candidate defaults.
+    assert runner.coin_overrides[0, start + 1].item() == pytest.approx(.07)
+    assert runner.coin_overrides[0, start + 2].item() == pytest.approx(4.5)
 
 
-@pytest.mark.parametrize("lookback", [0, "all"])
+@pytest.mark.parametrize("span", [1.0, 43200.5])
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_inactive_hsl_zero_and_unbounded_history_execute(lookback, strategy):
-    proxy, _ = make_proxy("coin", strategy, lookback=lookback, enabled=False)
-    assert proxy.runner.pnl_lookback_bars == 0
-    assert proxy.runner.hsl_capacity == 2
-    rows = proxy.evaluate([{}])
-    assert np.isfinite(rows[0]["adg_usd"])
+def test_disabled_hsl_uses_no_history_for_any_valid_memory_span(span, strategy):
+    from test_gpu_hsl_multicoin import make_proxy, raw
+
+    proxy = make_proxy("coin", strategy, coin_count=1, minutes=128,
+                       memory_span=span, enabled=False)
+    runner, result = raw(proxy, [{}])
+    assert runner._hsl_history_bytes_per_candidate() == 0
+    assert runner.hsl_fact_capacity == 0
+    assert not (result["hsl_triggers_long"] + result["hsl_triggers_short"]).any()

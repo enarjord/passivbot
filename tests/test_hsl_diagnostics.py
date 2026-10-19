@@ -27,8 +27,10 @@ def observed(monkeypatch):
 
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
 
-    def build(mode="coin"):
+    def build(mode="coin", *, flat=False):
         bot = make_bot(mode)
+        if flat:
+            bot.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
         bot.get_exchange_time = lambda: NOW
         bot.approved_coins_minus_ignored_coins = {"long": {SYMBOL}, "short": set()}
         bot._live_market_snapshot_max_age_ms = lambda: 10_000
@@ -45,7 +47,7 @@ def observed(monkeypatch):
     return build
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_monitor_topology_is_native_scope_and_numeric_evidence(observed, mode):
     bot, owner, wave, events = observed(mode)
     payload = _monitor_hsl_section(bot, now_ms=NOW)
@@ -55,7 +57,7 @@ def test_monitor_topology_is_native_scope_and_numeric_evidence(observed, mode):
     (row,) = payload["scopes"]
     assert row["action"] == "panic" and row["tier"] == "red"
     assert row["symbol"] == (SYMBOL if mode == "coin" else None)
-    assert row["pside"] == (None if mode == "unified" else "long")
+    assert row["pside"] == (None if mode == "portfolio" else "long")
     native = json.loads(wave.decisions[0].payload)["decision"]
     assert row["score"] == min(native["raw"], native["ema"])
     assert row["threshold"] == wave.decisions[0].threshold
@@ -268,7 +270,7 @@ def test_combined_source_stale_account_console_is_bounded(observed):
 
     bot, _, _, _ = observed()
     data = diagnostics.snapshot(bot, now_ms=NOW)
-    data.update(observation_status="diagnostic_unavailable", signal_mode="unified", account_unavailable=["balance", "positions", "open_orders"], stale_reasons=["account_generation_changed"], counts={key:999999 for key in data["counts"]}, candle_sources={"failures":[{"symbol":"X"*24, "timeframe":"15m", "stage":"cache", "error_type":"CandleReadBusyWithLongDiagnosticName"}]})
+    data.update(observation_status="diagnostic_unavailable", signal_mode="portfolio", account_unavailable=["balance", "positions", "open_orders"], stale_reasons=["account_generation_changed"], counts={key:999999 for key in data["counts"]}, candle_sources={"failures":[{"symbol":"X"*24, "timeframe":"15m", "stage":"cache", "error_type":"CandleReadBusyWithLongDiagnosticName"}]})
     data["scopes"][0]["symbol"] = "Y" * 24
     event = LiveEvent(EventTypes.HSL_STATUS, data=data)
     text = format_console_event(event)
@@ -300,7 +302,7 @@ def test_last_decision_is_explicitly_stale_when_current_inputs_are_not_confirmed
 
 
 def test_never_evaluated_monitor_does_not_initialize_trading_owner():
-    bot = make_bot("unified")
+    bot = make_bot("portfolio")
     result = _monitor_hsl_section(bot, now_ms=NOW)
     assert result["observation_status"] == "not_evaluated"
     assert result["scopes"] == []
@@ -369,7 +371,7 @@ def test_current_input_absence_is_not_misreported_green(observed):
 def test_tui_shows_portfolio_scope_and_observation_status(observed):
     from monitor_tui import MonitorTuiState, render_screen
 
-    bot, _, _, _ = observed("unified")
+    bot, _, _, _ = observed("portfolio")
     state = MonitorTuiState(
         relay_url="http://127.0.0.1:8765", exchange="fake", user="example"
     )
@@ -384,7 +386,7 @@ def test_tui_shows_portfolio_scope_and_observation_status(observed):
         )
     )
     screen = render_screen(state, width=180)
-    assert "hsl unified" in screen and "stale" in screen
+    assert "hsl portfolio" in screen and "stale" in screen
     assert "portfolio: panic" in screen
     assert "long=disabled" not in screen
 
@@ -405,8 +407,8 @@ def test_dashboard_hsl_summary_handles_missing_and_current_observations():
     script = function + """
 const assert = require('node:assert/strict');
 assert.match(hslSummary({}), /^HSL -/);
-const hsl = hslSummary({engine: 'hsl', signal_mode: 'unified', observation_status: 'stale', counts: {red: 1, estimated: 1}});
-assert.match(hsl, /HSL unified.*stale.*RED 1.*estimated 1/);
+const hsl = hslSummary({engine: 'hsl', signal_mode: 'portfolio', observation_status: 'stale', counts: {red: 1, estimated: 1}});
+assert.match(hsl, /HSL portfolio.*stale.*RED 1.*estimated 1/);
 assert.ok(!hsl.startsWith('L '));
 assert.match(hslSummary({engine: 'hsl', counts: {inactive: 2}}), /inactive 2/);
 assert.equal(hslScopeStatus({action: null, tier: 'inactive', availability: 'available'}), 'inactive');
@@ -418,14 +420,14 @@ assert.equal(hslScopeStatus({action: null, tier: null, availability: 'unavailabl
 def test_structured_console_shows_hsl_counts_without_legacy_tiers(observed):
     from live.event_bus import LiveEvent, EventTypes, format_console_event
 
-    bot, _, _, _ = observed("unified")
+    bot, _, _, _ = observed("portfolio")
     event = LiveEvent(
         EventTypes.HSL_STATUS,
         status="degraded",
         data=diagnostics.snapshot(bot, now_ms=NOW),
     )
     text = format_console_event(event)
-    assert "[risk] HSL current mode=unified" in text
+    assert "[risk] HSL current mode=portfolio" in text
     assert "red=1" in text and "estimated=1" in text
     assert "tier=disabled" not in text
 
@@ -438,7 +440,7 @@ def test_clean_red_aggregate_survives_smoke_and_startup_preview_consumers(observ
     )
     from tools.hsl_startup_preview import _bounded_hsl_data, _status_record_preview
 
-    bot, _, wave, events = observed("unified")
+    bot, _, wave, events = observed("portfolio")
     # No approximation/degradation flag should be needed to get RED attention.
     clean = replace(
         wave, decisions=tuple(replace(d, reasons=()) for d in wave.decisions)
@@ -470,7 +472,8 @@ def test_inactive_scopes_are_visible_in_tui_and_overview(observed):
     from monitor_tui import MonitorTuiState, render_screen
 
     bot, owner, _, _ = observed()
-    bot.config["bot"]["long"]["risk"]["n_positions"] = 0
+    bot.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
+    bot.config["bot"]["long"]["risk"]["max_positions"] = 0
     capture_report(owner)
     payload = diagnostics.snapshot(bot, now_ms=NOW)
     assert payload["tier"] == "inactive"
@@ -594,7 +597,7 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
     )
     from tools.hsl_startup_preview import _bounded_hsl_data, _status_record_preview
 
-    bot, owner, _, events = observed("unified")
+    bot, owner, _, events = observed("portfolio")
     wave = capture_report(
         owner, {SYMBOL: replace(quotes()[SYMBOL], bid=100.0, ask=100.0, last=100.0)}
     )
@@ -674,7 +677,8 @@ def test_inactive_scope_is_visible_in_console_and_fallback(observed, caplog):
     from live.event_bus import LiveEvent, EventTypes, format_console_event
 
     bot, owner, _, _ = observed()
-    bot.config["bot"]["long"]["risk"]["n_positions"] = 0
+    bot.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
+    bot.config["bot"]["long"]["risk"]["max_positions"] = 0
     bot._emit_live_event = None
     with caplog.at_level(logging.INFO):
         capture_report(owner)
@@ -730,8 +734,10 @@ async def test_protective_wave_reports_even_when_scope_has_no_exit_work(observed
     bot.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
     assert not await owner.protect()
     result = diagnostics.snapshot(bot, now_ms=NOW)
-    assert result["counts"]["green"] == 1
-    assert events[-1][1]["data"]["counts"]["green"] == 1
+    assert result["counts"]["red"] == 1
+    assert events[-1][1]["data"]["counts"]["red"] == 1
+
+    assert result["scopes"][0]["action"] == "halted"
 
 
 @pytest.mark.asyncio
@@ -741,12 +747,13 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(
     import asyncio
     import utils
 
-    bot, owner, _, events = observed()
+    bot, owner, _, events = observed(flat=True)
     clock = [NOW]
     monkeypatch.setattr(utils, "utc_ms", lambda: clock[0])
     bot.get_exchange_time = lambda: clock[0]
     bot.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
     events.clear()
+    bot._hsl_diagnostic_event = None
     capture_report(owner)
     assert len(events) == 1
     calls = []
@@ -804,7 +811,7 @@ async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(
     import asyncio
     import utils
 
-    bot, owner, _, _ = observed()
+    bot, owner, _, _ = observed(flat=True)
     clock = [NOW]
     monkeypatch.setattr(utils, "utc_ms", lambda: clock[0])
     bot.get_exchange_time = lambda: clock[0]
@@ -822,6 +829,9 @@ async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(
         wave = owner.capture()
         order = dict(symbol=SYMBOL, position_side="long")
         owner.bind(wave, (), (order,))
+        # Force status work for the completed plan; identical green reports
+        # normally deduplicate before invoking the sink.
+        bot._hsl_diagnostic_event = None
         planned.append(True)
         return (), (order,), None, wave
 

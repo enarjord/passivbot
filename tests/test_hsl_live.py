@@ -1,5 +1,7 @@
 """Offline integration of the staged hsl owner with the real bot and Rust."""
 
+from hsl_fixture import set_risk_memory_spans
+
 import argparse
 import json
 
@@ -11,6 +13,7 @@ from config_utils import load_config
 from config import prepare_config
 from config.hsl import generated_template
 from live import hsl_live
+from live.hsl_continuity import ScopeReplay
 import tools.run_fake_live as runner
 
 
@@ -31,7 +34,7 @@ import tools.run_fake_live as runner
         "flat_order_reason_gap",
     ],
 )
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 async def test_hsl_protective_wave_uses_actual_executor_without_history(
     tmp_path, monkeypatch, mode, path, side
 ):
@@ -50,17 +53,18 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            n_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit=0.0
         )
-    blocks = [cfg["bot"]["hsl"]] if mode == "unified" else [cfg["bot"][side]["hsl"]]
+    blocks = [cfg["bot"]["risk"]["hsl"]] if mode == "portfolio" else [cfg["bot"][side]["hsl"]]
     for block in blocks:
         block.update(
             enabled=True,
             red_threshold=0.06,
-            ema_span_minutes=1000.0,
+            # Execution/admission fixtures isolate the connector from EMA warmup.
+            drawdown_ratio_ema_span_minutes=1.0,
             panic_close_order_type="market",
         )
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
+    set_risk_memory_spans(cfg, 288.0)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
@@ -136,7 +140,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
             from live.hsl_runtime import InvalidHslOutput
 
             original_filter = market_data.filter_fresh_market_snapshot_creations
-            native = pbr.hsl_evaluate_grids
+            native = ScopeReplay.evaluate_grids
             boundary_reached = []
 
             async def change_at_boundary(current_bot, orders, **kwargs):
@@ -147,9 +151,9 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 result = await original_filter(current_bot, orders, **kwargs)
                 if path == "malformed_before_write":
                     monkeypatch.setattr(
-                        pbr,
-                        "hsl_evaluate_grids",
-                        lambda value, grids: '{"decision": null}',
+                        ScopeReplay,
+                        "evaluate_grids",
+                        lambda _self, value, grids: '{"decision": null}',
                     )
                 return result
 
@@ -165,7 +169,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
                 else:
                     await instance.protect()
             finally:
-                monkeypatch.setattr(pbr, "hsl_evaluate_grids", native)
+                monkeypatch.setattr(ScopeReplay, "evaluate_grids", native)
                 monkeypatch.setattr(
                     market_data,
                     "filter_fresh_market_snapshot_creations",
@@ -253,7 +257,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
             assert diagnostics["engine"] == "hsl"
             assert diagnostics["signal_mode"] == mode
             assert diagnostics["counts"]["red"] >= 1
-            if mode == "unified":
+            if mode == "portfolio":
                 assert diagnostics["scope_count"] == 1
                 assert diagnostics["scopes"][0]["pside"] is None
         elif path == "cancel_first":
@@ -416,7 +420,7 @@ def test_hsl_wave_is_not_execution_authority_after_inputs_change(monkeypatch, ch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("raw_balance_drift", [False, True])
 @pytest.mark.parametrize("execution", ["direct", "owner_refresh_drift"])
 async def test_hsl_green_can_plan_entries_without_hsl_history(
@@ -433,11 +437,11 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    cfg["live"]["max_realized_loss_pct"] = 1.0
+    cfg["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 1.0
     cfg["live"]["approved_coins"]["long"] = ["BTC"]
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
-    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
-    policy.update(enabled=True, ema_span_minutes=1.0, red_threshold=0.5)
+    set_risk_memory_spans(cfg, 288.0)
+    policy = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    policy.update(enabled=True, drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.5)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
@@ -539,11 +543,11 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
     cfg = generated_template(legacy, "coin")
     cfg["bot"]["long"]["hsl"].update(
         enabled=True,
-        ema_span_minutes=1.0,
+        drawdown_ratio_ema_span_minutes=1.0,
         red_threshold=0.06,
         panic_close_order_type="limit",
     )
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
+    set_risk_memory_spans(cfg, 288.0)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
@@ -776,11 +780,11 @@ def test_fill_receipt_is_atomic_and_clipped_before_first_consumer(change):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-@pytest.mark.parametrize("restart", ["always", "never"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("cooldown_minutes", [2.0, 4.0])
 @pytest.mark.parametrize("partial", [False, True])
 async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
-    tmp_path, monkeypatch, mode, restart, partial
+    tmp_path, monkeypatch, mode, cooldown_minutes, partial
 ):
     import asyncio
     from copy import deepcopy
@@ -790,19 +794,18 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
     cfg = generated_template(legacy, mode)
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
-    cfg["live"]["max_realized_loss_pct"] = 1.0
+    set_risk_memory_spans(cfg, 288.0)
+    cfg["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 1.0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
         red_threshold=0.06,
-        ema_span_minutes=1.0,
+        drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
-        restart_after_red_policy=restart,
-        cooldown_minutes_after_red=2.0,
+        cooldown_minutes_after_red=cooldown_minutes,
     )
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -894,7 +897,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
             assert await hsl_live.owner(bot).protect()
         wave = await settled_wave(bot)
         assert not wave.unavailable
-        assert wave.permission(symbol, "long")[0] == "halted", wave
+        assert wave.permission(symbol, "long")[0] == "halted", [json.loads(d.payload) for d in wave.decisions]
         (decision,) = [
             d for d in wave.decisions if hsl_live.matches(d.scope, symbol, "long")
         ]
@@ -910,9 +913,8 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
                 c["amount"] == 2.5 and c["reduce_only"] for c in creates
             )
             assert bot.cca.balance_total == 175.0
-        # The same running bot forgets expired policy evidence without a local
-        # flag. A normal cooldown needs minutes; never needs the configured day.
-        bot.cca.now_ms = flat_at + (86_400_001 if restart == "never" else 120_001)
+        # The authored finite deadline expires from the actual flatten fact.
+        bot.cca.now_ms = flat_at + int(cooldown_minutes * 60_000) + 1
         bot.market_snapshot_provider._cache.clear()
         wave = await settled_wave(bot)
         assert not wave.unavailable
@@ -964,7 +966,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize(
     "stage",
     [
@@ -986,12 +988,12 @@ async def test_hsl_startup_services_new_red_during_stalled_warmup(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
     cfg = generated_template(legacy, mode)
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    set_risk_memory_spans(cfg, 288.0)
+    block = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
         red_threshold=0.06,
-        ema_span_minutes=1.0,
+        drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
     config_path = tmp_path / "config.json"
@@ -1257,7 +1259,7 @@ async def test_hsl_batch_waits_for_write_then_requires_new_account(
     import utils
 
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
-    bot = make_bot("unified")
+    bot = make_bot("portfolio")
     bot.get_exchange_time = lambda: NOW
     bot.approved_coins_minus_ignored_coins = {"long": {SYMBOL}, "short": set()}
     bot._live_market_snapshot_max_age_ms = lambda: 10_000
@@ -1654,9 +1656,11 @@ async def test_stalled_startup_retries_completed_sources_with_bounded_cadence():
         stop_signal_received=False,
         refresh_protective_authoritative_state=refresh,
         cm=object(),
+        positions={},
+        _pnls_manager=None,
         config={
-            "live": {"hsl_signal_mode": "unified"},
-            "bot": {"hsl": {"enabled": True}},
+            "live": {},
+            "bot": {"risk": {"hsl": {"scope": "portfolio", "enabled": True}}},
         },
     )
     instance = hsl_live.Owner(bot)
@@ -1664,7 +1668,8 @@ async def test_stalled_startup_retries_completed_sources_with_bounded_cadence():
     instance.schedule_history = lambda: None
     reads = []
 
-    async def read_sources():
+    async def read_sources(symbols):
+        assert symbols == ()
         reads.append(True)
         # A transient source failure is a completed factual result, not an
         # exception: the real reader records it and the next acquisition repairs.
@@ -1699,16 +1704,19 @@ async def test_source_retry_does_not_replace_resistant_task_or_hide_late_failure
     instance = hsl_live.Owner(
         SimpleNamespace(
             cm=object(),
+            positions={},
+            _pnls_manager=None,
             config={
-                "live": {"hsl_signal_mode": "unified"},
-                "bot": {"hsl": {"enabled": True}},
+                "live": {},
+                "bot": {"risk": {"hsl": {"scope": "portfolio", "enabled": True}}},
             },
         )
     )
     entered, release = asyncio.Event(), asyncio.Event()
     reads = []
 
-    async def read_sources():
+    async def read_sources(symbols):
+        assert symbols == ()
         reads.append(True)
         entered.set()
         await release.wait()
@@ -1834,7 +1842,7 @@ async def test_failed_fill_refresh_revokes_only_required_consumers_until_repaire
     assert instance.admit(protective)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode):
     import utils
     import passivbot_rust as pbr
@@ -1856,14 +1864,14 @@ def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode)
     owner.bind(wave, (), (order,))
     diagnostic_before = object()
     bot._hsl_diagnostic_observation = diagnostic_before
-    native = pbr.hsl_evaluate_grids
+    native = ScopeReplay.evaluate_grids
     calls = []
 
-    def evaluate(metadata, grids):
+    def evaluate(replay, metadata, grids):
         calls.append(json.loads(metadata)["snapshot"])
-        return native(metadata, grids)
+        return native(replay, metadata, grids)
 
-    monkeypatch.setattr(pbr, "hsl_evaluate_grids", evaluate)
+    monkeypatch.setattr(ScopeReplay, "evaluate_grids", evaluate)
     assert owner.admit(order)
     assert len(calls) == 1
     assert bot._hsl_diagnostic_observation is diagnostic_before
@@ -1876,7 +1884,7 @@ def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode)
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize(
     "change",
@@ -1891,8 +1899,8 @@ def test_ordinary_admission_rejects_changed_risk_inputs(
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
     bot = make_bot(mode, side=side)
     block = (
-        bot.config["bot"]["hsl"]
-        if mode == "unified"
+        bot.config["bot"]["risk"]["hsl"]
+        if mode == "portfolio"
         else bot.config["bot"][side]["hsl"]
     )
     block["red_threshold"] = 0.2
@@ -1947,6 +1955,7 @@ async def test_completed_plan_invalidated_by_fill_confirmation_is_replanned(
     ledger = bot._ensure_freshness_ledger()
     ledger.begin_epoch()
     ledger.stamp("open_orders", now_ms=NOW)
+    ledger.stamp("fills", now_ms=NOW)
     instance = hsl_live.owner(bot)
     wave = instance.capture(quotes())
     order = dict(symbol=SYMBOL, position_side="long", reduce_only=True)
@@ -2151,7 +2160,7 @@ async def test_hsl_run_exits_on_each_canonical_shutdown_flag(flag):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("fresh_owner", [False, True])
 async def test_partial_panic_recovery_retires_resting_close_without_ordinary_planning(
     tmp_path, monkeypatch, mode, fresh_owner
@@ -2165,14 +2174,13 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
     cfg = generated_template(legacy, mode)
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
-    block = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    set_risk_memory_spans(cfg, 288.0)
+    block = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
         red_threshold=0.06,
-        ema_span_minutes=1.0,
+        drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
-        restart_after_red_policy="always",
     )
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -2330,16 +2338,16 @@ from hsl_fixture import load_fake_hsl_config
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookback", ["all", 0])
+@pytest.mark.parametrize("span", [1.0, 43200.0])
 async def test_disabled_hsl_owner_keeps_ordinary_fill_refresh_without_hsl_window(
-    lookback,
+    span,
 ):
     from test_hsl_runtime import bot
 
     value = bot()
     for side in ("long", "short"):
         value.config["bot"][side]["hsl"]["enabled"] = False
-    value.config["live"]["pnls_max_lookback_days"] = lookback
+    set_risk_memory_spans(value.config, span)
     owner = hsl_live.Owner(value)
     calls = []
 
@@ -2357,15 +2365,15 @@ async def test_disabled_hsl_owner_keeps_ordinary_fill_refresh_without_hsl_window
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 async def test_disabled_hsl_protection_does_not_acquire_quotes(mode):
     from test_hsl_runtime import bot, SYMBOL
 
     value = bot(mode)
     for side in ("long", "short"):
         value.config["bot"][side]["hsl"]["enabled"] = False
-    if mode == "unified":
-        value.config["bot"]["hsl"]["enabled"] = False
+    if mode == "portfolio":
+        value.config["bot"]["risk"]["hsl"]["enabled"] = False
     value.open_orders = {SYMBOL: [{"id": "resting"}]}
     instance = hsl_live.Owner(value)
 
@@ -2495,9 +2503,9 @@ async def test_flat_unselected_order_only_panic_is_retired_by_protective_executo
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            n_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit=0.0
         )
-    cfg["bot"][side]["hsl"].update(enabled=True, restart_after_red_policy="always")
+    cfg["bot"][side]["hsl"].update(enabled=True)
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})
