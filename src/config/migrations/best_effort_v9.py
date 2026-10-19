@@ -39,18 +39,27 @@ def infer_memory_span(value, path, changes, *, missing=False):
     return span
 
 
-def remove_result_metadata(config, changes, *, wrapped=False):
+_RESULT_METADATA_KEYS = ("analysis", "metrics", "suite_metrics", "optimizer_anchor",
+                         "optimizer_evaluation_contract")
+
+
+def record_envelope_metadata(source, changes):
+    for key in _RESULT_METADATA_KEYS:
+        if key in source:
+            record_guess(changes, key, source[key], None,
+                         "discard outer saved-result metadata; old fitness and evaluator snapshots are invalid after migration")
+
+
+def remove_result_metadata(config, changes, *, wrapped=False, path_prefix=""):
     """Match the export tool's exact saved-result allowlist, never unknown fields."""
-    keys = ("analysis", "metrics", "suite_metrics", "optimizer_anchor",
-            "optimizer_evaluation_contract")
-    result_record = wrapped or any(key in config for key in keys)
-    for key in keys:
+    result_record = wrapped or any(key in config for key in _RESULT_METADATA_KEYS)
+    for key in _RESULT_METADATA_KEYS:
         if key in config:
-            record_guess(changes, key, config.pop(key), None,
+            record_guess(changes, path_prefix + key, config.pop(key), None,
                          "discard saved-result metadata; old fitness and evaluator snapshots are invalid after migration")
     if result_record:
         backtest = config.get("backtest", {})
         for key in ("coins", "cache_dir"):
             if key in backtest:
-                record_guess(changes, f"backtest.{key}", backtest.pop(key), None,
+                record_guess(changes, f"{path_prefix}backtest.{key}", backtest.pop(key), None,
                              "discard derived dataset metadata; retain authored live/scenario coin selection")

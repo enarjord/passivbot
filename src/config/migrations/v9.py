@@ -256,9 +256,13 @@ def migrate_v8_to_v9(
     reject_v8_alias_conflicts(result)
     inferred_changes = []
     if best_effort and not _coin_patch:
-        from .best_effort_v9 import remove_result_metadata
+        from .best_effort_v9 import record_envelope_metadata, remove_result_metadata
 
-        remove_result_metadata(result, inferred_changes, wrapped=payload is not source)
+        wrapped = payload is not source
+        if wrapped:
+            record_envelope_metadata(source, inferred_changes)
+        remove_result_metadata(result, inferred_changes, wrapped=wrapped,
+                               path_prefix="config." if wrapped else "")
     if not _coin_patch:
         from .final_v9 import replace_retired_metrics
 

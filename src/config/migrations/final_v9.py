@@ -126,8 +126,9 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
         if not shared:
             raise ValueError("DEAP conversion requires an explicit optimize.pymoo.shared policy; outer genetic gates and offspring counts are not equivalent")
         optimize["backend"] = "pymoo"
-        changes.append(dict(path="optimize.backend", old="deap", new="pymoo",
-                            reason="acknowledged search algorithm change; explicit pymoo policy controls evolution"))
+        if not best_effort:
+            changes.append(dict(path="optimize.backend", old="deap", new="pymoo",
+                                reason="acknowledged search algorithm change; explicit pymoo policy controls evolution"))
     mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
                "mutation_eta": "mutation_eta", "mutation_indpb": "mutation_prob"}
     for key in ("crossover_eta", "crossover_probability", "mutation_eta", "mutation_indpb",

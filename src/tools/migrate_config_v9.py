@@ -288,10 +288,14 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         raise TypeError("configuration must be a mapping")
     inferred_changes = []
     if best_effort and payload.get("config_version") != V9_SCHEMA_VERSION:
-        from config.migrations.best_effort_v9 import remove_result_metadata
+        from config.migrations.best_effort_v9 import record_envelope_metadata, remove_result_metadata
 
+        wrapped = "config" in source
+        if wrapped:
+            record_envelope_metadata(source, inferred_changes)
         payload = deepcopy(payload)
-        remove_result_metadata(payload, inferred_changes, wrapped="config" in source)
+        remove_result_metadata(payload, inferred_changes, wrapped=wrapped,
+                               path_prefix="config." if wrapped else "")
     if best_effort and payload.get("config_version") != V9_SCHEMA_VERSION and memory_span_minutes is None:
         from config.migrations.best_effort_v9 import infer_memory_span
 

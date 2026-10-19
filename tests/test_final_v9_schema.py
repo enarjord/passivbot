@@ -10,6 +10,7 @@ from config.overrides import parse_overrides
 from config.parse import load_raw_config
 from config.risk_memory import risk_bootstrap_horizon_minutes, risk_memory_spans
 from config.schema import get_template_config
+from config.migrations.v9 import migrate_v8_to_v9
 from tools.migrate_config_v9 import main, migrate
 
 
@@ -723,9 +724,10 @@ def test_best_effort_saved_result_metadata_is_reported_without_reusing_fitness(w
     assert "metrics" not in result.config and "suite_metrics" not in result.config
     assert "coins" not in result.config["backtest"] and "cache_dir" not in result.config["backtest"]
     for key in ("optimizer_evaluation_contract", "metrics", "suite_metrics", "backtest.coins", "backtest.cache_dir"):
-        assert any(item["path"] == key and item["new"] is None and item.get("best_effort")
+        path = "config." + key if wrapped else key
+        assert any(item["path"] == path and item["new"] is None and item.get("best_effort")
                    for item in result.changes)
-        assert key in caplog.text
+        assert path in caplog.text
     assert "optimizer_evaluation_contract.live.pnls_max_lookback_days" not in caplog.text
 
 
@@ -748,3 +750,39 @@ def test_best_effort_retired_excess_mode_preserves_bounded_contract(mode):
     assert "we_excess_allowance_mode" not in result.config["bot"]["long"]["risk"]
     assert any(item.get("best_effort") and item["path"] == "bot.long.risk.we_excess_allowance_mode"
                for item in result.changes)
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+def test_best_effort_reports_outer_and_inner_metadata_distinctly(converter, caplog):
+    config = v8_config()
+    config["analysis"] = {"inner_fitness": 0.1}
+    source = {"config": config, "analysis": {"outer_fitness": 0.2},
+              "metrics": {"old_fitness": 0.3}, "optimizer_evaluation_contract": {"version": 2}}
+    original = deepcopy(source)
+    result = converter(source, best_effort=True)
+    assert source == original
+    expected = {"analysis": source["analysis"], "config.analysis": config["analysis"],
+                "metrics": source["metrics"],
+                "optimizer_evaluation_contract": source["optimizer_evaluation_contract"]}
+    for path, old in expected.items():
+        entries = [item for item in result.changes if item["path"] == path]
+        assert len(entries) == 1
+        assert entries[0]["old"] == old
+        assert entries[0]["new"] is None
+        assert entries[0]["best_effort"] is True
+        assert f"[best-effort] {path}:" in caplog.text
+    assert "analysis" not in result.config
+    assert "optimizer_evaluation_contract" not in result.config
+
+
+@pytest.mark.parametrize("best_effort", [False, True])
+def test_deap_transition_has_exactly_one_unambiguous_report_entry(best_effort):
+    config = v8_config()
+    config["optimize"]["backend"] = "deap"
+    result = migrate(config, best_effort=best_effort, memory_span_minutes=43200.0,
+                     acknowledge_search_backend_change=not best_effort)
+    transitions = [item for item in result.changes if item["path"] == "optimize.backend"]
+    assert len(transitions) == 1
+    assert transitions[0]["old"] == "deap" and transitions[0]["new"] == "pymoo"
+    assert transitions[0].get("best_effort", False) is best_effort
+    assert ("acknowledged" in transitions[0]["reason"]) is not best_effort
