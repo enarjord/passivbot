@@ -106,6 +106,19 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
             from config.schema import get_template_config
             from .best_effort_v9 import record_guess
 
+            for key in ("crossover_eta", "crossover_probability", "mutation_eta",
+                        "mutation_probability", "mutation_indpb", "offspring_multiplier"):
+                if key not in optimize:
+                    continue
+                value = optimize[key]
+                if isinstance(value, bool):
+                    raise ValueError(f"optimize.{key} must be numeric, not a boolean")
+                try:
+                    number = float(value)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"optimize.{key} must be a finite number") from exc
+                if not math.isfinite(number):
+                    raise ValueError(f"optimize.{key} must be a finite number")
             defaults = get_template_config()["optimize"]["pymoo"]["shared"]
             mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
                        "mutation_eta": "mutation_eta", "mutation_probability": "mutation_prob",

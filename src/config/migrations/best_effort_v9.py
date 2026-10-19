@@ -46,8 +46,14 @@ _RESULT_METADATA_KEYS = ("analysis", "metrics", "suite_metrics", "optimizer_anch
                          "optimizer_evaluation_contract")
 
 
+def _metadata_keys():
+    from config.authored import _METADATA_KEYS
+
+    return (*_RESULT_METADATA_KEYS, *sorted(_METADATA_KEYS))
+
+
 def record_envelope_metadata(source, changes):
-    for key in _RESULT_METADATA_KEYS:
+    for key in _metadata_keys():
         if key in source:
             record_guess(changes, key, source[key], None,
                          "discard outer saved-result metadata; old fitness and evaluator snapshots are invalid after migration")
@@ -56,10 +62,10 @@ def record_envelope_metadata(source, changes):
 def remove_result_metadata(config, changes, *, wrapped=False, path_prefix=""):
     """Match the export tool's exact saved-result allowlist, never unknown fields."""
     result_record = wrapped or any(key in config for key in _RESULT_METADATA_KEYS)
-    for key in _RESULT_METADATA_KEYS:
+    for key in _metadata_keys():
         if key in config:
             record_guess(changes, path_prefix + key, config.pop(key), None,
-                         "discard saved-result metadata; old fitness and evaluator snapshots are invalid after migration")
+                         "discard metadata; migrate authored config without cached results or hydration snapshots")
     if result_record:
         backtest = config.get("backtest", {})
         for key in ("coins", "cache_dir"):

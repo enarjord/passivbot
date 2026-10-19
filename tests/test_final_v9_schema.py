@@ -904,3 +904,70 @@ def test_saved_analysis_aliases_cannot_become_configuration_authority(converter)
     result = converter(config, best_effort=True)
     assert "analysis" not in result.config
     assert any(item["path"] == "analysis" and item.get("best_effort") for item in result.changes)
+
+
+@pytest.mark.parametrize("key", ["crossover_eta", "crossover_probability", "mutation_eta",
+                                 "mutation_probability", "mutation_indpb", "offspring_multiplier"])
+@pytest.mark.parametrize("value", [False, True])
+def test_best_effort_rejects_boolean_deap_numeric_controls(key, value):
+    config = v8_config()
+    config["optimize"].update(backend="deap", **{key: value})
+    config["optimize"]["pymoo"]["shared"] = {}
+    original = deepcopy(config)
+    with pytest.raises(ValueError, match=rf"optimize\.{key} must be numeric, not a boolean"):
+        migrate(config, best_effort=True)
+    assert config == original
+
+
+def test_best_effort_explicit_pymoo_policy_does_not_hide_malformed_deap_input():
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb=False)
+    with pytest.raises(ValueError, match="mutation_indpb must be numeric, not a boolean"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_best_effort_rejects_nonfinite_deap_probabilities(value):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_probability=value)
+    config["optimize"]["pymoo"]["shared"] = {}
+    with pytest.raises(ValueError, match="mutation_probability must be a finite number"):
+        migrate(config, best_effort=True)
+
+
+@pytest.mark.parametrize("value", [False, True])
+def test_best_effort_cli_rejects_boolean_sentinel_before_writing(tmp_path, value, capsys):
+    config = v8_config()
+    config["optimize"].update(backend="deap", mutation_indpb=value)
+    config["optimize"]["pymoo"]["shared"] = {}
+    source, target, report = (tmp_path / name for name in ("source.json", "target.json", "report.json"))
+    source.write_text(json.dumps(config))
+    original = source.read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        main([str(source), str(target), "--best-effort", "--report", str(report)])
+    assert exc.value.code == 2
+    assert "must be numeric, not a boolean" in capsys.readouterr().err
+    assert source.read_bytes() == original
+    assert not target.exists() and not report.exists()
+
+
+@pytest.mark.parametrize("converter", [migrate, migrate_v8_to_v9])
+@pytest.mark.parametrize("key", ["_raw", "_raw_effective", "_transform_log", "_coins_sources"])
+def test_best_effort_internal_metadata_does_not_drive_inference(converter, key):
+    config = v8_config()
+    config[key] = {"backtest": {"visible_metrics": ["adg_strategy_eq_w_per_exposure_long"]},
+                   "live": {"pnls_max_lookback_days": 999.0}}
+    result = converter(config, best_effort=True)
+    assert key not in result.config
+    assert result.config["backtest"].get("ew_half_life_days") is None
+    assert result.config["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    guesses = [item for item in result.changes if item.get("best_effort")]
+    assert {item["path"] for item in guesses} == {key, "live.pnls_max_lookback_days"}
+
+
+def test_internal_metadata_alone_does_not_authorize_dropping_authored_coins():
+    config = v8_config()
+    config["_raw"] = {}
+    config["backtest"]["coins"] = {"bybit": ["AAA"]}
+    with pytest.raises(ValueError, match="backtest.coins is an unknown"):
+        migrate(config, best_effort=True)

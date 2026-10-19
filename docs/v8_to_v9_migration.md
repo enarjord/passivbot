@@ -130,7 +130,7 @@ are emitted as choices are made, including before a later validation failure.
 | `restart_after_red_policy="never"` | Remove it and adopt finite cooldown plus ordinary admission gates |
 | Retired `we_excess_allowance_mode="bounded"` | Remove selector; retain the bounded allowance contract (`legacy_raw` still fails) |
 | Active realized-loss gate | Adopt independent decaying realized memory and report each effective context |
-| Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract` | Remove obsolete result metadata; discard derived `backtest.coins`/`cache_dir` only for recognized result records |
+| Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract`, and recognized hydration metadata | Remove obsolete result/cache snapshots before inference; discard derived `backtest.coins`/`cache_dir` only for recognized result records |
 | DEAP backend | Switch to pymoo, retain authored shared policy, approximate missing operator fields from old controls or canonical pymoo defaults |
 
 Explicit `--lookback-ema-span-minutes`, `--memory-span` and
