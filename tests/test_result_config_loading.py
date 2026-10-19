@@ -120,6 +120,42 @@ def test_wrapped_results_identified_by_outer_or_inner_metadata(tmp_path, marker_
     assert "analysis" not in loaded
 
 
+@pytest.mark.parametrize("marked", [False, True])
+@pytest.mark.parametrize("parts,value", [
+    (("disable_plotting",), "all"),
+    (("_hlcvs_dataset_override_meta",), {"dataset_override": True}),
+    (("backtest", "cache_dir"), {"binance": "caches/hlcvs_data/fixture"}),
+    (("backtest", "cm_debug_level"), 1),
+    (("backtest", "cm_progress_log_interval_seconds"), 30.0),
+    (("backtest", "cm_remote_fetch_bar"), True),
+])
+def test_saved_backtest_runtime_fields_are_only_removed_from_results(
+    tmp_path, marked, parts, value,
+):
+    source = get_template_config()
+    parent = source if len(parts) == 1 else source[parts[0]]
+    parent[parts[-1]] = value
+    if marked:
+        source["metrics"] = {"objectives": {"adg_strategy_eq": 0.001}}
+    path = tmp_path / "config.json"
+    original = json.dumps(source)
+    path.write_text(original)
+
+    if marked:
+        loaded = load_prepared_config(
+            str(path), verbose=False, log_info=False, allow_result_records=True,
+        )
+        loaded_parent = loaded if len(parts) == 1 else loaded[parts[0]]
+        assert parts[-1] not in loaded_parent
+        assert cleanup_config(source) == cleanup_config(get_template_config())
+    else:
+        with pytest.raises(ValueError, match="unknown configuration field"):
+            load_prepared_config(
+                str(path), verbose=False, log_info=False, allow_result_records=True,
+            )
+    assert path.read_text() == original
+
+
 @pytest.mark.parametrize("marker", [
     "analysis", "metrics", "suite_metrics", "optimizer_anchor",
     "optimizer_evaluation_contract",

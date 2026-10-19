@@ -33,6 +33,13 @@ def extract_result_config(source: dict, *, allow_unmarked_wrapper: bool = False)
     payload = deepcopy(payload)
     for key in RESULT_METADATA_KEYS:
         payload.pop(key, None)
-    if result_record and isinstance(payload.get("backtest"), dict):
-        payload["backtest"].pop("coins", None)
+    if result_record:
+        for key in ("disable_plotting", "_hlcvs_dataset_override_meta"):
+            payload.pop(key, None)
+        if isinstance(payload.get("backtest"), dict):
+            for key in (
+                "coins", "cache_dir", "cm_debug_level",
+                "cm_progress_log_interval_seconds", "cm_remote_fetch_bar",
+            ):
+                payload["backtest"].pop(key, None)
     return payload
