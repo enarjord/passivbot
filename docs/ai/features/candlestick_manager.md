@@ -11,7 +11,10 @@
    when offline policy permits them. Importing legacy historical data is an explicit offline
    `import-historical-data` command with separate dry-run and execute modes; startup does not
    convert or silently consume a legacy store. Imports preserve sources and already-valid target
-   chunks. Current-store integrity and recovery checks remain active.
+   rows. Dry runs leave the target tree unchanged, including locks and SQLite sidecars. Validate
+   sources and all overlapping destination chunks before the first row write, then revalidate each
+   chunk under its write lock; this is not a transaction across months. Reject historical inputs
+   whose volume units are ambiguous. Current-store integrity and recovery checks remain active.
    For missing Binance futures 1m data in the current v2 path, remote source priority is Binance
    Vision monthly archives, Binance Vision daily archives, then CCXT. More than seven days of
    missing bars in an eligible closed month selects the monthly archive. Eligible days with more

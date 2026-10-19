@@ -394,12 +394,20 @@ passivbot tool import-historical-data --legacy-root historical_data \
   --symbol BTCUSDT --timeframe 1m --start-ms 1704067200000 --end-ms 1704153600000
 ```
 
-Choose the exact source root, layout, symbol and half-open time range. Inspect the reported
-row count, then add `--execute` to import. `daily_cache` is the other source layout.
-Existing valid current-store rows win; repeated import adds no duplicates. Malformed source
-rows and corrupt/conflicting current chunks fail explicitly. Source shards are never renamed,
-deleted or rewritten. Dry inspection does not create or modify the requested target store.
-Current-store integrity checks remain part of startup independently of legacy conversion.
+Choose the source root, layout, symbol and aligned half-open time range `[start-ms, end-ms)`.
+Inspect the reported row count, then add `--execute` to import. `daily_cache` is the other
+source layout. Historical imports resolve compact symbols such as `BTCUSDT` to the base-coin
+directory and recognize established exchange directory aliases, including `ohlcvs_binanceusdm`
+and `ohlcvs_futures`. Historical GateIO shards are rejected because their volume units are
+ambiguous; daily-cache shards with explicit base-volume fields remain supported.
+
+Existing valid current-store rows win; repeated import adds no duplicates. The importer validates
+source rows and overlapping destination chunks before writing any rows. Malformed source rows
+and corrupt/conflicting current chunks fail explicitly. Writes recheck each destination chunk
+under its lock; a later I/O failure or concurrent change can still leave earlier months imported.
+Source shards are never renamed, deleted or rewritten. Dry inspection does not create or modify
+the requested target store, including lock files or SQLite sidecars. Current-store integrity
+checks remain part of startup independently of legacy conversion.
 
 ## Crash finder
 

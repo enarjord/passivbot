@@ -66,8 +66,10 @@ since the latest release tag; these features may already be available when insta
   without a measured basis. Preserve risk zero initialization and exposure RMS definitions.
 
 - Import legacy historical candles only through explicit `import-historical-data` dry-run/execute
-  commands. Validate source order and cross-shard overlaps before writing; preserve source files
-  and valid current-store rows, and retain startup integrity checks.
+  commands with exclusive end bounds and established exchange-directory aliases. Validate source
+  order, cross-shard overlaps and destination chunks before writing; reject ambiguous historical
+  GateIO volume. Preserve source files and valid current-store rows, keep dry runs read-only,
+  and retain startup integrity checks.
 
 - Qualify a fixed finite HSL cooldown from the latest pre-final-fill RED or final
   accounting RED. Later flat queries and balance changes cannot renew or cancel
