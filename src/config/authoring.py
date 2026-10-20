@@ -279,6 +279,16 @@ def _event_path(event):
     return tuple(event.get("path_parts", event["path"].split(".")))
 
 
+def _canonical_coin_event(path, value):
+    """Use loader coin identities in reports without rewriting authored selectors."""
+    if path == ("coin_overrides",):
+        value = normalize_coin_override_keys(value, verbose=False)
+    elif path[:1] == ("coin_overrides",) and len(path) > 1:
+        coin = next(iter(normalize_coin_override_keys({path[1]: {}}, verbose=False)))
+        path = ("coin_overrides", coin, *path[2:])
+    return path, deepcopy(value)
+
+
 def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, applied_overrides=()):
     from .optimize_bounds import flatten_optimize_bounds
     from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
@@ -348,7 +358,8 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     selected_target = (parts if direct_coin else
                        ("coin_overrides", coin, *query_target) if coin is not None else query_target)
     events = []
-    root_value = _get(authored, parts)
+    authored_coins = normalize_coin_override_keys(authored.get("coin_overrides", {}), verbose=False)
+    root_value = (_get(authored_coins, parts[1:]) if direct_coin else _get(authored, parts))
     if root_value is not _MISSING:
         events.append({"kind": "authored", "path": ".".join(parts), "value": deepcopy(root_value)})
     elif not direct_coin:
@@ -358,10 +369,19 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
                 and "bot" in authored and parts[1] not in authored["bot"]):
             events[-1]["rule"] = "omitted_side_disabled"
     context = deepcopy(full)
+    context.setdefault("live", {})["base_config_path"] = base_config_path
+    # Materializing optimizer dependencies consumes local files. Keep their
+    # authored origins separate, with the same canonical identities as the loader.
+    source_context = deepcopy(context)
+    source_context["coin_overrides"] = normalize_coin_override_keys(
+        source_context["coin_overrides"], verbose=False,
+    )
     dataset_selection = None
     applied_overrides = []
 
     def trace(name, target, dependencies, value, operation):
+        target, value = _canonical_coin_event(target, value)
+        dependencies = [_canonical_coin_event(source, None)[0] for source in dependencies]
         event = {"kind": "optimizer_transform", "name": name,
                  "path": ".".join(target), "path_parts": list(target),
                  "dependencies": [{"path": ".".join(source), "path_parts": list(source)}
@@ -372,15 +392,17 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
             events.append(event)
 
     def apply(raw, kind):
-        nonlocal context
+        nonlocal context, source_context
         normalized = normalize_scenario_overrides(raw)
         for selector, value in normalized.items():
             target = resolve_dotted_config_path(context, selector)
+            target, event_value = _canonical_coin_event(target, value)
             event = {"kind": kind, "path": ".".join(target), "path_parts": list(target),
-                     "value": deepcopy(value)}
+                     "value": event_value}
             applied_overrides.append(event)
             if _intersects(query_target, target) or _intersects(selected_target, target):
                 events.append(event)
+            _set(source_context, target, event_value)
         context = _patch(context, normalized)
 
     if optimize:
@@ -419,7 +441,7 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
             from optimizer_overrides import apply_coupled_unstuck_ema_spans
 
             context = apply_coupled_unstuck_ema_spans(context, trace=trace)
-    before_files = deepcopy(context)
+    before_files = deepcopy(source_context)
     effective, unresolved = _resolved_context(context, base_config_path=base_config_path, require_complete=False)
     # The same non-live loader resolves null inheritance, ignored lists and
     # dynamic dates without fetching market data.
@@ -461,7 +483,8 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
             generated = [event for event in applied_overrides if
                          selected_target[:len(_event_path(event))] == _event_path(event)
                          and _get(event["value"], selected_target[len(_event_path(event)):]) is not _MISSING]
-            event = (deepcopy(generated[-1]) if generated and inline_value is not _MISSING else
+            event = (deepcopy(generated[-1]) if generated and (
+                         inline_value is not _MISSING or generated[-1]["kind"] == "optimizer_transform") else
                      {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
                      "path": ".".join(selected_target),
                      "path_parts": list(selected_target), "value": deepcopy(value)}

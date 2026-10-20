@@ -715,3 +715,25 @@ def test_explain_coin_bounds_keeps_exact_target_transform_separate_from_declarat
     assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0"]] * 2
     assert report["search"]["status"] == "optimizer_transform"
     assert all(event["kind"] != "normalization" for event in report["sources"])
+
+
+@pytest.mark.parametrize("selected", ["SHIB", "1000SHIB"])
+def test_explain_alias_coin_bound_trace_uses_canonical_identity_without_rewriting_input(selected):
+    source = policy()
+    source["optimize"]["bounds"] = {}
+    source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    source["coin_overrides"] = {"1000SHIB": {"bot": {"long": {"strategy": {
+        "trailing_martingale": {"entry": {"ema_span_0": 321.5}},
+    }, "unstuck": {"ema_span_0": 42.5}}}}}
+    original = deepcopy(source)
+    report = explain_config(source, "optimize.bounds.long.unstuck.ema_span_0", coin=selected, optimize=True)
+    event = report["sources"][-1]
+    assert event["kind"] == "optimizer_transform"
+    assert event["path_parts"] == ["coin_overrides", "SHIB", "bot", "long", "unstuck", "ema_span_0"]
+    assert event["dependencies"][0]["path_parts"] == [
+        "coin_overrides", "SHIB", "bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0",
+    ]
+    assert event["value"] == 321.5
+    assert report["search"]["status"] == "optimizer_transform"
+    assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0"]] * 2
+    assert source == original
