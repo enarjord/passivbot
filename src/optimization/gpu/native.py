@@ -86,6 +86,10 @@ class NativeBacktestService:
         device = gpu_device()
         if self._required_device is not None and device != self._required_device:
             raise RuntimeError("CUDA backtest service requires an NVIDIA CUDA device")
+        if self._batch_tuner is not None and device == "mps":
+            # Device selection stays on the owner, before prepared replay limits
+            # create a controller and clamp its initial width.
+            self._batch_tuner.initial = 256
         scope = metal_residency_scope if device == "mps" else cuda_residency_scope
         try:
             with scope() as residency:

@@ -314,6 +314,10 @@ since the latest release tag; these features may already be available when insta
   frequencies, smoothing durations within each count to avoid misranking mixed partial
   batches. Keep cold-shape exclusion, bounds, cooldowns and rollback.
 
+- Start automatic Metal GPU optimizer batches at 256 candidates within prepared work,
+  scratch and service admission limits, retaining CUDA's initial width of 64 and
+  existing explicit-width and tuning-off behavior.
+
 - Assess native GPU optimizer batch-width trials after six successful warm observations and
   three seconds of completed work, retaining cold-shape exclusion, prepared work and scratch
   limits, demand and memory checks, cooldowns and rollback.
