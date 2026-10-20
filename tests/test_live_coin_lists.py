@@ -82,6 +82,8 @@ def _make_mode_override_bot(auto_gs=True):
             "short": {"size": 0.0, "price": 0.0},
         }
     }
+    bot.config = {"bot": {side: {"forager": {"always_include": []}}
+                          for side in ("long", "short")}}
     bot.open_orders = {}
     bot.coin_overrides = {}
     bot.approved_coins_minus_ignored_coins = {

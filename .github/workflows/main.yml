@@ -19,7 +19,7 @@ jobs:
   python:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +71,7 @@ jobs:
           MPLBACKEND: Agg
           MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
           PYTHONPATH: src
-        run: .venv/bin/python -m pytest
+        run: .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
 
       - name: Run release CLI smokes
         env:

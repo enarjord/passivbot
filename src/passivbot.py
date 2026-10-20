@@ -192,7 +192,7 @@ BOT_CLOSE_TIMEOUT_SECONDS = (
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 
-from config.universe import get_side_universe_sources
+from config.universe import get_side_universe_sources, require_side_universe_sources
 
 class FillHistoryCoverageUnavailable(RuntimeError):
     """Raised when live risk gates need fill history whose lookback is unproven."""
@@ -20110,7 +20110,7 @@ class Passivbot:
                     raw_source = config_sources[k]
                     source_by_list_kind[k] = "config_sources"
                 else:
-                    raw_source = self.live_value(k)
+                    raw_source = require_side_universe_sources(self.config, k)
                     source_by_list_kind[k] = "live_value"
                 parsed = normalize_coins_source(
                     raw_source, allow_all=(k == "approved_coins")
@@ -20540,10 +20540,7 @@ async def _run_live(startup_context: dict):
 
     startup_context["stage"] = "custom_endpoints"
     custom_endpoints_cli = args.custom_endpoints
-    live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
-    custom_endpoints_cfg = (
-        live_section.get("custom_endpoints_path") if live_section else None
-    )
+    custom_endpoints_cfg = get_optional_live_value(config, "custom_endpoints_path", None)
 
     override_path = None
     autodiscover = True

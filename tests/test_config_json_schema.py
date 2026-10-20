@@ -151,7 +151,6 @@ def test_bounds_do_not_open_aliases_or_non_numeric_genes(validator, bounds):
 
 @pytest.mark.parametrize("patch", [
     {"bot.long.unstuck.ema_span_0": 60.5},
-    {"bot": {"long": {"unstuck.ema_span_0": 60.5}}},
     {"coin_overrides.BTC.bot.long.unstuck.ema_span_0": 60.5},
     {"bot.long.entry_cooldown.max_duration_minutes": None},
 ])
@@ -160,6 +159,12 @@ def test_literal_and_nested_overrides_reuse_known_fields(validator, patch, owner
     payload = source(**({"backtest": {"scenarios": [{"overrides": patch}]}} if owner == "scenario"
                        else {"optimize": {"fixed_runtime_overrides": patch}}))
     validator.validate(payload)
+
+
+def test_nested_scenario_overrides_remain_supported(validator):
+    validator.validate(source(backtest={"scenarios": [{"overrides": {
+        "bot": {"long": {"unstuck.ema_span_0": 60.5}},
+    }}]}))
 
 
 @pytest.mark.parametrize("patch", [
@@ -174,16 +179,54 @@ def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, 
 
 
 @pytest.mark.parametrize("patch", [
+    {"bot": {"long": {"unstuck.ema_span_0": 60.5}}},
+    {"bot": {}},
+    {"live": {"account.leverage": 2}},
+    {"backtest": {"starting_balance": 1000.0}},
     {"bot.long.unstuck": {"close_pct": 0.1}},
     {"bot": {"long.unstuck": {"close_pct": 0.1}}},
     {"optimize.prefilter.penalty_weight": 1.0},
     {"optimize": {"prefilter": {"penalty_weight": 1.0}}},
     {"coin_overrides": {"BTC": {"live": {"account": {"leverage": 2}}}}},
+    {"coin_overrides.BTC": {"live": {"account": {"leverage": 2}}}},
     {"coin_overrides.BTC.bot.long.unstuck": {"close_pct": 0.1}},
 ])
 def test_fixed_runtime_schema_reuses_paths_but_rejects_object_pins_and_prefilter_policy(validator, patch):
     with pytest.raises(ValidationError):
         validator.validate(source(optimize={"fixed_runtime_overrides": patch}))
+
+
+def test_nested_fixed_pin_is_rejected_by_schema_and_runtime(validator):
+    payload = source(optimize={"fixed_runtime_overrides": {
+        "bot": {"long": {"unstuck.ema_span_0": 60.5}},
+    }})
+    with pytest.raises(ValidationError):
+        validator.validate(payload)
+    with pytest.raises(TypeError, match="must target leaf"):
+        prepare_config(payload, verbose=False)
+
+
+@pytest.mark.parametrize("coin", ["BTC", "bybit::BTC/USDT:USDT"])
+def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin):
+    from config.load import prepare_config
+
+    payload = source(
+        coin_overrides={coin: {"bot": {"long": {"unstuck": {"close_pct": 0.1}}}}},
+        backtest={"scenarios": [{"label": "atomic", "overrides": {
+            f"coin_overrides.{coin}": {"bot": {"long": {"unstuck": {"ema_span_0": 42.5}}}},
+        }}]},
+    )
+    validator.validate(payload)
+    prepare_config(payload, verbose=False)
+    payload["backtest"]["scenarios"][0]["overrides"][f"coin_overrides.{coin}"] = {
+        "override_config_path": "policy.json",
+    }
+    validator.validate(payload)
+    payload["backtest"]["scenarios"][0]["overrides"][f"coin_overrides.{coin}"] = {
+        "bot": {"long": {"risk": {"max_positions": 2}}},
+    }
+    with pytest.raises(ValidationError):
+        validator.validate(payload)
 
 
 def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
