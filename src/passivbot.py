@@ -192,7 +192,7 @@ BOT_CLOSE_TIMEOUT_SECONDS = (
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 
-from config.universe import get_side_universe_sources
+from config.universe import get_side_universe_sources, require_side_universe_sources
 
 class FillHistoryCoverageUnavailable(RuntimeError):
     """Raised when live risk gates need fill history whose lookback is unproven."""
@@ -20110,7 +20110,7 @@ class Passivbot:
                     raw_source = config_sources[k]
                     source_by_list_kind[k] = "config_sources"
                 else:
-                    raw_source = self.live_value(k)
+                    raw_source = require_side_universe_sources(self.config, k)
                     source_by_list_kind[k] = "live_value"
                 parsed = normalize_coins_source(
                     raw_source, allow_all=(k == "approved_coins")

@@ -79,7 +79,9 @@ class CoinFilterHarness(Passivbot):
         self._live_flags = {"filter_by_min_effective_cost": filter_min_cost_flag}
         self.warn_triggered = False
         self.positions = {}
-        self.config = {"live": {}}
+        self.config = {"bot": {"global": {"universe": {
+            "filter_by_min_effective_cost": filter_min_cost_flag,
+        }}}}
 
     # ---- overrides for get_filtered_coins dependencies ----
 
@@ -407,7 +409,7 @@ def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
     assert "projected_initial_cost=1.473263" in seen[0]
     assert "required_effective_min_cost=10.100000" in seen[0]
     assert "balance=51.154957" in seen[0]
-    assert "live.filter_by_min_effective_cost=false" in seen[0]
+    assert "bot.global.universe.filter_by_min_effective_cost=false" in seen[0]
     assert "override_may_create_exchange-min-sized_entries" in seen[0]
 
 

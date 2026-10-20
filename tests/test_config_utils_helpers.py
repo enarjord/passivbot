@@ -3,6 +3,7 @@ from config.universe import set_side_universe_sources
 import logging
 import argparse
 from copy import deepcopy
+import re
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -1783,16 +1784,17 @@ def _single_line_help(help_text: str) -> str:
 def _assert_help_option_aliases(
     help_text: str, long_option: str, short_option: str, metavar: str
 ) -> None:
-    """Assert argparse exposes both aliases without depending on render order."""
+    """Assert both aliases share an invocation across argparse render styles."""
     normalized = _single_line_help(help_text)
-    long_rendered = f"{long_option} {metavar}"
-    short_rendered = f"{short_option} {metavar}"
-    assert (
-        f"{long_rendered}, {short_rendered}" in normalized
-        or f"{short_rendered}, {long_rendered}" in normalized
-        or f"{long_option}, {short_rendered}" in normalized
-        or f"{short_option}, {long_rendered}" in normalized
-    )
+    argument = rf"--?[\w.-]+(?: {re.escape(metavar)})?"
+    for match in re.finditer(rf"{argument}(?:, {argument})+", normalized):
+        aliases = match.group().split(", ")
+        names = {alias.split()[0] for alias in aliases}
+        if {long_option, short_option} <= names and any(
+            alias.endswith(f" {metavar}") for alias in aliases
+        ):
+            return
+    raise AssertionError(f"missing shared invocation for {long_option}, {short_option} {metavar}")
 
 
 @pytest.mark.parametrize(
@@ -1802,10 +1804,21 @@ def _assert_help_option_aliases(
         "-s CSV_OR_PATH, --symbols CSV_OR_PATH",
         "--symbols, -s CSV_OR_PATH",
         "-s, --symbols CSV_OR_PATH",
+        "--symbols, -s, --bot.long.universe.approved_coins CSV_OR_PATH",
+        "--bot.long.universe.approved_coins, -s, --symbols CSV_OR_PATH",
     ],
 )
 def test_help_option_alias_assertion_accepts_supported_argparse_orderings(rendered):
     _assert_help_option_aliases(rendered, "--symbols", "-s", "CSV_OR_PATH")
+
+
+@pytest.mark.parametrize("rendered", [
+    "--symbols CSV_OR_PATH  source list  -s CSV_OR_PATH  another setting",
+    "--symbols, -s, --bot.long.universe.approved_coins",
+])
+def test_help_option_alias_assertion_requires_one_value_taking_action(rendered):
+    with pytest.raises(AssertionError):
+        _assert_help_option_aliases(rendered, "--symbols", "-s", "CSV_OR_PATH")
 
 
 def test_optimize_default_help_groups_common_flags_and_hides_bounds():
