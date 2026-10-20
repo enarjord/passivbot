@@ -143,11 +143,11 @@ def build_contract_bot(exchange: str, quote: str = "USDT"):
     bot.user = "ccxt-contracts"
     bot.quote = quote
     bot.config = {
+        "bot": {"global": {"hedge_mode": True}},
         "live": {
             "time_in_force": "gtc",
             "margin_mode_preference": "cross",
             "leverage": 3,
-            "hedge_mode": True,
         }
     }
     bot.coin_overrides = {}
