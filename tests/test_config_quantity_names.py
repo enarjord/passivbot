@@ -15,6 +15,16 @@ from released_v8_fixtures import released_v8_policy
 from tools.migrate_config_v9 import migrate
 
 
+def test_public_position_side_scope_is_not_truncated_in_console_diagnostics():
+    from live.event_bus import EventTypes, LiveEvent, format_console_event
+
+    event = LiveEvent(EventTypes.HSL_STATUS, data={
+        "engine": "hsl", "signal_mode": "position_side", "observation_status": "current",
+        "counts": {name: 0 for name in ("green", "red", "inactive", "unavailable", "estimated")},
+    })
+    assert "mode=position_side " in format_console_event(event)
+
+
 @pytest.mark.parametrize("scope,native", [
     ("coin", "coin"), ("position_side", "pside"), ("portfolio", "portfolio"),
 ])
