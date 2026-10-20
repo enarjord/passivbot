@@ -1610,7 +1610,7 @@ class Passivbot:
             if page_debug_symbols:
                 cm_kwargs["page_debug_symbols"] = page_debug_symbols
         # Archive fetching: disabled by default for live bots (avoids timeout issues)
-        # Set live.enable_archive_candle_fetch=true to enable if needed
+        # Set live.candles.enable_archive_candle_fetch=true to enable if needed
         archive_enabled = get_optional_live_value(
             config, "enable_archive_candle_fetch", False
         )
