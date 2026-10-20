@@ -193,81 +193,53 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
 
 
 def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracker=None) -> None:
-    """Expose omitted adaptive bounds without opening new search ranges.
+    """Materialize omitted optimizer dimensions as fixed effective bot values.
 
-    source_bounds records authored bounds before template seeding. Bot values
-    must already have their canonical defaults and normalized score weights.
+    The complete template is an explicit starting profile, never an authority
+    for missing bounds in an authored document. ``source_bounds`` must describe
+    the input before template hydration. Nullable policy remains outside the
+    numeric genome until an explicit numeric domain is supplied.
     """
-    kind = config['bot']['global']['strategy_kind']
+    from .param_paths import OPTIMIZABLE_BOT_KEY_PATHS, iter_optimizer_key_paths
+
+    kind = config["bot"]["global"]["strategy_kind"]
     bounds = config["optimize"]["bounds"]
     authored = flatten_optimize_bounds(
         bounds if source_bounds is None else source_bounds, strategy_kind=kind
     )
+    keys = set(strategy_optimize_key_path_map(kind)) | set(OPTIMIZABLE_BOT_KEY_PATHS)
     for side in BOT_POSITION_SIDES:
-        forager = config["bot"][side]["forager"]
-        cooldown = config["bot"][side]["entry_cooldown"]
-        for group, local_key, value in (
-            (
-                "forager", "score_weights_unilateralness",
-                forager["score_weights"]["unilateralness"],
-            ),
-            ("forager", "unilateralness_ema_span_1m", forager["unilateralness_ema_span_1m"]),
-            (
-                "entry_cooldown", "weights_minutes_exposure_ratio",
-                cooldown["weights_minutes"]["exposure_ratio"],
-            ),
-            (
-                "entry_cooldown", "weights_minutes_adverse_directionality",
-                cooldown["weights_minutes"]["adverse_directionality"],
-            ),
-            ("entry_cooldown", "min_duration_minutes", cooldown["min_duration_minutes"]),
-            ("entry_cooldown", "max_duration_minutes", cooldown["max_duration_minutes"]),
-        ):
-            flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY[group][local_key]
-            bound_key = f"{side}_{flat_key}"
-            if bound_key in authored:
-                # Keep explicit nested/legacy bounds ahead of seeded shorthand
-                # defaults when the canonical grouped representation is built.
-                set_flat_optimize_bound(bounds, kind, bound_key, authored[bound_key])
-                continue
-            # Null means an unbounded duration, not a numeric optimizer endpoint.
-            if value is None:
-                continue
-            if group == "entry_cooldown" and local_key == "max_duration_minutes":
-                if not math.isfinite(float(value)):
-                    raise ValueError(f"bot.{side}.entry_cooldown.max_duration_minutes must be finite when set")
-            frozen = [value, value]
-            local_path = _shared_bound_local_path(group, local_key)
-            target = bounds.setdefault(side, {}).setdefault(group, {})
-            for part in local_path[:-1]:
-                target = target.setdefault(part, {})
-            leaf = local_path[-1]
-            if tracker is not None:
-                path = ["optimize", "bounds", side, group, *local_path]
-                if leaf not in target:
-                    tracker.add(path, frozen)
-                elif target[leaf] != frozen:
-                    tracker.update(path, target[leaf], frozen)
-            target[leaf] = frozen
-
-    from .param_paths import resolve_optimizer_key_path
-    span_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
-    if config["bot"]["global"]["hsl"]["scope"] == "portfolio":
-        span_keys.append("hsl_memory_ema_span_minutes")
-    else:
-        for side in BOT_POSITION_SIDES:
-            span_keys.append(f"{side}_hsl_memory_ema_span_minutes")
-    for key in span_keys:
-        path = resolve_optimizer_key_path(config, key)
-        value = config
-        for part in path:
-            # Cleaning can preserve a sparse portfolio policy. A missing
-            # authorization value cannot supply an implicit optimizer bound.
-            if not isinstance(value, dict) or part not in value:
-                break
-            value = value[part]
+        for fields in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.values():
+            keys.update(f"{side}_{key}" for key in fields.values())
+    portfolio = config["bot"]["global"]["hsl"]["scope"] == "portfolio"
+    if portfolio:
+        keys = {key for key in keys if not key.startswith(("long_hsl_", "short_hsl_"))}
+        keys.update(SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].values())
+    rebuilt = {}
+    for key, path in iter_optimizer_key_paths(config, sorted(keys | set(authored))):
+        if key in authored:
+            value = authored[key]
         else:
-            set_flat_optimize_bound(bounds, kind, key, authored.get(key, [value, value]))
+            value = config
+            for part in path or ():
+                if not isinstance(value, dict) or part not in value:
+                    break
+                value = value[part]
+            else:
+                if value is None:
+                    continue
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise TypeError(f"{'.'.join(path)} must be numeric for an optimizer bound")
+                if not math.isfinite(float(value)):
+                    raise ValueError(f"{'.'.join(path)} must be finite for an optimizer bound")
+                value = [value, value]
+                set_flat_optimize_bound(rebuilt, kind, key, value)
+            continue
+        set_flat_optimize_bound(rebuilt, kind, key, value)
+    if tracker is not None and bounds != rebuilt:
+        tracker.update(["optimize", "bounds"], bounds, rebuilt)
+    bounds.clear()
+    bounds.update(rebuilt)
 
 
 def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
@@ -361,12 +333,8 @@ def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio
                 flat[key] = [value[0], value[0]]
             elif len(value) == 2:
                 flat[key] = sorted(value)
-    rebuilt = get_optimize_bounds_defaults()
-    if portfolio_hsl:
-        for side in BOT_POSITION_SIDES:
-            rebuilt[side].pop("hsl", None)
-    for pside in BOT_POSITION_SIDES:
-        rebuilt[pside]["strategy"] = {normalized_kind: deepcopy(rebuilt[pside]["strategy"][normalized_kind])}
+    # Sorting must never authorize a search dimension omitted by the author.
+    rebuilt = {}
     for flat_key, value in flat.items():
         set_flat_optimize_bound(rebuilt, normalized_kind, flat_key, value)
     bounds.clear()

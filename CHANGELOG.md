@@ -13,6 +13,10 @@ since the latest release tag; these features may already be available when insta
   with closed objects, sparse overrides and canonical nested optimizer bounds. Field metadata
   now documents shared optimizer bindings, coin permissions, units and validator domains;
   `passivbot tool config-schema` prints/checks the schema or describes one field.
+- Freeze independent optimizer genes omitted from authored v9 bounds at their configured values.
+  Add `tool optimizer-bounds` for explicit recommended ranges, preserve released-v8 inherited ranges
+  during migration, and reject partial normalized-weight searches that would move fixed weights.
+  Explicit optimizer relationships retain authority over their derived effective values.
 
 - Pin released-v8 migration defaults independently of the current schema, distinguish omitted
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.

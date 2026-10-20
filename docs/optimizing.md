@@ -81,6 +81,21 @@ the saved population rather than starting a new one.
 
 ## Running Optimization
 
+An authored v9 config searches only its explicitly listed domains. Missing bounds fix the
+corresponding normalized numeric genes; they do not inherit ranges from the schema template.
+Explicit `enable_overrides` relationships can still derive effective target values from searched
+sources, even when a target's own gene is omitted or fixed. Review these relationships with bounds;
+a fixed independent gene does not imply a fixed derived result.
+Use `passivbot tool optimizer-bounds input.json search.json` to write recommended ranges explicitly.
+Running `passivbot optimize` without a config selects the complete starting profile, whose visible
+bound ranges remain searched. Existing fixed/runtime/scenario and anchor precedence still applies;
+anchors and seeds are clamped to the effective domains, including omitted fixed coordinates.
+
+Normalized Forager weights must be searched together when they have positive participating
+coordinates. A partial weight fine-tune, scenario pin, or fixed positive sibling fails with an actionable
+group diagnostic; either select the entire group or freeze it. A missing zero coordinate is
+permitted only when it remains zero through normalization, including the all-zero fallback.
+
 ```bash
 passivbot optimize [path/to/config.json]
 ```

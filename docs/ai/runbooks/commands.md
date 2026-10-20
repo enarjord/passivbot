@@ -99,6 +99,7 @@ passivbot tool clean-config configs/private/input.json configs/private/live.json
 passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 passivbot tool migrate-config-v9 config_v8.json config_v9.json --lookback-ema-span-minutes 43200.0 --report migration-report.json
+passivbot tool optimizer-bounds input.json search.json --preset recommended
 passivbot tool compare-backtests path/to/v8/result path/to/v9/result
 ```
 
