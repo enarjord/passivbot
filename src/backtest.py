@@ -2553,7 +2553,7 @@ def log_backtest_execution_settings(
         execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
-        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.unstuck)",
+        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.global.unstuck)",
         execution_settings.unstuck_memory_ema_span_minutes,
     )
     logging.info(

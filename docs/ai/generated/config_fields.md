@@ -72,6 +72,17 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Source |
 | --- | --- | --- | --- |
+| `bot.global.hsl.cooldown_minutes_after_red` | float | Not declared | python |
+| `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | python |
+| `bot.global.hsl.enabled` | boolean | Not declared | python |
+| `bot.global.hsl.memory_ema_span_minutes` | float | Not declared | python |
+| `bot.global.hsl.panic_close_order_type` | string | Not declared | python |
+| `bot.global.hsl.red_threshold` | float | Not declared | python |
+| `bot.global.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | python |
+| `bot.global.hsl.scope` | string | `"coin"` | python |
+| `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | python |
+| `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | python |
+| `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | python |
 | `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | python |
 | `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | python |
 | `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | python |
@@ -141,16 +152,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.unstuck.enabled` | boolean | `true` | python |
 | `bot.long.unstuck.exposure_trigger_ratio` | float | `0.466` | python |
 | `bot.long.unstuck.loss_allowance_pct` | float | `0.0052` | python |
-| `bot.risk.hsl.cooldown_minutes_after_red` | float | Not declared | python |
-| `bot.risk.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | python |
-| `bot.risk.hsl.enabled` | boolean | Not declared | python |
-| `bot.risk.hsl.memory_ema_span_minutes` | float | Not declared | python |
-| `bot.risk.hsl.panic_close_order_type` | string | Not declared | python |
-| `bot.risk.hsl.red_threshold` | float | Not declared | python |
-| `bot.risk.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | python |
-| `bot.risk.hsl.scope` | string | `"coin"` | python |
-| `bot.risk.loss_gate.max_drawdown_ratio` | float | `1.0` | python |
-| `bot.risk.loss_gate.memory_ema_span_minutes` | float | `43200.0` | python |
 | `bot.short.entry_cooldown.base_duration_minutes` | float | `0.0` | python |
 | `bot.short.entry_cooldown.max_duration_minutes` | float \| null | `null` | python |
 | `bot.short.entry_cooldown.min_duration_minutes` | float | `0.0` | python |
@@ -220,7 +221,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.unstuck.enabled` | boolean | `true` | python |
 | `bot.short.unstuck.exposure_trigger_ratio` | float | `0.3` | python |
 | `bot.short.unstuck.loss_allowance_pct` | float | `0.005` | python |
-| `bot.unstuck.memory_ema_span_minutes` | float | `43200.0` | python |
 
 ## coin_overrides
 

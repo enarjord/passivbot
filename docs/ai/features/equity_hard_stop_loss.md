@@ -69,7 +69,7 @@ runs after protection in one owned background task with one coalesced pending re
 slow or failed diagnostics cannot become a protective prerequisite. Ordinary strategy, auto-unstuck
 and the realized-loss gate retain their own readiness requirements. Unstuck and
 the gate own independent account-wide net-realized drawdown memories and spans under
-`bot.unstuck` and `bot.global.loss_gate`; the gate's allowance uses its fraction directly,
+`bot.global.unstuck` and `bot.global.loss_gate`; the gate's allowance uses its fraction directly,
 without TWEL. Both read one canonical tape, each enabled memory consumes each actual net
 fill once even when HSL is disabled, and the ordinary ledger debits it once. A bounded authoritative
 suffix starts from an explicitly unknown-prefix zero initializer unless a known

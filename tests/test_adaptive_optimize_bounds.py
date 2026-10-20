@@ -18,7 +18,7 @@ from optimization.warmup import (
 def omit_unilateralness_bounds(config):
     for side in ("long", "short"):
         bounds = config["optimize"]["bounds"][side]["forager"]
-        bounds.pop("score_weights_unilateralness", None)
+        bounds.get("score_weights", {}).pop("unilateralness", None)
         bounds.pop("unilateralness_ema_span_1m", None)
 
 
@@ -153,15 +153,15 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
         else:
             source["optimize"]["bounds"][f"{side}_forager_score_weights_unilateralness"] = [0.0, 1.0, 0.01]
             source["optimize"]["bounds"][f"{side}_unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
-    if form != "grouped":
+    if form != "nested":
         with pytest.raises(ValueError, match="unknown configuration field"):
             prepare_config(source, verbose=False)
         for side in ("long", "short"):
             source["optimize"]["bounds"].pop(f"{side}_forager_score_weights_unilateralness", None)
             source["optimize"]["bounds"].pop(f"{side}_unilateralness_ema_span_1m", None)
             forager = source["optimize"]["bounds"][side]["forager"]
-            forager.pop("score_weights", None)
-            forager["score_weights_unilateralness"] = [0.0, 1.0, 0.01]
+            forager.pop("score_weights_unilateralness", None)
+            forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
             forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
     cfg = prepare_config(source, verbose=False)
     path = str(tmp_path / "config.json")

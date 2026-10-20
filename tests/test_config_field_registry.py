@@ -38,7 +38,7 @@ def test_every_template_setting_has_an_explicit_descriptor():
 def test_only_documented_optional_authority_lacks_exact_path_defaults():
     absent = {field.path for field in get_field_registry()
               if field.default is NO_DEFAULT and "*" not in field.path}
-    assert absent == {("bot", "risk", "hsl", field) for field in HSL_FIELDS}
+    assert absent == {("bot", "global", "hsl", field) for field in HSL_FIELDS}
 
 
 def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
@@ -97,9 +97,9 @@ def test_registry_defaults_are_isolated_and_optional_authority_is_absent():
     field.default.append("extra")
     assert get_template_config() == template
     assert get_field_registry().find(field.path).default == template["backtest"]["exchanges"]
-    authority = registry.find(("bot", "risk", "hsl", "enabled"))
+    authority = registry.find(("bot", "global", "hsl", "enabled"))
     assert authority.default is NO_DEFAULT
-    assert "enabled" not in template["bot"]["risk"]["hsl"]
+    assert "enabled" not in template["bot"]["global"]["hsl"]
 
 
 def test_all_rust_strategy_fields_are_typed_with_identical_paths_and_defaults():

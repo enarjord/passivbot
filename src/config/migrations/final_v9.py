@@ -615,10 +615,26 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
     from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
     kind = result.get("live", {}).get("strategy_kind", "trailing_martingale")
+    for side in ("long", "short"):
+        forager = bounds.get(side, {}).get("forager", {})
+        nested = forager.get("score_weights", {})
+        for key, value in forager.items():
+            if key.startswith("score_weights_"):
+                name = key.removeprefix("score_weights_")
+                if name in nested and value != nested[name]:
+                    raise ValueError(
+                        f"optimize.bounds.{side}.forager.{key} conflicts with "
+                        f"optimize.bounds.{side}.forager.score_weights.{name}"
+                    )
     for key, value in flatten_optimize_bounds(bounds, strategy_kind=kind).items():
         set_flat_optimize_bound(bounds, kind, key, value)
     for side in ("long", "short"):
         for key in list(bounds.get(side, {}).get("forager", {})):
             if key.startswith("score_weights_"):
-                del bounds[side]["forager"][key]
+                old = bounds[side]["forager"].pop(key)
+                destination = f"optimize.bounds.{side}.forager.score_weights.{key.removeprefix('score_weights_')}"
+                record(
+                    f"optimize.bounds.{side}.forager.{key}", old, {destination: old},
+                    "explicit released-v8 nested score-weight bound conversion",
+                )
     return result
