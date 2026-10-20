@@ -113,10 +113,10 @@ inline float strict_cap_quantity(
 }
 
 // Quantities produced by venue rounding can recover their integer counts.
-// Require a unique round-trip before subtracting counts. Leave the caller's
-// physical difference unchanged when the proof is unavailable.
-inline bool try_aligned_qty_difference(
-    float total, float held, float step, thread float& difference
+// Require a unique round-trip before subtracting counts. Leave the output
+// unchanged when the proof is unavailable.
+inline bool try_aligned_qty_difference_steps(
+    float total, float held, float step, thread float& difference_steps
 ) {
     float total_count = rint(total / step);
     float held_count = rint(held / step);
@@ -126,20 +126,23 @@ inline bool try_aligned_qty_difference(
         && nextafter(held, INFINITY) - held <= step;
     bool on_grid = total_count * step == total && held_count * step == held;
     if (counts_resolvable && on_grid) {
-        difference = fmax(total_count - held_count, 0.0f) * step;
+        difference_steps = fmax(total_count - held_count, 0.0f);
         return true;
     }
     return false;
 }
 
 inline float aligned_qty_difference(float total, float held, float step) {
-    float difference;
-    if (try_aligned_qty_difference(total, held, step, difference)) return difference;
+    float difference_steps;
+    if (try_aligned_qty_difference_steps(total, held, step, difference_steps)) return difference_steps * step;
     return fmax(floor_step(total - held, step), 0.0f);
 }
 
+// Preserve the selected count for callers that must compare venue quantities
+// without re-dividing the returned float32 minimum.
 inline float min_entry_qty(
-    float price, float qty_step, float min_qty, float min_cost, float c_mult
+    float price, float qty_step, float min_qty, float min_cost, float c_mult,
+    thread float* minimum_steps = nullptr
 ) {
     float raw_min = fmax(min_qty, min_cost / fmax(price, 1.0e-12f) / c_mult);
     float raw_steps = raw_min / qty_step;
@@ -149,7 +152,9 @@ inline float min_entry_qty(
         * fmax(fabs(raw_min), fabs(nearest)) * 4.0f;
     bool aligned = nearest_count > 0.0f && fabs(raw_steps - nearest_count) <= 1.0e-8f
         && (nearest >= raw_min || raw_min - nearest <= representation_tolerance);
-    return aligned ? fmax(nearest, raw_min) : ceil(raw_steps) * qty_step;
+    float steps = aligned ? nearest_count : ceil(raw_steps);
+    if (minimum_steps != nullptr) *minimum_steps = steps;
+    return aligned ? fmax(nearest, raw_min) : steps * qty_step;
 }
 
 inline bool should_use_ordinary_market_execution(

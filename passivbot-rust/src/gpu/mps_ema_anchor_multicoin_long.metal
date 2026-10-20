@@ -1861,8 +1861,9 @@ inline void generate_ema_multicoin_side_orders(
                 / balance;
         }
         if (psize[c] > 0.0f && close_price > 0.0f) {
+            float minimum_close_steps;
             float minimum_close = min_entry_qty(
-                close_price, qty_step, min_qty, min_cost, c_mult
+                close_price, qty_step, min_qty, min_cost, c_mult, &minimum_close_steps
             );
             float clip = fmin(psize[c], fmax(minimum_close, round_step(
                 balance * allowed_coin_wel * coin_base_qty_pct
@@ -1873,10 +1874,22 @@ inline void generate_ema_multicoin_side_orders(
             // 1.51 - 1.50 is below 0.01 despite leaving one valid step.
             // Unproven/off-grid operands retain the physical comparison;
             // directional rounding must not promote real dust to a full step.
-            float remainder = psize[c] - clip;
-            try_aligned_qty_difference(psize[c], clip, qty_step, remainder);
+            bool remainder_is_dust = psize[c] - clip < minimum_close;
+            float remainder_steps;
+            // Compare counts, not count*step against a packed decimal minimum:
+            // f32 5*0.01 can be smaller than packed 0.05.
+            // A minimum-sized clip also carries that selected count. Prove the
+            // position separately instead of demanding a raw-product clip.
+            bool minimum_clip = clip == minimum_close;
+            if (minimum_close_steps >= 0.0f && minimum_close_steps < 0x1p24f
+                && nextafter(minimum_close, INFINITY) - minimum_close <= qty_step
+                && try_aligned_qty_difference_steps(
+                    psize[c], minimum_clip ? 0.0f : clip, qty_step, remainder_steps)) {
+                if (minimum_clip) remainder_steps = fmax(remainder_steps - minimum_close_steps, 0.0f);
+                remainder_is_dust = remainder_steps < minimum_close_steps;
+            }
             close_qty[c] = psize[c] <= minimum_close
-                    || remainder < minimum_close
+                    || remainder_is_dust
                 ? psize[c] : clip;
             close_tick[c] = candidate_close_tick;
             close_market[c] = should_use_ordinary_market_execution(

@@ -237,7 +237,7 @@ def test_partial_top_up_recovers_counts_without_snapping_off_grid(source_name):
 
     probe = """#include <metal_stdlib>
 using namespace metal;
-""" + function("floor_step") + "\n" + function("try_aligned_qty_difference", "bool") + "\n" + function("aligned_qty_difference") + """
+""" + function("floor_step") + "\n" + function("try_aligned_qty_difference_steps", "bool") + "\n" + function("aligned_qty_difference") + """
 kernel void partial_top_up_probe(
     constant float* cases, device float* output,
     uint b [[thread_position_in_grid]]
@@ -390,7 +390,7 @@ def test_partial_top_up_at_power_of_two_checks_inward_spacing(source_name):
         start = source.index("inline " + return_type + " " + name + "(")
         return source[start:source.index("\n}", start) + 2]
     probe = "#include <metal_stdlib>\nusing namespace metal;\n"
-    probe += function("floor_step") + "\n" + function("try_aligned_qty_difference", "bool")
+    probe += function("floor_step") + "\n" + function("try_aligned_qty_difference_steps", "bool")
     probe += "\n" + function("aligned_qty_difference")
     probe += """
 kernel void inward_spacing_probe(constant float* values, device float* output,

@@ -66,6 +66,15 @@ kernel void ema_close_quantity_probe(
         (1, 150, 2, 0, 1),      # Position below the minimum.
         (150.5, 150, 1, 0, 150.5),  # Off-grid dust is not snapped up.
         (151.25, 150, 1, 0, 150),   # Off-grid remainder above the minimum.
+        (55, 50, 5, 0, 50),  # Packed 0.05 can exceed the product 5 * 0.01.
+        (54, 50, 5, 0, 54),  # A real one-step deficit must still close fully.
+        (56, 50, 5, 0, 50),
+        (55, 50, 1, 4.5, 50),  # Cost minimum rounds up to five steps.
+        (55, 50, 5.001, 0, 55),  # Off-grid minimum requires six steps.
+        (10, 1, 5, 0, 5),  # The clip itself can be the packed minimum.
+        (9, 1, 5, 0, 9),
+        (11, 1, 5, 0, 5),
+        (10, 1, 1, 4.5, 5),  # A cost-derived minimum-sized clip.
         (np.nextafter(np.float32(2), np.float32(0)), 1, 1, 0,
          np.nextafter(np.float32(2), np.float32(0))),
         (np.nextafter(np.float32(2), np.float32(np.inf)), 1, 1, 0, 1),
