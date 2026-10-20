@@ -114,7 +114,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
         "unilateralness": [0.0, 0.5]
     }
     if sparse:
-        source["bot"]["risk"]["hsl"] = {"scope": mode}
+        source["bot"]["global"]["hsl"] = {"scope": mode}
         source["bot"]["long"]["entry_cooldown"] = {"max_duration_minutes": 12.5}
         source["optimize"]["bounds"] = {
             "long": {"forager": {"score_weights": {"unilateralness": [0.0, 0.5]}}}
@@ -136,7 +136,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     ] == [0.0, 0.5]
     assert set(cleaned["bot"]["long"]["strategy"]) == {strategy}
     if sparse and mode == "portfolio":
-        assert cleaned["bot"]["risk"]["hsl"] == {"scope": "portfolio"}
+        assert cleaned["bot"]["global"]["hsl"] == {"scope": "portfolio"}
 
     saved_output = deepcopy(cleaned)
     source["live"]["approved_coins"]["long"].append("SOL")
@@ -168,12 +168,12 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
             ValueError,
             "retired",
         ),
-        (("bot", "risk", "hsl", "scope"), "unsupported", ValueError, "scope must be"),
+        (("bot", "global", "hsl", "scope"), "unsupported", ValueError, "scope must be"),
         (
-            ("optimize", "bounds", "risk", "hsl"),
+            ("optimize", "bounds", "global", "hsl"),
             [],
             TypeError,
-            "optimize.bounds.risk.hsl must be a mapping",
+            "optimize.bounds.global.hsl must be a mapping",
         ),
         (
             ("bot", "long", "forager", "score_weights", "volume"),
@@ -329,7 +329,7 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     cfg = generated_template(get_template_config(), mode)
     cfg["bot"]["long"]["hsl"]["enabled"] = True
     if mode == "portfolio":
-        cfg["bot"]["risk"]["hsl"].update(enabled=True)
+        cfg["bot"]["global"]["hsl"].update(enabled=True)
     original = deepcopy(cfg)
     cleaned = clean_config(cfg)
     assert cfg == original
@@ -338,10 +338,10 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
         assert not REMOVED_FIELDS.intersection(cleaned["bot"][side]["hsl"])
         assert cleaned["bot"][side]["hsl"] == cfg["bot"][side]["hsl"]
     if mode == "portfolio":
-        assert cleaned["bot"]["risk"]["hsl"] == cfg["bot"]["risk"]["hsl"]
-        expected_bounds = {**cfg["optimize"]["bounds"]["risk"]["hsl"],
-                           "memory_ema_span_minutes": [cfg["bot"]["risk"]["hsl"]["memory_ema_span_minutes"]] * 2}
-        assert cleaned["optimize"]["bounds"]["risk"]["hsl"] == expected_bounds
+        assert cleaned["bot"]["global"]["hsl"] == cfg["bot"]["global"]["hsl"]
+        expected_bounds = {**cfg["optimize"]["bounds"]["global"]["hsl"],
+                           "memory_ema_span_minutes": [cfg["bot"]["global"]["hsl"]["memory_ema_span_minutes"]] * 2}
+        assert cleaned["optimize"]["bounds"]["global"]["hsl"] == expected_bounds
     else:
         assert "hsl" not in cleaned["bot"]
     assert clean_config(cleaned) == cleaned
@@ -352,9 +352,9 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
 def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
     from config.hsl import generated_template
     cfg = generated_template(get_template_config(), "portfolio")
-    assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["risk"]["hsl"]
-    cfg["bot"]["risk"]["hsl"] = {"scope": "portfolio"}
-    assert clean_config(cfg)["bot"]["risk"]["hsl"] == {"scope": "portfolio"}
+    assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["global"]["hsl"]
+    cfg["bot"]["global"]["hsl"] = {"scope": "portfolio"}
+    assert clean_config(cfg)["bot"]["global"]["hsl"] == {"scope": "portfolio"}
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
@@ -368,7 +368,7 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     contract = build_evaluation_contract(cfg)
     assert "hsl_engine" not in contract["live"]
     block = (
-        contract["bot"]["risk"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
+        contract["bot"]["global"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
     )
     assert "restart_after_red_policy" not in block
     assert contract["version"] == 5
@@ -378,12 +378,12 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     assert _resume_config_mismatches(record, cfg) == []
     candidate_block = (
-        cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+        cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     )
     candidate_block["red_threshold"] = 0.031
     assert _resume_config_mismatches(record, cfg) == []
     path = (
-        "bot.risk.hsl.panic_close_order_type"
+        "bot.global.hsl.panic_close_order_type"
         if mode == "portfolio"
         else "bot.long.hsl.panic_close_order_type"
     )
@@ -398,14 +398,14 @@ def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
     from config_utils import format_config
 
     cfg = generated_template(get_template_config(), "portfolio")
-    cfg["bot"]["risk"]["hsl"].update(
+    cfg["bot"]["global"]["hsl"].update(
         enabled=True,
         drawdown_ratio_ema_span_minutes=12.5,
         red_threshold=0.07,
     )
-    cfg["optimize"]["bounds"]["risk"]["hsl"] = {"red_threshold": [0.02, 0.2]}
+    cfg["optimize"]["bounds"]["global"]["hsl"] = {"red_threshold": [0.02, 0.2]}
     exported = sanitize_prepared_config_for_dump(cfg)
     loaded = format_config(json.loads(json.dumps(exported)), verbose=False)
-    assert loaded["bot"]["risk"]["hsl"] == cfg["bot"]["risk"]["hsl"]
-    assert loaded["optimize"]["bounds"]["risk"]["hsl"]["red_threshold"] == [0.02, 0.2]
+    assert loaded["bot"]["global"]["hsl"] == cfg["bot"]["global"]["hsl"]
+    assert loaded["optimize"]["bounds"]["global"]["hsl"]["red_threshold"] == [0.02, 0.2]
     assert not REMOVED_FIELDS.intersection(loaded["bot"]["long"]["hsl"])

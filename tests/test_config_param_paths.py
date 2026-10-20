@@ -15,7 +15,7 @@ def test_group_resolution_matches_single_keys_with_one_metadata_projection(
 ):
     config = get_template_config()
     config["live"]["strategy_kind"] = kind
-    config["bot"]["risk"]["hsl"]["scope"] = mode
+    config["bot"]["global"]["hsl"]["scope"] = mode
     if not nested:
         config["bot"]["long"] = {"risk": {"max_positions": 3.0}}
     keys = [
@@ -46,7 +46,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
     keys = ["long_ema_span_0", "long_n_positions", "hsl_red_threshold"]
     first = dict(param_paths.iter_optimizer_key_paths(config, keys))
     config["live"]["strategy_kind"] = "ema_anchor"
-    config["bot"]["risk"]["hsl"]["scope"] = "portfolio"
+    config["bot"]["global"]["hsl"]["scope"] = "portfolio"
     config["bot"]["long"] = {"risk": {"max_positions": 2.0}}
     second = dict(param_paths.iter_optimizer_key_paths(config, keys))
     assert first["long_ema_span_0"] == (
@@ -57,7 +57,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
     )
     assert first["long_n_positions"] == ("bot", "long", "risk", "max_positions")
     assert second["long_n_positions"] == ("bot", "long", "risk", "max_positions")
-    assert second["hsl_red_threshold"] == ("bot", "risk", "hsl", "red_threshold")
+    assert second["hsl_red_threshold"] == ("bot", "global", "hsl", "red_threshold")
 
 
 def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
@@ -65,12 +65,12 @@ def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
         raise RuntimeError("metadata unavailable")
 
     monkeypatch.setattr(param_paths, "_strategy_path_map_for_config", unavailable)
-    config = {"bot": {"risk": {"hsl": {"scope": "portfolio"}}}}
+    config = {"bot": {'global': {'hsl': {'scope': 'portfolio'}}}}
     assert list(param_paths.iter_optimizer_key_paths(config, [])) == []
     assert list(param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold"])) == [
-        ("hsl_red_threshold", ("bot", "risk", "hsl", "red_threshold"))
+        ("hsl_red_threshold", ("bot", "global", "hsl", "red_threshold"))
     ]
     paths = param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold", "long_n_positions"])
-    assert next(paths) == ("hsl_red_threshold", ("bot", "risk", "hsl", "red_threshold"))
+    assert next(paths) == ("hsl_red_threshold", ("bot", "global", "hsl", "red_threshold"))
     with pytest.raises(RuntimeError, match="metadata unavailable"):
         next(paths)

@@ -88,9 +88,9 @@ def enabled(bot):
     Check overrides even for currently unselected or flat coins: their history
     may still contribute a cooldown when they next become eligible.
     """
-    mode = bot.config["bot"]["risk"]["hsl"]["scope"]
+    mode = bot.config["bot"]["global"]["hsl"]["scope"]
     if mode == "portfolio":
-        return bot.config["bot"]["risk"]["hsl"]["enabled"]
+        return bot.config["bot"]["global"]["hsl"]["enabled"]
     if mode not in {"coin", "pside"}:
         raise ValueError("invalid HSL signal mode")
     for side in ("long", "short"):
@@ -230,9 +230,9 @@ def _source_reasons(source):
 
 
 def _policies(bot, pairs):
-    mode = bot.config["bot"]["risk"]["hsl"]["scope"]
+    mode = bot.config["bot"]["global"]["hsl"]["scope"]
     if mode == "portfolio":
-        policy = dict(bot.config["bot"]["risk"]["hsl"])
+        policy = dict(bot.config["bot"]["global"]["hsl"])
         if policy["enabled"]:
             yield Scope(mode), policy, 1
     elif mode in {"coin", "pside"}:
@@ -413,7 +413,7 @@ def capture(
         global_reasons.add("fill_capture_unknown")
     if any(f.timestamp > now_ms for p in tape.pairs for f in p.fills):
         global_reasons.add("future_fill_outside_evaluation")
-    if bot.config["bot"]["risk"]["hsl"]["scope"] == "coin":
+    if bot.config["bot"]["global"]["hsl"]["scope"] == "coin":
         relevant.update(
             (symbol, side) for side, selected in symbols.items() for symbol in selected
         )

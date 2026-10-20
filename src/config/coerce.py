@@ -23,7 +23,7 @@ PYMOO_ALGORITHMS = ("auto", "nsga2", "nsga3")
 PYMOO_REF_DIR_METHODS = ("das_dennis",)
 
 
-def normalize_hsl_signal_mode(value, path: str = "bot.risk.hsl.scope") -> str:
+def normalize_hsl_signal_mode(value, path: str = "bot.global.hsl.scope") -> str:
     mode = str(value)
     if mode not in HSL_SIGNAL_MODES:
         allowed = ", ".join(HSL_SIGNAL_MODES)
@@ -243,8 +243,8 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
 
 def normalize_validation_fields(config: dict, *, raw_optimize=None) -> None:
     require_config_dict(config, "monitor")
-    config["bot"]["risk"]["hsl"]["scope"] = normalize_hsl_signal_mode(
-        config["bot"]["risk"]["hsl"]["scope"]
+    config["bot"]["global"]["hsl"]["scope"] = normalize_hsl_signal_mode(
+        config["bot"]["global"]["hsl"]["scope"]
     )
     normalize_risk_memory_config(config)
     normalize_logging_config(config)

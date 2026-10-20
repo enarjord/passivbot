@@ -205,14 +205,14 @@ def fixture_inputs(args):
         bot["unstuck"]["enabled"] = args.unstuck and side in active
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
     if args.hsl == "portfolio":
-        config["bot"]["risk"]["hsl"].update(
+        config["bot"]["global"]["hsl"].update(
             enabled=True, red_threshold=args.hsl_red_threshold,
             drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_minutes_after_red=args.hsl_cooldown_minutes,
         )
-    config["bot"]["unstuck"]["memory_ema_span_minutes"] = args.unstuck_memory_ema_span_minutes
-    config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = args.loss_gate_memory_ema_span_minutes
+    config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = args.unstuck_memory_ema_span_minutes
+    config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = args.loss_gate_memory_ema_span_minutes
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     # Ordered coins are derived preparation metadata, outside the canonical config.
     config["backtest"]["coins"] = {args.exchange: coins}

@@ -153,14 +153,14 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 ### Equity Hard Stop Loss
 
 HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/pside modes,
-and explicit `bot.risk.hsl` for portfolio mode. Supported leaves are `enabled`,
+and explicit `bot.global.hsl` for portfolio mode. Supported leaves are `enabled`,
 `red_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
 `cooldown_minutes_after_red`, and `panic_close_order_type`. Coin scope also supports
 `scale_budget_with_excess_allowance`.
 HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
 
-`bot.risk.hsl.scope` selects `coin` (default), `pside`, or `portfolio` signal construction.
+`bot.global.hsl.scope` selects `coin` (default), `pside`, or `portfolio` signal construction.
 
 For parameter definitions, RED handling, cooldown/restart rules, per-coin overrides, and
 backtest behavior, see [Equity Hard Stop Loss](equity_hard_stop_loss.md) and the
@@ -366,7 +366,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       ]
       ```
       The `hsl.*` entries are eligible only when the main config's global
-      `bot.risk.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
+      `bot.global.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
     - `config.live`:
     ```
     [forced_mode_long, forced_mode_short, leverage]
@@ -477,8 +477,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
 - Risk memory controls are consumer-owned: `bot.<side>.hsl.memory_ema_span_minutes`
-  (or `bot.risk.hsl.memory_ema_span_minutes` in portfolio scope),
-  `bot.unstuck.memory_ema_span_minutes`, and `bot.risk.loss_gate.memory_ema_span_minutes`.
+  (or `bot.global.hsl.memory_ema_span_minutes` in portfolio scope),
+  `bot.global.unstuck.memory_ema_span_minutes`, and `bot.global.loss_gate.memory_ema_span_minutes`.
   HSL ratio smoothing separately uses `drawdown_ratio_ema_span_minutes`. All are EMA spans,
   not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
   equivalence from an old rolling duration.
@@ -505,7 +505,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **total_exposure_enforcer_policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer_threshold / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
 - **total_exposure_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` used by the unconditional entry cap and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
 - **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **bot.risk.loss_gate.max_drawdown_ratio**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
+- **bot.global.loss_gate.max_drawdown_ratio**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
   - Default: `1.0` (disabled).
   - `0.0`: block all lossy closes; negative or nonfinite values are invalid.
   - `>= 1.0`: disable the gate.
@@ -527,6 +527,10 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 ### Bounds
 
 When optimizing, parameter values are constrained within the lower and upper bounds. Bounds support an optional third element specifying a discrete step size for grid-based optimization.
+
+Bounds mirror the corresponding bot path exactly: `bot.long.forager.score_weights.volume`
+has its bound at `optimize.bounds.long.forager.score_weights.volume`. Both trees use the
+scopes `global`, `long`, and `short`; flattened optimizer identifiers are internal adapters.
 
 **Bounds Formats:**
 
@@ -554,11 +558,18 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
 ```json
 "optimize": {
     "bounds": {
-        "long_n_positions": [1, 20, 1],
-        "long_total_wallet_exposure_limit": [0.1, 2.0, 0.1],
-        "long_entry_grid_spacing_pct": [0.005, 0.05, 0.005],
-        "long_ema_span_0": [100, 10000],
-        "long_ema_span_1": [200, 20000]
+        "long": {
+            "risk": {
+                "max_positions": [1, 20, 1],
+                "total_wallet_exposure_limit": [0.1, 2.0, 0.1]
+            },
+            "forager": {"score_weights": {"volume": [0.0, 1.0, 0.01]}},
+            "strategy": {
+                "trailing_martingale": {
+                    "entry": {"ema_span_0": [100, 10000], "ema_span_1": [200, 20000]}
+                }
+            }
+        }
     }
 }
 ```
@@ -566,19 +577,12 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
 In this example:
 - `max_positions`: Integers from 1 to 20
 - `total_wallet_exposure_limit`: Values 0.1, 0.2, 0.3, ..., 2.0
-- `entry_grid_spacing_pct`: Values 0.005, 0.01, 0.015, ..., 0.05
+- `forager.score_weights.volume`: Values 0.0, 0.01, 0.02, ..., 1.0
 - `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
 
-HSL bounds now use side-specific prefixes:
-
-1. `long_hsl_red_threshold`
-2. `long_hsl_drawdown_ratio_ema_span_minutes`
-3. `long_hsl_cooldown_minutes_after_red`
-4. `short_hsl_red_threshold`
-5. `short_hsl_drawdown_ratio_ema_span_minutes`
-6. `short_hsl_cooldown_minutes_after_red`
-
-Portfolio HSL uses `optimize.bounds.hsl`; coin and pside modes use directional bounds.
+HSL bounds use `optimize.bounds.<side>.hsl` in coin and pside modes, with
+`red_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`, and
+`cooldown_minutes_after_red` leaves. Portfolio HSL uses `optimize.bounds.global.hsl`.
 Independent slow spans use their canonical consumer-owned bound blocks. There is no
 restart-policy field. Use independent ordinary account-equity definitions for cross-version
 economic comparison; HSL signal metrics are model-dependent and all fitness is recomputed
@@ -770,7 +774,7 @@ v8 file does not convert its policy. Main configs reject retired fields in root,
 coin/scenario overrides and optimizer policy. There is no engine selector or restart policy.
 
 Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`pside` modes. `portfolio` requires an
-explicit `bot.risk.hsl` block with `enabled`, `red_threshold`, `drawdown_ratio_ema_span_minutes`,
+explicit `bot.global.hsl` block with `enabled`, `red_threshold`, `drawdown_ratio_ema_span_minutes`,
 `memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_minutes_after_red`. Side policy is never silently
 promoted to portfolio authority. `scale_budget_with_excess_allowance` defaults to `false`
 and may vary per coin in coin scope.
@@ -788,9 +792,9 @@ cancel or renew the integer deadline. New actual exposure starts a new episode. 
 cooldown allows immediate restart subject to ordinary gates. There is no `never` option;
 permanent shutdown belongs to the operator or an external supervisor.
 
-Portfolio optimizer bounds use `optimize.bounds.risk.hsl`; local HSL bounds use their side
-blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.unstuck` and
-`optimize.bounds.risk.loss_gate`. Omitted slow-span bounds freeze configured values;
+Portfolio optimizer bounds use `optimize.bounds.global.hsl`; local HSL bounds use their side
+blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.global.unstuck` and
+`optimize.bounds.global.loss_gate`. Omitted slow-span bounds freeze configured values;
 conversion never widens new dimensions implicitly. Per-coin override support does not create
 per-coin optimizer genes. Schema, policies, inputs and implementation participate in saved-fitness
 identity; incompatible checkpoints fail and migrated numeric seeds require fresh evaluation.

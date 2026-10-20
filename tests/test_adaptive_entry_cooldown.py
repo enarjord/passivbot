@@ -327,7 +327,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
         assert original[f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] == [0.0, 0.0]
         assert original[f"{side}_entry_cooldown_min_duration_minutes"] == [0.0, 0.0]
         assert f"{side}_entry_cooldown_max_duration_minutes" not in original
-    cfg["optimize"]["bounds"]["long"]["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
+    cfg["optimize"]["bounds"]["long"]["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [20.0, 80.5]
     cfg = clean_config(prepare_config(cfg, verbose=False))
     bounds = flatten_optimize_bounds(

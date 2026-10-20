@@ -73,7 +73,7 @@ def validate_authored_config(config, template, *, policy_context=None):
     schema["live"]["base_config_path"] = ""
     from .hsl import FIELDS
 
-    schema["bot"]["risk"]["hsl"].update({key: None for key in FIELDS})
+    schema["bot"]["global"]["hsl"].update({key: None for key in FIELDS})
     bounds = schema["optimize"]["bounds"]
     for side in ("long", "short"):
         bounds[side]["hsl"]["memory_ema_span_minutes"] = []
@@ -81,12 +81,12 @@ def validate_authored_config(config, template, *, policy_context=None):
         for key in ("min_duration_minutes", "max_duration_minutes"):
             cooldown[key] = []
         cooldown["weights_minutes"] = {"exposure_ratio": [], "adverse_directionality": []}
-        bounds[side]["forager"]["score_weights_unilateralness"] = []
+        bounds[side]["forager"].setdefault("score_weights", {})["unilateralness"] = []
         bounds[side]["forager"]["unilateralness_ema_span_1m"] = []
     # Optional dimensions must remain absent from default searches.
-    bounds.setdefault("unstuck", {})["memory_ema_span_minutes"] = []
-    bounds.setdefault("risk", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
-    bounds["risk"].setdefault("hsl", {}).update({
+    bounds.setdefault("global", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
+    bounds.setdefault("global", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
+    bounds["global"].setdefault("hsl", {}).update({
         "red_threshold": [], "drawdown_ratio_ema_span_minutes": [],
         "memory_ema_span_minutes": [], "cooldown_minutes_after_red": [],
     })
@@ -100,7 +100,7 @@ def validate_authored_config(config, template, *, policy_context=None):
             _mapping(value, path)
             from .overrides import _extract_allowed_patch
 
-            mode = policy_context.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
+            mode = policy_context.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")
             strategy = policy_context.get("live", {}).get("strategy_kind", "trailing_martingale")
             for coin, patch in value.items():
                 _extract_allowed_patch(
@@ -173,7 +173,7 @@ def validate_authored_config(config, template, *, policy_context=None):
                 from .overrides import _extract_allowed_patch, get_allowed_modifications
 
                 coin, *local_parts = parts[1:]
-                mode = policy_context.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
+                mode = policy_context.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")
                 policy = get_allowed_modifications(hsl_signal_mode=mode)
                 for part in local_parts:
                     if not isinstance(policy, dict) or part not in policy:

@@ -58,7 +58,7 @@ DIFF_SETTING_PATHS = (
     ("identity", "live.user", ("live", "user")),
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
-    ("hsl", "bot.risk.hsl.scope", ("bot", "risk", "hsl", "scope")),
+    ("hsl", "bot.global.hsl.scope", ("bot", "global", "hsl", "scope")),
     ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
     ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
     ("forager", "bot.long.risk.max_positions", ("bot", "long", "risk", "max_positions")),
@@ -276,7 +276,7 @@ def _hsl_policy_reports(config):
     live = live if isinstance(live, dict) else {}
     bot = bot if isinstance(bot, dict) else {}
     if _effective_hsl_signal_mode(config) == "portfolio":
-        return {"portfolio": _hsl_side_report({"hsl": bot.get("risk", {}).get("hsl", {})})}
+        return {"portfolio": _hsl_side_report({"hsl": bot.get("global", {}).get("hsl", {})})}
     return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
 
 
@@ -509,7 +509,7 @@ def _balance_hysteresis_report(
 
 
 def _effective_hsl_signal_mode(config: dict[str, Any]) -> str:
-    raw = _path_value(config, ("bot", "risk", "hsl", "scope"))
+    raw = _path_value(config, ("bot", "global", "hsl", "scope"))
     return DEFAULT_HSL_SIGNAL_MODE if raw is _MISSING else str(raw)
 
 
@@ -663,8 +663,8 @@ def _cache_readiness_report(
 
     lookback_status = "present"
     for key, path, validator in (
-        ("unstuck_memory_ema_span_minutes", ("bot", "unstuck", "memory_ema_span_minutes"), normalize_memory_ema_span_minutes),
-        ("loss_gate_memory_ema_span_minutes", ("bot", "risk", "loss_gate", "memory_ema_span_minutes"), normalize_memory_ema_span_minutes),
+        ("unstuck_memory_ema_span_minutes", ("bot", "global", "unstuck", "memory_ema_span_minutes"), normalize_memory_ema_span_minutes),
+        ("loss_gate_memory_ema_span_minutes", ("bot", "global", "loss_gate", "memory_ema_span_minutes"), normalize_memory_ema_span_minutes),
         ("risk_bootstrap_max_lookback_minutes", ("live", "risk_bootstrap_max_lookback_minutes"), normalize_risk_bootstrap_max_lookback_minutes),
     ):
         try:
@@ -739,7 +739,7 @@ def _cache_readiness_report(
                 (
                     "HSL account-level history replay is unsafe with an active "
                     "balance override; runtime will fail before replay for "
-                    f"bot.risk.hsl.scope={signal_mode!r}"
+                    f"bot.global.hsl.scope={signal_mode!r}"
                 ),
             )
         if lookback_status in {
@@ -1120,7 +1120,7 @@ def build_live_config_preflight_report(
                 (
                     "HSL signal modes 'portfolio' and 'pside' reconstruct "
                     "account-level equity history and are unsafe with an active "
-                    "balance override; use bot.risk.hsl.scope='coin', remove the "
+                    "balance override; use bot.global.hsl.scope='coin', remove the "
                     "balance override, or disable HSL before live trading"
                 ),
                 path=(
@@ -1138,7 +1138,7 @@ def build_live_config_preflight_report(
         "identity": identity_report,
         "hsl": {
             "signal_mode": _display_value(
-                _path_value(parsed, ("bot", "risk", "hsl", "scope"))
+                _path_value(parsed, ("bot", "global", "hsl", "scope"))
             ).get("value"),
             "effective_signal_mode": hsl_signal_mode,
             "balance_override": balance_override_report,

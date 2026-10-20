@@ -399,13 +399,13 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
     def policy_scope(node, inherited):
         mode = node.get("live", {}).get("hsl_signal_mode", inherited)
-        mode = node.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", mode)
+        mode = node.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", mode)
         return "portfolio" if mode == "unified" else mode
 
     def memory_paths(scope):
-        paths = [("bot", "unstuck", "memory_ema_span_minutes"),
-                 ("bot", "risk", "loss_gate", "memory_ema_span_minutes")]
-        return paths + ([("bot", "risk", "hsl", "memory_ema_span_minutes")]
+        paths = [("bot", "global", "unstuck", "memory_ema_span_minutes"),
+                 ("bot", "global", "loss_gate", "memory_ema_span_minutes")]
+        return paths + ([("bot", "global", "hsl", "memory_ema_span_minutes")]
                         if scope == "portfolio" else
                         [("bot", side, "hsl", "memory_ema_span_minutes") for side in ("long", "short")])
 
@@ -428,11 +428,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             parts[2:3] = FLAT_BOT_KEY_TO_GROUP_PATH[parts[2]]
         path = ".".join(parts)
         for old, new in (
-            ("live.hsl_signal_mode", "bot.risk.hsl.scope"),
-            ("live.max_realized_loss_pct", "bot.risk.loss_gate.max_drawdown_ratio"),
+            ("live.hsl_signal_mode", "bot.global.hsl.scope"),
+            ("live.max_realized_loss_pct", "bot.global.loss_gate.max_drawdown_ratio"),
             ("backtest.liquidation_threshold", "backtest.equity_floor_ratio"),
             ("live.auto_gs", "live.disapproved_position_mode"),
-            ("bot.hsl.", "bot.risk.hsl."),
+            ("bot.hsl.", "bot.global.hsl."),
             (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
             (".risk.n_positions", ".risk.max_positions"),
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
@@ -444,7 +444,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         from config.scenario_overrides import normalize_scenario_overrides
 
         values = normalize_scenario_overrides(raw)
-        scope = values.get("live.hsl_signal_mode", values.get("bot.risk.hsl.scope", inherited_scope))
+        scope = values.get("live.hsl_signal_mode", values.get("bot.global.hsl.scope", inherited_scope))
         scope = "portfolio" if scope == "unified" else scope
         converted = {}
         for key, value in values.items():
@@ -475,8 +475,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     scope = policy_scope(result, "coin")
     live = result.setdefault("live", {})
     for old, target in (
-        ("hsl_signal_mode", ("bot", "risk", "hsl", "scope")),
-        ("max_realized_loss_pct", ("bot", "risk", "loss_gate", "max_drawdown_ratio")),
+        ("hsl_signal_mode", ("bot", "global", "hsl", "scope")),
+        ("max_realized_loss_pct", ("bot", "global", "loss_gate", "max_drawdown_ratio")),
     ):
         if old in live:
             value = live.pop(old)
@@ -502,8 +502,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     if "hsl" in bot:
         old = bot.pop("hsl")
         for key, value in old.items():
-            put(result, ("bot", "risk", "hsl", key), value, f"bot.hsl.{key}")
-        record("bot.hsl", old, {"bot.risk.hsl": old}, "portfolio HSL authority")
+            put(result, ("bot", "global", "hsl", key), value, f"bot.hsl.{key}")
+        record("bot.hsl", old, {"bot.global.hsl": old}, "portfolio HSL authority")
     rename(result.setdefault("backtest", {}), "liquidation_threshold", "equity_floor_ratio", "backtest")
 
     def visit(node, path=""):
@@ -612,5 +612,29 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         raise ValueError("optimize.bounds.live.lookback_ema_span_minutes requires explicit independent memory bounds")
     if "hsl" in bounds:
         old = bounds.pop("hsl")
-        put(bounds, ("risk", "hsl"), old, "optimize.bounds.hsl")
+        put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
+    from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+    kind = result.get("live", {}).get("strategy_kind", "trailing_martingale")
+    for side in ("long", "short"):
+        forager = bounds.get(side, {}).get("forager", {})
+        nested = forager.get("score_weights", {})
+        for key, value in forager.items():
+            if key.startswith("score_weights_"):
+                name = key.removeprefix("score_weights_")
+                if name in nested and value != nested[name]:
+                    raise ValueError(
+                        f"optimize.bounds.{side}.forager.{key} conflicts with "
+                        f"optimize.bounds.{side}.forager.score_weights.{name}"
+                    )
+    for key, value in flatten_optimize_bounds(bounds, strategy_kind=kind).items():
+        set_flat_optimize_bound(bounds, kind, key, value)
+    for side in ("long", "short"):
+        for key in list(bounds.get(side, {}).get("forager", {})):
+            if key.startswith("score_weights_"):
+                old = bounds[side]["forager"].pop(key)
+                destination = f"optimize.bounds.{side}.forager.score_weights.{key.removeprefix('score_weights_')}"
+                record(
+                    f"optimize.bounds.{side}.forager.{key}", old, {destination: old},
+                    "explicit released-v8 nested score-weight bound conversion",
+                )
     return result

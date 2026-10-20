@@ -139,13 +139,13 @@ def _config_report(config: dict[str, Any]) -> dict[str, Any]:
             "exchange": live.get("exchange"),
         },
         "hsl": {
-            "signal_mode": _section(_section(_section(config.get("bot")).get("risk")).get("hsl")).get("scope"),
+            "signal_mode": _section(_section(_section(config.get("bot")).get("global")).get("hsl")).get("scope"),
             "sides": {pside: _hsl_side_config(config, pside) for pside in SIDES},
             "portfolio": _hsl_side_config(
                 {
                     "bot": {
                         "portfolio": {
-                            "hsl": _section(_section(_section(config.get("bot")).get("risk")).get("hsl"))
+                            "hsl": _section(_section(_section(config.get("bot")).get("global")).get("hsl"))
                         }
                     }
                 },

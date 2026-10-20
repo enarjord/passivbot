@@ -15,7 +15,7 @@ from optimize import SuiteEvaluator, _apply_config_overrides
 @pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_scenario_override_stays_canonical_and_lowers_effective_policy_once(mode):
     config = generated_template(get_template_config(), mode)
-    scope = ("bot", "risk", "hsl") if mode == "portfolio" else ("bot", "long", "hsl")
+    scope = ("bot", "global", "hsl") if mode == "portfolio" else ("bot", "long", "hsl")
     policy = config
     for key in scope:
         policy = policy[key]

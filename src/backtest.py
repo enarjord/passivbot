@@ -267,7 +267,7 @@ def _resolve_backtest_hsl(config, coin_policies):
         "engine": "hsl",
         "mode": mode,
         "sides": [deepcopy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
-        "portfolio": {key: deepcopy(value) for key, value in config["bot"]["risk"]["hsl"].items()
+        "portfolio": {key: deepcopy(value) for key, value in config["bot"]["global"]["hsl"].items()
                       if key != "scope"} if mode == "portfolio" else None,
         "coins": coin_policies if mode == "coin" else {},
     }
@@ -275,7 +275,7 @@ def _resolve_backtest_hsl(config, coin_policies):
 
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
     return normalize_hsl_signal_mode(
-        require_config_value(config, "bot.risk.hsl.scope")
+        require_config_value(config, "bot.global.hsl.scope")
     )
 
 
@@ -2513,12 +2513,12 @@ def get_backtest_execution_settings(
     if market_order_near_touch_threshold < 0.0:
         raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
     unstuck_memory_span = normalize_memory_ema_span_minutes(
-        require_config_value(config, "bot.unstuck.memory_ema_span_minutes"),
-        field="bot.unstuck.memory_ema_span_minutes",
+        require_config_value(config, "bot.global.unstuck.memory_ema_span_minutes"),
+        field="bot.global.unstuck.memory_ema_span_minutes",
     )
     loss_gate_memory_span = normalize_memory_ema_span_minutes(
-        require_config_value(config, "bot.risk.loss_gate.memory_ema_span_minutes"),
-        field="bot.risk.loss_gate.memory_ema_span_minutes",
+        require_config_value(config, "bot.global.loss_gate.memory_ema_span_minutes"),
+        field="bot.global.loss_gate.memory_ema_span_minutes",
     )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
@@ -2553,11 +2553,11 @@ def log_backtest_execution_settings(
         execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
-        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.unstuck)",
+        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.global.unstuck)",
         execution_settings.unstuck_memory_ema_span_minutes,
     )
     logging.info(
-        "[backtest]   loss_gate_memory_ema_span_minutes = %s (bot.risk.loss_gate)",
+        "[backtest]   loss_gate_memory_ema_span_minutes = %s (bot.global.loss_gate)",
         execution_settings.loss_gate_memory_ema_span_minutes,
     )
 
@@ -2798,7 +2798,7 @@ def prep_backtest_args(
             ),
             "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
             "max_realized_loss_pct": float(
-                require_config_value(config, "bot.risk.loss_gate.max_drawdown_ratio")
+                require_config_value(config, "bot.global.loss_gate.max_drawdown_ratio")
             ),
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
             "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,

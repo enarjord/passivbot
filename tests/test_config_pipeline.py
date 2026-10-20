@@ -61,10 +61,10 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     assert config["live"]["strategy_kind"] == "ema_anchor"
     assert config["live"]["user"] == "example"
     # This explicit demonstration span is not a converted rolling-window policy.
-    assert config["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
     assert config["live"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
-    assert config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == 1.0
-    assert config["bot"]["risk"]["hsl"]["scope"] == "coin"
+    assert config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == 1.0
+    assert config["bot"]["global"]["hsl"]["scope"] == "coin"
     assert config["live"]["approved_coins"] == {
         "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
     }
@@ -198,7 +198,7 @@ def test_authored_patches_accept_sparse_local_coin_paths(location, path, value):
     assert prepare_config(source, verbose=False)
 
 
-@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.risk.loss_gate.memory_ema_span_minutes",
+@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.global.loss_gate.memory_ema_span_minutes",
                                   "bot.long.risk.max_positions", "bot.long.hsl.ema_span_minutes"])
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
 def test_authored_coin_path_pins_reject_aliases_and_global_policy(path, location):
@@ -218,7 +218,7 @@ def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
     from config.hsl import require_live_balance_support
 
     config = get_template_config()
-    config["bot"]["risk"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
+    config["bot"]["global"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
     override = 100.0 if location == "runtime" else None
     if location == "config":
         config["live"]["balance_override"] = 100.0
@@ -231,7 +231,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     from config.hsl import validate_optimizer_metrics
 
     config = get_template_config()
-    config["bot"]["risk"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
+    config["bot"]["global"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
         validate_optimizer_metrics(config, ["hard_stop_restarts"])
     else:
@@ -964,12 +964,12 @@ def test_prepare_config_rejects_malformed_config_version():
 
 def test_prepare_config_preserves_independent_memory_spans():
     source = get_template_config()
-    source["bot"]["unstuck"]["memory_ema_span_minutes"] = 30.5
-    source["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
+    source["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 30.5
+    source["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
     source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 90.5
     prepared = prepare_config(source, verbose=False)
-    assert prepared["bot"]["unstuck"]["memory_ema_span_minutes"] == 30.5
-    assert prepared["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == 60.5
+    assert prepared["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 30.5
+    assert prepared["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 60.5
     assert prepared["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 90.5
     assert "lookback_ema_span_minutes" not in prepared["live"]
 
@@ -990,8 +990,8 @@ def test_prepare_config_rejects_retired_all_history_gate_window():
 
 def test_prepare_config_rejects_invalid_memory_ema_span_minutes_string():
     source = get_template_config()
-    source["bot"]["unstuck"]["memory_ema_span_minutes"] = "everything"
-    with pytest.raises(ValueError, match="bot.unstuck.memory_ema_span_minutes must be a finite number"):
+    source["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = "everything"
+    with pytest.raises(ValueError, match="bot.global.unstuck.memory_ema_span_minutes must be a finite number"):
         prepare_config(source, verbose=False)
 
 

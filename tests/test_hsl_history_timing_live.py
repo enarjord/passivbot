@@ -37,7 +37,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit=0.0
         )
-    policy = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
+    policy = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     policy.update(
         enabled=True,
         red_threshold=0.9,
@@ -98,7 +98,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         hsl_live.owner(bot).cancel_inputs()
         await asyncio.sleep(0.01)
         policy = (
-            bot.config["bot"]["risk"]["hsl"]
+            bot.config["bot"]["global"]["hsl"]
             if mode == "portfolio"
             else bot.config["bot"][side]["hsl"]
         )

@@ -139,13 +139,8 @@ def sync_with_template(
         target, source = template_with_extras, result
         for key in section:
             target, source = target[key], source[key]
-        if section == ("bot",):
-            target["risk"] = deepcopy(source["risk"])
-            target["unstuck"] = deepcopy(source["unstuck"])
-        elif "risk" in source:
-            target["risk"] = deepcopy(source["risk"])
-        if "hsl" in source:
-            target["hsl"] = deepcopy(source["hsl"])
+        if "global" in source:
+            target["global"] = deepcopy(source["global"])
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
     preserved_live_optimize_bounds = [
         ("optimize", "bounds", key)
@@ -306,5 +301,5 @@ def normalize_optimizer_settings(
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
         strategy_kind=result.get("live", {}).get("strategy_kind"),
-        portfolio_hsl=result["bot"]["risk"]["hsl"]["scope"] == "portfolio",
+        portfolio_hsl=result["bot"]["global"]["hsl"]["scope"] == "portfolio",
     )

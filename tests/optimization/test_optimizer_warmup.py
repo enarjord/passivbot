@@ -224,7 +224,7 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     bounds = cfg["optimize"]["bounds"]["long"]
     bounds["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
     if consumer == "forager":
-        bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
+        bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 10.0]}
     cfg = prepare_config(cfg, verbose=False)

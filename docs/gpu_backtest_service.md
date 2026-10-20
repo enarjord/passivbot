@@ -422,12 +422,12 @@ independently of batch scheduling or search policy. Both fused sides participate
 in the proof, and each replay reconstructs its state for the selected layout.
 
 Shared-account EMA and Trailing Martingale auto-unstuck use continuous decaying
-net-realized-PnL memory with `bot.unstuck.memory_ema_span_minutes`. The global loss
-gate maintains its own realized D with `bot.risk.loss_gate.memory_ema_span_minutes`.
+net-realized-PnL memory with `bot.global.unstuck.memory_ema_span_minutes`. The global loss
+gate maintains its own realized D with `bot.global.loss_gate.memory_ema_span_minutes`.
 Every ordinary, protective or unstuck fill contributes its net economics to each
 enabled memory, including signed fees and rebates, while the economic ledger records
 the fill once. Both memories exclude UPNL and survive HSL episode boundaries. The
-gate uses `bot.risk.loss_gate.max_drawdown_ratio` directly in the allowance formula,
+gate uses `bot.global.loss_gate.max_drawdown_ratio` directly in the allowance formula,
 without a TWEL multiplier. Its configured
 enablement is preserved separately from float32 packing, including fractions that
 round to 1. The independent rolling window and its history scratch storage are

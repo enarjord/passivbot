@@ -151,8 +151,8 @@ def test_prep_backtest_args_uses_market_orders_allowed_from_live():
 
 def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_gate_transport():
     config = _base_config()
-    config["bot"]["unstuck"]["memory_ema_span_minutes"] = 1234.5
-    config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 2345.5
+    config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 1234.5
+    config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 2345.5
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["unstuck_memory_ema_span_minutes"] == 1234.5
@@ -164,7 +164,7 @@ def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_ga
 
 def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     config = _base_config()
-    config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.1
+    config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.1
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["max_realized_loss_pct"] == 0.1
@@ -272,7 +272,7 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
 
 def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
-    config["bot"]["risk"]["hsl"]["scope"] = "coin"
+    config["bot"]["global"]["hsl"]["scope"] = "coin"
     config["bot"]["long"]["hsl"]["enabled"] = False
     config["bot"]["long"]["hsl"]["red_threshold"] = 0.2
     config["coin_overrides"] = {

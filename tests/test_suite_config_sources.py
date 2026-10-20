@@ -205,7 +205,7 @@ def test_external_suite_canonical_coin_patch_uses_base_strategy_context(tmp_path
 
 def test_external_suite_canonical_coin_patch_uses_base_scope_context(tmp_path):
     base = get_template_config()
-    base["bot"]["risk"]["hsl"]["scope"] = "pside"
+    base["bot"]["global"]["hsl"]["scope"] = "pside"
     section = {"scenarios": [{"label": "scope", "overrides": {"coin_overrides": {
         "BTC": {"bot": {"long": {"hsl": {"enabled": True}}}},
     }}}]}

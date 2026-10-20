@@ -93,7 +93,7 @@ minimum executable close, the close may exceed the remaining allowance. Further
 unstucking is then blocked until later realized profits or loss-memory decay rebuild positive
 allowance.
 
-The global realized-loss gate has its own threshold, `bot.risk.loss_gate.max_drawdown_ratio`,
+The global realized-loss gate has its own threshold, `bot.global.loss_gate.max_drawdown_ratio`,
 and consumes the same account-wide ordered net fills with its own span and accumulator. It can still block a
 non-panic unstuck close if the projected loss exceeds its remaining allowance.
 
@@ -110,7 +110,7 @@ before ordinary closes, and live reconciliation reapplies the cap against the
 latest position without consuming reducer quantity first.
 
 Auto-unstuck uses one continuous account-wide net-realized loss memory, controlled
-by `bot.unstuck.memory_ema_span_minutes`. Every ordered fill updates each enabled memory, including
+by `bot.global.unstuck.memory_ema_span_minutes`. Every ordered fill updates each enabled memory, including
 fees and signed rebates; profits repay remembered loss and elapsed minutes decay it.
 HSL episode boundaries do not reset it. Live bootstrap uses available fill coverage
 and discloses its unknown prefix; a finite suffix is not proof of the infinite past.
@@ -231,14 +231,14 @@ reductions, with stable symbol tie-breaks, and stop once projected TWE reaches t
 
 `normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
 panic exposure contributes to the same-side TWE measurement, but those positions remain outside
-TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.risk.loss_gate.max_drawdown_ratio`; only
+TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.global.loss_gate.max_drawdown_ratio`; only
 panic close orders bypass the realized-loss gate.
 
-### C. Realized-Loss Gate (`bot.risk.loss_gate.max_drawdown_ratio`)
+### C. Realized-Loss Gate (`bot.global.loss_gate.max_drawdown_ratio`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
 
 The gate consumes the same ordered account-wide net-realized facts as auto-unstuck,
-using its own drawdown D and elapsed-minute decay from `bot.risk.loss_gate.memory_ema_span_minutes` and per-fill clipping.
+using its own drawdown D and elapsed-minute decay from `bot.global.loss_gate.memory_ema_span_minutes` and per-fill clipping.
 All actual fills contribute net PnL and signed fees once, even when HSL and unstuck
 are disabled. UPNL and external balance changes do not change D.
 
@@ -271,7 +271,7 @@ Operational notes:
 
 HSL uses one Rust forward risk model in live trading, backtesting and optimization. Coin mode
 uses one signal per coin and position side; pside mode uses one per active side;
-portfolio mode uses one explicit policy under `bot.risk.hsl`.
+portfolio mode uses one explicit policy under `bot.global.hsl`.
 
 HSL maintains slowly decaying currency drawdown and an independent fast EMA of its
 contemporaneous drawdown ratio. The minimum of the raw ratio and ratio EMA must

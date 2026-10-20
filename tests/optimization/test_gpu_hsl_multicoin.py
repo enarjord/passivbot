@@ -58,15 +58,15 @@ def make_proxy(
             cooldown_minutes_after_red=5,
         )
     if mode == "portfolio":
-        config["bot"]["risk"]["hsl"].update(
+        config["bot"]["global"]["hsl"].update(
             enabled=enabled,
             red_threshold=0.02,
             drawdown_ratio_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
         )
-    config["bot"]["unstuck"]["memory_ema_span_minutes"] = memory_span
-    config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
+    config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = memory_span
+    config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
     if override:
         config["coin_overrides"] = {"AAA": {"bot": {override_side: {"hsl": override}}}}
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)

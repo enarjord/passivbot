@@ -78,8 +78,8 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 f"optimize bound {bound_key} does not map to a known bot parameter"
             )
         if resolved in {
-            ("bot", "unstuck", "memory_ema_span_minutes"),
-            ("bot", "risk", "loss_gate", "memory_ema_span_minutes"),
+            ("bot", "global", "unstuck", "memory_ema_span_minutes"),
+            ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
         }:
             from config.risk_memory import normalize_memory_ema_span_minutes
 
@@ -132,8 +132,8 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             ("entry_cooldown", "max_duration_minutes"),
         ):
             cooldown_ranges[resolved[1], resolved[-1]] = bound
-        if resolved[:3] == ("bot", "risk", "hsl"):
-            value = bot_config["risk"]["hsl"].get(resolved[-1])
+        if resolved[:3] == ("bot", "global", "hsl"):
+            value = bot_config["global"]["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise KeyError(
                     f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter"
@@ -256,9 +256,9 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
         if resolved is None:
             continue
         if (canonical_key in OPTIMIZABLE_BOT_KEY_PATHS
-            or resolved[:3] == ("bot", "risk", "hsl")
-            or resolved in {("bot", "unstuck", "memory_ema_span_minutes"),
-                            ("bot", "risk", "loss_gate", "memory_ema_span_minutes")}):
+            or resolved[:3] == ("bot", "global", "hsl")
+            or resolved in {("bot", "global", "unstuck", "memory_ema_span_minutes"),
+                            ("bot", "global", "loss_gate", "memory_ema_span_minutes")}):
             key_paths.append((bound_key, resolved))
             continue
         if canonical_key in strategy_path_map:

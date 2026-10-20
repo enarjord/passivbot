@@ -1,5 +1,11 @@
 # Bot Configuration Deep Dive
 
+Bot policy has three scopes: `bot.global`, `bot.long`, and `bot.short`. Global HSL scope,
+loss-gate policy, and unstuck memory live under `bot.global`; each position side owns its
+strategy and local risk controls. HSL, unstuck, and loss-gate memories remain independent.
+Optimizer bounds use the same path after `optimize.bounds` as the corresponding parameter
+after `bot`, for example `long.forager.score_weights.volume`.
+
 This note explains how the parameters under `config.bot.{long,short}` are consumed by
 Passivbot’s Rust core.  For brevity we omit rounding to exchange precision, guard rails,
 and boolean checks; the pseudo-code below mirrors the algebra in
@@ -184,12 +190,12 @@ older screening checkpoints use a different parameter layout.
 
 Auto-unstuck requires a positive remaining realized-loss allowance. It uses one continuous
 account-wide net-realized-PnL drawdown memory, with its global
-`bot.unstuck.memory_ema_span_minutes` span. This memory includes ordinary/HSL closes, entry/exit
+`bot.global.unstuck.memory_ema_span_minutes` span. This memory includes ordinary/HSL closes, entry/exit
 fees and signed rebates; it excludes unrealized PnL and does not reset at HSL episode
 boundaries. For each elapsed minute and then each ordered realized event:
 
 ```text
-alpha = 2 / (bot.unstuck.memory_ema_span_minutes + 1)
+alpha = 2 / (bot.global.unstuck.memory_ema_span_minutes + 1)
 D_realized = (1 - alpha) * D_realized
 D_realized = max(0, D_realized - net_realized_PnL)
 p = unstuck.loss_allowance_pct * applicable_total_wallet_exposure_limit
@@ -197,7 +203,7 @@ remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
 
 Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
-create no negative loss credit. The global `bot.risk.loss_gate` consumes the same ordered net fills with its own
+create no negative loss credit. The global `bot.global.loss_gate` consumes the same ordered net fills with its own
 `memory_ema_span_minutes` and separate drawdown accumulator. Its allowance uses
 `p = max_drawdown_ratio`, without TWEL multiplication. Each enabled filter consumes a fill
 once while the economic ledger records it once. Old rolling windows and loss percentages require

@@ -57,8 +57,8 @@ _FIELDS_BY_TYPE = {
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
         "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
-        "bot.risk.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
-        "bot.unstuck": "memory_ema_span_minutes",
+        "bot.global.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
+        "bot.global.unstuck": "memory_ema_span_minutes",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -90,7 +90,7 @@ _FIELDS_BY_TYPE = {
         "optimize.gpu": "tuning_mode",
         "optimize.pymoo": "algorithm",
         "optimize.pymoo.algorithms.nsga3.ref_dirs": "method",
-        "bot.risk.hsl": "scope",
+        "bot.global.hsl": "scope",
     },
     FieldType.ARRAY: {
         "backtest": "exchanges scenarios visible_metrics",
@@ -209,11 +209,11 @@ def get_field_registry() -> FieldRegistry:
 
     # Portfolio HSL authority is explicitly optional; no default is synthesized.
     for name in ("enabled", "scale_budget_with_excess_allowance"):
-        add(f"bot.risk.hsl.{name}", FieldType.BOOLEAN)
-    add("bot.risk.hsl.panic_close_order_type", FieldType.STRING)
+        add(f"bot.global.hsl.{name}", FieldType.BOOLEAN)
+    add("bot.global.hsl.panic_close_order_type", FieldType.STRING)
     for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_minutes_after_red"):
-        add(f"bot.risk.hsl.{name}", FieldType.FLOAT)
+        add(f"bot.global.hsl.{name}", FieldType.FLOAT)
 
     for kind in get_supported_strategy_kinds():
         spec = get_strategy_spec(kind)

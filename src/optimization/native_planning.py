@@ -59,7 +59,7 @@ def _request_owned_paths(config):
         if path is not None:
             yield path
     for key in ("red_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red"):
-        yield ("bot", "risk", "hsl", key)
+        yield ("bot", "global", "hsl", key)
 
 
 def _static_contract(config):
@@ -99,7 +99,7 @@ def _static_contract(config):
         if path is not None:
             _remove_path(result, path)
     for key in ("red_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red"):
-        _remove_path(result, ("bot", "risk", "hsl", key))
+        _remove_path(result, ("bot", "global", "hsl", key))
     coupled = unstuck_ema_spans_coupled(config)
     # CPU worker views lower coupled unstuck spans to ordinary request inheritance.
     # Strategy coin pins remain static; their derived unstuck copies must not

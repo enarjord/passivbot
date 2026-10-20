@@ -156,9 +156,9 @@ def test_referenced_retired_policy_error_identifies_coin_and_file(tmp_path):
 def _config_with_file(tmp_path, document, *, scope="coin"):
     config = config_utils.get_template_config()
     config["live"]["user"] = "tester"
-    config["bot"]["risk"]["hsl"]["scope"] = scope
+    config["bot"]["global"]["hsl"]["scope"] = scope
     if scope == "portfolio":
-        config["bot"]["risk"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
+        config["bot"]["global"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
         for side in ("long", "short"):
             config["optimize"]["bounds"][side].pop("hsl", None)
     config["live"]["base_config_path"] = str(tmp_path / "main.json")
@@ -262,12 +262,12 @@ def test_sparse_file_keeps_only_authored_pins_and_explicit_wallet_extension(tmp_
 @pytest.mark.parametrize("scope", ["pside", "portfolio"])
 def test_full_file_hsl_cannot_authorize_its_own_scope(tmp_path, caplog, scope):
     document = config_utils.get_template_config()
-    document["bot"]["risk"]["hsl"]["scope"] = "coin"
+    document["bot"]["global"]["hsl"]["scope"] = "coin"
     document["bot"]["long"]["hsl"]["enabled"] = True
     document["bot"]["long"]["unstuck"]["enabled"] = False
     config, _ = _config_with_file(tmp_path, document, scope=scope)
     parsed = _prepare_file_config(config)
-    assert parsed["bot"]["risk"]["hsl"]["scope"] == scope
+    assert parsed["bot"]["global"]["hsl"]["scope"] == scope
     assert "hsl" not in parsed["coin_overrides"]["BTC"]["bot"]["long"]
     assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["enabled"] is False
     assert "file HSL values are ignored" in caplog.text

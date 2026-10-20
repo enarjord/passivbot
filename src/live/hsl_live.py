@@ -16,10 +16,10 @@ from live.market_snapshot import MarketSnapshotUnavailable
 
 
 def policy(bot, side, symbol=None):
-    if bot.config["bot"]["risk"]["hsl"]["scope"] == "portfolio":
-        return dict(bot.config["bot"]["risk"]["hsl"])
+    if bot.config["bot"]["global"]["hsl"]["scope"] == "portfolio":
+        return dict(bot.config["bot"]["global"]["hsl"])
     result = dict(bot.config["bot"][side]["hsl"])
-    if symbol is not None and bot.config["bot"]["risk"]["hsl"]["scope"] == "coin":
+    if symbol is not None and bot.config["bot"]["global"]["hsl"]["scope"] == "coin":
         result.update(
             bot.coin_overrides.get(symbol, {})
             .get("bot", {})

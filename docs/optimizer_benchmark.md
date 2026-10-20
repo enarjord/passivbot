@@ -71,7 +71,7 @@ vectors; it never regenerates candidates. The report records selected entry IDs.
 corners, retaining random candidates. `--bounds-config` reads only `optimize.bounds`
 from a canonical local config. Derived bounds and candidates remain private inputs.
 Default bounds follow the workload's HSL scope: portfolio workloads use shared
-`bot.risk.hsl` parameters, while coin/pside workloads retain side HSL parameters.
+`bot.global.hsl` parameters, while coin/pside workloads retain side HSL parameters.
 Explicit `--bounds-config` inputs are validated as supplied; inactive side HSL bounds
 in portfolio mode remain errors.
 

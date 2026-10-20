@@ -7013,7 +7013,7 @@ def _smoke_hsl_enabled_scopes(config: dict[str, Any]) -> list[str]:
     bot = config.get("bot")
     if not isinstance(bot, dict):
         return enabled
-    risk = bot.get("risk") if isinstance(bot.get("risk"), dict) else {}
+    risk = bot.get("global") if isinstance(bot.get("global"), dict) else {}
     policy = risk.get("hsl") if isinstance(risk.get("hsl"), dict) else {}
     if _normalize_smoke_hsl_signal_mode(policy.get("scope")) == "portfolio":
         return (
@@ -7086,7 +7086,7 @@ def _smoke_config_check_records(
             )
             continue
         live = config.get("live") if isinstance(config.get("live"), dict) else {}
-        global_hsl = config.get("bot", {}).get("risk", {}).get("hsl", {})
+        global_hsl = config.get("bot", {}).get("global", {}).get("hsl", {})
         signal_mode = _normalize_smoke_hsl_signal_mode(global_hsl.get("scope"))
         config_balance_override = live.get("balance_override")
         launch_balance_override = record.get("balance_override")

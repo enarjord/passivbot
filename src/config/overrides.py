@@ -311,7 +311,7 @@ def _extract_allowed_patch(
             from .hsl import validate_override_paths
 
             validate_override_paths(
-                {"bot": {"risk": {"hsl": {"scope": hsl_signal_mode if strict else "coin"}}}},
+                {"bot": {"global": {"hsl": {"scope": hsl_signal_mode if strict else "coin"}}}},
                 {"bot": {pside: side}},
             )
             hsl_group = side.get("hsl")
@@ -323,7 +323,7 @@ def _extract_allowed_patch(
                 path = _format_override_path(coin, ("bot", pside, "hsl"))
                 message = (
                     f"{path} is overridable only when the effective global "
-                    f"bot.risk.hsl.scope is 'coin'; got {hsl_signal_mode!r}"
+                    f"bot.global.hsl.scope is 'coin'; got {hsl_signal_mode!r}"
                 )
                 if strict:
                     raise ValueError(message)
@@ -643,7 +643,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
                        log_config_transforms=False)
         patch = _extract_allowed_patch(
             raw, coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
-            hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")),
+            hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")),
         )
         _validate_patch_leaf_types(config, patch, coin=coin, origin=source)
         return _validate_effective_coin_config(config, patch, coin=coin, origin=source)
@@ -818,7 +818,7 @@ def parse_overrides(
     strategy_kind = normalize_strategy_kind(result.get("live", {}).get("strategy_kind"))
     live_config = result.get("live", {})
     hsl_signal_mode = normalize_hsl_signal_mode(
-        result["bot"]["risk"]["hsl"]["scope"]
+        result["bot"]["global"]["hsl"]["scope"]
     )
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}

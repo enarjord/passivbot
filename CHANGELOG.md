@@ -13,6 +13,11 @@ since the latest release tag; these features may already be available when insta
 - Pin released-v8 migration defaults independently of the current schema, distinguish omitted
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.
 
+- Organize shared bot policy under `bot.global`, alongside `bot.long` and `bot.short`,
+  and mirror bot parameter paths exactly in optimizer bounds, including nested forager
+  score weights. Released v8 migration emits this layout; obsolete development-v9
+  paths are rejected.
+
 - Rebuild Pareto selection fronts on the active objectives after limits, normalize on that
   front, and report loaded, post-limit, and active-front counts separately. Exclude zero-weight
   metrics from weighted selection and preserve closest-target reference selection on the full pool.
@@ -93,7 +98,7 @@ since the latest release tag; these features may already be available when insta
 
 - Adopt the final canonical v9 config with independent HSL, unstuck and loss-gate slow spans;
   HSL ratio smoothing remains separate. Keep local unstuck controls under each side and put
-  global risk policy under `bot.risk`. Share ordered fills and risk arithmetic while retaining
+  global risk policy under `bot.global`. Share ordered fills and risk arithmetic while retaining
   separate enabled accumulators and recording each fill once in the economic ledger. Gate-only
   configurations retain their own realized memory. Preserve raw accounting versus snapped sizing,
   full loss/fee debits, profit paydown, batch reservations, final sizing and panic exemptions.
