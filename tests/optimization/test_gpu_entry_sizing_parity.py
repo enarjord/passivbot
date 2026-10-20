@@ -29,13 +29,7 @@ def _fixture(side, coin_count, entry_kind):
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["hsl"]["enabled"] = False
         bot["unstuck"]["enabled"] = False
-        bot["risk"].update(
-            n_positions=coin_count if direction == side else 0,
-            total_wallet_exposure_limit=float(coin_count) if direction == side else 0.0,
-            we_excess_allowance_pct=0.0,
-            position_exposure_enforcer_enabled=False,
-            total_exposure_enforcer_enabled=False,
-        )
+        bot['risk'].update({'n_positions': coin_count if direction == side else 0, 'total_wallet_exposure_limit': float(coin_count) if direction == side else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(
             ema_span_0=2.0,

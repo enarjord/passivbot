@@ -14,12 +14,12 @@ BOT_GROUP_FIELD_MAP = {
     "risk": {
         "max_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
-        "total_exposure_enforcer_enabled": "risk_twel_enforcer_enabled",
-        "total_exposure_enforcer_policy": "risk_twel_enforcer_policy",
-        "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
+        "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
+        "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
+        "total_exposure_enforcer.threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
-        "position_exposure_enforcer_enabled": "risk_wel_enforcer_enabled",
-        "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer.enabled": "risk_wel_enforcer_enabled",
+        "position_exposure_enforcer.threshold": "risk_wel_enforcer_threshold",
     },
     "forager": {
         "score_weights": "forager_score_weights",
@@ -49,7 +49,7 @@ BOT_GROUP_FIELD_MAP = {
 }
 
 FLAT_BOT_KEY_TO_GROUP_PATH = {
-    flat_key: (group_name, local_key)
+    flat_key: (group_name, *local_key.split("."))
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
@@ -78,10 +78,9 @@ def get_grouped_bot_value(
         return bot_side[flat_key]
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is not None:
-        group_name, local_key = group_path
-        group = get_bot_group(bot_side, group_name)
-        if local_key in group:
-            return group[local_key]
+        value = get_grouped_path(bot_side, group_path, default=_MISSING)
+        if value is not _MISSING:
+            return value
     if flat_key in bot_side:
         return bot_side[flat_key]
     return default
@@ -143,19 +142,39 @@ def canonical_shared_bot_path_for_flat_key(
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is None:
         return None
-    group_name, local_key = group_path
-    return ("bot", pside, group_name, local_key)
+    return ("bot", pside, *group_path)
+
+
+def get_grouped_path(node: dict, path: tuple[str, ...], *, default=None):
+    """Read an exact internal binding without adding configuration authority."""
+    for part in path:
+        if not isinstance(node, dict) or part not in node:
+            return default
+        node = node[part]
+    return node
+
+
+def set_grouped_bot_value(bot_side: dict, flat_key: str, value) -> None:
+    """Write through a canonical shared-field binding, or a native flat view."""
+    path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if path is None or not isinstance(bot_side.get(path[0]), dict):
+        bot_side[flat_key] = value
+        return
+    target = bot_side
+    for part in path[:-1]:
+        target = target.setdefault(part, {})
+        if not isinstance(target, dict):
+            raise TypeError(f"{'.'.join(path[:-1])} must be a dict")
+    target[path[-1]] = value
 
 
 def resolve_shared_bot_path(
     bot_side: dict | None, pside: str, flat_key: str
 ) -> tuple[str, ...] | None:
-    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
-    if isinstance(bot_side, dict) and group_path is not None:
-        group_name, local_key = group_path
-        group_cfg = bot_side.get(group_name)
-        if isinstance(group_cfg, dict) and local_key in group_cfg:
-            return ("bot", pside, group_name, local_key)
+    path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if isinstance(bot_side, dict) and path is not None:
+        if get_grouped_path(bot_side, path, default=_MISSING) is not _MISSING:
+            return ("bot", pside, *path)
     if isinstance(bot_side, dict) and flat_key in bot_side:
         return ("bot", pside, flat_key)
     return canonical_shared_bot_path_for_flat_key(pside, flat_key)
@@ -183,31 +202,29 @@ def canonicalize_shared_bot_side(
                 f"{'.'.join(path_prefix + (group_name,))} must be a dict; "
                 f"got {type(group_cfg).__name__}"
             )
-    for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+    for flat_key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in bot_side:
             continue
         moved_value = bot_side.pop(flat_key)
-        group_cfg = bot_side.get(group_name)
-        if group_cfg is None:
-            group_cfg = {}
-            bot_side[group_name] = group_cfg
+        target = bot_side
+        for index, part in enumerate(path[:-1]):
+            if part not in target:
+                target[part] = {}
+                if tracker is not None:
+                    tracker.add([*path_prefix, *path[:index + 1]], {})
+            target = target[part]
+            if not isinstance(target, dict):
+                raise TypeError(f"{'.'.join((*path_prefix, *path[:-1]))} must be a dict")
+        leaf = path[-1]
+        if leaf not in target:
+            target[leaf] = moved_value
             if tracker is not None:
-                tracker.add([*path_prefix, group_name], {})
-        if local_key not in group_cfg:
-            group_cfg[local_key] = moved_value
+                tracker.rename([*path_prefix, flat_key], [*path_prefix, *path], moved_value)
+        elif target[leaf] != moved_value:
+            old_value = target[leaf]
+            target[leaf] = moved_value
             if tracker is not None:
-                tracker.rename(
-                    [*path_prefix, flat_key],
-                    [*path_prefix, group_name, local_key],
-                    moved_value,
-                )
-        elif group_cfg[local_key] != moved_value:
-            old_value = group_cfg[local_key]
-            group_cfg[local_key] = moved_value
-            if tracker is not None:
-                tracker.update(
-                    [*path_prefix, group_name, local_key], old_value, moved_value
-                )
+                tracker.update([*path_prefix, *path], old_value, moved_value)
                 tracker.remove([*path_prefix, flat_key], moved_value)
         elif tracker is not None:
             tracker.remove([*path_prefix, flat_key], moved_value)

@@ -554,7 +554,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
-        == canonical["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"]
+        == canonical['bot']['long']['risk']['position_exposure_enforcer']['threshold']
     )
     assert (
         compiled["bot"]["long"]["unstuck_threshold"]
@@ -675,7 +675,7 @@ def test_prepare_config_rejects_positive_twel_with_zero_positions():
     risk = source["bot"]["long"]["risk"]
     risk["total_wallet_exposure_limit"] = 1.0
     risk["max_positions"] = 0
-    risk["total_exposure_enforcer_enabled"] = False
+    risk['total_exposure_enforcer']['enabled'] = False
 
     with pytest.raises(
         ValueError,
@@ -1281,13 +1281,10 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
         "threshold_we_weight",
     ):
         trailing_martingale["entry"].pop(key)
-    for key in (
-        "total_exposure_enforcer_policy",
-        "total_exposure_enforcer_threshold",
-        "we_excess_allowance_pct",
-        "position_exposure_enforcer_threshold",
-    ):
-        risk.pop(key)
+    risk["total_exposure_enforcer"].pop("policy")
+    risk["total_exposure_enforcer"].pop("threshold")
+    risk["position_exposure_enforcer"].pop("threshold")
+    risk.pop("we_excess_allowance_pct")
 
     with caplog.at_level(logging.INFO):
         prepared = prepare_config(
@@ -1313,28 +1310,28 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
         template_strategy["entry"]["threshold_we_weight"]
     )
-    assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(
-        template_risk["total_exposure_enforcer_threshold"]
+    assert long_risk['total_exposure_enforcer']['threshold'] == pytest.approx(
+        template_risk['total_exposure_enforcer']['threshold']
     )
     assert "total_exposure_entry_gate_enabled" not in long_risk
-    assert long_risk["total_exposure_enforcer_policy"] == "reduce_overweight"
+    assert long_risk['total_exposure_enforcer']['policy'] == "reduce_overweight"
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(
         template_risk["we_excess_allowance_pct"]
     )
-    assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(
-        template_risk["position_exposure_enforcer_threshold"]
+    assert long_risk['position_exposure_enforcer']['threshold'] == pytest.approx(
+        template_risk['position_exposure_enforcer']['threshold']
     )
 
 
 def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():
     source = get_template_config()
-    source["bot"]["long"]["risk"]["total_exposure_enforcer_policy"] = "REDUCE_PORTFOLIO"
+    source['bot']['long']['risk']['total_exposure_enforcer']['policy'] = "REDUCE_PORTFOLIO"
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     compiled = compile_runtime_config(prepared)
 
     assert (
-        prepared["bot"]["long"]["risk"]["total_exposure_enforcer_policy"]
+        prepared['bot']['long']['risk']['total_exposure_enforcer']['policy']
         == "reduce_portfolio"
     )
     assert compiled["bot"]["long"]["risk_twel_enforcer_policy"] == "reduce_portfolio"
@@ -1343,10 +1340,10 @@ def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():
 
 def test_prepare_config_rejects_invalid_twel_policy():
     source = get_template_config()
-    source["bot"]["long"]["risk"]["total_exposure_enforcer_policy"] = "least_stuck"
+    source['bot']['long']['risk']['total_exposure_enforcer']['policy'] = "least_stuck"
 
     with pytest.raises(
-        ValueError, match="bot.long.risk.total_exposure_enforcer_policy"
+        ValueError, match="bot.long.risk.total_exposure_enforcer.policy"
     ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 

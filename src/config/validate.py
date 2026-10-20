@@ -197,7 +197,7 @@ def validate_config(
             raise ValueError(f"bot.{pside}.entry_cooldown.base_duration_minutes must be >= 0.0")
         normalize_twel_enforcer_policy(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
-            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+            path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
         active_strategy = get_active_strategy_side(
             bot_side, strategy_kind=strategy_kind, pside=pside

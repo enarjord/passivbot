@@ -435,6 +435,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             ("bot.hsl.", "bot.global.hsl."),
             (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
             (".risk.n_positions", ".risk.max_positions"),
+            (".risk.position_exposure_enforcer_enabled", ".risk.position_exposure_enforcer.enabled"),
+            (".risk.position_exposure_enforcer_threshold", ".risk.position_exposure_enforcer.threshold"),
+            (".risk.total_exposure_enforcer_enabled", ".risk.total_exposure_enforcer.enabled"),
+            (".risk.total_exposure_enforcer_threshold", ".risk.total_exposure_enforcer.threshold"),
+            (".risk.total_exposure_enforcer_policy", ".risk.total_exposure_enforcer.policy"),
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
         ):
             path = path.replace(old, new)
@@ -517,6 +522,16 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             rename(node, "ema_span_minutes", "drawdown_ratio_ema_span_minutes", path)
         if path.endswith(".risk"):
             rename(node, "n_positions", "max_positions", path)
+            for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+                for leaf in ("enabled", "threshold", "policy"):
+                    old = f"{owner}_{leaf}"
+                    if old in node:
+                        value = node.pop(old)
+                        put(node, (owner, leaf), value, f"{path}.{old}")
+                        record(
+                            f"{path}.{old}", value, {f"{owner}.{leaf}": value},
+                            "explicit released-v8 exposure-enforcer object conversion",
+                        )
         if path.endswith(".unstuck"):
             rename(node, "threshold", "exposure_trigger_ratio", path)
         for key in list(node):
@@ -533,6 +548,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 continue
             if key in {"overrides", "fixed_runtime_overrides"} and ("scenarios[" in path or path == "optimize"):
                 node[key] = patch(node[key], scope, current)
+                visit(node[key], current)
             elif key == "fixed_params" and isinstance(node[key], list):
                 old = deepcopy(node[key])
                 node[key] = [selector(item, parameter_selector=True) if isinstance(item, str)
@@ -562,9 +578,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
     for side in ("long", "short"):
         values = result.get("bot", {}).get(side, {})
-        for flat_key, (group, local) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
-            if flat_key in values and local in values.get(group, {}) and values[flat_key] != values[group][local]:
-                raise ValueError(f"bot.{side}.{flat_key} conflicts with bot.{side}.{group}.{local}")
+        from config.shared_bot import get_grouped_path
+        missing = object()
+        for flat_key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+            grouped = get_grouped_path(values, path, default=missing)
+            if flat_key in values and grouped is not missing and values[flat_key] != grouped:
+                raise ValueError(f"bot.{side}.{flat_key} conflicts with bot.{side}.{'.'.join(path)}")
     before = deepcopy(result)
     apply_migrations(result, verbose=False)
     apply_backward_compatibility_renames(result, verbose=False)

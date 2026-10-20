@@ -242,12 +242,12 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             values = inline.get("bot", {}).get(side)
             if not isinstance(values, dict):
                 continue
-            for flat, (group, leaf) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+            for flat, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
                 if flat in values:
                     changes.append(dict(
                         path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{flat}",
                         old=deepcopy(values[flat]),
-                        new={f"{group}.{leaf}": deepcopy(values[flat])},
+                        new={".".join(path): deepcopy(values[flat])},
                         reason="explicit released-v8 shared field conversion before file/inline merge",
                     ))
             canonicalize_shared_bot_side(values)

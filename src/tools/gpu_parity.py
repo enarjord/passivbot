@@ -188,13 +188,7 @@ def fixture_inputs(args):
     )
     for side in ("long", "short"):
         bot = config["bot"][side]
-        bot["risk"].update(
-            max_positions=args.coins if side in active else 0,
-            total_wallet_exposure_limit=1.0 if side in active else 0.0,
-            we_excess_allowance_pct=0.0,
-            position_exposure_enforcer_enabled=False,
-            total_exposure_enforcer_enabled=False,
-        )
+        bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         bot["hsl"].update(
             enabled=side in active and args.hsl in {"coin", "pside"},
             red_threshold=args.hsl_red_threshold,

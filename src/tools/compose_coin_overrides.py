@@ -420,7 +420,7 @@ def _set_path(config: dict, path: tuple[str, ...], value: Any) -> None:
 
 
 def _bound_lower(config: dict, side: str, group: str, key: str) -> float | int:
-    raw = _get_path(config, ("optimize", "bounds", side, group, key))
+    raw = _get_path(config, ("optimize", "bounds", side, group, *key.split(".")))
     if isinstance(raw, (list, tuple)) and raw:
         candidates = raw[:2] if len(raw) >= 2 else raw
         if all(
@@ -503,39 +503,33 @@ def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
 
         wel_enforcer_disabled = [
             not bool(
-                item.config["bot"][side]["risk"][
-                    "position_exposure_enforcer_enabled"
-                ]
+                item.config['bot'][side]['risk']['position_exposure_enforcer']['enabled']
             )
             for item in configs
         ]
         if all(wel_enforcer_disabled):
-            lower = _bound_lower(master, side, "risk", "position_exposure_enforcer_threshold")
+            lower = _bound_lower(master, side, "risk", "position_exposure_enforcer.threshold")
             for item in configs:
                 risk = item.config["bot"][side]["risk"]
-                risk["position_exposure_enforcer_enabled"] = False
-                risk["position_exposure_enforcer_threshold"] = lower
+                risk['position_exposure_enforcer']['enabled'] = False
+                risk['position_exposure_enforcer']['threshold'] = lower
             actions.append(f"bot.{side}.risk.position_exposure_enforcer (disabled in every input)")
         else:
-            master_threshold = master["bot"][side]["risk"][
-                "position_exposure_enforcer_threshold"
-            ]
+            master_threshold = master['bot'][side]['risk']['position_exposure_enforcer']['threshold']
             for item, disabled in zip(configs, wel_enforcer_disabled):
                 if disabled:
-                    item.config["bot"][side]["risk"][
-                        "position_exposure_enforcer_threshold"
-                    ] = master_threshold
+                    item.config['bot'][side]['risk']['position_exposure_enforcer']['threshold'] = master_threshold
 
         twel_enforcer_disabled = all(
-            not bool(item.config["bot"][side]["risk"]["total_exposure_enforcer_enabled"])
+            not bool(item.config['bot'][side]['risk']['total_exposure_enforcer']['enabled'])
             for item in configs
         )
         if twel_enforcer_disabled:
-            policy_default = schema["bot"][side]["risk"]["total_exposure_enforcer_policy"]
+            policy_default = schema['bot'][side]['risk']['total_exposure_enforcer']['policy']
             for item in configs:
                 risk = item.config["bot"][side]["risk"]
-                risk["total_exposure_enforcer_enabled"] = False
-                risk["total_exposure_enforcer_policy"] = policy_default
+                risk['total_exposure_enforcer']['enabled'] = False
+                risk['total_exposure_enforcer']['policy'] = policy_default
             actions.append(f"bot.{side}.risk.total_exposure_enforcer (disabled in every input)")
     return actions
 

@@ -76,19 +76,20 @@ def test_ema_position_enforcers_rejected_before_device_imports(monkeypatch, side
     ]))
     if coin_override:
         config["coin_overrides"] = {"COIN00": {"bot": {side: {"risk": {
-            "position_exposure_enforcer_enabled": True,
-            "position_exposure_enforcer_threshold": .5,
+            "position_exposure_enforcer": {
+                "enabled": True,
+                "threshold": 0.5,
+            },
         }}}}}
     else:
-        config["bot"][side]["risk"].update(position_exposure_enforcer_enabled=True,
-                                            position_exposure_enforcer_threshold=.5)
+        config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': True, 'threshold': 0.5}})
     original = builtins.__import__
     def guarded(name, *args, **kwargs):
         if name.split(".")[0] in {"torch", "cupy"}:
             pytest.fail("unsupported EMA enforcer reached device preparation")
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", guarded)
-    with pytest.raises(ValueError, match=f"bot.{side}.risk.position_exposure_enforcer_enabled.*CPU backend"):
+    with pytest.raises(ValueError, match=f"bot.{side}.risk.position_exposure_enforcer.enabled.*CPU backend"):
         if entrypoint == "parameters":
             prepare_candidate_parameters(config, markets, "binance")
         else:

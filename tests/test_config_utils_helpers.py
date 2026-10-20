@@ -1189,7 +1189,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
-        == config["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"]
+        == config['bot']['long']['risk']['position_exposure_enforcer']['threshold']
     )
     assert (
         compiled["bot"]["long"]["unstuck_threshold"]

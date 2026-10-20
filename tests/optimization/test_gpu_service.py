@@ -2287,8 +2287,10 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
                             "we_excess_allowance_pct": 0.25,
-                            "position_exposure_enforcer_enabled": True,
-                            "position_exposure_enforcer_threshold": 0.8,
+                            "position_exposure_enforcer": {
+                                "enabled": True,
+                                "threshold": 0.8,
+                            },
                         },
                         "wallet_exposure_limit": 0.4,
                         "unstuck": {

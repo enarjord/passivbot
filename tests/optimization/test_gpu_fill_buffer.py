@@ -73,11 +73,7 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
                           starting_balance=1000.0, limit_order_fill_buffer_pct=buffer)
     for s in ['long', 'short']:
-        cfg['bot'][s]['risk'].update(total_wallet_exposure_limit=1.0 if s == side else 0.0,
-                                     n_positions=coin_count if s == side else 0,
-                                     entry_cooldown_minutes=0.0, we_excess_allowance_pct=0.0,
-                                     position_exposure_enforcer_enabled=False,
-                                     total_exposure_enforcer_enabled=False)
+        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
         cfg['bot'][s]['hsl']['enabled'] = False
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
