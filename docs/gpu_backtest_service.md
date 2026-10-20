@@ -266,7 +266,10 @@ batches use that limit. This prevents several serial scratch/work splits from de
 the return of an oversized outer batch. Preparation retains no inactive runner references;
 switching datasets can release their tensors and mutable scratch.
 
-Automatic widths start at the smaller of 64 and the prepared ceiling. Separate per-dataset
+Automatic widths start at 256 on Metal and 64 on CUDA, bounded by the prepared ceiling
+and service admission limit. The GPU owner selects the device before creating a prepared
+controller; producer-side construction remains device-independent. Explicit widths and
+tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
 counts, including partial request cohorts. Failed work and each actual count's first cold
 use do not contribute to throughput trials. A window requires at least six successful warm
