@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Generate optimizer benchmark default bounds for the selected HSL scope, so frozen
+  portfolio-HSL populations can reconstruct valid search bounds without inactive side parameters.
+
 - Preserve valid minimum-sized EMA Anchor close remainders in native GPU replay
   by subtracting uniquely recoverable venue-step counts before checking dust.
 
