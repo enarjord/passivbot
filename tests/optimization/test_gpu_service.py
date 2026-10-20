@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from config.shared_bot import flatten_shared_bot_side
+from config.hsl import native_hsl_policy
 from config.schema import get_template_config
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
@@ -71,7 +72,7 @@ build_tm_coin_parameters = partial(build_coin_override_parameters, strategy_kind
 def _complete_hsl_payload(payload):
     from copy import deepcopy
 
-    defaults = get_template_config()["bot"]["long"]["hsl"]
+    defaults = native_hsl_policy(get_template_config()["bot"]["long"]["hsl"])
     params = getattr(payload, "backtest_params", {})
     payload.backtest_params = params
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
@@ -101,6 +102,21 @@ def _complete_hsl_payload(payload):
         "sides": next(iter(policies.values())),
         "portfolio": deepcopy(defaults),
     }
+
+
+def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pins():
+    payload = SimpleNamespace(bot_params_list=[{
+        "long": {"hsl_red_threshold": 0.27},
+        "short": {},
+    }])
+    _complete_hsl_payload(payload)
+    native = payload.backtest_params["equity_hard_stop_loss"]
+    assert native["coins"]["BTC"][0]["red_threshold"] == 0.27
+    default_threshold = get_template_config()["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
+    assert native["coins"]["BTC"][1]["red_threshold"] == default_threshold
+    assert native["portfolio"]["red_threshold"] == default_threshold
+    for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
+        assert "drawdown_ratio_threshold" not in policy
 
 
 @pytest.mark.parametrize("proxy_cls", [SharedAccountReplay])
@@ -2136,7 +2152,7 @@ def test_multicoin_coin_overrides_reject_invalid_hsl_panic_order_type():
             {
                 "long": {
                     "hsl_enabled": True,
-            "hsl_scale_budget_with_excess_allowance": False,
+                    "hsl_scale_budget_with_excess_allowance": False,
                     "hsl_panic_close_order_type": "makret",
                 }
             },
