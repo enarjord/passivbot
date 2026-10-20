@@ -23,7 +23,7 @@ def _parse(overrides, *, loaded=None):
                 path.write_text(json.dumps(loaded or {}))
                 patch["override_config_path"] = str(path)
         source = get_template_config()
-        source["live"]["user"] = "tester"
+        source["live"]["account"]["user"] = "tester"
         source["coin_overrides"] = deepcopy(overrides)
         prepared = prepare_config(source, verbose=False, log_config_transforms=False)
         return parse_overrides(

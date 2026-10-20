@@ -282,7 +282,7 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
     Missing rows remain unavailable to ordinary candle consumers until an authoritative row
     arrives. Live strategy EMA reads may provisionally bridge a later-bracketed internal gap with
     non-persistent flat zero-volume rows only when the gap is no wider than
-    `live.max_active_candle_tail_gap_minutes`; current remote-enabled forager ranking reads use the
+    `live.candles.max_active_candle_tail_gap_minutes`; current remote-enabled forager ranking reads use the
     same bounded internal-gap rule, while cache-only forager ranking carry-forward remains
     unavailable across an unresolved internal gap.
     Complete rows in the supplied EMA window remain

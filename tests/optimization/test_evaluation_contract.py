@@ -94,7 +94,7 @@ def test_resume_ignores_machine_settings_and_overridden_source_values():
     config["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": False}
     old = _record(config)
     config["bot"]["long"]["hsl"]["enabled"] = True
-    config["live"]["execution_delay_seconds"] = 17
+    config["live"]["execution"]["execution_delay_seconds"] = 17
     config["optimize"]["n_cpus"] += 1
     assert _resume_config_mismatches(old, config) == []
 

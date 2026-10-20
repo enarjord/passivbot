@@ -219,11 +219,7 @@ def get_allowed_modifications(*, hsl_signal_mode: str = "coin"):
             "long": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
             "short": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
         },
-        "live": {
-            "forced_mode_long": True,
-            "forced_mode_short": True,
-            "leverage": True,
-        },
+        "live": {"modes": {"long": True, "short": True}, "account": {"leverage": True}},
     }
 
 
@@ -450,8 +446,8 @@ def _validate_patch_leaf_types(
             continue
         if isinstance(value, str):
             if path in {
-                ("live", "forced_mode_long"),
-                ("live", "forced_mode_short"),
+                ("live", "modes", "long"),
+                ("live", "modes", "short"),
             }:
                 if value:
                     try:
@@ -480,10 +476,10 @@ def _validate_patch_leaf_types(
                 raise TypeError(f"{display_path} must be numeric")
             if not math.isfinite(float(value)) or float(value) < 0.0:
                 raise ValueError(f"{display_path} must be finite and >= 0.0")
-    leverage = patch.get("live", {}).get("leverage")
+    leverage = patch.get("live", {}).get("account", {}).get("leverage")
     if leverage is not None and float(leverage) <= 0.0:
         raise ValueError(
-            f"coin_overrides.{coin}.live.leverage ({origin}) must be > 0.0"
+            f"coin_overrides.{coin}.live.account.leverage ({origin}) must be > 0.0"
         )
 
 

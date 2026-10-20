@@ -103,7 +103,7 @@ facts once. Fills, budget changes and diagnostics do not rescan historical candl
 startup/repair can reconstruct bounded history through the same Rust core.
 
 Live targets five slow spans and at least every active policy's configured cooldown, within
-`live.risk_bootstrap_max_lookback_minutes` (maximum 90 days). An enabled cooldown exceeding
+`live.startup.risk_bootstrap_max_lookback_minutes` (maximum 90 days). An enabled cooldown exceeding
 that cap fails live capability validation. Coverage, unknown prefix, shortened targets, ambiguous fills, missing historical
 marks and estimated budgets are observable. The same retained boundary and ordered facts reproduce the same fold. Routine pruning
 keeps compact forward state; restart, incompatible policy or corrections requiring discarded

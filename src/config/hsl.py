@@ -325,7 +325,10 @@ def normalize_hsl(config, template, *, verbose=True):
     config.setdefault("live", {}).pop("hsl_engine", None)
     from .risk_memory import normalize_risk_memory_config
 
-    config["live"].setdefault("risk_bootstrap_max_lookback_minutes", deepcopy(template["live"]["risk_bootstrap_max_lookback_minutes"]))
+    config["live"].setdefault("startup", {}).setdefault(
+        "risk_bootstrap_max_lookback_minutes",
+        deepcopy(template["live"]["startup"]["risk_bootstrap_max_lookback_minutes"]),
+    )
     bot = config.setdefault("bot", {})
     bot.setdefault("global", deepcopy(template["bot"]["global"]))
     bot["global"].setdefault("hsl", {"scope": "coin"})
@@ -419,7 +422,7 @@ def require_live_runtime_support(config):
     from .risk_memory import normalize_risk_bootstrap_max_lookback_minutes
 
     cap = normalize_risk_bootstrap_max_lookback_minutes(
-        config["live"]["risk_bootstrap_max_lookback_minutes"]
+        config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"]
     )
     mode = _mode(config)
     policies = []
@@ -441,7 +444,7 @@ def require_live_runtime_support(config):
         required = max(required, policy["cooldown_minutes_after_red"])
         if policy["cooldown_minutes_after_red"] > cap:
             raise ValueError(
-                f"{path}.cooldown_minutes_after_red exceeds live.risk_bootstrap_max_lookback_minutes; "
+                f"{path}.cooldown_minutes_after_red exceeds live.startup.risk_bootstrap_max_lookback_minutes; "
                 "live cannot reconstruct its full finite cooldown within this history cap"
             )
     return required
@@ -456,7 +459,7 @@ def require_live_balance_support(config, override=None):
     value = (
         override
         if override is not None
-        else config.get("live", {}).get("balance_override")
+        else config.get("live", {}).get("account", {}).get("balance_override")
     )
     bot = config.get("bot", {})
     enabled = (
@@ -469,7 +472,7 @@ def require_live_balance_support(config, override=None):
     )
     if enabled and value not in (None, ""):
         raise ValueError(
-            "enabled portfolio/position_side HSL does not support live.balance_override; remove the override, select coin mode, or disable HSL"
+            "enabled portfolio/position_side HSL does not support live.account.balance_override; remove the override, select coin mode, or disable HSL"
         )
 
 

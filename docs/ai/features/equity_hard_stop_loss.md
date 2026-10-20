@@ -55,7 +55,7 @@ exposure never sets that multiplier. Reject aggregate scaling; coin policies may
 missing historical budgets require an explicit estimate diagnostic.
 
 Each effective HSL policy uses its own `memory_ema_span_minutes` and independent
-`drawdown_ratio_ema_span_minutes`. Bootstrap targets five memory spans, capped by `live.risk_bootstrap_max_lookback_minutes` (at most 90 days), and retains
+`drawdown_ratio_ema_span_minutes`. Bootstrap targets five memory spans, capped by `live.startup.risk_bootstrap_max_lookback_minutes` (at most 90 days), and retains
 the full finite HSL cooldown horizon. Live policies whose cooldown exceeds the supported
 cap fail explicitly. Acquisition coverage is distinct from exponential memory.
 Historical candle gaps/coarse projections follow the numerical contract and disclose

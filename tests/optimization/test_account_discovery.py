@@ -269,7 +269,13 @@ def test_canonical_identity_ignores_export_noise_but_preserves_every_policy_diff
     noisy["analysis"] = {"fitness": 123}
     noisy["optimize"] = {"seed": 2}
     noisy["version"] = "v8.0.0"
-    noisy["live"].update(user="another", _audit="ignored", base_config_path="source.json")
+    noisy["live"].update(
+        {
+            "_audit": "ignored",
+            "base_config_path": "source.json",
+            "account": {**noisy["live"].get("account", {}), "user": "another"},
+        }
+    )
     noisy["bot"]["long"]["gene"] = 1.0
     assert canonical_configuration_identity(noisy, model="v9") == first
     for changed in (effective(1.000001), effective("1"), effective(True), effective({"number": "1"})):
