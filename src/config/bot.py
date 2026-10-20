@@ -858,7 +858,7 @@ def format_bot_config(
 ) -> dict:
     if not isinstance(bot_cfg, dict):
         raise TypeError(f"config.bot must be a dict; got {type(bot_cfg).__name__}")
-    template = normalization_template(get_template_config(), {"live": live_cfg or {}})
+    template = normalization_template(get_template_config(), {"bot": bot_cfg})
     result = {
         "bot": deepcopy(bot_cfg),
         "live": (

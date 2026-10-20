@@ -105,13 +105,16 @@ def validate_config(
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
     from .prefilter import resolve_prefilter, prefilter_enabled
+    from .policy import validate_shared_bot_policy
+
+    validate_shared_bot_policy(config)
 
     backend = str(config["optimize"]["backend"] or "pymoo").strip().lower()
     if backend not in {"pymoo", "gpu"}:
         raise ValueError("optimize.backend must be one of ['pymoo', 'gpu']")
     config["optimize"]["backend"] = backend
     policy = resolve_prefilter(config["optimize"].get("prefilter"))
-    if prefilter_enabled(policy) and config["live"]["strategy_kind"] != "trailing_martingale":
+    if prefilter_enabled(policy) and config['bot']['global']['strategy_kind'] != "trailing_martingale":
         raise ValueError("enabled config prefilters currently require trailing_martingale")
 
     from .hsl import normalize_hsl
@@ -134,7 +137,7 @@ def validate_config(
         require_existing_config_path(config, key): value
         for key, value in config["optimize"]["fixed_runtime_overrides"].items()
     }
-    strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(config["bot"]["global"].get("strategy_kind"))
     optimize_bounds = (
         raw_optimize.get("bounds")
         if isinstance(raw_optimize, dict)
@@ -218,14 +221,14 @@ def validate_config(
             "config.live.market_snapshot_ticker_strategy must be one of: auto, bulk, symbols"
         )
     try:
-        hysteresis_pct = float(config["live"]["forager_score_hysteresis_pct"])
+        hysteresis_pct = float(config['bot']['global']['forager']['score_hysteresis_pct'])
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.forager_score_hysteresis_pct must be numeric"
+            "config.bot.global.forager.score_hysteresis_pct must be numeric"
         ) from exc
     if not math.isfinite(hysteresis_pct) or hysteresis_pct < 0.0:
         raise ValueError(
-            "config.live.forager_score_hysteresis_pct must be finite and >= 0.0"
+            "config.bot.global.forager.score_hysteresis_pct must be finite and >= 0.0"
         )
     try:
         limit_order_market_dist = float(

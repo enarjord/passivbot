@@ -192,7 +192,7 @@ class KucoinBot(CCXTBot):
         """KuCoin: normalize against the exchange account mode, not strategy mode.
 
         The connector keeps the KuCoin account in hedge mode even when
-        ``live.hedge_mode`` disables simultaneous strategy exposure.  KuCoin
+        ``bot.global.hedge_mode`` disables simultaneous strategy exposure.  KuCoin
         websocket updates in that account mode carry ``positionSide`` but do
         not necessarily carry native ``reduceOnly``.  Treating the strategy
         flag as the exchange account mode therefore makes otherwise valid

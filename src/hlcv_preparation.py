@@ -1407,7 +1407,7 @@ async def try_prepare_hlcvs_v2_local(
     effective_start_ts = max(0, requested_start_ts - warmup_ms)
     effective_start_ts = (effective_start_ts // minute_ms) * minute_ms
     effective_start_date = ts_to_date(effective_start_ts)
-    minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
+    minimum_coin_age_days = float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
     logging.info(
         "[%s] starting local v2 HLCV preparation for %d candidate coins (%s -> %s)",
@@ -4071,7 +4071,7 @@ async def prepare_hlcvs_internal(
     end_ts,
     om: HLCVManager,
 ):
-    minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
+    minimum_coin_age_days = float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
     interval_ms = 60_000
 
     first_timestamps_unified = await get_first_timestamps_unified(
@@ -4523,7 +4523,7 @@ async def _prepare_hlcvs_combined_impl(
     else:
         exchanges_to_consider = sorted(list(om_dict.keys()))
     normalization_candidate_exchanges = list(normalization_candidate_exchanges or ())
-    minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
+    minimum_coin_age_days = float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
     interval_ms = 60_000
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
     tradfi_for_stock_perps = _has_stock_perp_calendar_context(

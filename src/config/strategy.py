@@ -48,6 +48,8 @@ TRAILING_GRID_V7_FLAT_ONLY_KEYS = {
 TRAILING_MARTINGALE_EMA_GATE_MODES = frozenset({"disabled", "all", "initial", "reentry"})
 
 
+from config.access import get_optional_config_value
+
 def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
     if strategy_kind == DEFAULT_STRATEGY_KIND and key == "entry.ema_gate_mode":
         if not isinstance(value, str):
@@ -138,7 +140,7 @@ def get_active_strategy_side(
 
 def get_active_strategy_config(config: dict, *, strategy_kind: str | None = None) -> dict:
     normalized_kind = normalize_strategy_kind(
-        strategy_kind if strategy_kind is not None else config.get("live", {}).get("strategy_kind")
+        strategy_kind if strategy_kind is not None else get_optional_config_value(config, 'bot.global.strategy_kind')
     )
     bot_cfg = config.get("bot", {})
     return {
@@ -207,8 +209,8 @@ def build_runtime_strategy_side(
 
 
 def reject_legacy_flat_strategy_fields(config: dict) -> None:
-    live_cfg = config.setdefault("live", {})
-    normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
+    global_cfg = config.setdefault("bot", {}).setdefault("global", {})
+    normalized_kind = normalize_strategy_kind(global_cfg.get("strategy_kind"))
     bot_cfg = config.setdefault("bot", {})
     for pside in BOT_POSITION_SIDES:
         bot_side = bot_cfg.get(pside)
@@ -219,7 +221,7 @@ def reject_legacy_flat_strategy_fields(config: dict) -> None:
             joined = ", ".join(f"bot.{pside}.{key}" for key in legacy_keys)
             raise ValueError(
                 f"{joined} are legacy flat strategy fields and cannot be used at "
-                f"bot.<side> in v8 configs with live.strategy_kind={normalized_kind!r}. "
+                f"bot.<side> with bot.global.strategy_kind={normalized_kind!r}. "
                 "Run `passivbot tool migrate-config-v7` for v7 configs, or move active "
                 "v8 strategy parameters under "
                 f"bot.<side>.strategy.{normalized_kind} before loading."
@@ -229,16 +231,16 @@ def reject_legacy_flat_strategy_fields(config: dict) -> None:
 
 
 def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = None) -> None:
-    live_cfg = config.setdefault("live", {})
-    normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
-    if "strategy_kind" not in live_cfg:
-        live_cfg["strategy_kind"] = normalized_kind
+    global_cfg = config.setdefault("bot", {}).setdefault("global", {})
+    normalized_kind = normalize_strategy_kind(global_cfg.get("strategy_kind"))
+    if "strategy_kind" not in global_cfg:
+        global_cfg["strategy_kind"] = normalized_kind
         if tracker is not None:
-            tracker.add(["live", "strategy_kind"], normalized_kind)
-    elif live_cfg["strategy_kind"] != normalized_kind:
+            tracker.add(["bot", "global", "strategy_kind"], normalized_kind)
+    elif global_cfg["strategy_kind"] != normalized_kind:
         if tracker is not None:
-            tracker.update(["live", "strategy_kind"], live_cfg["strategy_kind"], normalized_kind)
-        live_cfg["strategy_kind"] = normalized_kind
+            tracker.update(["bot", "global", "strategy_kind"], global_cfg["strategy_kind"], normalized_kind)
+        global_cfg["strategy_kind"] = normalized_kind
 
     bot_cfg = config.setdefault("bot", {})
     reject_legacy_flat_strategy_fields(config)
@@ -319,7 +321,7 @@ def prune_inactive_strategy_subtrees(config: dict, *, tracker: Optional[object] 
     bot_cfg = config.get("bot")
     if not isinstance(bot_cfg, dict):
         return
-    active_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    active_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     for pside in BOT_POSITION_SIDES:
         bot_side = bot_cfg.get(pside)
         if not isinstance(bot_side, dict):

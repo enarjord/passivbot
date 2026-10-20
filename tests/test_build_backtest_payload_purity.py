@@ -8,6 +8,7 @@ Synthetic fixtures, millisecond runtime. Deliberately do NOT call
 `execute_backtest` — the Rust engine is invariant under the refactor, and
 these tests need to run in a tight loop when the refactor lands.
 """
+from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 
@@ -35,9 +36,9 @@ def _base_config(candle_interval_minutes: int = 1) -> dict:
     cfg["backtest"]["end_date"] = "2021-01-02"
     cfg["backtest"]["maker_fee_override"] = None
     cfg["backtest"]["taker_fee_override"] = None
-    cfg["live"]["warmup_ratio"] = 0.0
-    cfg["live"]["max_warmup_minutes"] = 0
-    cfg["live"]["hedge_mode"] = False
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    cfg['bot']['global']['warmup']['max_minutes'] = 0
+    cfg['bot']['global']['hedge_mode'] = False
     return cfg
 
 
@@ -83,11 +84,11 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
     coins = ["COIN1", "COIN2", "COIN3", "COIN4"]
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"binance": coins}
-    config["live"]["approved_coins"] = {
+    set_side_universe_sources(config, 'approved_coins', {
         "long": ["COIN1", "COIN2", "COIN3"],
         "short": ["COIN1", "COIN2", "COIN3", "COIN4"],
-    }
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    })
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 3
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
@@ -211,8 +212,8 @@ def test_build_backtest_payload_marks_normal_forced_coin_active():
     n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"binance": ["BTC", "OM"]}
-    config["live"]["approved_coins"] = {"long": ["BTC", "OM"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC", "OM"], "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
     config["coin_overrides"] = {"OM": {"live": {"forced_mode_long": "normal"}}}
@@ -252,8 +253,8 @@ def test_build_backtest_payload_applies_market_settings_override():
     n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"binance": ["TON"]}
-    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["TON"], "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["backtest"]["market_settings"] = {"overrides": {"TON": {"c_mult": 1.0}}}
     mss = {
         "TON": {
@@ -286,8 +287,8 @@ def test_build_backtest_payload_prefers_exchange_market_settings_override():
     n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"combined": ["TON"]}
-    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["TON"], "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["backtest"]["market_settings"] = {
         "overrides": {"TON": {"c_mult": 1.0}},
         "overrides_by_exchange": {"bybit": {"TON": {"c_mult": 0.1}}},
@@ -322,8 +323,8 @@ def test_build_backtest_payload_defaults_missing_c_mult_with_warning(caplog):
     n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"binance": ["TON"]}
-    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["TON"], "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     mss = {
         "TON": {
             "qty_step": 0.01,
@@ -368,8 +369,8 @@ def test_build_backtest_payload_rejects_invalid_explicit_c_mult(bad_c_mult):
     n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"binance": ["TON"]}
-    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["TON"], "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["backtest"]["market_settings"] = {
         "overrides": {"TON": {"c_mult": bad_c_mult}}
     }
@@ -890,8 +891,8 @@ def test_build_backtest_payload_allows_empty_multicoin_valid_window():
     coins = ["BTC", "EMPTY"]
     config = _base_config(candle_interval_minutes=1)
     config["backtest"]["coins"] = {"binance": coins}
-    config["live"]["approved_coins"] = {"long": coins, "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": coins, "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
     mss = {

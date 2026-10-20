@@ -1,4 +1,5 @@
 """Tests for the account loss gate and independent realized-loss memories."""
+from config.universe import set_side_universe_sources
 
 import json
 import logging
@@ -1036,7 +1037,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config = get_template_config()
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
                                   btc_collateral_cap=.5)
-        config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
         config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
         config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
         config["bot"]["long"]["wallet_exposure_limit"] = .5
@@ -1091,7 +1092,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
 
         config = generated_template(get_template_config())
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000)
-        config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
         config["bot"]["long"]["hsl"].update(enabled=False)
         config["bot"]["short"]["hsl"].update(enabled=False)
         if policy:

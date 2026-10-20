@@ -177,7 +177,7 @@ def _format_approved_coins_shape_for_log(value: Any) -> str:
     return f"type={type(value).__name__}"
 
 
-def _format_approved_coins_change_for_log(old_value: Any, new_value: Any) -> str:
+def _format_approved_coins_change_for_log(old_value: Any, new_value: Any, *, path: str) -> str:
     def format_value(value: Any) -> str:
         if (
             isinstance(value, dict)
@@ -194,7 +194,7 @@ def _format_approved_coins_change_for_log(old_value: Any, new_value: Any) -> str
         return _format_approved_coins_shape_for_log(value)
 
     return (
-        "changed live.approved_coins "
+        f"changed {path} "
         f"{format_value(old_value)} -> {format_value(new_value)}"
     )
 
@@ -202,8 +202,8 @@ def _format_approved_coins_change_for_log(old_value: Any, new_value: Any) -> str
 def _format_config_change_message(
     full_path: str, old_value: Any, new_value: Any
 ) -> tuple[str, tuple[Any, ...]]:
-    if full_path == "live.approved_coins":
-        return _format_approved_coins_change_for_log(old_value, new_value), ()
+    if full_path in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}:
+        return _format_approved_coins_change_for_log(old_value, new_value, path=full_path), ()
     if full_path == "optimize.limits":
         custom = _format_optimize_limits_change_for_log(old_value, new_value)
         if custom is not None:
@@ -219,7 +219,25 @@ FIELD_RUNTIME_RULES = {
         "cli_exposed_on": {"backtest", "optimize"},
         "help_group": {"backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
     },
-    "live.approved_coins": {
+    "approved_coins": {
+        "owner": "bot",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+    },
+    "ignored_coins": {
+        "owner": "bot",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+    },
+    'bot.global.universe.minimum_coin_age_days': {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -228,24 +246,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
-    "live.ignored_coins": {
-        "owner": "live",
-        "consumed_by": {"live", "backtest"},
-        "cli_exposed_on": {"live", "backtest"},
-        "help_group": {
-            "backtest": "Coin Selection",
-        },
-    },
-    "live.minimum_coin_age_days": {
-        "owner": "live",
-        "consumed_by": {"live", "backtest", "optimize"},
-        "cli_exposed_on": {"live", "backtest", "optimize"},
-        "help_group": {
-            "backtest": "Coin Selection",
-            "optimize": "Coin Selection",
-        },
-    },
-    "live.forager_score_hysteresis_pct": {
+    'bot.global.forager.score_hysteresis_pct': {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -284,7 +285,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.hedge_mode": {
+    'bot.global.hedge_mode': {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -293,7 +294,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.market_orders_allowed": {
+    'bot.global.execution.market_orders_allowed': {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -302,7 +303,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.market_order_near_touch_threshold": {
+    'bot.global.execution.market_order_near_touch_threshold': {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -343,7 +344,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.max_warmup_minutes": {
+    'bot.global.warmup.max_minutes': {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -948,9 +949,9 @@ def create_acronym(full_name, acronyms=set()):
 #       "help": "Human-facing help text",
 #   }
 RESERVED_CLI_ARGS = {
-    "live.approved_coins": {
+    "approved_coins": {
         "visible": ["--symbols", "-s"],
-        "hidden": ["--live.approved_coins", "--live_approved_coins"],
+        "hidden": [],
         "type": comma_separated_values,
         "metavar": "CSV_OR_PATH",
         "commands": {"live", "backtest", "optimize"},
@@ -960,26 +961,27 @@ RESERVED_CLI_ARGS = {
             "optimize": "Coin Selection",
         },
         "help": (
-            "Approved coins. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
+            "Approved coin sources for both sides. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
             "coin list file, or a JSON/HJSON per-side object like "
             '{"long":["BTC"],"short":"all"}. Use coin tickers, not exchange symbols.'
         ),
     },
-    "live.ignored_coins": {
+    "ignored_coins": {
         "visible": ["--ignored-coins", "-ic"],
-        "hidden": ["--live.ignored_coins", "--live_ignored_coins"],
+        "hidden": [],
         "type": comma_separated_values,
         "metavar": "CSV_OR_PATH",
-        "commands": {"live", "backtest"},
+        "commands": {"live", "backtest", "optimize"},
         "group": {
             "live": "Coin Selection",
             "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
         },
-        "help": "Ignored coins. Comma-separated coins or path to a JSON coin list file.",
+        "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file.",
     },
-    "live.minimum_coin_age_days": {
+    'bot.global.universe.minimum_coin_age_days': {
         "visible": ["--minimum-coin-age-days", "-mcad"],
-        "hidden": ["--live.minimum_coin_age_days", "--live_minimum_coin_age_days"],
+        "hidden": ['--bot_global_universe_minimum_coin_age_days'],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -990,12 +992,9 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Minimum coin age in days required before a coin is eligible to trade.",
     },
-    "live.forager_score_hysteresis_pct": {
+    'bot.global.forager.score_hysteresis_pct': {
         "visible": ["--forager-score-hysteresis-pct"],
-        "hidden": [
-            "--live.forager_score_hysteresis_pct",
-            "--live_forager_score_hysteresis_pct",
-        ],
+        "hidden": ['--bot_global_forager_score_hysteresis_pct'],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1086,21 +1085,18 @@ RESERVED_CLI_ARGS = {
             "market*1.8 are skipped until price action moves closer."
         ),
     },
-    "live.filter_by_min_effective_cost": {
+    'bot.global.universe.filter_by_min_effective_cost': {
         "visible": ["--filter-by-min-effective-cost", "-fbmec"],
-        "hidden": [
-            "--live.filter_by_min_effective_cost",
-            "--live_filter_by_min_effective_cost",
-        ],
+        "hidden": ['--bot_global_universe_filter_by_min_effective_cost'],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live"},
         "group": {"live": "Behavior"},
         "help": "Filter out coins whose minimum effective cost exceeds the configured size.",
     },
-    "live.hedge_mode": {
+    'bot.global.hedge_mode': {
         "visible": ["--hedge-mode", "-hm"],
-        "hidden": ["--live.hedge_mode", "--live_hedge_mode"],
+        "hidden": ['--bot_global_hedge_mode'],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live", "backtest", "optimize"},
@@ -1123,9 +1119,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Set leverage for this run.",
     },
-    "live.market_orders_allowed": {
+    'bot.global.execution.market_orders_allowed': {
         "visible": ["--market-orders-allowed", "-moa"],
-        "hidden": ["--live.market_orders_allowed", "--live_market_orders_allowed"],
+        "hidden": ['--bot_global_execution_market_orders_allowed'],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live", "backtest", "optimize"},
@@ -1139,12 +1135,9 @@ RESERVED_CLI_ARGS = {
             "Disabled by default; live exchange slippage controls apply."
         ),
     },
-    "live.market_order_near_touch_threshold": {
+    'bot.global.execution.market_order_near_touch_threshold': {
         "visible": ["--market-order-near-touch-threshold", "-montt"],
-        "hidden": [
-            "--live.market_order_near_touch_threshold",
-            "--live_market_order_near_touch_threshold",
-        ],
+        "hidden": ['--bot_global_execution_market_order_near_touch_threshold'],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1160,7 +1153,7 @@ RESERVED_CLI_ARGS = {
     },
     "bot.global.loss_gate.max_drawdown_ratio": {
         "visible": ["--loss-gate-max-drawdown-ratio"],
-        "hidden": ["--bot.global.loss_gate.max_drawdown_ratio", "--bot_risk_loss_gate_max_drawdown_ratio"],
+        "hidden": ['--bot_global_loss_gate_max_drawdown_ratio'],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1211,7 +1204,7 @@ RESERVED_CLI_ARGS = {
     },
     "bot.global.unstuck.memory_ema_span_minutes": {
         "visible": ["--unstuck-memory-ema-span-minutes"],
-        "hidden": ["--bot.global.unstuck.memory_ema_span_minutes", "--bot_unstuck_memory_ema_span_minutes"],
+        "hidden": ['--bot_global_unstuck_memory_ema_span_minutes'],
         "type": normalize_memory_ema_span_minutes,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1229,7 +1222,7 @@ RESERVED_CLI_ARGS = {
     },
     "bot.global.hsl.scope": {
         "visible": ["--hsl-scope"],
-        "hidden": ["--bot.global.hsl.scope", "--bot_risk_hsl_scope"],
+        "hidden": ['--bot_global_hsl_scope'],
         "type": normalize_hsl_signal_mode,
         "metavar": "MODE",
         "choices": tuple(HSL_SIGNAL_MODES),
@@ -1534,11 +1527,53 @@ FIELD_RUNTIME_RULES["bot.global.loss_gate.memory_ema_span_minutes"] = deepcopy(
 RESERVED_CLI_ARGS["bot.global.loss_gate.memory_ema_span_minutes"] = {
     **deepcopy(RESERVED_CLI_ARGS["bot.global.unstuck.memory_ema_span_minutes"]),
     "visible": ["--loss-gate-memory-ema-span-minutes"],
-    "hidden": ["--bot.global.loss_gate.memory_ema_span_minutes", "--bot_risk_loss_gate_memory_ema_span_minutes"],
+    "hidden": ["--bot_global_loss_gate_memory_ema_span_minutes"],
     "help": "Global loss-gate realized-memory EMA span in minutes.",
 }
 
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
+
+# Shared fixed policy remains configurable on every consuming command. The
+# optimizer projects these settings separately from its numeric search genes.
+for _path, _group in (
+    ("bot.global.strategy_kind", "Behavior"),
+    ("bot.global.warmup.ratio", "Backtest Runtime"),
+    ("bot.global.warmup.max_minutes", "Backtest Runtime"),
+    ("bot.global.universe.filter_by_min_effective_cost", "Coin Selection"),
+):
+    FIELD_RUNTIME_RULES[_path] = {
+        "owner": "bot",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "live": "Runtime" if _group == "Backtest Runtime" else _group,
+            "backtest": "Backtest Runtime" if _group == "Behavior" else _group,
+            "optimize": "Backtest Runtime" if _group == "Behavior" else _group,
+        },
+    }
+for _pside in ("long", "short"):
+    for _field in ("approved_coins", "ignored_coins"):
+        _path = f"bot.{_pside}.universe.{_field}"
+        FIELD_RUNTIME_RULES[_path] = deepcopy(FIELD_RUNTIME_RULES[_field])
+        RESERVED_CLI_ARGS[_path] = {
+            "visible": [f"--{_path}"], "hidden": [],
+            "type": comma_separated_values, "metavar": "CSV_OR_PATH",
+            "commands": {"live", "backtest", "optimize"},
+            "group": {command: "Coin Selection" for command in ("live", "backtest", "optimize")},
+            "help": f"{_field.replace('_', ' ').capitalize()} source for the {_pside} side only.",
+        }
+    for _path, _group in ((f"bot.{_pside}.forager.always_include", "Coin Selection"),):
+        FIELD_RUNTIME_RULES[_path] = {
+            "owner": "bot", "consumed_by": {"live", "backtest", "optimize"},
+            "cli_exposed_on": {"live", "backtest", "optimize"},
+            "help_group": {command: _group for command in ("live", "backtest", "optimize")},
+        }
+for _path, _rule in FIELD_RUNTIME_RULES.items():
+    if _path.startswith("bot."):
+        _rule["owner"] = "bot"
+for _path, _spec in RESERVED_CLI_ARGS.items():
+    if _path.startswith("bot.") and f"--{_path}" not in _spec["visible"]:
+        _spec["visible"].append(f"--{_path}")
 
 
 def _merge_runtime_rules_into_reserved_cli_args():
@@ -1673,7 +1708,7 @@ CLI_HELP_OVERRIDES = {
         "Read an explicit offline candle input, without converting the current store. Expected layout: "
         "<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz or .npy."
     ),
-    "live.max_warmup_minutes": (
+    'bot.global.warmup.max_minutes': (
         "Hard cap on calculated EMA/history warmup minutes for backtests and "
         "live. 0 disables the cap."
     ),
@@ -1767,23 +1802,26 @@ def _argument_help_text(full_name: str, appendix: str) -> str:
 
 
 def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
+    shared_group = field_cli_help_group(full_name, "live")
+    if shared_group is not None:
+        return shared_group
     coin_selection = {
-        "live.approved_coins",
-        "live.forager_score_hysteresis_pct",
-        "live.ignored_coins",
-        "live.minimum_coin_age_days",
+        "approved_coins",
+        'bot.global.forager.score_hysteresis_pct',
+        "ignored_coins",
+        'bot.global.universe.minimum_coin_age_days',
     }
     behavior = {
-        "live.filter_by_min_effective_cost",
+        'bot.global.universe.filter_by_min_effective_cost',
         "live.fee_conversion_max_age_ms",
         "live.fee_pct_fallback",
         "live.fee_pct_sanity_abs_max",
         "live.forced_mode_long",
         "live.forced_mode_short",
-        "live.hedge_mode",
+        'bot.global.hedge_mode',
         "live.exchange_symbol_unavailable_cooldown_hours",
         "live.leverage",
-        "live.market_orders_allowed",
+        'bot.global.execution.market_orders_allowed',
         "bot.global.loss_gate.max_drawdown_ratio",
         "live.limit_order_create_max_market_dist_pct",
         "live.order_match_tolerance_pct",
@@ -1943,7 +1981,15 @@ def project_template_config_for_cli(config: dict, command: Optional[str]) -> dic
             }
         return result
     if command == "optimize":
-        result.pop("bot", None)
+        def fixed_policy(node, prefix):
+            if field_cli_exposed_on(prefix, command):
+                return deepcopy(node)
+            if isinstance(node, dict):
+                retained = {key: fixed_policy(value, f"{prefix}.{key}") for key, value in node.items()}
+                return {key: value for key, value in retained.items() if value is not None}
+            return None
+
+        result["bot"] = fixed_policy(result.get("bot", {}), "bot")
         live_cfg = result.get("live")
         if isinstance(live_cfg, dict):
             result["live"] = {
@@ -2130,7 +2176,7 @@ def add_arguments_recursively(
                     metavar="CSV",
                     help=(
                         "Override " f"{full_name}."
-                        if help_all or command is None
+                        if help_all or command is None or visible_group is not None
                         else argparse.SUPPRESS
                     ),
                 )
@@ -2224,7 +2270,7 @@ def add_arguments_recursively(
                 metavar=_argument_metavar(type_, full_name, value),
                 help=(
                     _argument_help_text(full_name, appendix)
-                    if help_all or command is None
+                    if help_all or command is None or visible_group is not None
                     else argparse.SUPPRESS
                 ),
             )
@@ -2307,13 +2353,22 @@ def update_config_with_args(
     }
     supplied = {key: value for key, value in vars(args).items()
                 if (value is not None or key in nullable_float_overrides)
-                and (key in allowed_keys if allowed_keys is not None else "." in key)}
+                and (key in allowed_keys if allowed_keys is not None else "." in key or key in {"approved_coins", "ignored_coins"})}
     if "config_version" in supplied:
         raise ValueError(
             "config_version is source schema metadata and cannot be overridden at runtime; "
             "use passivbot tool migrate-config-v9 and revalidate the configuration"
         )
-    validate_override_paths(config, supplied, allow_engine=True)
+    # -s/-ic deliberately set both side sources. Validate their concrete paths
+    # before mutation; these convenience destinations are not config aliases.
+    expanded = {}
+    for key, value in supplied.items():
+        if key in {"approved_coins", "ignored_coins"}:
+            for side in ("long", "short"):
+                expanded[f"bot.{side}.universe.{key}"] = value
+        else:
+            expanded[key] = value
+    validate_override_paths(config, expanded, allow_engine=True)
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
@@ -2322,22 +2377,34 @@ def update_config_with_args(
         if allowed_keys is not None:
             if key not in allowed_keys:
                 continue
-        elif "." not in key:
+        elif "." not in key and key not in {"approved_coins", "ignored_coins"}:
             continue
-        if key in {"live.approved_coins", "live.ignored_coins"}:
+        side_source_paths = {
+            f"bot.{side}.universe.{field}": (side, field)
+            for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
+        }
+        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths:
+            from config.universe import get_side_universe_sources
+
+            side, source_key = side_source_paths.get(key, (None, key))
             normalized = normalize_coins_source(
-                value,
-                allow_all=(key == "live.approved_coins"),
+                value if side is None else {side: value},
+                allow_all=(source_key == "approved_coins"),
             )
-            change = recursive_config_update(config, key, normalized, verbose=verbose)
-            source_key = key.split(".")[-1]
-            # Preserve the raw CLI source so live coin-list refreshes can re-read external files
-            # passed via CLI (e.g. `-s path/to/approved_coins.json`) instead of freezing the
-            # first parsed snapshot into `_coins_sources`.
-            config.setdefault("_coins_sources", {})[source_key] = deepcopy(value)
-            if change:
-                changed_keys.append(key)
-                diffs.append(change)
+            stored = config.setdefault("_coins_sources", {}).get(source_key)
+            if not isinstance(stored, dict) or set(stored) - {"long", "short"}:
+                stored = (get_side_universe_sources(config, source_key, {}) if stored is None else
+                          {pside: deepcopy(stored) for pside in ("long", "short")})
+            stored = deepcopy(stored)
+            for pside in ("long", "short") if side is None else (side,):
+                path = f"bot.{pside}.universe.{source_key}"
+                change = recursive_config_update(config, path, normalized[pside], verbose=verbose)
+                # Retain raw per-side file references for live refresh.
+                stored[pside] = deepcopy(value.get(pside, []) if side is None and isinstance(value, dict) else value)
+                if change:
+                    changed_keys.append(path)
+                    diffs.append(change)
+            config["_coins_sources"][source_key] = stored
             continue
         change = recursive_config_update(config, key, value, verbose=verbose)
         if change:

@@ -18,9 +18,9 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
     from optimization.gpu.service import SharedAccountReplay
 
     config, _, markets, _, timestamps = _fixture(sides[0], coins, "initial")
-    config["live"]["strategy_kind"] = strategy
+    config['bot']['global']['strategy_kind'] = strategy
     config["backtest"]["candle_interval_minutes"] = interval_minutes
-    config["live"]["hedge_mode"] = True
+    config['bot']['global']['hedge_mode'] = True
     if hsl_mode != "coin":
         from config.hsl import generated_template
         config = generated_template(config, hsl_mode)

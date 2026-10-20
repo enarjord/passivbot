@@ -11,6 +11,7 @@ Tests cover:
 - Inception timestamp tracking
 - Parallel fetching behavior
 """
+from config.universe import set_side_universe_sources
 
 import asyncio
 import json
@@ -218,6 +219,10 @@ def sample_config():
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "entry_volatility_ema_span_1h": 1.0,
+                "universe": {
+                    "approved_coins": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                    "ignored_coins": [],
+                },
             },
             "short": {
                 "enabled": True,
@@ -229,18 +234,14 @@ def sample_config():
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "entry_volatility_ema_span_1h": 1.0,
+                "universe": {"approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
+            },
+            "global": {
+                "universe": {"minimum_coin_age_days": 0.0},
+                "warmup": {"max_minutes": 0.0, "ratio": 3.0},
             },
         },
-        "live": {
-            "approved_coins": {
-                "long": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
-                "short": ["BTC/USDT:USDT"],
-            },
-            "ignored_coins": {"long": [], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "max_warmup_minutes": 0.0,
-            "warmup_ratio": 3.0,
-        },
+        "live": {},
         "backtest": {
             "start_date": "2024-01-01",
             "end_date": "2024-01-02",
@@ -249,9 +250,7 @@ def sample_config():
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 10.0,
         },
-        "optimize": {
-            "bounds": {},
-        },
+        "optimize": {"bounds": {}},
     }
 
 
@@ -834,7 +833,7 @@ async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
 async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
     sample_config, monkeypatch
 ):
-    sample_config["live"]["minimum_coin_age_days"] = 1.0
+    sample_config['bot']['global']['universe']['minimum_coin_age_days'] = 1.0
 
     class FakeManager:
         async def load_markets(self):
@@ -877,7 +876,7 @@ async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
 async def test_prepare_hlcvs_internal_rejects_zero_inception_when_age_filter_enabled(
     sample_config, monkeypatch
 ):
-    sample_config["live"]["minimum_coin_age_days"] = 30.0
+    sample_config['bot']['global']['universe']['minimum_coin_age_days'] = 30.0
 
     class FakeManager:
         async def load_markets(self):
@@ -1671,7 +1670,7 @@ class TestPrepareHLCVSCombined:
         self, sample_config, monkeypatch
     ):
         sample_config["backtest"]["exchanges"] = ["binance", "bybit"]
-        sample_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["BTC"], "short": []})
 
         class FakeManager:
             def __init__(self, exchange, start_date, end_date, **kwargs):
@@ -1726,7 +1725,7 @@ class TestPrepareHLCVSCombined:
     ):
         monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance"]
-        sample_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["ETH"], "short": []})
 
         class FakeManager:
             def __init__(self, exchange, start_date, end_date, **kwargs):
@@ -1817,7 +1816,7 @@ class TestPrepareHLCVSCombined:
     ):
         monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance"]
-        sample_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["ETH"], "short": []})
         sample_config["backtest"]["start_date"] = "2026-04-01"
         sample_config["backtest"]["end_date"] = "2026-04-01"
         sample_config["backtest"]["cm_progress_log_interval_seconds"] = 0.0
@@ -1903,7 +1902,7 @@ class TestPrepareHLCVSCombined:
     ):
         monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance", "bybit"]
-        sample_config["live"]["approved_coins"] = {"long": ["ETH", "SOL"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["ETH", "SOL"], "short": []})
         sample_config["backtest"]["start_date"] = "2026-04-01"
         sample_config["backtest"]["end_date"] = "2026-04-01"
         sample_config["backtest"]["cm_progress_log_interval_seconds"] = 0.0
@@ -3347,22 +3346,23 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             "cm_progress_log_interval_seconds": 0.0,
             "ohlcv_source_dir": str(legacy_root),
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
+        "live": {},
         "bot": {
             "long": {
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "wallet_exposure_limit": 1.0,
+                "universe": {"approved_coins": ["ETH"]},
             },
             "short": {
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
                 "wallet_exposure_limit": 0.0,
+                "universe": {"approved_coins": []},
+            },
+            "global": {
+                "universe": {"minimum_coin_age_days": 0.0},
+                "warmup": {"ratio": 0.0, "max_minutes": 0.0},
             },
         },
     }

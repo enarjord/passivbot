@@ -1,4 +1,6 @@
 """Offline cleanup contracts and safe file/directory publication."""
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 import json
@@ -52,8 +54,8 @@ def test_public_example_exports_are_reusable_and_idempotent(source, mode, tmp_pa
     assert source.read_bytes() == original
     prepared = prepare_config(json.loads(output), live_only=True, verbose=False)
     assert (
-        prepared["live"]["strategy_kind"]
-        == json.loads(original)["live"]["strategy_kind"]
+        prepared['bot']['global']['strategy_kind']
+        == json.loads(original)['bot']['global']['strategy_kind']
     )
     if mode == "live":
         assert "optimize" not in json.loads(output)
@@ -64,8 +66,8 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     tmp_path,
 ):
     cfg = get_template_config()
-    cfg["live"]["approved_coins"] = "missing-coin-list.json"
-    cfg["live"]["ignored_coins"] = "missing-ignored-list.json"
+    set_side_universe_sources(cfg, 'approved_coins', "missing-coin-list.json")
+    set_side_universe_sources(cfg, 'ignored_coins', "missing-ignored-list.json")
     cfg["backtest"]["end_date"] = "now"
     cfg["backtest"]["filter_by_min_effective_cost"] = None
     cfg["bot"]["long"]["risk"]["max_positions"] = 3.5
@@ -95,8 +97,8 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
         "logging",
         "monitor",
     }
-    assert result["live"]["approved_coins"] == "missing-coin-list.json"
-    assert result["live"]["ignored_coins"] == "missing-ignored-list.json"
+    assert require_side_universe_sources(result, 'approved_coins') == {side: "missing-coin-list.json" for side in ('long', 'short')}
+    assert require_side_universe_sources(result, 'ignored_coins') == {side: "missing-ignored-list.json" for side in ('long', 'short')}
     assert result["backtest"]["end_date"] == "now"
     assert result["backtest"]["filter_by_min_effective_cost"] is None
     assert result["bot"]["long"]["risk"]["max_positions"] == 4
@@ -503,8 +505,8 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
 ):
     rng = random.Random(711)
     cfg = generated_template(get_template_config(), hsl_mode)
-    cfg["live"]["strategy_kind"] = strategy
-    cfg["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": []}
+    cfg['bot']['global']['strategy_kind'] = strategy
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC", "ETH"], "short": []})
     cfg["backtest"]["scenarios"] = [{"label": "base"}]
     cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
     cfg["backtest"]["reducer"] = {"default": "mean", "adg_strategy_eq": "min"}
@@ -641,15 +643,15 @@ def test_explicit_v9_migration_produces_reusable_cleanup_input(tmp_path):
 
 def test_full_cleanup_normalizes_optimizer_policy_without_resolving_inputs():
     cfg = get_template_config()
-    cfg["live"]["approved_coins"] = ["BTC", "ETH"]
-    cfg["live"]["ignored_coins"] = "unreadable-coins.json"
+    set_side_universe_sources(cfg, 'approved_coins', ["BTC", "ETH"])
+    set_side_universe_sources(cfg, 'ignored_coins', "unreadable-coins.json")
     cfg["optimize"]["backend"] = " PyMoO "
     cfg["optimize"]["population_size"] = "42"
     cfg["optimize"]["seed"] = "123"
     cfg["optimize"]["limits"] = []
     result = cleanup_config(cfg)
-    assert result["live"]["approved_coins"] == ["BTC", "ETH"]
-    assert result["live"]["ignored_coins"] == "unreadable-coins.json"
+    assert require_side_universe_sources(result, 'approved_coins') == {side: ["BTC", "ETH"] for side in ('long', 'short')}
+    assert require_side_universe_sources(result, 'ignored_coins') == {side: "unreadable-coins.json" for side in ('long', 'short')}
     assert result["optimize"]["backend"] == "pymoo"
     assert result["optimize"]["population_size"] == 42
     assert result["optimize"]["seed"] == 123

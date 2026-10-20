@@ -1212,8 +1212,8 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
             "live": {
                 "max_ohlcv_fetches_per_minute": 4,
                 "max_forager_candle_staleness_minutes": 10,
-                "strategy_kind": "trailing_martingale",
-            }
+            },
+            "bot": {"global": {"strategy_kind": "trailing_martingale"}},
         }
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
@@ -1424,8 +1424,8 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
             "live": {
                 "max_ohlcv_fetches_per_minute": 4,
                 "max_forager_candle_staleness_minutes": 10,
-                "strategy_kind": "trailing_martingale",
-            }
+            },
+            "bot": {"global": {"strategy_kind": "trailing_martingale"}},
         }
         positions = {
             symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}
@@ -2230,7 +2230,7 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
         pass
 
     class FakeBot:
-        config = {"live": {"warmup_ratio": 0.0}}
+        config = {"live": {}, "bot": {"global": {"warmup": {"ratio": 0.0}}}}
         cm = FakeCM()
         approved_coins_minus_ignored_coins = {
             "long": {"BTC/USDT:USDT"},
@@ -3145,10 +3145,8 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
 
     class FakeBot:
         config = {
-            "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_warmup_minutes": 60,
-            }
+            "live": {"max_ohlcv_fetches_per_minute": 4},
+            "bot": {"global": {"warmup": {"max_minutes": 60}}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []

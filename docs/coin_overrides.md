@@ -73,7 +73,7 @@ HSL patch; the main config's effective global mode always decides.
    bot patch directly per coin.
 
 Configured override files are required inputs. A missing, unreadable, malformed, or invalid file
-stops configuration loading with the coin and path identified. The file's `live.strategy_kind`, if
+stops configuration loading with the coin and path identified. The file's `bot.global.strategy_kind`, if
 present, must match the global strategy kind; per-coin strategy-kind changes are not supported.
 Coin keys that normalize to the same ticker are also rejected instead of overwriting each other.
 
@@ -81,33 +81,18 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
 
 ```json
 {
-  "live": {
-    "approved_coins": ["BTC", "XRP"],
-    "base_config_path": "configs/running_config.json"
-  },
+  "live": {"base_config_path": "configs/running_config.json"},
   "coin_overrides": {
     "XRP": {
       "bot": {
         "long": {
-          "strategy": {
-            "trailing_martingale": {
-              "entry": {
-                "threshold_base_pct": 0.05
-              }
-            }
-          },
-          "unstuck": {
-            "ema_gating_enabled": false,
-            "loss_allowance_pct": 0.005
-          },
+          "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.05}}},
+          "unstuck": {"ema_gating_enabled": false, "loss_allowance_pct": 0.005},
           "entry_cooldown": {
             "base_duration_minutes": 0.05,
             "min_duration_minutes": 0.0,
             "max_duration_minutes": 60.0,
-            "weights_minutes": {
-              "exposure_ratio": 10.0,
-              "adverse_directionality": 20.0
-            }
+            "weights_minutes": {"exposure_ratio": 10.0, "adverse_directionality": 20.0}
           },
           "hsl": {
             "enabled": true,
@@ -119,19 +104,15 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           "wallet_exposure_limit": 0.18
         },
         "short": {
-          "strategy": {
-            "trailing_martingale": {
-              "entry": {
-                "threshold_base_pct": 0.055
-              }
-            }
-          }
+          "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.055}}}
         }
       },
-      "live": {
-        "forced_mode_long": "normal"
-      }
+      "live": {"forced_mode_long": "normal"}
     }
+  },
+  "bot": {
+    "long": {"universe": {"approved_coins": ["BTC", "XRP"]}},
+    "short": {"universe": {"approved_coins": ["BTC", "XRP"]}}
   }
 }
 ```
@@ -141,13 +122,14 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
 Main config:
 ```json
 {
-  "live": {
-    "approved_coins": ["BTC", "BCH", "DOGE"],
-    "base_config_path": "configs/running_config.json"
-  },
+  "live": {"base_config_path": "configs/running_config.json"},
   "coin_overrides": {
-    "BCH": { "override_config_path": "configs/overrides/bch.json" },
-    "DOGE": { "override_config_path": "configs/overrides/doge.json" }
+    "BCH": {"override_config_path": "configs/overrides/bch.json"},
+    "DOGE": {"override_config_path": "configs/overrides/doge.json"}
+  },
+  "bot": {
+    "long": {"universe": {"approved_coins": ["BTC", "BCH", "DOGE"]}},
+    "short": {"universe": {"approved_coins": ["BTC", "BCH", "DOGE"]}}
   }
 }
 ```

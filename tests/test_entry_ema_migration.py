@@ -244,7 +244,7 @@ def test_scenario_strategy_replacement_and_atomic_coin_patch_migrate():
 @pytest.mark.parametrize("kind", [KIND, "ema_anchor", "trailing_grid_v7"])
 def test_canonical_wildcard_leaf_selector_preserves_active_strategy_genes(kind):
     config = get_template_config()
-    config["live"]["strategy_kind"] = kind
+    config["bot"]["global"]["strategy_kind"] = kind
     if kind == "trailing_grid_v7":
         with pytest.raises(ValueError, match="unsupported strategy kind"):
             flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)

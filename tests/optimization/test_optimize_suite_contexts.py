@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import pickle
 from copy import deepcopy
 from types import SimpleNamespace
@@ -98,13 +100,13 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
             "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
         },
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     # Schema defaults keep shorts disabled. Optimizer candidates may enable
     # shorts later, so context preparation must not dedupe base vs long_only.
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     if rms_search:
-        config["live"]["max_warmup_minutes"] = 3
+        config['bot']['global']['warmup']['max_minutes'] = 3
         config["optimize"]["bounds"]["long"]["forager"].update(
             unilateralness_ema_span_1m=[1.0, 60.0],
             score_weights={"unilateralness": [0.0, 1.0]},
@@ -257,8 +259,8 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
         {"label": "explicit", "coins": ["DOGE"]},
         {"label": "default"},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     captured = {}
     format_scenario = optimize_suite.format_config
 
@@ -271,7 +273,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
             assert not set(scenario_config["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH)
         validate_authored_config(scenario_config, get_template_config())
         captured.setdefault("formatted_approved", []).append(
-            deepcopy(scenario_config["live"]["approved_coins"])
+            deepcopy(require_side_universe_sources(scenario_config, 'approved_coins'))
         )
         return format_scenario(scenario_config, **kwargs)
 
@@ -284,7 +286,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
         return None
 
     async def fake_prepare_master_datasets(base_config, exchanges, *_args, **_kwargs):
-        captured["approved"] = list(base_config["live"]["approved_coins"]["long"])
+        captured["approved"] = list(base_config['bot']["long"]['universe']['approved_coins'])
         captured["exchanges"] = list(exchanges)
         return {
             "combined": _make_lazy_dataset(
@@ -340,8 +342,8 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
     config["backtest"]["scenarios"] = [
         {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["HYPE"]},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     loaded_exchanges = []
     captured = {}
 
@@ -397,8 +399,8 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
     config["backtest"]["scenarios"] = [
         {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["HYPE"]},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -457,8 +459,8 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
     config["backtest"]["scenarios"] = [
         {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["HYPE"]},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -500,8 +502,8 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "missing_coin", "coins": ["MISSING"]}]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -545,8 +547,8 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "base"}]
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -598,8 +600,8 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
         exchanges=["binance"],
         suite_enabled=True,
     )
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     path = tmp_path / "scenario-coin.json"
     config["backtest"]["scenarios"] = [
         {

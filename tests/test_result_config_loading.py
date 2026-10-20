@@ -1,4 +1,6 @@
 """Saved result provenance must not become authored configuration authority."""
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 import json
@@ -15,7 +17,7 @@ from tools.clean_config import cleanup_config
 
 def result_record():
     config = get_template_config()
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     config["backtest"].update(start_date="2024-01-01", end_date="2024-01-02")
     config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
     config["backtest"]["coins"] = {"combined": ["BTC"]}
@@ -231,7 +233,7 @@ def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, caps
 
     def capture_prepared(source, **kwargs):
         loaded = original_prepare(source, **kwargs)
-        assert loaded["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+        assert require_side_universe_sources(loaded, 'approved_coins') == {"long": ["BTC"], "short": []}
         assert "metrics" not in source
         assert "coins" not in source["backtest"]
         raise PreparedBeforeDataAccess

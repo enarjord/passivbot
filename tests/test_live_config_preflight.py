@@ -1,4 +1,5 @@
 from __future__ import annotations
+from config.universe import set_side_universe_sources
 
 import json
 import os
@@ -17,30 +18,29 @@ def _write_config(path, config):
 def _sample_config() -> dict:
     return {
         "config_version": "v9.0.0",
-        "_raw": {"live": {"api_key": "super-secret-api-key"}},
-        "backtest": {"exchanges": ["binance"]},
+        "_raw": {
+            "live": {
+                "api_key": "super-secret-api-key"
+            }
+        },
+        "backtest": {
+            "exchanges": ["binance"]
+        },
         "live": {
             "user": "binance_01",
-            "approved_coins": {
-                "long": ["BTC", "ETH", "SOL", "XMR"],
-                "short": ["BTC"],
-            },
-            "ignored_coins": {"long": ["DOGE"], "short": []},
             "max_forager_candle_staleness_minutes": 12,
             "max_forager_candle_refresh_seconds": 45,
-            "forager_score_hysteresis_pct": 0.02,
             "force_cold_startup": False,
-            "max_warmup_minutes": 30,
-            "risk_bootstrap_max_lookback_minutes": 129600.0,
+            "risk_bootstrap_max_lookback_minutes": 129600.0
         },
         "bot": {
             "global": {
                 "unstuck": {
-                    "memory_ema_span_minutes": 10080.0,
+                    "memory_ema_span_minutes": 10080.0
                 },
                 "loss_gate": {
                     "memory_ema_span_minutes": 20160.0,
-                    "max_drawdown_ratio": 0.2,
+                    "max_drawdown_ratio": 0.2
                 },
                 "hsl": {
                     "scope": "portfolio",
@@ -50,19 +50,25 @@ def _sample_config() -> dict:
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit",
+                    "panic_close_order_type": "limit"
                 },
+                "forager": {
+                    "score_hysteresis_pct": 0.02
+                },
+                "warmup": {
+                    "max_minutes": 30
+                }
             },
             "long": {
                 "risk": {
                     "max_positions": 3,
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit": 1.0
                 },
                 "unstuck": {
-                    "enabled": True,
+                    "enabled": True
                 },
                 "forager": {
-                    "volume_ema_span_1m": 120.0,
+                    "volume_ema_span_1m": 120.0
                 },
                 "hsl": {
                     "enabled": True,
@@ -71,16 +77,20 @@ def _sample_config() -> dict:
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit",
+                    "panic_close_order_type": "limit"
                 },
+                "universe": {
+                    "approved_coins": ["BTC", "ETH", "SOL", "XMR"],
+                    "ignored_coins": ["DOGE"]
+                }
             },
             "short": {
                 "risk": {
                     "max_positions": 1,
-                    "total_wallet_exposure_limit": 0.0,
+                    "total_wallet_exposure_limit": 0.0
                 },
                 "unstuck": {
-                    "enabled": False,
+                    "enabled": False
                 },
                 "hsl": {
                     "enabled": False,
@@ -89,10 +99,14 @@ def _sample_config() -> dict:
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit",
+                    "panic_close_order_type": "limit"
                 },
-            },
-        },
+                "universe": {
+                    "approved_coins": ["BTC"],
+                    "ignored_coins": []
+                }
+            }
+        }
     }
 
 
@@ -271,6 +285,7 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
     tmp_path,
 ):
     config = _sample_config()
+    config["bot"]["global"]["warmup"]["ratio"] = 0.3
     config["live"].update(
         {
             "defer_broad_candle_warmup": True,
@@ -280,7 +295,6 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
             "max_active_candle_tail_gap_minutes": 10,
             "max_disk_candles_per_symbol_per_tf": 2_000_000,
             "max_memory_candles_per_symbol": 200_000,
-            "warmup_ratio": 0.3,
         }
     )
     config_path = tmp_path / "live.json"
@@ -470,10 +484,10 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     target["live"]["user"] = "okx_01"
     target["backtest"]["exchanges"] = ["okx"]
     target["bot"]["global"]["hsl"]["scope"] = "pside"
-    target["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
-    target["live"]["ignored_coins"]["short"] = ["DOGE", "XRP"]
+    target['bot']["long"]['universe']['approved_coins'] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
+    target['bot']["short"]['universe']['ignored_coins'] = ["DOGE", "XRP"]
     target["live"]["max_forager_candle_staleness_minutes"] = 20
-    target["live"]["max_warmup_minutes"] = 45
+    target['bot']['global']['warmup']['max_minutes'] = 45
     target["_raw"]["live"]["api_key"] = "new-secret-api-key"
     target["bot"]["long"]["hsl"]["enabled"] = False
     target["bot"]["short"]["risk"]["max_positions"] = 2
@@ -511,7 +525,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         "present": True,
         "value": 20,
     }
-    assert changes["live.max_warmup_minutes"]["after"] == {
+    assert changes['bot.global.warmup.max_minutes']["after"] == {
         "present": True,
         "value": 45,
     }
@@ -524,13 +538,13 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         changes["cache.readiness.summary"]["after"]["value"]["disabled_surface_count"]
         == 1
     )
-    assert changes["live.approved_coins.long"]["added_count"] == 2
-    assert changes["live.approved_coins.long"]["removed_count"] == 1
-    assert changes["live.approved_coins.long"]["added_sample"] == ["ADA"]
-    assert changes["live.approved_coins.long"]["added_truncated"] == 1
-    assert changes["live.ignored_coins.short"]["added_count"] == 2
-    assert changes["live.ignored_coins.short"]["added_sample"] == ["DOGE"]
-    assert changes["live.ignored_coins.short"]["added_truncated"] == 1
+    assert changes["bot.long.universe.approved_coins"]["added_count"] == 2
+    assert changes["bot.long.universe.approved_coins"]["removed_count"] == 1
+    assert changes["bot.long.universe.approved_coins"]["added_sample"] == ["ADA"]
+    assert changes["bot.long.universe.approved_coins"]["added_truncated"] == 1
+    assert changes["bot.short.universe.ignored_coins"]["added_count"] == 2
+    assert changes["bot.short.universe.ignored_coins"]["added_sample"] == ["DOGE"]
+    assert changes["bot.short.universe.ignored_coins"]["added_truncated"] == 1
     assert "super-secret-api-key" not in rendered
     assert "new-secret-api-key" not in rendered
     assert "api_key" not in rendered
@@ -575,8 +589,8 @@ def test_live_config_preflight_compare_resolves_canonical_shared_bot_keys(tmp_pa
 
 def test_live_config_preflight_handles_all_and_invalid_coin_shapes(tmp_path):
     config = _sample_config()
-    config["live"]["approved_coins"] = "all"
-    config["live"]["ignored_coins"] = {"long": {"BTC": True}, "short": []}
+    set_side_universe_sources(config, 'approved_coins', "all")
+    set_side_universe_sources(config, 'ignored_coins', {"long": {"BTC": True}, "short": []})
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 

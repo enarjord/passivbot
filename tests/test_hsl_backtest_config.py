@@ -1,5 +1,6 @@
 """Canonical policy transport into the real native simulator; no network I/O."""
 
+from config.universe import set_side_universe_sources
 from hsl_fixture import set_risk_memory_spans
 
 from copy import deepcopy
@@ -22,10 +23,8 @@ def real_extension():
 
 def inputs(mode="coin"):
     cfg = generated_template(get_template_config(), mode)
-    cfg["live"].update(
-        approved_coins={"long": ["AAA"], "short": []},
-        ignored_coins={"long": [], "short": []},
-    )
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['AAA'], 'short': []})
+    set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
     set_risk_memory_spans(cfg, 1440.0)
     cfg["backtest"]["starting_balance"] = 1000.0
     cfg["backtest"]["btc_collateral_cap"] = 0.0

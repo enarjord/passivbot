@@ -1,4 +1,5 @@
 """Offline end-to-end replay through the canonical config loader and Rust backtester."""
+from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 import numpy as np
@@ -39,12 +40,10 @@ def _legacy_replay_config():
         suite_enabled=False,
         candle_interval_minutes=1,
     )
-    c["live"].update(
-        approved_coins={"long": ["BTC", "ETH"], "short": []},
-        ignored_coins={"long": [], "short": []},
-        warmup_ratio=1,
-        max_warmup_minutes=100,
-    )
+    set_side_universe_sources(c, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
+    set_side_universe_sources(c, 'ignored_coins', {'long': [], 'short': []})
+    c['bot']['global']['warmup']['ratio'] = 1
+    c['bot']['global']['warmup']['max_minutes'] = 100
     for side in ("long", "short"):
         b = c["bot"][side]
         b['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0 if side == 'long' else 0.0, 'we_excess_allowance_pct': 0, 'position_exposure_enforcer': {**b['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**b['risk']['total_exposure_enforcer'], 'enabled': False}})
@@ -205,9 +204,9 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
     raw["bot"][inactive_side]["risk"].update(
         max_positions=0, total_wallet_exposure_limit=0.0
     )
-    raw["live"]["approved_coins"] = {
+    set_side_universe_sources(raw, 'approved_coins', {
         active_side: ["BTC", "ETH"], inactive_side: []
-    }
+    })
     raw["bot"][active_side]["hsl"].update(
         enabled=hsl_enabled,
         drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.001,

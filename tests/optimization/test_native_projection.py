@@ -24,7 +24,7 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
         selected = [candle_coins[index] for index in selected_indices]
         config["backtest"]["coins"]["binance"] = selected
         for side in ("long", "short"):
-            config["live"]["approved_coins"][side] = list(selected)
+            config['bot'][side]['universe']['approved_coins'] = list(selected)
             config["bot"][side]["risk"]["max_positions"] = len(selected)
     if max_positions is not None:
         for side in ("long", "short"):
@@ -422,7 +422,7 @@ def test_dynamic_side_enablement_still_selects_a_distinct_static_contract(value)
 
 @pytest.mark.parametrize("path,value", [
     ("backtest.starting_balance", 2000.0),
-    ("live.market_orders_allowed", True),
+    ('bot.global.execution.market_orders_allowed', True),
     ("bot.global.loss_gate.max_drawdown_ratio", 0.5),
 ])
 def test_post_construction_static_policies_still_require_a_compatible_dataset(path, value):

@@ -994,15 +994,15 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
         (
             [
                 "live",
-                "--live.approved_coins",
+                "--bot.long.universe.approved_coins",
                 "BTC,ETH",
-                "--live_ignored_coins",
+                "--bot.short.universe.ignored_coins",
                 "DOGE",
-                "--live.minimum_coin_age_days",
+                "--bot.global.universe.minimum_coin_age_days",
                 "5",
-                "--live.filter_by_min_effective_cost",
+                "--bot.global.universe.filter_by_min_effective_cost",
                 "y",
-                "--live.hedge_mode",
+                "--bot.global.hedge_mode",
                 "n",
                 "--live_leverage",
                 "3",
@@ -1021,7 +1021,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "now",
                 "--backtest_starting_balance",
                 "1000",
-                "--live.approved_coins",
+                "--bot.long.universe.approved_coins",
                 "BTC",
                 "-h",
             ],
@@ -1046,7 +1046,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
         ),
     ],
 )
-def test_legacy_aliases_still_work_through_real_command_modules(
+def test_canonical_and_unchanged_aliases_work_through_real_command_modules(
     monkeypatch, tmp_path, capsys, argv, expected_text
 ):
     _configure_real_cli_module_test(monkeypatch, tmp_path)

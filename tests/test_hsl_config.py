@@ -206,7 +206,7 @@ def test_portfolio_optimizer_paths_target_portfolio_only():
     assert keys["hsl_drawdown_ratio_ema_span_minutes"] == ("bot", "global", "hsl", "drawdown_ratio_ema_span_minutes")
     assert not any(k.startswith(("long_hsl_", "short_hsl_")) for k in keys)
     assert "hsl_red_threshold" in flatten_optimize_bounds(
-        cfg["optimize"]["bounds"], strategy_kind=cfg["live"]["strategy_kind"]
+        cfg["optimize"]["bounds"], strategy_kind=cfg['bot']['global']['strategy_kind']
     )
 
 
@@ -664,7 +664,7 @@ def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_pat
         "inline": hsl,
         "file": {"coin_overrides": {"TEST": {"override_config_path": "coin.json"}}},
         "legacy_file": {"live.coin_flags.TEST": "-lc coin.json"},
-        "non_hsl": {"live.minimum_coin_age_days": 30},
+        "non_hsl": {'bot.global.universe.minimum_coin_age_days': 30},
     }
     scenarios = [{"label": "external", "overrides": patches[patch_kind]}]
     path = tmp_path / "suite.json"

@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import pytest
 from copy import deepcopy
 import config_utils
@@ -5,7 +6,9 @@ import config_utils
 
 def _base_config_with_override(coin_key, override_value):
     config = config_utils.get_template_config()
-    config["live"].update(user="tester", approved_coins=[], ignored_coins={"long": [], "short": []})
+    config['live'].update(user='tester')
+    set_side_universe_sources(config, 'approved_coins', [])
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config["coin_overrides"] = {coin_key: override_value}
     return config
 

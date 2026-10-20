@@ -57,7 +57,7 @@ for the distinction between schema, package version and tags.
   contributors, dispersion, exclusions, reference exchange, and full-precision scale factors.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
-- **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry
+- **filter_by_min_effective_cost**: `null` (default) inherits `bot.global.universe.filter_by_min_effective_cost`; explicit `true` or `false` overrides that policy for simulation. When enabled, skip coins whose projected initial entry
   (balance × wallet_exposure_limit × the active strategy initial sizing fraction, including WE
   excess allowance)
   would fall below the exchange’s effective minimum cost.
@@ -70,7 +70,7 @@ for the distinction between schema, package version and tags.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override`.
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override`.
 - **limit_order_fill_buffer_pct**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
-- **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
+- **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.global.execution.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
   Fill-activity metrics use the `fills_*` prefix, including fill counts, per-day entry/close and long/short rates, no-fill gap durations, per-position-slot activity, active fill day counts/ratio, analysis duration, active symbol count, and top-symbol fill share.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
@@ -233,7 +233,7 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 - **strategy.trailing_martingale.entry.initial_qty_pct**:
   - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
   - This is the initial sizing fraction used by min-effective-cost checks when
-    `live.strategy_kind = "trailing_martingale"`.
+    `bot.global.strategy_kind = "trailing_martingale"`.
 
 ### Trailing Martingale Closes
 
@@ -383,21 +383,70 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - **Take Profit Only mode**: Passivbot only manages closing orders.
     - **Panic mode**: Passivbot closes the position immediately.
 
+## Shared Bot Policy
+
+Behavior shared by live trading, backtests and optimization belongs in `bot`. Global policy
+lives in `bot.global`; directional policy lives in `bot.long` and `bot.short`. `live` contains
+operational execution, exchange I/O and startup settings.
+
+### Universe and selection
+
+- **bot.<side>.universe.approved_coins**: A coin list, `"all"` for every eligible coin, or a path
+  to an external coin-list file. An empty list disables entries for that side. Long and short
+  have separate source leaves; live refresh preserves each side's file reference.
+- **bot.<side>.universe.ignored_coins**: A coin list or external coin-list file. The side's
+  tradable universe is its approved coins minus ignored coins, subject to age/market checks.
+- **bot.<side>.forager.always_include**: Ordered, deduplicated coin/market identifiers that
+  remain selected by Forager. They must still pass approval, ignored-coin, minimum-age,
+  market-availability, risk, HSL and operational mode checks. This list does not add coins to
+  the approved universe and does not override a live forced mode.
+
+```json
+"bot": {
+    "long": {"universe": {"approved_coins": ["BTC", "ETH"], "ignored_coins": []}},
+    "short": {"universe": {"approved_coins": "all", "ignored_coins": ["BTC"]}}
+}
+```
+
+CLI `--symbols`/`-s` and `--ignored-coins`/`-ic` deliberately set both side sources.
+Use `--bot.long.universe.approved_coins BTC,ETH` or the corresponding short/ignored path to
+change one side. A per-side option takes precedence over a both-side convenience in the same
+command. Retired `--live...` policy paths are rejected.
+
+- **bot.global.universe.minimum_coin_age_days**: Disallows coins younger than a given number of days.
+
+- **bot.global.forager.score_hysteresis_pct**: Fractional normalized-score tolerance for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
+
+### Strategy, execution and warmup
+
+- **bot.global.strategy_kind**: Selects the active strategy subtree on both sides.
+
+- **bot.global.hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.bot.global.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
+
+- **bot.global.universe.filter_by_min_effective_cost**: If `true`, disallows coins where
+  `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
+  For `trailing_martingale`, the sizing fraction is
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
+  `bot.<side>.strategy.ema_anchor.base_qty_pct`.
+  - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
+
+- **bot.global.execution.market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
+
+- **bot.global.execution.market_order_near_touch_threshold**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
+  - Decision rules:
+    - non-panic buy with `price >= market_price` => `market`
+    - non-panic sell with `price <= market_price` => `market`
+    - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
+    - otherwise => `limit`
+    - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
+  - Ownership is `config.bot.global.execution`. Backtests always inherit `bot.global.execution.market_orders_allowed` and `bot.global.execution.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
+
+- **bot.global.warmup.max_minutes**: Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups. Use `0` to disable the cap; otherwise values above `0` clamp the per-symbol warmup calculated from EMA spans.
+
+- **bot.global.warmup.ratio**: Multiplier applied to the longest EMA or log-range span (in minutes) across long/short settings to decide how much 1m history to prefetch before trading. A value of `0.2`, for example, warmups ~20% of the deepest lookback, capped by `bot.global.warmup.max_minutes`.
+
 ## Live Trading Settings
 
-- **approved_coins**:
-  - List of coins approved for trading.
-    - Backtester and optimizer use `live.approved_coins` minus `live.ignored_coins`.
-  - May be given as a path to an external file, read continuously by Passivbot.
-  - May be split into long and short:
-    - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
-    - Example: `{"long": ["COIN1", "COIN2"], "short": "all"}`
-  - Explicit empty values disable trading for the affected side:
-    - `approved_coins = []`, `{}`, `""`, or `null` disables both sides
-    - `approved_coins = {"long": ["BTC"], "short": []}` keeps long curated and disables short
-  - The explicit value `"all"` means all eligible coins for the affected side:
-    - `approved_coins = "all"` enables all eligible coins for both sides
-    - `approved_coins = {"long": "all", "short": ["BTC", "ETH"]}` enables all eligible longs and curated shorts
 - **disapproved_position_mode**: Policy for existing positions on disapproved coins.
   `graceful_stop` keeps managing the current position and prevents reopening after flat;
   `manual` delegates management to the operator. Default is `graceful_stop`.
@@ -405,25 +454,12 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **enable_forager_ws_candles**: Persists proven-final public 1m WebSocket candles for flat forager candidates when the exchange supports CCXT Pro `watchOHLCV`. The first nonempty snapshot of each watcher session only primes provenance. Changed values may correct an existing canonical timestamp, but extending canonical history requires fresh-successor proof, and persistence is read-verified before cache/EMA exposure. REST remains the complete fallback for startup basis, gaps, reconnect recovery, prolonged silence, and forced periodic integrity overlaps. WebSocket silence never proves a no-trade candle, and unstable streams cool down while REST maintenance continues. The lightweight reconciler stays ready for later runtime transitions into forager mode. Default is `true`; set `false` to use REST-only candidate maintenance. A zero `max_ohlcv_fetches_per_minute` disables this network path too.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **exchange_symbol_unavailable_cooldown_hours**: RAM-only, per-symbol entry cooldown after a connector proves from an exact exchange-specific error code that API trading is temporarily unavailable for that symbol. Default is `6.0` hours; `0` disables the cooldown; the maximum is `876600` hours (100 years). Flat affected symbols are excluded from new planning, while held symbols retain close and panic management with normal entries suppressed. Expiry retries the symbol automatically, a repeated qualifying response starts a fresh cooldown, and restarting the bot deliberately clears all cooldowns so the symbol is tried immediately. WEEX currently classifies only structured error code `-1058`; other exchanges require their own exact, fixture-tested classifier before using this policy.
-- **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
-
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default is `200_000`.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
 - **inactive_coin_candle_ttl_minutes**: How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep inactive symbols fresher at the cost of more network/disk churn.
-- **filter_by_min_effective_cost**: If `true`, disallows coins where
-  `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
-  For `trailing_martingale`, the sizing fraction is
-  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
-  `bot.<side>.strategy.ema_anchor.base_qty_pct`.
-  - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 - **forced_mode_long**, **forced_mode_short**: Force all coins long/short to a given mode.
   - Choices: `[m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
-- **ignored_coins**:
-  - List of coins the bot will not make positions on. If there are positions on that coin, enable graceful stop or manual mode.
-  - May be given as a path to an external file, read continuously by Passivbot.
-  - May be split into long and short:
-    - Example: `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - **leverage**: Leverage set on the exchange. Default is `10`.
 - **margin_mode_preference**: Preferred live margin mode when a symbol supports both cross and isolated.
   - `auto` / `auto_cross`: prefer cross when both modes are available.
@@ -432,18 +468,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `isolated`: require isolated for new entries; cross-only symbols are skipped for new entries but existing positions/orders remain manageable.
   - If the exchange reports an already-open live position or open orders on a symbol, the live bot preserves that symbol's actual live margin mode for state management instead of forcing the configured preference mid-position.
   - Hyperliquid HIP-3 exception: isolated HIP-3 live trading is currently unsupported. Cross-capable HIP-3 markets are forced to cross for new entries, isolated-only HIP-3 markets are skipped for new entries, and existing isolated HIP-3 live state causes startup to fail loudly.
-- **market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
-- **market_order_near_touch_threshold**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
-  - Decision rules:
-    - non-panic buy with `price >= market_price` => `market`
-    - non-panic sell with `price <= market_price` => `market`
-    - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
-    - otherwise => `limit`
-    - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
-  - Ownership is `config.live`. Backtests always inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
 - **market_snapshot_ticker_strategy**: Selects the live market-snapshot ticker path. `auto` lets Passivbot choose the exchange-appropriate default, `bulk` requests one broad ticker snapshot when the exchange supports it, and `symbols` fetches tickers symbol by symbol.
 - **custom_endpoints_path**: Optional live-config path to a custom endpoint override JSON file. Set to `null` to use the default auto-discovery behavior, set to a path such as `configs/custom_endpoints.json` to force that file, or set to `"none"` to disable endpoint overrides even if the default file exists. See [Running live](live.md#custom-exchange-endpoints).
-- **forager_score_hysteresis_pct**: Fractional normalized-score tolerance for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 - **forager_ws_candle_rest_audit_minutes**: Maximum time a healthy WebSocket-advanced flat-candidate 1m tail may defer its next REST integrity audit. Default is `30`; accepted values are greater than `0` and at most `60`. Missing basis, internal gaps, WebSocket silence, reconnect gaps, and active position/open-order surfaces continue to use the existing REST readiness and refresh rules.
 - **order_match_tolerance_pct**: Fractional relative tolerance used to match near-identical cancel/create pairs and avoid order churn. The accepted range is `0.0` through `0.01` inclusive (0% through 1%). Default is `0.0002`, meaning 0.02% relative price/quantity tolerance. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **order_replacement_churn_gate_activation_count**: Account-wide connector-bound create-attempt count in the rolling window below which far churn-evidenced ordinary orders may still be placed. Default `10`; `0` disables only this economy deferral. Exact reconciliation and cancel-confirm-refresh-replan safety remain active. Market, risk-critical, and near-market creates never wait for economy capacity but still count.
@@ -469,7 +495,6 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - Beyond the cap, or without any prior feature basis, a candidate is unavailable for new forager entries until refreshed.
 - **max_forager_candle_refresh_seconds**: Wall-time cap for one best-effort broad forager-candidate candle refresh task. Default is `45`. When the cap is reached, Passivbot pauses the broad refresh and retries remaining stale candidates later; active position/open-order candle refreshes are not capped by this setting.
 - **defer_broad_candle_warmup**: If `true`, startup warms only trading-critical symbols first and catches up broad approved-coin candles in the background. Set `false` to block startup until broad candle warmup completes.
-- **minimum_coin_age_days**: Disallows coins younger than a given number of days.
 - **balance_override**: Optional numeric override for wallet balance used by the live bot (useful for dry-runs and debugging). When set, the bot will not fetch balance from the exchange. Can also be useful when using BTC collateral and you want to keep an effectively “fixed USD balance” for sizing, instead of having the USD-denominated balance fluctuate with the BTC/USD price.
 - **balance_hysteresis_snap_pct**: Hysteresis snap percentage applied to balance updates to reduce noise. Set `0.0` to disable hysteresis. Snapped balance is used for sizing and entry-gating surfaces where hysteresis is intentional; raw balance remains the basis for exact exposure-repair surfaces such as WEL/TWEL auto-reduce. Values above roughly `0.05` can make near-boundary behavior less intuitive and are surfaced by `passivbot tool live-config-preflight`.
 - **recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `10000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
@@ -513,12 +538,10 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **fee_pct_fallback**: Fallback fee percentage used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
 - **fee_pct_sanity_abs_max**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fee_pct_fallback`.
 - **fee_conversion_max_age_ms**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
-- **max_warmup_minutes**: Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups. Use `0` to disable the cap; otherwise values above `0` clamp the per-symbol warmup calculated from EMA spans.
-- **warmup_ratio**: Multiplier applied to the longest EMA or log-range span (in minutes) across long/short settings to decide how much 1m history to prefetch before trading. A value of `0.2`, for example, warmups ~20% of the deepest lookback, capped by `max_warmup_minutes`.
 - **warmup_jitter_seconds**: Random startup delay spread applied before warm-up work begins. This helps multiple bots sharing one machine or cache avoid stampeding the same files and APIs at the same second.
 - **warmup_concurrency**: Concurrency cap for live warm-up tasks. `0` lets Passivbot auto-select; positive values bound how many symbols are warmed in parallel.
 - **max_concurrent_api_requests**: Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set an integer to throttle authenticated and public request fan-out more aggressively.
-- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `warmup_ratio`, indicator spans, and `max_warmup_minutes`.
+- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.global.warmup.ratio`, indicator spans, and `bot.global.warmup.max_minutes`.
 - **time_in_force**: Default is Good-Till-Cancelled.
 - **user**: Fetch API key/secret from `api-keys.json`.
 
@@ -599,7 +622,7 @@ after migration.
 - **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
   - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_pct` > `strategy.trailing_martingale.close.retracement_base_pct`. This prevents retracement from triggering before reaching the minimum profit threshold.
   - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These retired overrides are rejected.
-  - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `live.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
+  - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.global.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
 - **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_pct` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
 - **iters**: Number of backtests per optimize session.

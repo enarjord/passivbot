@@ -26,7 +26,7 @@ requires_extension = pytest.mark.skipif(
 
 def _ema_anchor_config() -> dict:
     return {
-        "live": {"strategy_kind": "ema_anchor"},
+        "live": {},
         "bot": {
             "long": {
                 "strategy": {
@@ -58,6 +58,7 @@ def _ema_anchor_config() -> dict:
                     }
                 }
             },
+            "global": {"strategy_kind": "ema_anchor"},
         },
     }
 

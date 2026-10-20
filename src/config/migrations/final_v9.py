@@ -370,7 +370,13 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     """Translate public fields without guessing independent optimizer ranges."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
+    from .shared_policy import (COIN_SOURCE_FIELDS, forced_normal_coins,
+                                move_shared_policy, preserve_forced_normal_selection, shared_policy_selector)
+
     result = deepcopy(source)
+    if not sparse:
+        from .released_v8 import materialize_released_v8_minimum_cost_defaults
+        materialize_released_v8_minimum_cost_defaults(result, changes=changes)
     if not sparse:
         retire_deap_policy(result, acknowledge=acknowledge_search_backend_change, changes=changes,
                            best_effort=best_effort)
@@ -452,7 +458,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
         ):
             path = path.replace(old, new)
-        return path
+        return shared_policy_selector(path)
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides
@@ -474,6 +480,18 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                     converted[dotted] = deepcopy(value)
                 record(f"{path}.{key}", value, converted, "split shared slow memory into independent spans")
                 continue
+            if key in {f"live.{field}" for field in COIN_SOURCE_FIELDS}:
+                field = key.split(".")[-1]
+                sources = value if isinstance(value, dict) else {side: value for side in ("long", "short")}
+                if set(sources) - {"long", "short"}:
+                    raise ValueError(f"{path}.{key} must use only long/short source keys")
+                for side, source in sources.items():
+                    target = f"bot.{side}.universe.{field}"
+                    if target in converted and converted[target] != source:
+                        raise ValueError(f"{path}.{key} conflicts with {target}")
+                    converted[target] = deepcopy(source)
+                record(f"{path}.{key}", value, converted, "side-owned universe source paths")
+                continue
             new = selector(key)
             if key == "live.auto_gs":
                 if type(value) is not bool:
@@ -484,6 +502,15 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             converted[new] = deepcopy(value)
             if new != key:
                 record(f"{path}.{key}", values[key], {new: value}, "canonical v9 override path")
+        # A scenario/fixed coin map replaces the root map. Preserve both the
+        # operational normal exemptions and its persistent selection meaning.
+        if "coin_overrides" in values:
+            for side, coins in forced_normal_coins(values["coin_overrides"]).items():
+                target = f"bot.{side}.forager.always_include"
+                if target not in converted:
+                    converted[target] = coins
+                    record(f"{path}.{target}", None, coins,
+                           "preserved released coin-normal forced selection")
         return converted
 
     scope = policy_scope(result, "coin")
@@ -574,6 +601,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
         migrate_entry_cooldown_tree(result)
         migrate_entry_ema_tree(result)
+        move_shared_policy(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
         return result
@@ -597,8 +625,10 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     apply_migrations(result, verbose=False)
     apply_backward_compatibility_renames(result, verbose=False)
     migrate_entry_cooldown(result)
+    move_shared_policy(result, record=record)
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
+    preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
         canonicalize_shared_bot_side(result.get("bot", {}).get(side))
 
@@ -642,7 +672,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         old = bounds.pop("hsl")
         put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
     from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
-    kind = result.get("live", {}).get("strategy_kind", "trailing_martingale")
+    kind = result.get("bot", {}).get("global", {}).get("strategy_kind", "trailing_martingale")
     for side in ("long", "short"):
         forager = bounds.get(side, {}).get("forager", {})
         nested = forager.get("score_weights", {})

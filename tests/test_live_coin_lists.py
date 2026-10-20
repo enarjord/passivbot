@@ -820,12 +820,15 @@ def test_refresh_approved_ignored_coin_lists_labels_live_value_source():
     bot = _make_eligibility_event_bot()
     bot.config = {
         "_coins_sources": {},
-        "live": {
-            "approved_coins": {
-                "long": [f"A{index:02d}" for index in range(14)],
-                "short": ["SHORT"],
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {
+                    "approved_coins": [f"A{index:02d}" for index in range(14)],
+                    "ignored_coins": ["IGNORED"],
+                }
             },
-            "ignored_coins": {"long": ["IGNORED"], "short": []},
+            "short": {"universe": {"approved_coins": ["SHORT"], "ignored_coins": []}},
         },
     }
     structured = ListEventSink()

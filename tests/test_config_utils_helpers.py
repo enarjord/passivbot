@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import logging
 import argparse
 from copy import deepcopy
@@ -49,7 +51,7 @@ from warmup_utils import compute_backtest_warmup_minutes
 
 def _strategy_side(config, pside, kind=None):
     if kind is None:
-        kind = config["live"]["strategy_kind"]
+        kind = config['bot']['global']['strategy_kind']
     return config["bot"][pside]["strategy"][kind]
 
 
@@ -95,7 +97,7 @@ def test_hsl_signal_mode_accepts_portfolio_and_rejects_retired_unified():
 
 @pytest.mark.parametrize(
     "flag",
-    ["--hsl-scope", "--bot.global.hsl.scope", "--bot_risk_hsl_scope"],
+    ["--hsl-scope", "--bot.global.hsl.scope", "--bot_global_hsl_scope"],
 )
 def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
     parser = argparse.ArgumentParser()
@@ -117,7 +119,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
 
-    assert loaded["live"]["strategy_kind"] == "trailing_martingale"
+    assert loaded['bot']['global']['strategy_kind'] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
         "entry_cooldown",
         "forager",
@@ -125,6 +127,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "risk",
         "strategy",
         "unstuck",
+        "universe",
     }
     assert set(loaded["bot"]["short"]) == {
         "entry_cooldown",
@@ -133,12 +136,13 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "risk",
         "strategy",
         "unstuck",
+        "universe",
     }
     assert "market_orders_allowed" not in loaded["backtest"]
     assert "market_order_near_touch_threshold" not in loaded["backtest"]
     assert "lookback_ema_span_minutes" not in loaded["backtest"]
-    assert "market_orders_allowed" in loaded["live"]
-    assert "market_order_near_touch_threshold" in loaded["live"]
+    assert "market_orders_allowed" in loaded["bot"]["global"]["execution"]
+    assert "market_order_near_touch_threshold" in loaded["bot"]["global"]["execution"]
     assert loaded["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "risk_input_max_attempts" not in loaded["live"]
 
@@ -174,6 +178,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "risk",
             "strategy",
             "unstuck",
+            "universe",
         }
         assert set(loaded["bot"]["short"]) == {
             "entry_cooldown",
@@ -182,6 +187,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "risk",
             "strategy",
             "unstuck",
+            "universe",
         }
         expected_bounds = {"entry_cooldown", "forager", "risk", "strategy", "unstuck"}
         if loaded["bot"]["global"]["hsl"]["scope"] == "portfolio":
@@ -539,8 +545,8 @@ def test_normalize_position_counts_rounds_values():
 
 def test_apply_non_live_adjustments_sorts_and_filters():
     config = get_template_config()
-    config["live"]["approved_coins"] = "btc,eth"
-    config["live"]["ignored_coins"] = {"long": ["eth"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', "btc,eth")
+    set_side_universe_sources(config, 'ignored_coins', {"long": ["eth"], "short": []})
     config["backtest"]["end_date"] = "2023-01-01"
     config["backtest"]["btc_collateral_cap"] = 0.0
     config["optimize"]["scoring"] = ["btc_adg", "adg"]
@@ -553,7 +559,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
 
     _apply_non_live_adjustments(config, verbose=False)
 
-    assert config["live"]["approved_coins"]["long"] == ["btc"]
+    assert config['bot']["long"]['universe']['approved_coins'] == ["btc"]
     assert config["optimize"]["scoring"] == [
         {"metric": "adg_btc", "goal": "max"},
         {"metric": "adg_usd", "goal": "max"},
@@ -575,13 +581,13 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert _bound(
         config, "long", "strategy", "trailing_martingale", "entry", "threshold_base_pct"
     ) == [0.05, 0.1]
-    assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
+    assert config['bot']["short"]['universe']['approved_coins'] == ["btc", "eth"]
 
 
 def test_apply_non_live_adjustments_supports_legacy_coins_file():
     config = get_template_config()
-    config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', "configs/approved_coins_topmcap.json")
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_pct"
     ] = [0.1, 0.2]
@@ -589,7 +595,7 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     _apply_non_live_adjustments(config, verbose=False)
     with open("configs/approved_coins.json") as fp:
         expected = json.load(fp)
-    assert config["live"]["approved_coins"]["long"] == expected
+    assert config['bot']["long"]['universe']['approved_coins'] == expected
 
 
 def test_normalize_coins_source_supports_partial_per_side_dicts():
@@ -1267,28 +1273,28 @@ def test_update_config_with_args_updates_coin_sources():
         "ignored_coins": {"long": [], "short": []},
     }
     args = SimpleNamespace()
-    vars(args)["live.approved_coins"] = ["BTC", "ETH"]
+    vars(args)["approved_coins"] = ["BTC", "ETH"]
     update_config_with_args(config, args, verbose=False)
-    assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
-    assert config["_coins_sources"]["approved_coins"] == ["BTC", "ETH"]
+    assert config['bot']["long"]['universe']['approved_coins'] == ["BTC", "ETH"]
+    assert config["_coins_sources"]["approved_coins"]["long"] == ["BTC", "ETH"]
     log_entry = config["_transform_log"][-1]
     assert log_entry["step"] == "update_config_with_args"
     diff = log_entry["details"]["diffs"][0]
-    assert diff["path"] == "live.approved_coins"
-    assert diff["new"]["long"] == ["BTC", "ETH"]
+    assert diff["path"] == "bot.long.universe.approved_coins"
+    assert diff["new"] == ["BTC", "ETH"]
 
 
 def test_update_config_with_args_replaces_path_coin_source():
     config = get_template_config()
     config["_coins_sources"] = {"ignored_coins": "configs/ignored.json"}
     args = SimpleNamespace()
-    vars(args)["live.ignored_coins"] = ["DOGE"]
+    vars(args)["ignored_coins"] = ["DOGE"]
     update_config_with_args(config, args, verbose=False)
-    assert config["live"]["ignored_coins"]["long"] == ["DOGE"]
-    assert config["_coins_sources"]["ignored_coins"] == ["DOGE"]
+    assert config['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
+    assert config["_coins_sources"]["ignored_coins"]["long"] == ["DOGE"]
     entry = config["_transform_log"][-1]
     assert entry["step"] == "update_config_with_args"
-    assert entry["details"]["diffs"][0]["path"] == "live.ignored_coins"
+    assert entry["details"]["diffs"][0]["path"] == "bot.long.universe.ignored_coins"
 
 
 def test_update_config_with_args_preserves_cli_coin_file_source_for_live_reload(
@@ -1300,12 +1306,12 @@ def test_update_config_with_args_preserves_cli_coin_file_source_for_live_reload(
     config = get_template_config()
     config["_coins_sources"] = {}
     args = SimpleNamespace()
-    vars(args)["live.approved_coins"] = [str(approved_file)]
+    vars(args)["approved_coins"] = [str(approved_file)]
 
     update_config_with_args(config, args, verbose=False)
 
-    assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
-    assert config["_coins_sources"]["approved_coins"] == [str(approved_file)]
+    assert config['bot']["long"]['universe']['approved_coins'] == ["BTC", "ETH"]
+    assert config["_coins_sources"]["approved_coins"]["long"] == [str(approved_file)]
 
     approved_file.write_text('["BTC","XRP"]', encoding="utf-8")
     refreshed = normalize_coins_source(config["_coins_sources"]["approved_coins"])
@@ -1315,7 +1321,7 @@ def test_update_config_with_args_preserves_cli_coin_file_source_for_live_reload(
 
 def test_load_config_preserves_raw_and_effective_snapshots(tmp_path):
     raw = get_template_config()
-    raw["live"]["approved_coins"] = ["BTC"]
+    set_side_universe_sources(raw, 'approved_coins', ["BTC"])
     path = tmp_path / "raw_config.json"
     path.write_text(json.dumps(raw))
 
@@ -1324,10 +1330,10 @@ def test_load_config_preserves_raw_and_effective_snapshots(tmp_path):
     assert loaded["_raw_effective"] == raw
 
     # Mutating runtime view must not mutate the stored snapshots
-    loaded["live"]["approved_coins"]["long"].append("ETH")
-    loaded["live"]["approved_coins"]["short"].append("ETH")
-    assert loaded["_raw"]["live"]["approved_coins"] == ["BTC"]
-    assert loaded["_raw_effective"]["live"]["approved_coins"] == ["BTC"]
+    loaded['bot']["long"]['universe']['approved_coins'].append("ETH")
+    loaded['bot']["short"]['universe']['approved_coins'].append("ETH")
+    assert loaded["_raw"]["bot"]["long"]["universe"]["approved_coins"] == ["BTC"]
+    assert loaded["_raw_effective"]["bot"]["long"]["universe"]["approved_coins"] == ["BTC"]
     log_steps = [entry["step"] for entry in loaded["_transform_log"]]
     assert log_steps[0] == "load_config"
     assert "normalize_config" in log_steps
@@ -1342,7 +1348,21 @@ def test_parse_overrides_records_transform_log():
 
 def test_format_config_preserves_raw_snapshot_and_log():
     cfg = get_template_config()
-    raw_snapshot = {"live": {"approved_coins": ["BTC"]}}
+    raw_snapshot = {
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {
+                    "approved_coins": ["BTC"]
+                }
+            },
+            "short": {
+                "universe": {
+                    "approved_coins": ["BTC"]
+                }
+            }
+        }
+    }
     cfg["_raw"] = deepcopy(raw_snapshot)
     cfg["_transform_log"] = [{"step": "preprocess", "ts_ms": 0}]
 
@@ -1410,10 +1430,23 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(
     start_flag, tmp_path
 ):
     raw = {
-        "live": {"approved_coins": ["BTC"]},
-        "bot": {"long": {}, "short": {}},
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {
+                    "approved_coins": ["BTC"]
+                }
+            },
+            "short": {
+                "universe": {
+                    "approved_coins": ["BTC"]
+                }
+            }
+        },
         "coin_overrides": {},
-        "optimize": {"bounds": {}},
+        "optimize": {
+            "bounds": {}
+        }
     }
     path = tmp_path / "no_backtest.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
@@ -1460,7 +1493,7 @@ def test_backtest_cli_max_warmup_override_updates_consumed_live_field():
     args, allowed_config_keys = _parse_backtest_args(
         [
             "configs/hype.json",
-            "--live.max_warmup_minutes",
+            "--bot.global.warmup.max_minutes",
             "1",
         ]
     )
@@ -1472,7 +1505,7 @@ def test_backtest_cli_max_warmup_override_updates_consumed_live_field():
 
     assert "backtest.max_warmup_minutes" not in allowed_config_keys
     assert "max_warmup_minutes" not in config["backtest"]
-    assert config["live"]["max_warmup_minutes"] == pytest.approx(1.0)
+    assert config['bot']['global']['warmup']['max_minutes'] == pytest.approx(1.0)
     assert compute_backtest_warmup_minutes(config) == 1
 
 
@@ -1588,25 +1621,24 @@ def test_update_config_with_args_bounds_approved_coins_cli_override_log(caplog):
     config = get_template_config()
     old_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
     override_coins = ["ADA", "AVAX", "DOT", "LINK", "MATIC", "ATOM"]
-    config["live"]["approved_coins"] = old_coins
+    set_side_universe_sources(config, 'approved_coins', old_coins)
     args = SimpleNamespace()
-    vars(args)["live.approved_coins"] = override_coins
+    vars(args)["approved_coins"] = override_coins
 
     with caplog.at_level(logging.INFO):
         update_config_with_args(config, args, verbose=True)
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": override_coins,
         "short": override_coins,
     }
     message = next(
         rec.message
         for rec in caplog.records
-        if rec.message.startswith("[config] changed live.approved_coins")
+        if rec.message.startswith("[config] changed bot.long.universe.approved_coins")
     )
     assert "list:5[BTC,ETH,SOL,+2]" in message
-    assert "sides(long:6[ADA,AVAX,DOT,+3]" in message
-    assert "short:6[ADA,AVAX,DOT,+3]" in message
+    assert "list:6[ADA,AVAX,DOT,+3]" in message
     assert len("2026-07-15T22:24:59Z INFO     [config] " + message) <= 240
 
 
@@ -1614,12 +1646,12 @@ def test_approved_coins_change_log_samples_deterministically():
     value = {"long": ["SOL", "BTC", "ETH", "XRP"], "short": ["DOGE"]}
 
     message, args = config_utils._format_config_change_message(
-        "live.approved_coins", value, value
+        "bot.long.universe.approved_coins", value, value
     )
 
     assert args == ()
     assert message == (
-        "changed live.approved_coins sides("
+        "changed bot.long.universe.approved_coins sides("
         "long:4[SOL,BTC,ETH,+1],short:1[DOGE]) -> "
         "sides(long:4[SOL,BTC,ETH,+1],short:1[DOGE])"
     )
@@ -1633,7 +1665,7 @@ def test_approved_coins_change_log_stays_within_info_budget_for_large_mappings()
     }
 
     message, args = config_utils._format_config_change_message(
-        "live.approved_coins", old_value, new_value
+        "bot.long.universe.approved_coins", old_value, new_value
     )
 
     assert args == ()
@@ -1647,11 +1679,11 @@ def test_approved_coins_change_log_bounds_malformed_and_unexpected_values():
     malformed = {"long": "X" * 1_000, "extra": ["Y" * 1_000]}
 
     message, args = config_utils._format_config_change_message(
-        "live.approved_coins", malformed, object()
+        "bot.long.universe.approved_coins", malformed, object()
     )
 
     assert args == ()
-    assert message == "changed live.approved_coins dict:2 -> type=object"
+    assert message == "changed bot.long.universe.approved_coins dict:2 -> type=object"
     assert len(message) < 240
     assert "X" * 20 not in message
     assert "Y" * 20 not in message
@@ -1669,14 +1701,16 @@ def test_config_change_log_keeps_non_target_generic_formatting():
     assert args == ("backtest.start_date", old_value, new_value)
 
 
-def test_backtest_filter_min_cost_inherits_from_live():
+def test_backtest_filter_min_cost_retains_shared_policy_inheritance():
     cfg = get_template_config()
-    cfg["live"]["filter_by_min_effective_cost"] = True
+    cfg['bot']['global']['universe']['filter_by_min_effective_cost'] = True
     cfg["backtest"]["filter_by_min_effective_cost"] = None
 
     formatted = format_config(cfg, verbose=False)
 
-    assert formatted["backtest"]["filter_by_min_effective_cost"] is True
+    assert formatted["backtest"]["filter_by_min_effective_cost"] is None
+    from config.policy import effective_minimum_cost_filter
+    assert effective_minimum_cost_filter(formatted) is True
 
 
 def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:
@@ -2117,9 +2151,9 @@ def test_dotted_max_warmup_override_parses_for_non_live_commands(command):
         group_map=group_map,
     )
 
-    parsed = parser.parse_args(["--live.max_warmup_minutes", "720"])
+    parsed = parser.parse_args(["--bot.global.warmup.max_minutes", "720"])
 
-    assert getattr(parsed, "live.max_warmup_minutes") == pytest.approx(720.0)
+    assert getattr(parsed, 'bot.global.warmup.max_minutes') == pytest.approx(720.0)
 
 
 def test_optimize_fixed_bot_runtime_overrides_parse():
@@ -2218,10 +2252,10 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_maker_fee = parser.parse_args(["--maker-fee-override", "0.0002"])
     parsed_taker_fee = parser.parse_args(["--taker-fee-override", "0.00055"])
 
-    assert getattr(parsed_market, "live.market_orders_allowed") is True
-    assert getattr(parsed_hedge, "live.hedge_mode") is False
+    assert getattr(parsed_market, 'bot.global.execution.market_orders_allowed') is True
+    assert getattr(parsed_hedge, 'bot.global.hedge_mode') is False
     assert getattr(
-        parsed_near_touch, "live.market_order_near_touch_threshold"
+        parsed_near_touch, 'bot.global.execution.market_order_near_touch_threshold'
     ) == pytest.approx(0.002)
     assert getattr(parsed_lookback, "bot.global.unstuck.memory_ema_span_minutes") == pytest.approx(
         14.5
@@ -2265,9 +2299,9 @@ def test_runtime_registry_reserved_help_metadata_stays_in_sync():
 def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_fields():
     config = project_template_config_for_cli(get_template_config(), "backtest")
 
-    assert "market_orders_allowed" in config["live"]
-    assert "market_order_near_touch_threshold" in config["live"]
-    assert "max_warmup_minutes" in config["live"]
+    assert "market_orders_allowed" in config["bot"]["global"]["execution"]
+    assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
+    assert "max_minutes" in config["bot"]["global"]["warmup"]
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "user" not in config["live"]
 
@@ -2275,9 +2309,9 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
 def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_fields():
     config = project_template_config_for_cli(get_template_config(), "optimize")
 
-    assert "market_orders_allowed" in config["live"]
-    assert "market_order_near_touch_threshold" in config["live"]
-    assert "max_warmup_minutes" in config["live"]
+    assert "market_orders_allowed" in config["bot"]["global"]["execution"]
+    assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
+    assert "max_minutes" in config["bot"]["global"]["warmup"]
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, config, command="optimize")
     parsed = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5"])
@@ -2337,6 +2371,8 @@ def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, sh
     source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.5
     source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     original_bot = deepcopy(source["bot"])
+    for side in ("long", "short"):
+        original_bot[side]["universe"]["approved_coins"] = ["BTC"]
     if wrapped:
         source = {"config": source}
     parser = argparse.ArgumentParser()

@@ -37,10 +37,7 @@ def base_config():
                 "forager_volatility_ema_span_1m": 100.0,
                 "strategy": {
                     "trailing_martingale": {
-                        "entry": {
-                            "ema_span_0": 1000.0,
-                            "ema_span_1": 1500.0,
-                        },
+                        "entry": {"ema_span_0": 1000.0, "ema_span_1": 1500.0},
                         "volatility_ema_span_1h": 1.0,
                     }
                 },
@@ -50,23 +47,18 @@ def base_config():
                 "forager_volatility_ema_span_1m": 100.0,
                 "strategy": {
                     "trailing_martingale": {
-                        "entry": {
-                            "ema_span_0": 1000.0,
-                            "ema_span_1": 1500.0,
-                        },
+                        "entry": {"ema_span_0": 1000.0, "ema_span_1": 1500.0},
                         "volatility_ema_span_1h": 1.0,
                     }
                 },
             },
+            "global": {
+                "strategy_kind": "trailing_martingale",
+                "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+            },
         },
-        "live": {
-            "strategy_kind": "trailing_martingale",
-            "warmup_ratio": 3.0,
-            "max_warmup_minutes": 0.0,  # 0 means no limit
-        },
-        "optimize": {
-            "bounds": {},
-        },
+        "live": {},
+        "optimize": {"bounds": {}},
     }
 
 
@@ -184,7 +176,7 @@ class TestWarmupCalculation:
     def test_max_warmup_limit_enforcement(self, base_config):
         """Test that max_warmup_minutes limit is enforced."""
         # Set a limit of 1000 minutes
-        base_config["live"]["max_warmup_minutes"] = 1000.0
+        base_config['bot']['global']['warmup']['max_minutes'] = 1000.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -193,7 +185,7 @@ class TestWarmupCalculation:
 
     def test_zero_warmup_edge_case(self, base_config):
         """Test with max_warmup_minutes = 0 (disabled limit)."""
-        base_config["live"]["max_warmup_minutes"] = 0.0
+        base_config['bot']['global']['warmup']['max_minutes'] = 0.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -203,7 +195,7 @@ class TestWarmupCalculation:
 
     def test_zero_warmup_ratio_edge_case(self, base_config):
         """Test with warmup_ratio = 0."""
-        base_config["live"]["warmup_ratio"] = 0.0
+        base_config['bot']['global']['warmup']['ratio'] = 0.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -224,7 +216,7 @@ class TestWarmupCalculation:
 
     def test_negative_warmup_ratio_clamped_to_zero(self, base_config):
         """Test that negative warmup_ratio is treated as 0."""
-        base_config["live"]["warmup_ratio"] = -5.0
+        base_config['bot']['global']['warmup']['ratio'] = -5.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -273,7 +265,7 @@ class TestPerCoinWarmupCalculation:
 
     def test_per_coin_warmup_max_limit_enforcement(self, config_with_coin_overrides):
         """Test that max_warmup_minutes limit applies per-coin."""
-        config_with_coin_overrides["live"]["max_warmup_minutes"] = 5000.0
+        config_with_coin_overrides['bot']['global']['warmup']['max_minutes'] = 5000.0
 
         per_coin_warmup = compute_per_coin_warmup_minutes(config_with_coin_overrides)
 
@@ -311,7 +303,7 @@ class TestPerCoinWarmupCalculation:
 
     @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
     def test_per_coin_warmup_with_supported_hour_volatility(self, base_config, strategy):
-        base_config["live"]["strategy_kind"] = strategy
+        base_config['bot']['global']['strategy_kind'] = strategy
         hour_key = "offset_volatility_ema_span_1h" if strategy == "ema_anchor" else "volatility_ema_span_1h"
         minute_key = "offset_volatility_ema_span_1m" if strategy == "ema_anchor" else "volatility_ema_span_1m"
         for pside in ("long", "short"):
@@ -410,7 +402,7 @@ class TestEMASpanExtraction:
 
     @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
     def test_supported_hour_volatility_bound_is_considered(self, base_config, strategy):
-        base_config["live"]["strategy_kind"] = strategy
+        base_config['bot']['global']['strategy_kind'] = strategy
         hour_key = "offset_volatility_ema_span_1h" if strategy == "ema_anchor" else "volatility_ema_span_1h"
         minute_key = "offset_volatility_ema_span_1m" if strategy == "ema_anchor" else "volatility_ema_span_1m"
         for pside in ("long", "short"):
@@ -436,7 +428,7 @@ class TestEMASpanExtraction:
         compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes,
     ])
     def test_retired_strategy_rejected_before_warmup(self, base_config, compute):
-        base_config["live"]["strategy_kind"] = "trailing_grid_v7"
+        base_config['bot']['global']['strategy_kind'] = "trailing_grid_v7"
         with pytest.raises(ValueError, match="unsupported strategy kind.*trailing_grid_v7"):
             compute(base_config)
 
@@ -454,13 +446,12 @@ class TestWarmupEdgeCases:
         config = {
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {"entry": {"ema_span_0": 1000.0}}
-                    }
+                    "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 1000.0}}}
                 },
                 "short": {},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
-            "live": {"strategy_kind": "trailing_martingale"},  # Missing warmup_ratio
+            "live": {},
             "optimize": {"bounds": {}},
         }
 
@@ -473,13 +464,12 @@ class TestWarmupEdgeCases:
         config = {
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {"entry": {"ema_span_0": 1000.0}}
-                    }
+                    "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 1000.0}}}
                 },
                 "short": {},
+                "global": {"strategy_kind": "trailing_martingale", "warmup": {"ratio": 3.0}},
             },
-            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0},
+            "live": {},
             "optimize": {"bounds": {}},
         }
 
@@ -490,8 +480,15 @@ class TestWarmupEdgeCases:
     def test_empty_bot_params(self):
         """Test with empty bot params."""
         config = {
-            "bot": {"long": {}, "short": {}},
-            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
+            "bot": {
+                "long": {},
+                "short": {},
+                "global": {
+                    "strategy_kind": "trailing_martingale",
+                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                },
+            },
+            "live": {},
             "optimize": {"bounds": {}},
         }
 
@@ -505,17 +502,15 @@ class TestWarmupEdgeCases:
         config = {
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {"entry": {"ema_span_0": math.inf}}
-                    }
+                    "strategy": {"trailing_martingale": {"entry": {"ema_span_0": math.inf}}}
                 },
                 "short": {},
+                "global": {
+                    "strategy_kind": "trailing_martingale",
+                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                },
             },
-            "live": {
-                "strategy_kind": "trailing_martingale",
-                "warmup_ratio": 3.0,
-                "max_warmup_minutes": 0.0,
-            },
+            "live": {},
             "optimize": {"bounds": {}},
         }
 
@@ -527,17 +522,15 @@ class TestWarmupEdgeCases:
         config = {
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {"entry": {"ema_span_0": math.nan}}
-                    }
+                    "strategy": {"trailing_martingale": {"entry": {"ema_span_0": math.nan}}}
                 },
                 "short": {},
+                "global": {
+                    "strategy_kind": "trailing_martingale",
+                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                },
             },
-            "live": {
-                "strategy_kind": "trailing_martingale",
-                "warmup_ratio": 3.0,
-                "max_warmup_minutes": 0.0,
-            },
+            "live": {},
             "optimize": {"bounds": {}},
         }
 

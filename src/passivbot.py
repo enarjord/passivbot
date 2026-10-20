@@ -192,6 +192,8 @@ BOT_CLOSE_TIMEOUT_SECONDS = (
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 
+from config.universe import get_side_universe_sources
+
 class FillHistoryCoverageUnavailable(RuntimeError):
     """Raised when live risk gates need fill history whose lookback is unproven."""
 
@@ -1373,7 +1375,7 @@ class Passivbot:
         # self.hedge_mode to False if the exchange doesn't support two-way mode.
         # Effective hedge_mode = config setting AND exchange capability.
         self._config_hedge_mode = bool(
-            get_optional_live_value(self.config, "hedge_mode", True)
+            get_optional_config_value(self.config, 'bot.global.hedge_mode', True)
         )
         self.hedge_mode = True  # Exchange capability, may be overridden by subclass
         self.inverse = False
@@ -1400,7 +1402,7 @@ class Passivbot:
         self.quote = "USDT"
 
         self.minimum_market_age_millis = (
-            float(require_live_value(config, "minimum_coin_age_days"))
+            float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
             * 24
             * 60
             * 60
@@ -2019,7 +2021,7 @@ class Passivbot:
         overrides = getattr(self, "coin_overrides", {}) or {}
         config = getattr(self, "config", {})
         source = config.get("_coins_sources", {}).get(
-            "approved_coins", config.get("live", {}).get("approved_coins")
+            "approved_coins", get_side_universe_sources(config, 'approved_coins')
         )
         horizons = []
         for pside in ("long", "short"):
@@ -2520,7 +2522,7 @@ class Passivbot:
                 "[order] live market order execution is enabled | "
                 "market_order_near_touch_threshold=%s; crossing/near-touch orders may be "
                 "submitted as market orders and live exchange slippage controls apply",
-                self.live_value("market_order_near_touch_threshold"),
+                require_config_value(self.config, 'bot.global.execution.market_order_near_touch_threshold'),
             )
 
     def _format_duration(self, ms: int) -> str:
@@ -3084,7 +3086,7 @@ class Passivbot:
         if not active_sides:
             return []
         strategy_kind = normalize_strategy_kind(
-            self.config.get("live", {}).get("strategy_kind")
+            get_optional_config_value(self.config, 'bot.global.strategy_kind')
             if isinstance(getattr(self, "config", None), dict)
             else None
         )
@@ -4653,7 +4655,7 @@ class Passivbot:
                 },
             }
         strategy_kind = normalize_strategy_kind(
-            self.config.get("live", {}).get("strategy_kind")
+            get_optional_config_value(self.config, 'bot.global.strategy_kind')
         )
         return Passivbot._required_h1_log_range_span_for_strategy(
             strategy_params,
@@ -4824,13 +4826,13 @@ class Passivbot:
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
             warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
         try:
             max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
             )
         except Exception:
             max_warmup_minutes = 0
@@ -5387,13 +5389,13 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
         try:
             max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
             )
         except Exception:
             max_warmup_minutes = 0
@@ -5550,13 +5552,13 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
         try:
             max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
             )
         except Exception:
             max_warmup_minutes = 0
@@ -7393,7 +7395,7 @@ class Passivbot:
             logging.info("[order] %s %d orders", direction, order_count)
 
     def _live_market_orders_allowed(self) -> bool:
-        value = self.live_value("market_orders_allowed")
+        value = require_config_value(self.config, 'bot.global.execution.market_orders_allowed')
         if isinstance(value, str):
             return value.strip().lower() in {"true", "t", "1", "yes", "y", "on"}
         return bool(value)
@@ -7577,7 +7579,7 @@ class Passivbot:
                     incumbent_short.add(idx)
 
         score_hysteresis_pct = float(
-            self.live_value("forager_score_hysteresis_pct") or 0.0
+            require_config_value(self.config, 'bot.global.forager.score_hysteresis_pct') or 0.0
         )
         return {
             "peek_hints": {
@@ -8060,7 +8062,7 @@ class Passivbot:
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
         strategy_kind = normalize_strategy_kind(
-            self.config.get("live", {}).get("strategy_kind")
+            get_optional_config_value(self.config, 'bot.global.strategy_kind')
             if isinstance(getattr(self, "config", None), dict)
             else None
         )
@@ -9889,7 +9891,7 @@ class Passivbot:
             s: self.effective_min_cost_is_low_enough(pside, s) for s in candidates
         }
         if not any(min_cost_flags.values()):
-            if self.live_value("filter_by_min_effective_cost"):
+            if require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
                 self.warn_on_high_effective_min_cost(pside)
             return []
         try:
@@ -10072,13 +10074,13 @@ class Passivbot:
                 status="succeeded" if ideal_coins else "skipped",
                 reason_code="selected" if ideal_coins else "none_selected",
             )
-            if not ideal_coins and self.live_value("filter_by_min_effective_cost"):
+            if not ideal_coins and require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
                 if any(not flag for flag in min_cost_flags.values()):
                     self.warn_on_high_effective_min_cost(pside)
         else:
             eligible = [s for s in candidates if min_cost_flags.get(s, True)]
             if not eligible:
-                if self.live_value("filter_by_min_effective_cost"):
+                if require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
                     self.warn_on_high_effective_min_cost(pside)
                 return []
             # all approved coins are selected, no filtering by volume and log range
@@ -10109,13 +10111,13 @@ class Passivbot:
         )
         try:
             warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
         try:
             max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
             )
         except Exception:
             max_warmup_minutes = 0
@@ -10257,7 +10259,7 @@ class Passivbot:
 
     def warn_on_high_effective_min_cost(self, pside):
         """Log a warning if min effective cost filtering removes every candidate."""
-        if not self.live_value("filter_by_min_effective_cost"):
+        if not require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
             return
         if not self.is_pside_enabled(pside):
             return
@@ -10357,10 +10359,7 @@ class Passivbot:
         bot_cfg = config.get("bot")
         if not isinstance(bot_cfg, dict) or not isinstance(bot_cfg.get(pside), dict):
             return float(self.bp(pside, "entry_initial_qty_pct", symbol))
-        live_cfg = config.get("live")
-        strategy_kind = normalize_strategy_kind(
-            live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
-        )
+        strategy_kind = normalize_strategy_kind(config["bot"]["global"]["strategy_kind"])
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
             return float(strategy_cfg["base_qty_pct"])
@@ -10375,7 +10374,7 @@ class Passivbot:
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
         """Check whether the symbol meets the effective minimum cost requirement."""
-        if not self.live_value("filter_by_min_effective_cost"):
+        if not require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
@@ -13484,7 +13483,7 @@ class Passivbot:
                     effective_min_cost,
                 )
             logging.debug(
-                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
+                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.global.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
@@ -14862,7 +14861,7 @@ class Passivbot:
     def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         config = getattr(self, "config", {})
         strategy_kind = normalize_strategy_kind(
-            config.get("live", {}).get("strategy_kind")
+            get_optional_config_value(config, 'bot.global.strategy_kind')
         )
         strategy_cfg = get_active_strategy_side(
             config.get("bot", {}).get(pside, {}),
@@ -15279,6 +15278,13 @@ class Passivbot:
         ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
         if ineligible_reason is not None:
             return "tp_only" if ineligible_reason == "not active" else "manual"
+        from config.universe import always_include_matches
+
+        if always_include_matches(
+            self.config, pside, symbol,
+            exchange=getattr(self, "exchange", None), market_symbol=symbol,
+        ):
+            return self._apply_entry_eligibility_mode(pside, symbol, "normal")
         return self._apply_entry_eligibility_mode(pside, symbol)
 
     def _build_orchestrator_mode_overrides(
@@ -15439,7 +15445,7 @@ class Passivbot:
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
         strategy_kind = normalize_strategy_kind(
-            self.config.get("live", {}).get("strategy_kind")
+            get_optional_config_value(self.config, 'bot.global.strategy_kind')
         )
 
         def _legacy_bp_warmup_value(pside: str, key: str, symbol: str) -> float:
@@ -17876,7 +17882,7 @@ class Passivbot:
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         config = getattr(self, "config", {})
         strategy_kind = normalize_strategy_kind(
-            config.get("live", {}).get("strategy_kind")
+            get_optional_config_value(config, 'bot.global.strategy_kind')
         )
         input_dict = {
             "timestamp_ms": now_ms,
@@ -17887,11 +17893,11 @@ class Passivbot:
             # value is a simulation knob, not a live slippage cap.
             "global": {
                 "filter_by_min_effective_cost": bool(
-                    self.live_value("filter_by_min_effective_cost")
+                    require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost')
                 ),
-                "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
+                "market_orders_allowed": bool(require_config_value(self.config, 'bot.global.execution.market_orders_allowed')),
                 "market_order_near_touch_threshold": float(
-                    self.live_value("market_order_near_touch_threshold")
+                    require_config_value(self.config, 'bot.global.execution.market_order_near_touch_threshold')
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
@@ -18970,13 +18976,13 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0) or 0.0
+                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0) or 0.0
             )
         except Exception:
             warmup_ratio = 0.0
         try:
             max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
             )
         except Exception:
             max_warmup_minutes = 0
@@ -19770,13 +19776,13 @@ class Passivbot:
         span = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
         try:
             warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
         try:
             max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
+                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
             )
         except Exception:
             max_warmup_minutes = 0

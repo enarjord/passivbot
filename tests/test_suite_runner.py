@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import asyncio
 import sys
 from copy import deepcopy
@@ -87,13 +89,12 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
                 {
                     "label": "nested",
                     "overrides": {
-                        "live": {"hedge_mode": True},
+                        "live": {},
                         "bot": {
-                            "short": {"risk": {"total_wallet_exposure_limit": 0.0}}
+                            "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
+                            "global": {"hedge_mode": True},
                         },
-                        "coin_overrides": {
-                            "ETH": {"live": {"forced_mode_long": "normal"}}
-                        },
+                        "coin_overrides": {"ETH": {"live": {"forced_mode_long": "normal"}}},
                     },
                 }
             ]
@@ -102,7 +103,7 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
     )
 
     assert scenarios[0].overrides == {
-        "live.hedge_mode": True,
+        'bot.global.hedge_mode': True,
         "bot.short.risk.total_wallet_exposure_limit": 0.0,
         "coin_overrides": {"ETH": {"live": {"forced_mode_long": "normal"}}},
     }
@@ -223,9 +224,10 @@ def test_apply_scenario_filters_unavailable_coins():
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": [], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
         },
     }
     scenario = SuiteScenario(
@@ -245,7 +247,7 @@ def test_apply_scenario_filters_unavailable_coins():
         base_coin_sources={"BTC": "binance"},
     )
     assert coins == ["BTC"]
-    assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
+    assert cfg['bot']["long"]['universe']['approved_coins'] == ["BTC"]
     assert cfg["backtest"]["coin_sources"] == {"BTC": "binance"}
 
 
@@ -281,9 +283,10 @@ def test_apply_scenario_records_transform_log():
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": [], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
         },
     }
     scenario = SuiteScenario(
@@ -317,9 +320,10 @@ def test_apply_scenario_rejects_asymmetric_side_coin_lists():
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["ETH"]},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["ETH"], "ignored_coins": []}},
         },
     }
     scenario = SuiteScenario(
@@ -330,7 +334,7 @@ def test_apply_scenario_rejects_asymmetric_side_coin_lists():
         ignored_coins=[],
     )
 
-    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+    with pytest.raises(ValueError, match="asymmetric bot.<side>.universe.approved_coins"):
         apply_scenario(
             base_config,
             scenario,
@@ -343,17 +347,11 @@ def test_apply_scenario_rejects_asymmetric_side_coin_lists():
 
 def test_apply_scenario_rejects_asymmetric_exact_side_coin_lists():
     base_config = {
-        "backtest": {
-            "coins": {},
-            "cache_dir": {},
-            "exchanges": ["bitget"],
-        },
-        "live": {
-            "approved_coins": {
-                "long": ["1000ABCUSDT"],
-                "short": ["ABCUSDT"],
-            },
-            "ignored_coins": {"long": [], "short": []},
+        "backtest": {"coins": {}, "cache_dir": {}, "exchanges": ["bitget"]},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["1000ABCUSDT"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["ABCUSDT"], "ignored_coins": []}},
         },
     }
     scenario = SuiteScenario(
@@ -364,7 +362,7 @@ def test_apply_scenario_rejects_asymmetric_exact_side_coin_lists():
         ignored_coins=[],
     )
 
-    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+    with pytest.raises(ValueError, match="asymmetric bot.<side>.universe.approved_coins"):
         apply_scenario(
             base_config,
             scenario,
@@ -391,9 +389,10 @@ def test_apply_scenario_reconciles_exact_ignored_id_to_available_alias(
     assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
     base_config = {
         "backtest": {"coins": {}, "cache_dir": {}, "exchanges": ["bitget"]},
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
         },
     }
     scenario = SuiteScenario(
@@ -414,7 +413,7 @@ def test_apply_scenario_reconciles_exact_ignored_id_to_available_alias(
     )
 
     assert coins == ["BTC"]
-    assert cfg["live"]["ignored_coins"] == {
+    assert require_side_universe_sources(cfg, 'ignored_coins') == {
         "long": ["BTC"],
         "short": ["BTC"],
     }
@@ -433,10 +432,11 @@ def test_suite_side_validation_compares_resolved_market_identity(tmp_path, monke
     }
     assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["BTCUSDT"]},
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["BTCUSDT"], "ignored_coins": []}},
+        },
     }
 
     validate_suite_side_coin_lists(config, ["bitget"])
@@ -549,16 +549,18 @@ def test_suite_side_validation_retains_qualified_venue_scope(tmp_path, monkeypat
     for exchange in ("bitget", "bybit"):
         assert utils.create_coin_symbol_map_cache(exchange, markets, verbose=False)
     config = {
-        "live": {
-            "approved_coins": {
-                "long": ["bitget::BTCUSDT"],
-                "short": ["bybit::BTCUSDT"],
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {"approved_coins": ["bitget::BTCUSDT"], "ignored_coins": []}
             },
-            "ignored_coins": {"long": [], "short": []},
-        }
+            "short": {
+                "universe": {"approved_coins": ["bybit::BTCUSDT"], "ignored_coins": []}
+            },
+        },
     }
 
-    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+    with pytest.raises(ValueError, match="asymmetric bot.<side>.universe.approved_coins"):
         validate_suite_side_coin_lists(config, ["bitget", "bybit"])
 
 
@@ -571,12 +573,17 @@ def test_apply_scenario_overrides_update_config():
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {
+                "risk": {"max_positions": 8},
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
+            "short": {
+                "risk": {"max_positions": 8},
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
         },
-        "bot": {"long": {"risk": {"max_positions": 8}},
-                "short": {"risk": {"max_positions": 8}}},
     }
     scenario = SuiteScenario(
         label="override",
@@ -611,13 +618,16 @@ def test_apply_scenario_rejects_unknown_override_path():
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-        },
+        "live": {},
         "bot": {
-            "long": {"risk": {"max_positions": 8}},
-            "short": {"risk": {"max_positions": 8}},
+            "long": {
+                "risk": {"max_positions": 8},
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
+            "short": {
+                "risk": {"max_positions": 8},
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
         },
     }
     scenario = SuiteScenario(
@@ -652,16 +662,14 @@ def test_apply_scenario_overrides_use_canonical_paths():
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-        },
+        "live": {},
         "bot": {
             "long": {
                 "hsl": {"red_threshold": 0.3},
                 "entry_cooldown": {"base_duration_minutes": 0.0},
+                "universe": {"approved_coins": [], "ignored_coins": []},
             },
-            "short": {},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
         },
     }
     scenario = SuiteScenario(
@@ -738,9 +746,10 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
             "exchanges": ["binance", "bybit"],
             "coins": {},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
         },
     }
     scenarios = [
@@ -777,7 +786,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
                 exchange,
                 config["backtest"]["start_date"],
                 config["backtest"]["end_date"],
-                config["live"]["approved_coins"]["long"],
+                config['bot']["long"]['universe']['approved_coins'],
             )
         )
         timestamps = np.array([0, 60_000], dtype=np.int64)
@@ -849,9 +858,10 @@ async def test_prepare_master_datasets_preserves_combined_source_exchanges(monke
             "exchanges": ["binance", "bybit"],
             "coins": {},
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": ["ETH"]},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["ETH"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["ETH"], "ignored_coins": []}},
         },
     }
     scenarios = [
@@ -933,9 +943,10 @@ async def test_prepare_master_datasets_copies_materialized_arrays_directly_to_sh
             "exchanges": ["binance"],
             "coins": {},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC", "ETH"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC", "ETH"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
         },
     }
 
@@ -995,9 +1006,12 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
         cache_dir="/tmp",
     )
     scenario_config = {
-        "backtest": {"start_date": "1970-01-01T00:01:00", "end_date": "1970-01-01T00:03:00"},
-        "live": {"warmup_ratio": 0.0},
-        "bot": {"long": {}, "short": {}},
+        "backtest": {
+            "start_date": "1970-01-01T00:01:00",
+            "end_date": "1970-01-01T00:03:00",
+        },
+        "live": {},
+        "bot": {"long": {}, "short": {}, "global": {"warmup": {"ratio": 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr(
@@ -1038,9 +1052,12 @@ def test_prepare_dataset_subset_recomputes_warmup_from_scenario(monkeypatch):
         cache_dir="/tmp",
     )
     scenario_config = {
-        "backtest": {"start_date": "1970-01-01T00:00:00", "end_date": "1970-01-01T00:05:00"},
-        "live": {"warmup_ratio": 0.0},
-        "bot": {"long": {}, "short": {}},
+        "backtest": {
+            "start_date": "1970-01-01T00:00:00",
+            "end_date": "1970-01-01T00:05:00",
+        },
+        "live": {},
+        "bot": {"long": {}, "short": {}, "global": {"warmup": {"ratio": 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
@@ -1087,8 +1104,12 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
             "start_date": "1970-01-01T00:00:00",
             "end_date": "1970-01-01T00:02:00",
         },
-        "live": {"warmup_ratio": 0.0, "max_warmup_minutes": 0.0},
-        "bot": {"long": {}, "short": {}},
+        "live": {},
+        "bot": {
+            "long": {},
+            "short": {},
+            "global": {"warmup": {"ratio": 0.0, "max_minutes": 0.0}},
+        },
         "optimize": {"bounds": {}},
     }
     seen = {}
@@ -1157,8 +1178,8 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
 
     config = get_template_config()
     config["backtest"]["exchanges"] = ["binance"]
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     suite_cfg = {"scenarios": [{"label": "external"}], "exchanges": ["bybit"]}
 
     async def noop(*args, **kwargs):

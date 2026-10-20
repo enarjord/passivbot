@@ -149,7 +149,7 @@ def test_last_scenario_global_memory_span_override_is_request_owned(memory_key):
 @pytest.mark.parametrize("path,value", [
     ("live.risk_bootstrap_max_lookback_minutes", 64800.0),
     ("bot.global.loss_gate.max_drawdown_ratio", 0.5),
-    ("live.market_orders_allowed", True),
+    ('bot.global.execution.market_orders_allowed', True),
     ("backtest.starting_balance", 2000.0),
 ])
 def test_global_memory_span_gene_does_not_relax_other_dataset_inputs(memory_key, path, value):

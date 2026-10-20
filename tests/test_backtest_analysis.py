@@ -772,7 +772,11 @@ def test_post_process_writes_original_config_for_dataset_override(
 
     original_config = {
         "backtest": {"start_date": "2025-01-01", "coins": {"binance": ["ETH"]}},
-        "live": {"approved_coins": {"long": ["ETH"], "short": []}},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["ETH"]}},
+            "short": {"universe": {"approved_coins": []}},
+        },
     }
     config = {
         "disable_plotting": True,
@@ -782,10 +786,16 @@ def test_post_process_writes_original_config_for_dataset_override(
             "hlcvs_data_dir": "caches/hlcvs_data/custom__abc",
         },
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 0.0},
+            "long": {
+                "total_wallet_exposure_limit": 1.0,
+                "universe": {"approved_coins": ["BTC"]},
+            },
+            "short": {
+                "total_wallet_exposure_limit": 0.0,
+                "universe": {"approved_coins": []},
+            },
         },
-        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "live": {},
         "_original_backtest_config": original_config,
         "metrics": {"stale": True},
         "suite_metrics": {"stale": True},
@@ -819,7 +829,7 @@ def test_post_process_writes_original_config_for_dataset_override(
     assert dumped_by_name["config.original.json"]["backtest"]["coins"]["binance"] == [
         "ETH"
     ]
-    assert dumped_by_name["config.original.json"]["live"]["approved_coins"]["long"] == [
+    assert dumped_by_name["config.original.json"]["bot"]["long"]["universe"]["approved_coins"] == [
         "ETH"
     ]
     assert dumped_by_name["config.json"]["backtest"]["coins"]["binance"] == ["BTC"]

@@ -56,7 +56,7 @@ def apply_features(config, case, coins, markets, bars):
         flags.add("excess")
     active = ("long", "short") if case.sides == "both" else (case.sides,)
     config["backtest"].update(offline=True, dynamic_wel_by_tradability="dynamic_wel_off" not in flags)
-    config["live"]["hedge_mode"] = case.sides == "both" and "one_way" not in flags
+    config['bot']['global']['hedge_mode'] = case.sides == "both" and "one_way" not in flags
     if "loss_gate" in flags:
         config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.001
     if "min_cost" in flags:
@@ -85,7 +85,7 @@ def apply_features(config, case, coins, markets, bars):
         if case.topology != "forager":
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
-            config["live"]["forager_score_hysteresis_pct"] = 0.1
+            config['bot']['global']['forager']['score_hysteresis_pct'] = 0.1
         policy = config["bot"]["global"]["hsl"] if config["bot"]["global"]["hsl"]["scope"] == "portfolio" else bot["hsl"]
         if "hsl_slow_memory" in flags:
             policy["memory_ema_span_minutes"] = 10.5

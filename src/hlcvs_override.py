@@ -32,6 +32,8 @@ from utils import (
 from warmup_utils import compute_backtest_warmup_minutes
 
 
+from config.universe import set_side_universe_sources, get_side_universe_sources
+
 def _hlcvs_cache_artifact_path(
     cache_dir: Path, manifest, name: str, candidates: tuple[str, ...]
 ) -> Path | None:
@@ -317,8 +319,8 @@ def load_hlcvs_data_override(config, exchange):
     if not set().union(*(set(side_membership[pside]) for pside in POSITION_SIDES)):
         raise ValueError("HLCV dataset override produced no side-eligible coins")
 
-    original_approved = deepcopy(config.get("live", {}).get("approved_coins", {}))
-    config.setdefault("live", {})["approved_coins"] = side_membership
+    original_approved = deepcopy(get_side_universe_sources(config, 'approved_coins', {}))
+    set_side_universe_sources(config, "approved_coins", side_membership)
     config.setdefault("backtest", {})["start_date"] = ts_to_date(int(effective_config_start_ts))
     config["backtest"]["end_date"] = ts_to_date(int(timestamps[-1]))
     config["backtest"].setdefault("cache_dir", {})[exchange] = str(cache_dir)

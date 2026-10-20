@@ -405,7 +405,8 @@ def _config_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     backtest_cfg = config.get("backtest", {}) or {}
-    live_cfg = config.get("live", {}) or {}
+    bot_cfg = config.get("bot", {}) or {}
+    global_policy = bot_cfg.get("global", {})
     return {
         "backtest": {
             "start_date": backtest_cfg.get("start_date"),
@@ -416,11 +417,11 @@ def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
             "market_settings_sources": deepcopy(backtest_cfg.get("market_settings_sources", {})),
             "ohlcv_source_dir": backtest_cfg.get("ohlcv_source_dir"),
         },
-        "live": {
-            "approved_coins": deepcopy(live_cfg.get("approved_coins")),
-            "minimum_coin_age_days": live_cfg.get("minimum_coin_age_days"),
-            "max_warmup_minutes": live_cfg.get("max_warmup_minutes"),
-            "warmup_ratio": live_cfg.get("warmup_ratio"),
+        "bot": {
+            "universe": {side: deepcopy(bot_cfg.get(side, {}).get("universe", {}))
+                         for side in ("long", "short")},
+            "minimum_coin_age_days": global_policy.get("universe", {}).get("minimum_coin_age_days"),
+            "warmup": deepcopy(global_policy.get("warmup", {})),
         },
         "warmup": {
             "global_minutes": compute_backtest_warmup_minutes(config),

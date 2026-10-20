@@ -21,6 +21,8 @@ MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS = 2_097_152
 HSL_SIGNAL_MODES = {"portfolio", "pside", "coin"}
 
 
+from config.universe import get_side_universe_sources
+
 def validate_hsl_signal_topology(
     signal_mode: str,
     *,
@@ -454,7 +456,7 @@ def gpu_side_enabled(config: dict, side: str) -> bool:
         or int(round(n_positions_raw)) <= 0
     ):
         return False
-    approved = config.get("live", {}).get("approved_coins", {})
+    approved = get_side_universe_sources(config, 'approved_coins', {})
     if isinstance(approved, dict):
         return bool(approved.get(side, []))
     return True

@@ -49,7 +49,7 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
         for pside in ("long", "short"):
             cfg["bot"][pside]["unstuck"]["enabled"] = False
             cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
-            cfg["live"]["approved_coins"][pside] = ["BTC"] if pside == side else []
+            cfg['bot'][pside]['universe']['approved_coins'] = ["BTC"] if pside == side else []
         cfg["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 1.0
     config_path = tmp_path / "config.json"
     config_path.write_text(

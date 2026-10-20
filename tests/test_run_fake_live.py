@@ -1087,12 +1087,12 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg["bot"]["long"]["risk"]["we_excess_allowance_pct"] = 0.37
     cfg["bot"]["short"]["risk"]["max_positions"] = 0
     cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
-    cfg["live"]["approved_coins"]["long"] = ["SOL"]
-    cfg["live"]["approved_coins"]["short"] = []
-    cfg["live"]["ignored_coins"]["long"] = []
-    cfg["live"]["ignored_coins"]["short"] = []
-    cfg["live"]["filter_by_min_effective_cost"] = True
-    cfg["live"]["market_orders_allowed"] = False
+    cfg['bot']["long"]['universe']['approved_coins'] = ["SOL"]
+    cfg['bot']["short"]['universe']['approved_coins'] = []
+    cfg['bot']["long"]['universe']['ignored_coins'] = []
+    cfg['bot']["short"]['universe']['ignored_coins'] = []
+    cfg['bot']['global']['universe']['filter_by_min_effective_cost'] = True
+    cfg['bot']['global']['execution']['market_orders_allowed'] = False
     config_path = tmp_path / "fake_live_min_effective_cost.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
 

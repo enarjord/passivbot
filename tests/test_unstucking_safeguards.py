@@ -359,7 +359,7 @@ def _dummy_config():
 
     cfg = get_template_config()
     cfg["live"]["user"] = "test_user"
-    cfg["live"]["minimum_coin_age_days"] = 0
+    cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"].update(
             loss_allowance_pct=0.01, exposure_trigger_ratio=0.5,

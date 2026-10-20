@@ -63,7 +63,7 @@ def test_native_long_history_equity_clock_transport(strategy, sides, coin_count)
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     candles = np.full((count, coin_count, 4), 100.0)
     candles[:, :, 3] = 1.0
-    config["live"]["max_warmup_minutes"] = 1
+    config['bot']['global']['warmup']['max_minutes'] = 1
     config["backtest"].update(
         start_date=datetime.fromtimestamp(int(timestamps[first]) / 1000,
                                           timezone.utc).isoformat(),

@@ -48,6 +48,9 @@ from utils import (
 )
 
 
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
+
 @dataclass
 class ScenarioEvalContext:
     label: str
@@ -113,7 +116,7 @@ async def prepare_suite_contexts(
 
     base_start = require_config_value(config, "backtest.start_date")
     base_end = require_config_value(config, "backtest.end_date")
-    base_coins = require_live_value(config, "approved_coins")
+    base_coins = require_side_universe_sources(config, 'approved_coins')
     if isinstance(base_coins, dict):
         coins_union = set(base_coins.get("long", [])) | set(base_coins.get("short", []))
         base_coins_list = sorted(coins_union)
@@ -122,7 +125,7 @@ async def prepare_suite_contexts(
     else:
         base_coins_list = []
 
-    base_ignored = require_live_value(config, "ignored_coins")
+    base_ignored = require_side_universe_sources(config, 'ignored_coins')
     if isinstance(base_ignored, dict):
         ignored_union = set(base_ignored.get("long", [])) | set(base_ignored.get("short", []))
         base_ignored_list = sorted(ignored_union)
@@ -150,16 +153,16 @@ async def prepare_suite_contexts(
     )
 
     base_config = deepcopy(config)
-    if isinstance(base_config["live"]["approved_coins"], dict):
-        base_config["live"]["approved_coins"]["long"] = master_coins_list
-        base_config["live"]["approved_coins"]["short"] = master_coins_list
+    if isinstance(require_side_universe_sources(base_config, 'approved_coins'), dict):
+        base_config['bot']["long"]['universe']['approved_coins'] = master_coins_list
+        base_config['bot']["short"]['universe']['approved_coins'] = master_coins_list
     else:
-        base_config["live"]["approved_coins"] = master_coins_list
-    if isinstance(base_config["live"]["ignored_coins"], dict):
-        base_config["live"]["ignored_coins"]["long"] = master_ignored_list
-        base_config["live"]["ignored_coins"]["short"] = master_ignored_list
+        set_side_universe_sources(base_config, 'approved_coins', master_coins_list)
+    if isinstance(require_side_universe_sources(base_config, 'ignored_coins'), dict):
+        base_config['bot']["long"]['universe']['ignored_coins'] = master_ignored_list
+        base_config['bot']["short"]['universe']['ignored_coins'] = master_ignored_list
     else:
-        base_config["live"]["ignored_coins"] = master_ignored_list
+        set_side_universe_sources(base_config, 'ignored_coins', master_ignored_list)
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
 

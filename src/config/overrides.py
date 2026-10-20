@@ -24,6 +24,8 @@ from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
 
 
+from config.access import get_optional_config_value
+
 def apply_allowed_modifications(
     src, modifications, allowed_overrides, return_full=True
 ):
@@ -290,12 +292,13 @@ def _extract_allowed_patch(
 
     source_doc = deepcopy(_unwrap_override_document(document, source=source))
     _reject_flat_strategy_coin_overrides(source_doc, coin=coin)
-    source_live = source_doc.get("live")
-    if isinstance(source_live, dict) and "strategy_kind" in source_live:
-        source_strategy_kind = normalize_strategy_kind(source_live["strategy_kind"])
+    source_bot = source_doc.get("bot")
+    source_global = source_bot.get("global", {}) if isinstance(source_bot, dict) else {}
+    if isinstance(source_global, dict) and "strategy_kind" in source_global:
+        source_strategy_kind = normalize_strategy_kind(source_global["strategy_kind"])
         if source_strategy_kind != strategy_kind:
             raise ValueError(
-                f"{source}.live.strategy_kind {source_strategy_kind!r} does not match "
+                f"{source}.bot.global.strategy_kind {source_strategy_kind!r} does not match "
                 f"the global strategy_kind {strategy_kind!r}"
             )
     bot = source_doc.get("bot")
@@ -348,7 +351,7 @@ def _extract_allowed_patch(
             mismatched = sorted(kind for kind in strategy if kind != strategy_kind)
             if mismatched:
                 declares_strategy_kind = (
-                    isinstance(source_live, dict) and "strategy_kind" in source_live
+                    isinstance(source_global, dict) and "strategy_kind" in source_global
                 )
                 if strict or not declares_strategy_kind:
                     raise ValueError(
@@ -541,14 +544,14 @@ def _validate_effective_coin_config(
     if pinned_cooldown_paths:
         bounds = flatten_optimize_bounds(
             effective["optimize"]["bounds"],
-            strategy_kind=effective.get("live", {}).get("strategy_kind"),
+            strategy_kind=get_optional_config_value(effective, 'bot.global.strategy_kind'),
         )
         from .optimize_bounds import set_flat_optimize_bound
 
         effective["optimize"]["bounds"] = {}
         for key, value in bounds.items():
             if resolve_optimizer_key_path(effective, key) not in pinned_cooldown_paths:
-                set_flat_optimize_bound(effective["optimize"]["bounds"], effective["live"]["strategy_kind"], key, value)
+                set_flat_optimize_bound(effective["optimize"]["bounds"], effective['bot']['global']['strategy_kind'], key, value)
     try:
         prepared = prepare_config(
             effective,
@@ -613,11 +616,12 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
     require_v9_runtime_config(config, additional_inputs=(raw,))
     if "config_version" in raw:
         require_v9_runtime_config(raw)
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    source_live = raw.get("live")
-    if isinstance(source_live, dict) and "strategy_kind" in source_live:
-        if normalize_strategy_kind(source_live["strategy_kind"]) != strategy_kind:
-            raise ValueError(f"{source}.live.strategy_kind {source_live['strategy_kind']!r} "
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    source_bot = raw.get("bot")
+    source_global = source_bot.get("global", {}) if isinstance(source_bot, dict) else {}
+    if isinstance(source_global, dict) and "strategy_kind" in source_global:
+        if normalize_strategy_kind(source_global["strategy_kind"]) != strategy_kind:
+            raise ValueError(f"{source}.bot.global.strategy_kind {source_global['strategy_kind']!r} "
                              f"does not match the global strategy_kind {strategy_kind!r}")
 
     validation = deepcopy(raw)
@@ -634,7 +638,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
     _validate_patch_leaf_types(config, wallet_patch, coin=coin, origin=source)
     validation.setdefault("config_version", config["config_version"])
     validate_authored_config(validation, get_template_config(), policy_context=config)
-    validation.setdefault("live", {}).setdefault("strategy_kind", strategy_kind)
+    validation.setdefault("bot", {}).setdefault("global", {}).setdefault("strategy_kind", strategy_kind)
 
     with _override_file_validation(resolved_path):
         # Recursive file references remain validated. The active path stack
@@ -815,7 +819,7 @@ def parse_overrides(
     result["coin_overrides"] = normalize_coin_override_keys(
         result["coin_overrides"], symbol_normalizer=symbol_normalizer, verbose=verbose
     )
-    strategy_kind = normalize_strategy_kind(result.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(result, 'bot.global.strategy_kind'))
     live_config = result.get("live", {})
     hsl_signal_mode = normalize_hsl_signal_mode(
         result["bot"]["global"]["hsl"]["scope"]

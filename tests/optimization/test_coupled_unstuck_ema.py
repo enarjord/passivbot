@@ -19,7 +19,7 @@ from optimizer_overrides import apply_coupled_unstuck_ema_spans
 
 def config_for(kind="trailing_martingale"):
     config = get_template_config()
-    config["live"]["strategy_kind"] = kind
+    config['bot']['global']['strategy_kind'] = kind
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     config = parse_overrides(prepare_config(config, verbose=False), verbose=False)
     for side in ("long", "short"):
@@ -324,7 +324,8 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
 
 def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins():
     config = config_for()
-    config["live"].update(warmup_ratio=1.0, max_warmup_minutes=1_000_000)
+    config['bot']['global']['warmup']['ratio'] = 1.0
+    config['bot']['global']['warmup']['max_minutes'] = 1000000
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 900_000.5}}}}
     }

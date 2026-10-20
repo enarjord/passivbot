@@ -105,8 +105,8 @@ def canonical_optimizer_key(key: str) -> str:
 
 
 def active_strategy_kind(config: dict) -> str:
-    live_cfg = config.get("live")
-    raw_kind = live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
+    global_cfg = config.get("bot", {}).get("global", {})
+    raw_kind = global_cfg.get("strategy_kind")
     return normalize_strategy_kind(raw_kind)
 
 

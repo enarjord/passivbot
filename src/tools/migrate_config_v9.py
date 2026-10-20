@@ -17,12 +17,23 @@ from config.risk_memory import normalize_lookback_ema_span_minutes
 from json_utils import json_dumps_streamlined
 
 
+from config.access import get_optional_config_value
+
+def _released_path_context(config):
+    """Resolve v8 selectors under their released active strategy, without aliases in loading."""
+    bot = config.get("bot", {})
+    global_policy = bot.get("global", {})
+    kind = config.get("live", {}).get("strategy_kind", "trailing_martingale")
+    return {**config, "bot": {**bot, "global": {**global_policy, "strategy_kind": kind}}}
+
+
 def _audit_authored_patch_conflicts(config, overrides):
     """Compare released spellings before entry migrations can choose a value."""
     from config.param_paths import resolve_dotted_config_path
     from config.shared_bot import canonical_shared_bot_path_for_flat_key
 
     seen = {}
+    path_context = _released_path_context(config)
 
     def visit(node, prefix=()):
         for key, value in node.items():
@@ -30,7 +41,7 @@ def _audit_authored_patch_conflicts(config, overrides):
             if isinstance(value, dict):
                 visit(value, parts)
                 continue
-            path = resolve_dotted_config_path(config, ".".join(parts))
+            path = resolve_dotted_config_path(path_context, ".".join(parts))
             if path is None:
                 continue
             if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
@@ -54,15 +65,19 @@ def _restore_authored_export_inputs(exported, authored):
     defaults = get_template_config()["backtest"]
     for key in ("start_date", "end_date"):
         exported["backtest"][key] = deepcopy(authored.get("backtest", {}).get(key, defaults[key]))
+    from config.universe import get_side_universe_sources, set_side_universe_sources
     for key in ("approved_coins", "ignored_coins"):
-        if key in authored.get("live", {}):
-            exported["live"][key] = deepcopy(authored["live"][key])
+        sources = get_side_universe_sources(authored, key)
+        if sources is not None:
+            set_side_universe_sources(exported, key, sources)
+
     if "filter_by_min_effective_cost" in authored.get("backtest", {}):
         exported["backtest"]["filter_by_min_effective_cost"] = authored["backtest"]["filter_by_min_effective_cost"]
 
     preserved_paths = {("backtest", "start_date"), ("backtest", "end_date"),
                        ("backtest", "filter_by_min_effective_cost"),
-                       ("live", "approved_coins"), ("live", "ignored_coins")}
+                       *(("bot", side, "universe", key)
+                         for side in ("long", "short") for key in ("approved_coins", "ignored_coins"))}
 
     def restore_patch(target, source, prefix=()):
         for key, value in source.items():
@@ -101,10 +116,11 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
         overrides = context["backtest"]["scenarios"][0]["overrides"]
 
     seen = set()
+    path_context = _released_path_context(config) if authored else config
     for selector, value in normalize_scenario_overrides(overrides).items():
         if scenario and (selector == "optimize" or selector.startswith("optimize.")):
             raise ValueError("scenario/runtime optimizer controls must be top-level optimize settings")
-        path = (resolve_dotted_config_path(config, selector) if authored else
+        path = (resolve_dotted_config_path(path_context, selector) if authored else
                 require_existing_config_path(config, selector))
         if path is None:
             # Raw retired fields must survive until the explicit migration pass.
@@ -223,7 +239,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                        for item in file_result.changes)
         patch = _extract_allowed_patch(
             migrated, coin=coin, source=f"coin_overrides.{coin}.override_config_path",
-            strict=False, strategy_kind=result.get("live", {}).get("strategy_kind"),
+            strict=False, strategy_kind=result.get("live", {}).get("strategy_kind", "trailing_martingale"),
             hsl_signal_mode=mode,
         )
         inline = deepcopy(inline)
@@ -266,9 +282,9 @@ def _optimizer_root_enablement(config, enable_overrides, facts):
     from optimizer_overrides import optimizer_overrides
 
     projection = {
-        "live": {"strategy_kind": config.get("live", {}).get("strategy_kind")},
-        "bot": {side: {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}
-                for side in ("long", "short")},
+        "bot": {"global": {"strategy_kind": config.get("live", {}).get("strategy_kind", "trailing_martingale")},
+                **{side: {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}
+                   for side in ("long", "short")}},
     }
     projection = optimizer_overrides(enable_overrides, projection, None)
     resolved = dict(facts)

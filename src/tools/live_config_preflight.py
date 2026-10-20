@@ -30,11 +30,9 @@ CACHE_LIVE_KEYS = (
     "max_disk_candles_per_symbol_per_tf",
     "max_memory_candles_per_symbol",
     "max_ohlcv_fetches_per_minute",
-    "max_warmup_minutes",
     "risk_bootstrap_max_lookback_minutes",
     "warmup_concurrency",
     "warmup_jitter_seconds",
-    "warmup_ratio",
 )
 CACHE_SETTING_CHECK_KEYS = (
     "defer_broad_candle_warmup",
@@ -45,12 +43,9 @@ CACHE_SETTING_CHECK_KEYS = (
     "max_active_candle_tail_gap_minutes",
     "max_disk_candles_per_symbol_per_tf",
     "max_memory_candles_per_symbol",
-    "max_warmup_minutes",
     "risk_bootstrap_max_lookback_minutes",
-    "warmup_ratio",
 )
 FORAGER_LIVE_KEYS = (
-    "forager_score_hysteresis_pct",
     "max_forager_candle_refresh_seconds",
     "max_forager_candle_staleness_minutes",
 )
@@ -65,6 +60,9 @@ DIFF_SETTING_PATHS = (
     ("forager", "bot.short.risk.max_positions", ("bot", "short", "risk", "max_positions")),
     *(("forager", f"live.{key}", ("live", key)) for key in FORAGER_LIVE_KEYS),
     *(("cache", f"live.{key}", ("live", key)) for key in CACHE_LIVE_KEYS),
+    ("forager", "bot.global.forager.score_hysteresis_pct", ("bot", "global", "forager", "score_hysteresis_pct")),
+    ("cache", "bot.global.warmup.max_minutes", ("bot", "global", "warmup", "max_minutes")),
+    ("cache", "bot.global.warmup.ratio", ("bot", "global", "warmup", "ratio")),
 )
 
 
@@ -549,6 +547,8 @@ def _cache_readiness_report(
     balance_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     checks = {key: _setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
+    warmup = config.get("bot", {}).get("global", {}).get("warmup", {})
+    checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "ratio")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -594,13 +594,12 @@ def _cache_readiness_report(
         )
 
     for key in (
-        "max_warmup_minutes",
         "max_active_candle_tail_gap_minutes",
         "max_disk_candles_per_symbol_per_tf",
         "max_memory_candles_per_symbol",
     ):
         status = _numeric_status(
-            _setting_value(live, key), allow_zero=key == "max_warmup_minutes"
+            _setting_value(live, key)
         )
         if status == "missing":
             _append_attention(
@@ -615,20 +614,22 @@ def _cache_readiness_report(
                 f"live.{key} is {status}; candle cache readiness may be degraded",
             )
 
-    warmup_ratio_status = _numeric_status(
-        _setting_value(live, "warmup_ratio"), allow_zero=True
-    )
+    max_minutes_status = _numeric_status(_setting_value(warmup, "max_minutes"), allow_zero=True)
+    if max_minutes_status != "present":
+        _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
+                          f"bot.global.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
+    warmup_ratio_status = _numeric_status(_setting_value(warmup, "ratio"), allow_zero=True)
     if warmup_ratio_status == "missing":
         _append_attention(
             candles,
             "warmup_ratio_missing",
-            "live.warmup_ratio is missing; EMA warmup buffer intent is implicit",
+            "bot.global.warmup.ratio is missing; EMA warmup buffer intent is implicit",
         )
     elif warmup_ratio_status != "present":
         _append_attention(
             candles,
             f"warmup_ratio_{warmup_ratio_status}",
-            f"live.warmup_ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"bot.global.warmup.ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
         )
 
     archive_status = _bool_status(_setting_value(live, "enable_archive_candle_fetch"))
@@ -808,15 +809,8 @@ def _cache_readiness_report(
 
 
 def _coin_value_for_side(config: dict[str, Any], group_name: str, side: str) -> Any:
-    live = config["live"] if isinstance(config.get("live"), dict) else {}
-    group = (
-        live[group_name]
-        if isinstance(live.get(group_name), dict)
-        else live.get(group_name)
-    )
-    if isinstance(group, dict):
-        return group[side] if side in group else None
-    return group
+    value = _path_value(config, ("bot", side, "universe", group_name))
+    return None if value is _MISSING else value
 
 
 def _universe_diff_changes(
@@ -838,7 +832,7 @@ def _universe_diff_changes(
                 continue
             change = {
                 "category": "universe",
-                "field": f"live.{group_name}.{side}",
+                "field": f"bot.{side}.universe.{group_name}",
                 "before": {
                     "present": before_summary["present"],
                     "mode": before_summary["mode"],
@@ -973,10 +967,10 @@ def _collect_shape_warnings(
                         "warning",
                         "coin_list_shape_invalid",
                         (
-                            f"live.{group_name}.{side} is not a list, 'all', "
+                            f"bot.{side}.universe.{group_name} is not a list, 'all', "
                             "scalar, or missing"
                         ),
-                        path=f"live.{group_name}.{side}",
+                        path=f"bot.{side}.universe.{group_name}",
                     )
                 )
 
@@ -1062,8 +1056,8 @@ def build_live_config_preflight_report(
             )
 
     sample_size = max(0, int(sample_size))
-    approved = _side_coin_summary(live.get("approved_coins"), sample_size=sample_size)
-    ignored = _side_coin_summary(live.get("ignored_coins"), sample_size=sample_size)
+    approved = {side: _coin_list_summary(_coin_value_for_side(parsed, "approved_coins", side), sample_size=sample_size) for side in SIDES}
+    ignored = {side: _coin_list_summary(_coin_value_for_side(parsed, "ignored_coins", side), sample_size=sample_size) for side in SIDES}
     _collect_shape_warnings(approved=approved, ignored=ignored, issues=issues)
 
     forager_by_side = {
@@ -1154,6 +1148,7 @@ def build_live_config_preflight_report(
         },
         "forager": {
             "live_settings": _selected_values(live, FORAGER_LIVE_KEYS),
+            "bot_settings": _selected_values(bot.get("global", {}).get("forager", {}), ("score_hysteresis_pct",)),
             "sides": forager_by_side,
             "total_configured_max_positions": sum(
                 float(value) for value in n_positions_values
@@ -1164,6 +1159,7 @@ def build_live_config_preflight_report(
         },
         "cache": {
             "live_settings": _selected_values(live, CACHE_LIVE_KEYS),
+            "bot_settings": _selected_values(bot.get("global", {}).get("warmup", {}), ("max_minutes", "ratio")),
             "readiness": _cache_readiness_report(
                 live,
                 config=parsed,

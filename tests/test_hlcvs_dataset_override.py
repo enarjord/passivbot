@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import json
 
 import numpy as np
@@ -29,15 +31,22 @@ def _base_config(cache_dir, *, mode="dataset"):
             "start_date": "2025-01-01",
         },
         "bot": {
-            "long": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
-            "short": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+            "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "universe": {"approved_coins": ["BTC"]},
+            },
+            "short": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "universe": {"approved_coins": []},
+            },
+            "global": {
+                "universe": {"minimum_coin_age_days": 0},
+                "warmup": {"ratio": 0.0, "max_minutes": 0},
+            },
         },
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "minimum_coin_age_days": 0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0,
-        },
+        "live": {},
     }
 
 
@@ -62,7 +71,7 @@ def _write_dataset(cache_dir, *, manifest_start_date="2025-01-01", mss_overrides
     (cache_dir / "market_specific_settings.json").write_text(json.dumps(mss))
     manifest_config = _base_config(cache_dir)
     manifest_config["backtest"]["start_date"] = manifest_start_date
-    manifest_config["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": ["ETH"]}
+    set_side_universe_sources(manifest_config, 'approved_coins', {"long": ["BTC", "ETH"], "short": ["ETH"]})
     manifest = build_hlcvs_manifest(
         config=manifest_config,
         exchange="binance",
@@ -90,7 +99,7 @@ def test_hlcvs_dataset_override_dataset_mode_updates_side_membership_and_effecti
 
     assert cache_dir_out == cache_dir.resolve()
     assert coins == ["BTC", "ETH"]
-    assert config["live"]["approved_coins"] == {"long": ["BTC", "ETH"], "short": ["ETH"]}
+    assert require_side_universe_sources(config, 'approved_coins') == {"long": ["BTC", "ETH"], "short": ["ETH"]}
     assert config["backtest"]["coins"]["binance"] == ["BTC", "ETH"]
     np.testing.assert_array_equal(out_timestamps, timestamps)
     np.testing.assert_allclose(out_hlcvs, hlcvs)
@@ -124,7 +133,7 @@ def test_hlcvs_dataset_override_intersection_mode_preserves_input_side_membershi
     )
 
     assert coins == ["BTC"]
-    assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+    assert require_side_universe_sources(config, 'approved_coins') == {"long": ["BTC"], "short": []}
 
 
 def test_hlcvs_dataset_override_reconciles_exact_identifier_to_dataset_key(
@@ -147,14 +156,14 @@ def test_hlcvs_dataset_override_reconciles_exact_identifier_to_dataset_key(
         verbose=False,
     )
     config = _base_config(cache_dir, mode="intersection")
-    config["live"]["approved_coins"] = {"long": ["BTCUSDT"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTCUSDT"], "short": []})
 
     _cache_dir, coins, _hlcvs, _mss, _results_path, _btc, _timestamps = (
         load_hlcvs_data_override(config, "binance")
     )
 
     assert coins == ["BTC"]
-    assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+    assert require_side_universe_sources(config, 'approved_coins') == {"long": ["BTC"], "short": []}
 
 
 def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tmp_path):
@@ -162,8 +171,8 @@ def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tm
     timestamps, _hlcvs = _write_dataset(cache_dir)
     config = _base_config(cache_dir, mode="intersection")
     config["backtest"]["start_date"] = "2025-01-02"
-    config["live"]["warmup_ratio"] = 1.0
-    config["live"]["max_warmup_minutes"] = 1440
+    config['bot']['global']['warmup']['ratio'] = 1.0
+    config['bot']['global']['warmup']['max_minutes'] = 1440
     config["bot"]["long"]["ema_span_0"] = 1440.0
 
     _cache_dir, _coins, _hlcvs, mss, _results_path, _btc, out_timestamps = (
@@ -194,7 +203,7 @@ def test_hlcvs_dataset_override_preserves_sliced_valid_window_metadata(tmp_path)
     }
     _write_dataset(cache_dir, mss_overrides=mss_overrides, hlcvs=hlcvs)
     config = _base_config(cache_dir, mode="intersection")
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
 
     _cache_dir, coins, out_hlcvs, mss, _results_path, _btc, _timestamps = (
         load_hlcvs_data_override(config, "binance")

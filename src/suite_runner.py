@@ -94,6 +94,9 @@ _SCENARIO_KEYS = frozenset(
 # --------------------------------------------------------------------------- #
 
 
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
+
 @dataclass(frozen=True)
 class SuiteScenario:
     label: str
@@ -453,23 +456,18 @@ def _coalesce_master_coins(
 def validate_suite_side_coin_lists(
     config: Dict[str, Any], exchanges: Sequence[str] = ()
 ) -> None:
-    live = config.get("live", {}) if isinstance(config, dict) else {}
-    if not isinstance(live, dict):
-        return
     for field in ("approved_coins", "ignored_coins"):
-        value = live.get(field)
-        if not isinstance(value, dict):
-            continue
-        long_coins = _normalized_coin_set(value.get("long", []), exchanges)
-        short_coins = _normalized_coin_set(value.get("short", []), exchanges)
+        value = require_side_universe_sources(config, field)
+        long_coins = _normalized_coin_set(value["long"], exchanges)
+        short_coins = _normalized_coin_set(value["short"], exchanges)
         if long_coins == short_coins:
             continue
         long_only = sorted(long_coins - short_coins)
         short_only = sorted(short_coins - long_coins)
         raise ValueError(
-            f"suite mode does not support asymmetric live.{field}; "
+            f"suite mode does not support asymmetric bot.<side>.universe.{field}; "
             f"long_only={long_only} short_only={short_only}. "
-            f"Make live.{field}.long and live.{field}.short identical for suite runs."
+            f"Make bot.long.universe.{field} and bot.short.universe.{field} identical for suite runs."
         )
 
 
@@ -672,12 +670,7 @@ def _config_for_dataset_coins(
     if not required_coins:
         return base_config
     cfg = deepcopy(base_config)
-    approved_coins = cfg.setdefault("live", {}).get("approved_coins")
-    if isinstance(approved_coins, dict):
-        cfg["live"]["approved_coins"]["long"] = list(required_coins)
-        cfg["live"]["approved_coins"]["short"] = list(required_coins)
-    else:
-        cfg["live"]["approved_coins"] = list(required_coins)
+    set_side_universe_sources(cfg, 'approved_coins', list(required_coins))
     return cfg
 
 
@@ -1252,7 +1245,6 @@ def apply_scenario(
             seed_missing_groups=False,
         )
     backtest_section = cfg.setdefault("backtest", {})
-    live_section = cfg.setdefault("live", {})
     validate_suite_side_coin_lists(cfg, backtest_section.get("exchanges", []))
 
     new_start = scenario.start_date or backtest_section.get("start_date")
@@ -1315,8 +1307,6 @@ def apply_scenario(
         backtest_section["exchanges"] = scenario_exchanges
     backtest_section.setdefault("coins", {})
     backtest_section.setdefault("cache_dir", {})
-    live_section.setdefault("approved_coins", {})
-    live_section.setdefault("ignored_coins", {})
 
     for exchange in scenario_exchanges:
         current = backtest_section["coins"].get(exchange)
@@ -1328,41 +1318,13 @@ def apply_scenario(
             )
         backtest_section["coins"][exchange] = list(filtered_coins)
 
-    if isinstance(live_section["approved_coins"], dict):
+    for field, values in (("approved_coins", filtered_coins), ("ignored_coins", filtered_ignored)):
         for side in ("long", "short"):
-            current = live_section["approved_coins"].get(side, [])
-            if current != filtered_coins:
-                tracker.update(
-                    ["live", "approved_coins", side],
-                    deepcopy(current),
-                    list(filtered_coins),
-                )
-            live_section["approved_coins"][side] = list(filtered_coins)
-    else:
-        current = live_section.get("approved_coins")
-        if current != filtered_coins:
-            tracker.update(
-                ["live", "approved_coins"], deepcopy(current), list(filtered_coins)
-            )
-        live_section["approved_coins"] = list(filtered_coins)
-
-    if isinstance(live_section["ignored_coins"], dict):
-        for side in ("long", "short"):
-            current = live_section["ignored_coins"].get(side, [])
-            if current != filtered_ignored:
-                tracker.update(
-                    ["live", "ignored_coins", side],
-                    deepcopy(current),
-                    list(filtered_ignored),
-                )
-            live_section["ignored_coins"][side] = list(filtered_ignored)
-    else:
-        current = live_section.get("ignored_coins")
-        if current != filtered_ignored:
-            tracker.update(
-                ["live", "ignored_coins"], deepcopy(current), list(filtered_ignored)
-            )
-        live_section["ignored_coins"] = list(filtered_ignored)
+            universe = cfg["bot"][side].setdefault("universe", {})
+            current = universe.get(field, [])
+            if current != values:
+                tracker.update(["bot", side, "universe", field], deepcopy(current), list(values))
+            universe[field] = list(values)
 
     resolved_sources = resolve_coin_sources(
         base_coin_sources or {},
@@ -2165,8 +2127,8 @@ async def run_backtest_suite_async(
 ) -> SuiteSummary:
     base_exchanges = require_config_value(config, "backtest.exchanges")
 
-    base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
-    base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))
+    base_coins = _flatten_coin_list(require_side_universe_sources(config, 'approved_coins'))
+    base_ignored = _flatten_coin_list(require_side_universe_sources(config, 'ignored_coins'))
 
     scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
@@ -2212,16 +2174,16 @@ async def run_backtest_suite_async(
     base_config = deepcopy(config)
     base_config.setdefault("backtest", {})
     base_config["backtest"]["coin_sources"] = suite_coin_sources
-    if isinstance(base_config["live"]["approved_coins"], dict):
-        base_config["live"]["approved_coins"]["long"] = list(master_coins)
-        base_config["live"]["approved_coins"]["short"] = list(master_coins)
+    if isinstance(require_side_universe_sources(base_config, 'approved_coins'), dict):
+        base_config['bot']["long"]['universe']['approved_coins'] = list(master_coins)
+        base_config['bot']["short"]['universe']['approved_coins'] = list(master_coins)
     else:
-        base_config["live"]["approved_coins"] = list(master_coins)
-    if isinstance(base_config["live"]["ignored_coins"], dict):
-        base_config["live"]["ignored_coins"]["long"] = list(master_ignored)
-        base_config["live"]["ignored_coins"]["short"] = list(master_ignored)
+        set_side_universe_sources(base_config, 'approved_coins', list(master_coins))
+    if isinstance(require_side_universe_sources(base_config, 'ignored_coins'), dict):
+        base_config['bot']["long"]['universe']['ignored_coins'] = list(master_ignored)
+        base_config['bot']["short"]['universe']['ignored_coins'] = list(master_ignored)
     else:
-        base_config["live"]["ignored_coins"] = list(master_ignored)
+        set_side_universe_sources(base_config, 'ignored_coins', list(master_ignored))
 
     candle_interval = int(
         base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1

@@ -36,17 +36,25 @@ def _base_config():
             "market_settings_sources": {},
         },
         "bot": {
-            "long": {"n_positions": 1},
-            "short": {"n_positions": 1},
+            "long": {
+                "n_positions": 1,
+                "universe": {"approved_coins": ["ETH"], "ignored_coins": []},
+            },
+            "short": {
+                "n_positions": 1,
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
+            "global": {
+                "universe": {"minimum_coin_age_days": 0},
+                "warmup": {"ratio": 0.0, "max_minutes": 0},
+            },
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-            "minimum_coin_age_days": 0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0,
+        "live": {},
+        "optimize": {
+            "bounds": {},
+            "scoring": [],
+            "suite": {"enabled": False, "scenarios": []},
         },
-        "optimize": {"bounds": {}, "scoring": [], "suite": {"enabled": False, "scenarios": []}},
     }
 
 
@@ -109,7 +117,7 @@ async def test_market_settings_sources_fallback_on_missing_coin():
 
     cfg = _base_config()
     # Use a coin that exists on binance but specify a non-existent exchange override
-    cfg["live"]["approved_coins"]["long"] = ["BTC"]
+    cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
     cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
     # Use hyperliquid for market settings - BTC should exist there
     cfg["backtest"]["market_settings_sources"] = {"BTC": "hyperliquid"}
@@ -169,7 +177,7 @@ async def test_market_settings_values_differ_between_exchanges():
     from hlcv_preparation import prepare_hlcvs_combined
 
     cfg = _base_config()
-    cfg["live"]["approved_coins"]["long"] = ["ETH"]
+    cfg['bot']["long"]['universe']['approved_coins'] = ["ETH"]
 
     # First run: binance settings
     cfg["backtest"]["coin_sources"] = {"ETH": "binance"}

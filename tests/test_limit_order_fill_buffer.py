@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 
 import pytest
@@ -75,8 +76,8 @@ def _native_args():
     cfg['backtest']['coins'] = {'binance': ['BTC']}
     cfg['backtest']['btc_collateral_cap'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
-    cfg['live']['approved_coins'] = {'long': ['BTC'], 'short': []}
-    cfg['live']['market_orders_allowed'] = False
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
+    cfg['bot']['global']['execution']['market_orders_allowed'] = False
     for side in ['long', 'short']:
         cfg['bot'][side]['hsl']['enabled'] = False
         cfg['bot'][side]['unstuck']['enabled'] = False
@@ -129,8 +130,8 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
     from suite_runner import SuiteScenario, apply_scenario
 
     cfg = get_template_config()
-    cfg['live']['approved_coins'] = {'long': ['BTC'], 'short': ['BTC']}
-    cfg['live']['ignored_coins'] = {'long': [], 'short': []}
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': ['BTC']})
+    set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
     cfg['backtest']['exchanges'] = ['binance']
     scenario = SuiteScenario(
         label='strict_fills', start_date=None, end_date=None,

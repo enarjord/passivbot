@@ -165,7 +165,11 @@ async def test_download_uses_backtest_materialization_path(monkeypatch, tmp_path
             "end_date": "2026-01-02",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"]}},
+            "short": {"universe": {"approved_coins": []}},
+        },
     }
 
     await ohlcv_download.warm_ohlcv_caches(config, force_refetch_gaps=True)

@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import sys
 from functools import partial
 from types import ModuleType, SimpleNamespace
@@ -1018,17 +1019,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     backtest._get_backtest_coin_override = lambda *args, **kwargs: {}
     monkeypatch.setitem(sys.modules, "backtest", backtest)
     config = get_template_config()
-    config["live"].update(
-        {
-            "strategy_kind": strategy_kind,
-            "approved_coins": {
-                "long": ["BTC"],
-                "short": ["ETH"],
-            },
-            "ignored_coins": {"long": ["ETH"], "short": ["BTC"]},
-            "hedge_mode": False,
-        }
-    )
+    config['bot']['global']['strategy_kind'] = strategy_kind
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': ['ETH']})
+    set_side_universe_sources(config, 'ignored_coins', {'long': ['ETH'], 'short': ['BTC']})
+    config['bot']['global']['hedge_mode'] = False
     config["backtest"]["dynamic_wel_by_tradability"] = dynamic_wel_by_tradability
     for side in ("long", "short"):
         config["bot"][side]["risk"].update(
@@ -1133,7 +1127,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "filter_by_min_effective_cost": True,
             "max_realized_loss_pct": 1.0,
             "market_order_slippage_pct": 0.0,
-            "hedge_mode": config["live"]["hedge_mode"],
+            "hedge_mode": config['bot']['global']['hedge_mode'],
         },
     )
     _complete_hsl_payload(payload)
@@ -2367,10 +2361,16 @@ def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():
 def test_gpu_side_enablement_uses_config_risk_not_per_coin_sentinel():
     config = {
         "bot": {
-            "long": {"risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 1}},
-            "short": {"risk": {"total_wallet_exposure_limit": 0.0, "max_positions": 0}},
+            "long": {
+                "risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 1},
+                "universe": {"approved_coins": ["BTC"]},
+            },
+            "short": {
+                "risk": {"total_wallet_exposure_limit": 0.0, "max_positions": 0},
+                "universe": {"approved_coins": ["BTC"]},
+            },
         },
-        "live": {"approved_coins": {"long": ["BTC"], "short": ["BTC"]}},
+        "live": {},
     }
 
     assert gpu_side_enabled(config, "long")

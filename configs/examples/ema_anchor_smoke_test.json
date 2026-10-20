@@ -56,12 +56,18 @@
     },
     "bot": {
         "global": {
-            "hsl": {"scope": "coin"},
-            "loss_gate": {
-                "max_drawdown_ratio": 1.0,
-                "memory_ema_span_minutes": 43200.0
+            "execution": {
+                "market_order_near_touch_threshold": 0.001,
+                "market_orders_allowed": false
             },
-            "unstuck": {"memory_ema_span_minutes": 43200.0}
+            "forager": {"score_hysteresis_pct": 0.02},
+            "hedge_mode": false,
+            "hsl": {"scope": "coin"},
+            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
+            "strategy_kind": "ema_anchor",
+            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 365.0},
+            "unstuck": {"memory_ema_span_minutes": 43200.0},
+            "warmup": {"max_minutes": 0, "ratio": 0.3}
         },
         "long": {
             "entry_cooldown": {
@@ -71,6 +77,7 @@
                 "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0}
             },
             "forager": {
+                "always_include": [],
                 "score_weights": {
                     "ema_readiness": 0.0,
                     "unilateralness": 0.0,
@@ -115,6 +122,7 @@
                     "offset_volatility_ema_span_1m": 60.0
                 }
             },
+            "universe": {"approved_coins": ["BTC", "SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.078,
                 "ema_dist": -0.07,
@@ -134,6 +142,7 @@
                 "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0}
             },
             "forager": {
+                "always_include": [],
                 "score_weights": {
                     "ema_readiness": 0.0,
                     "unilateralness": 0.0,
@@ -178,6 +187,7 @@
                     "offset_volatility_ema_span_1m": 60.0
                 }
             },
+            "universe": {"approved_coins": ["BTC", "SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.05,
                 "ema_dist": -0.2,
@@ -193,7 +203,6 @@
     "coin_overrides": {},
     "config_version": "v9.0.0",
     "live": {
-        "approved_coins": {"long": ["BTC", "SOL"], "short": ["BTC", "SOL"]},
         "balance_hysteresis_snap_pct": 0.01,
         "balance_override": null,
         "candle_lock_timeout_seconds": 10,
@@ -209,20 +218,14 @@
         "fee_pct_sanity_abs_max": 0.001,
         "fills_confirmation_overlap_minutes": 60,
         "fills_recent_overlap_minutes": 10,
-        "filter_by_min_effective_cost": true,
-        "forager_score_hysteresis_pct": 0.02,
         "forager_ws_candle_rest_audit_minutes": 30,
         "force_cold_startup": false,
         "forced_mode_long": "",
         "forced_mode_short": "",
-        "hedge_mode": false,
-        "ignored_coins": {"long": [], "short": []},
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,
         "limit_order_create_max_market_dist_pct": 0.8,
         "margin_mode_preference": "cross",
-        "market_order_near_touch_threshold": 0.001,
-        "market_orders_allowed": false,
         "market_snapshot_ticker_strategy": "auto",
         "max_active_candle_tail_gap_minutes": 10,
         "max_concurrent_api_requests": null,
@@ -234,8 +237,6 @@
         "max_n_creations_per_batch": 3,
         "max_n_restarts_per_day": 10,
         "max_ohlcv_fetches_per_minute": 30,
-        "max_warmup_minutes": 0,
-        "minimum_coin_age_days": 365,
         "order_match_tolerance_pct": 0.0002,
         "order_replacement_churn_gate_activation_count": 10,
         "order_replacement_churn_gate_market_dist_pct": 0.005,
@@ -244,12 +245,10 @@
         "recv_window_ms": 5000,
         "risk_bootstrap_max_lookback_minutes": 129600.0,
         "startup_phase_budgets": {},
-        "strategy_kind": "ema_anchor",
         "time_in_force": "good_till_cancelled",
         "user": "example",
         "warmup_concurrency": 0,
-        "warmup_jitter_seconds": 30,
-        "warmup_ratio": 0.3
+        "warmup_jitter_seconds": 30
     },
     "logging": {
         "backup_count": 5,
@@ -290,10 +289,7 @@
                 "entry_cooldown": {
                     "base_duration_minutes": [0, 60, 0.1],
                     "min_duration_minutes": [0.0, 0.0],
-                    "weights_minutes": {
-                        "adverse_directionality": [0.0, 0.0],
-                        "exposure_ratio": [0.0, 0.0]
-                    }
+                    "weights_minutes": {"adverse_directionality": [0.0, 0.0], "exposure_ratio": [0.0, 0.0]}
                 },
                 "forager": {
                     "score_weights": {
@@ -346,10 +342,7 @@
                 "entry_cooldown": {
                     "base_duration_minutes": [0, 60, 0.1],
                     "min_duration_minutes": [0.0, 0.0],
-                    "weights_minutes": {
-                        "adverse_directionality": [0.0, 0.0],
-                        "exposure_ratio": [0.0, 0.0]
-                    }
+                    "weights_minutes": {"adverse_directionality": [0.0, 0.0], "exposure_ratio": [0.0, 0.0]}
                 },
                 "forager": {
                     "score_weights": {
@@ -407,11 +400,7 @@
             "batch_size": null,
             "checkpoint_interval_seconds": 5.0,
             "max_dispatch_candidate_bars": null,
-            "screening": {
-                "min_survivors": 64,
-                "scenarios": [],
-                "survival_fraction": 0.1
-            },
+            "screening": {"min_survivors": 64, "scenarios": [], "survival_fraction": 0.1},
             "tuning_mode": "auto"
         },
         "iters": 500000,
@@ -482,9 +471,7 @@
             "algorithm": "auto",
             "algorithms": {
                 "nsga2": {},
-                "nsga3": {
-                    "ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}
-                }
+                "nsga3": {"ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}}
             },
             "shared": {
                 "crossover_eta": 20.0,
@@ -502,10 +489,7 @@
             {"goal": "min", "metric": "peak_recovery_hours_strategy_eq"},
             {"goal": "min", "metric": "position_held_hours_max"},
             {"goal": "min", "metric": "drawdown_worst_strategy_eq"},
-            {
-                "goal": "min",
-                "metric": "drawdown_worst_mean_1pct_strategy_eq"
-            }
+            {"goal": "min", "metric": "drawdown_worst_mean_1pct_strategy_eq"}
         ],
         "seed": null,
         "write_all_results": true

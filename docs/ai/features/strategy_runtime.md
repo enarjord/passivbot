@@ -256,8 +256,8 @@ values or ratios outside `[0, 1)` before order construction.
 `backtest.market_order_slippage_pct` is a backtest simulation knob only. Live orchestrator input
 must not read or forward it; live callers intentionally omit `market_order_slippage_pct` and rely
 on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
-current bid/ask snapshot plus exchange-side behavior, controlled by `live.market_orders_allowed`
-and `live.market_order_near_touch_threshold`.
+current bid/ask snapshot plus exchange-side behavior, controlled by `bot.global.execution.market_orders_allowed`
+and `bot.global.execution.market_order_near_touch_threshold`.
 
 ## Close Recursion Contract
 

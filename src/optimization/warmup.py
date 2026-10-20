@@ -70,9 +70,9 @@ def optimizer_dead_param_values(
 ) -> dict[str, float]:
     """Return exact canonical values for optimizer genes made semantically dead."""
 
-    live_cfg = config.get("live", {})
+    global_cfg = config.get("bot", {}).get("global", {})
     strategy_kind = (
-        str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+        str(global_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
     )
     if strategy_kind != "trailing_martingale":
         return {}

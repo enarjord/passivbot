@@ -38,7 +38,7 @@ def _remove_path(config, path):
 
 def _request_owned_paths(config):
     """Paths removed from execution identity, independent of searched bounds."""
-    kind = config["live"]["strategy_kind"]
+    kind = config['bot']['global']['strategy_kind']
     dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
@@ -78,7 +78,7 @@ def _static_contract(config):
     # optimizer's saved suite recipe or its candidate-dependent derived patches.
     for key in ("scenarios", "suite_enabled", "suite_reducers", "cache_dir", "base_dir"):
         result["backtest"].pop(key, None)
-    kind = config["live"]["strategy_kind"]
+    kind = config['bot']['global']['strategy_kind']
     dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):

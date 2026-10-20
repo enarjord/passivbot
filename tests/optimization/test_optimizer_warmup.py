@@ -4,6 +4,7 @@ Covers the bug where prepare_hlcvs_mss stamped mss[coin]["warmup_minutes"]
 from the template bot's decorative values (e.g. volatility_ema_span_1h)
 instead of the worst case the optimizer's search space can actually produce.
 """
+from config.universe import set_side_universe_sources
 
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from warmup_utils import compute_per_coin_warmup_minutes
 def _set_bounds(config, entries):
     """Author nested config bounds using the optimizer gene-path writer."""
     for key, value in entries.items():
-        set_flat_optimize_bound(config["optimize"]["bounds"], config["live"]["strategy_kind"], key, value)
+        set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']['global']['strategy_kind'], key, value)
 
 
 def _make_optimizer_config() -> dict:
@@ -40,9 +41,9 @@ def _make_optimizer_config() -> dict:
     largest warmup the optimizer can actually produce is 100 * 0.3 = 30 min.
     """
     config = get_template_config()
-    config["live"]["warmup_ratio"] = 0.3
-    config["live"]["max_warmup_minutes"] = 0
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
+    config['bot']['global']['warmup']['ratio'] = 0.3
+    config['bot']['global']['warmup']['max_minutes'] = 0
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
     config["backtest"]["exchanges"] = ["combined"]
     config["backtest"]["coins"] = {"combined": ["HYPE"]}
 
@@ -118,7 +119,7 @@ def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_th
 
 def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
     config = get_template_config()
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
     _set_bounds(config, {"long_n_positions": [1, 3, 1]})
@@ -219,7 +220,7 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["live"]["max_warmup_minutes"] = 3
+    cfg['bot']['global']['warmup']['max_minutes'] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
     bounds = cfg["optimize"]["bounds"]["long"]
     bounds["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
@@ -277,7 +278,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg["live"]["warmup_ratio"] = 0.0
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
@@ -324,7 +325,7 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg["live"]["warmup_ratio"] = 0.0
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
     cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 2.5
@@ -341,8 +342,8 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
     cfg = get_template_config()
-    cfg["live"]["warmup_ratio"] = 0.0
-    cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ("long", "short")}
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    set_side_universe_sources(cfg, 'approved_coins', {s: ["BTC", "ETH"] for s in ("long", "short")})
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     cfg["optimize"]["bounds"] = {}
     for s in ("long", "short"):
@@ -364,12 +365,12 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     # An inheriting selected coin makes the global policy reachable again.
     cfg["backtest"]["coins"]["binance"].append("XRP")
     assert compute_backtest_warmup_minutes(cfg) == 0
-    cfg["live"]["approved_coins"][side].append("XRP")
+    cfg['bot'][side]['universe']['approved_coins'].append("XRP")
     assert compute_backtest_warmup_minutes(cfg) == 2000001
     assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
     # Without a resolved selection, retain the conservative global history.
     cfg["backtest"]["coins"] = {}
-    cfg["live"]["approved_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(cfg, 'approved_coins', {"long": [], "short": []})
     assert compute_backtest_warmup_minutes(cfg) == 2000001
 
 
@@ -379,8 +380,8 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
     cfg = get_template_config()
-    cfg["live"]["warmup_ratio"] = 0.0
-    cfg["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]} if dataset_known else {}
     cfg["optimize"]["bounds"] = {}
     cfg["coin_overrides"] = {}
@@ -399,7 +400,7 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     assert max(compute_per_coin_warmup_minutes(cfg).values()) == 0
     assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
     # Opening the opposite side makes that inherited policy a real consumer.
-    cfg["live"]["approved_coins"]["long"].append("ETH")
+    cfg['bot']["long"]['universe']['approved_coins'].append("ETH")
     assert compute_backtest_warmup_minutes(cfg) == 2000001
     assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
     # A zero per-coin exposure pin still makes the newly approved side ineligible.
@@ -422,7 +423,8 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     })
     coin, override_key = (symbol, "BTC") if exact_dataset else ("BTC", "binance::BTCUSDT")
     cfg = get_template_config()
-    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": [coin], "short": [coin]})
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    set_side_universe_sources(cfg, 'approved_coins', {'long': [coin], 'short': [coin]})
     cfg["backtest"]["coins"] = {"binance": [coin]}
     cfg["optimize"]["bounds"] = {}
     for s in ("long", "short"):
@@ -462,7 +464,8 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]})
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': ['BTC', 'ETH']})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=dynamic)
     cfg["optimize"]["bounds"] = {}
     _set_bounds(cfg, {f"{side}_n_positions": [slots]})
@@ -499,7 +502,8 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": ["BTC", "ETH"], "short": []})
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["risk"].update(max_positions=2, total_wallet_exposure_limit=1)
@@ -507,7 +511,7 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1
     _set_bounds(cfg, {"long_n_positions": [1, 2]})
     assert compute_backtest_warmup_minutes(cfg) == 2000001
-    cfg["live"]["approved_coins"]["long"] = ["BTC"]
+    cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
     assert compute_backtest_warmup_minutes(cfg) == 0
     cfg["backtest"]["dynamic_wel_by_tradability"] = True
     assert compute_backtest_warmup_minutes(cfg) == 0

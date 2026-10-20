@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import json
 import pytest
 from copy import deepcopy
@@ -59,7 +60,7 @@ def test_clean_config_fills_missing_values_from_template():
     config = {}
     cleaned = clean_config(config)
     template = get_template_config()
-    assert cleaned["live"]["strategy_kind"] == template["live"]["strategy_kind"]
+    assert cleaned['bot']['global']['strategy_kind'] == template['bot']['global']['strategy_kind']
     assert cleaned["bot"]["long"]["strategy"] == {
         "trailing_martingale": template["bot"]["long"]["strategy"][
             "trailing_martingale"
@@ -99,8 +100,8 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     from config.hsl import generated_template
 
     source = generated_template(get_template_config(), mode)
-    source["live"]["strategy_kind"] = strategy
-    source["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    source['bot']['global']['strategy_kind'] = strategy
+    set_side_universe_sources(source, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     source["live"]["startup_phase_budgets"] = {"candles": 15.0}
     source["backtest"]["reducer"] = {"adg_strategy_eq": "max"}
     source["backtest"]["market_settings"]["overrides"] = {"BTC": {"min_qty": 0.001}}
@@ -139,12 +140,12 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
         assert cleaned["bot"]["global"]["hsl"] == {"scope": "portfolio"}
 
     saved_output = deepcopy(cleaned)
-    source["live"]["approved_coins"]["long"].append("SOL")
+    source['bot']["long"]['universe']['approved_coins'].append("SOL")
     source["backtest"]["scenarios"][0]["overrides"]["bot.long.risk.max_positions"] = 3.0
     assert cleaned == saved_output
 
     changed_source = deepcopy(source)
-    cleaned["live"]["approved_coins"]["short"].append("SOL")
+    cleaned['bot']["short"]['universe']['approved_coins'].append("SOL")
     cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
         "unilateralness"
     ][0] = 0.1
@@ -187,7 +188,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
             ValueError,
             "must be finite",
         ),
-        (("live", "strategy_kind"), "unsupported", ValueError, "unsupported strategy kind"),
+        (("bot", "global", "strategy_kind"), "unsupported", ValueError, "unsupported strategy kind"),
     ],
 )
 def test_clean_config_rejects_invalid_inputs_without_mutating_them(path, value, error, match):
@@ -209,7 +210,7 @@ def test_clean_config_rejects_invalid_inputs_without_mutating_them(path, value, 
 def test_clean_config_prunes_inactive_strategy_subtrees_for_selected_kind():
     template = get_template_config()
     config = deepcopy(template)
-    config["live"]["strategy_kind"] = "ema_anchor"
+    config['bot']['global']['strategy_kind'] = "ema_anchor"
 
     cleaned = clean_config(config)
 
@@ -366,12 +367,12 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
 
     cfg = generated_template(get_template_config(), mode)
     contract = build_evaluation_contract(cfg)
-    assert "hsl_engine" not in contract["live"]
+    assert "hsl_engine" not in contract.get("live", {})
     block = (
         contract["bot"]["global"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
     )
     assert "restart_after_red_policy" not in block
-    assert contract["version"] == 5
+    assert contract["version"] == 6
     assert "independent_loss_memories" in contract["risk_model"]
     assert contract["risk_model"].startswith("v9_")
     assert "red_threshold" not in block  # candidate value, not fixed policy

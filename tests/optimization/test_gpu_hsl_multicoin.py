@@ -1,5 +1,6 @@
 """V9 forward HSL dispatch, candidate isolation and temporal replay structure."""
 
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import numpy as np
 import pytest
@@ -35,12 +36,10 @@ def make_proxy(
     config = generated_template(get_template_config(), mode)
     assert coin_count >= 1
     coins = (["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)])[:coin_count]
-    config["live"].update(
-        strategy_kind=strategy,
-        approved_coins={s: coins if s in sides else [] for s in ("long", "short")},
-        ignored_coins={"long": [], "short": []},
-        max_warmup_minutes=60,
-    )
+    config['bot']['global']['strategy_kind'] = strategy
+    set_side_universe_sources(config, 'approved_coins', {s: coins if s in sides else [] for s in ('long', 'short')})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    config['bot']['global']['warmup']['max_minutes'] = 60
     config["backtest"].update(
         coins={"binance": coins}, starting_balance=1000.0, btc_collateral_cap=0.0
     )

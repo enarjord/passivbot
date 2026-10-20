@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 
 import pytest
@@ -14,11 +15,11 @@ def _base_config() -> dict:
     cfg["backtest"]["exchanges"] = ["binance"]
     cfg["backtest"]["start_date"] = "2021-01-01"
     cfg["backtest"]["end_date"] = "2021-01-02"
-    cfg["live"]["approved_coins"] = {
+    set_side_universe_sources(cfg, 'approved_coins', {
         "long": ["A", "B", "C"],
         "short": ["A"],
-    }
-    cfg["live"]["ignored_coins"] = {"long": [], "short": []}
+    })
+    set_side_universe_sources(cfg, 'ignored_coins', {"long": [], "short": []})
     cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
     cfg["bot"]["long"]["risk"]["max_positions"] = 3
     cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
@@ -178,16 +179,16 @@ def test_hlcvs_cache_hash_changes_for_canonical_grouped_side_enablement():
 
 def test_effective_backtest_data_coins_rejects_missing_approved_side():
     cfg = _base_config()
-    cfg["live"]["approved_coins"] = {"short": ["A"]}
+    del cfg["bot"]["long"]["universe"]["approved_coins"]
 
-    with pytest.raises(KeyError, match="live\\.approved_coins\\.long"):
+    with pytest.raises(KeyError, match=r"bot\.long\.universe\.approved_coins"):
         effective_backtest_data_coins(cfg)
 
 
 def test_effective_backtest_data_coins_rejects_null_approved_side():
     cfg = _base_config()
     cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
-    cfg["live"]["approved_coins"]["long"] = None
+    cfg['bot']["long"]['universe']['approved_coins'] = None
 
     with pytest.raises(TypeError, match="approved coin sides"):
         effective_backtest_data_coins(cfg)

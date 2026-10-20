@@ -168,8 +168,10 @@ def cleanup_config(
     # references. Template-shaped cleaning alone would replace a string/list
     # with the default mapping, even though live normalization preserves it.
     for key in ("approved_coins", "ignored_coins"):
-        cleaned["live"][key] = deepcopy(prepared["live"][key])
-    # null means inherit the live setting, rather than the schema's false.
+        from config.universe import require_side_universe_sources, set_side_universe_sources
+
+        set_side_universe_sources(cleaned, key, require_side_universe_sources(prepared, key))
+    # Preserve null as explicit inheritance of the shared bot policy.
     cleaned["backtest"]["filter_by_min_effective_cost"] = prepared["backtest"][
         "filter_by_min_effective_cost"
     ]

@@ -83,6 +83,7 @@ from config import (
 )
 from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
+from config.universe import require_side_universe_sources, set_side_universe_sources
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
 from config.shared_bot import (
@@ -399,7 +400,7 @@ def _propagate_optimizer_dataset_override(
             "HLCV dataset override metadata missing effective date range"
         ) from exc
 
-    config.setdefault("live", {})["approved_coins"] = deepcopy(side_membership)
+    set_side_universe_sources(config, "approved_coins", side_membership)
     backtest = config.setdefault("backtest", {})
     backtest["start_date"] = ts_to_date(effective_start_ts)
     backtest["end_date"] = ts_to_date(effective_end_ts)
@@ -996,7 +997,7 @@ def _restore_gpu_resume_anchor_plan(config: dict, checkpoint_path: str) -> bool:
         raise ValueError("Cannot resume: GPU checkpoint has an invalid anchor plan")
     checkpoint_strategy = normalize_strategy_kind(anchor_plan.get("strategy_kind"))
     config_strategy = normalize_strategy_kind(
-        config.get("live", {}).get("strategy_kind")
+        get_optional_config_value(config, 'bot.global.strategy_kind')
     )
     if checkpoint_strategy != config_strategy:
         raise ValueError(
@@ -2059,11 +2060,9 @@ class SuiteEvaluator:
         backtest_cfg["cache_dir"] = deepcopy(scenario_backtest.get("cache_dir", {}))
         scenario_config["backtest"] = backtest_cfg
 
-        scenario_live = ctx.config.get("live", {})
-        live_cfg = dict(config.get("live", {}))
-        live_cfg["approved_coins"] = deepcopy(scenario_live.get("approved_coins", {}))
-        live_cfg["ignored_coins"] = deepcopy(scenario_live.get("ignored_coins", {}))
-        scenario_config["live"] = live_cfg
+        scenario_config["bot"] = deepcopy(config["bot"])
+        for field in ("approved_coins", "ignored_coins"):
+            set_side_universe_sources(scenario_config, field, require_side_universe_sources(ctx.config, field))
         scenario_config["disable_plotting"] = True
 
         if ctx.overrides:
@@ -2707,7 +2706,7 @@ def _validate_starting_config_selection_args(
 
 def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
     bounds = config.get("optimize", {}).get("bounds", {})
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     flat_bounds = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
     use_flat_bounds = isinstance(bounds, dict) and any(
         isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
@@ -2718,7 +2717,7 @@ def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
 
 def _set_optimize_bound(config: dict, bound_key: str, value) -> None:
     bounds = config.get("optimize", {}).get("bounds", {})
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     _, use_flat_bounds = _flat_optimize_bounds_for_config(config)
     if use_flat_bounds:
         bounds[bound_key] = value
@@ -3016,7 +3015,7 @@ def install_anchored_fine_tune_plan(
 
     anchors = []
     base_strategy_kind = normalize_strategy_kind(
-        config.get("live", {}).get("strategy_kind")
+        get_optional_config_value(config, 'bot.global.strategy_kind')
     )
     base_key_paths = get_optimization_key_paths(config)
     key_path_by_key = {key: path for key, path in base_key_paths}
@@ -3037,7 +3036,7 @@ def install_anchored_fine_tune_plan(
         try:
             anchor_cfg = _build_starting_seed_config(raw_anchor)
             anchor_strategy_kind = normalize_strategy_kind(
-                anchor_cfg.get("live", {}).get("strategy_kind")
+                get_optional_config_value(anchor_cfg, 'bot.global.strategy_kind')
             )
             if anchor_strategy_kind != base_strategy_kind:
                 raise ValueError(
@@ -3262,11 +3261,6 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
         numeric_live = _starting_live_numeric_seed(live_cfg)
         if numeric_live:
             extracted["live"] = numeric_live
-        strategy_kind = live_cfg.get("strategy_kind")
-        if strategy_kind and normalize_strategy_kind(
-            strategy_kind
-        ) != normalize_strategy_kind(None):
-            extracted.setdefault("live", {})["strategy_kind"] = strategy_kind
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
@@ -3400,8 +3394,8 @@ def _run_gpu_preparation_preflight(
 
     effective_config = deepcopy(config)
     _apply_config_overrides(effective_config, config["optimize"].get("fixed_runtime_overrides", {}))
-    if effective_config["live"]["strategy_kind"] != config["live"]["strategy_kind"]:
-        raise ValueError("fixed_runtime_overrides may not change live.strategy_kind")
+    if effective_config['bot']['global']['strategy_kind'] != config['bot']['global']['strategy_kind']:
+        raise ValueError("fixed_runtime_overrides may not change bot.global.strategy_kind")
     validate_gpu_backtest_config(effective_config)
     for field in ("batch_size", "max_dispatch_candidate_bars"):
         resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
@@ -3501,12 +3495,12 @@ def iter_anchored_fine_tune_seed_configs(config: dict):
     if anchor_plan is None:
         return
     for anchor in anchor_plan.get("anchors") or []:
-        live_seed = deepcopy(anchor.get("seed_live") or {})
+        bot_seed = deepcopy(anchor.get("seed_bot") or {})
         if anchor_plan.get("strategy_kind"):
-            live_seed["strategy_kind"] = anchor_plan["strategy_kind"]
+            bot_seed.setdefault("global", {})["strategy_kind"] = anchor_plan["strategy_kind"]
         yield {
-            "bot": deepcopy(anchor.get("seed_bot") or {}),
-            "live": live_seed,
+            "bot": bot_seed,
+            "live": deepcopy(anchor.get("seed_live") or {}),
             "_starting_config_source": anchor.get("source", "<memory>"),
         }
 

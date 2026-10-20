@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import json
 
@@ -31,15 +32,20 @@ def _record(config):
         ("forager_score_hysteresis_pct", 0.07),
     ],
 )
-def test_resume_rejects_changed_fixed_live_simulation_inputs(key, value):
+def test_resume_rejects_changed_shared_bot_simulation_inputs(key, value):
     from optimize import _resume_config_mismatches
 
     config = _config()
     old = _record(config)
-    assert config["live"][key] != value
-    config["live"][key] = value
+    from config.migrations.shared_policy import LIVE_POLICY_PATHS
+    node = config
+    parts = LIVE_POLICY_PATHS[key].split(".")
+    for part in parts[:-1]:
+        node = node[part]
+    assert node[parts[-1]] != value
+    node[parts[-1]] = value
     assert any(
-        "evaluation.live" in item for item in _resume_config_mismatches(old, config)
+        "evaluation.bot" in item for item in _resume_config_mismatches(old, config)
     )
 
 
@@ -412,7 +418,7 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
     config = _config()
     config["optimize"].update(backend=backend, limits=[])
     config["backtest"].update(exchanges=["binance"], filter_by_min_effective_cost=False)
-    config["live"].update(approved_coins={"long": ["BTC"], "short": []})
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
     (tmp_path / "coin.json").write_text(
         json.dumps(
