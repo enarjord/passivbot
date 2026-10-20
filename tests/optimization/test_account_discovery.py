@@ -118,7 +118,7 @@ def test_missing_invalid_or_partial_account_inputs_fail(updates, match):
 
 def effective(gene=1):
     return dict(version="v9.0.0", bot={"long": {"gene": gene}},
-                live={"lookback_ema_span_minutes": 100, "user": "operator"}, coin_overrides={})
+                live={"lookback_ema_span_minutes": 100, "account": {"user": "operator"}}, coin_overrides={})
 
 
 def protocol(**updates):
@@ -288,6 +288,28 @@ def test_canonical_identity_ignores_export_noise_but_preserves_every_policy_diff
     assert canonical_configuration_identity(changed, model="v9") != first
     assert canonical_configuration_identity(source, model="v8") != first
     assert source == effective(1)
+
+
+@pytest.mark.parametrize("path", [
+    ("live", "account", "leverage"),
+    ("live", "account", "balance_override"),
+    ("bot", "long", "risk", "total_wallet_exposure_limit"),
+    ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0"),
+])
+def test_grouped_account_user_is_operational_while_economic_settings_remain_distinct(path):
+    from config.schema import get_template_config
+
+    source = get_template_config()
+    original = deepcopy(source)
+    identity = canonical_configuration_identity(source, model="v9")
+    source["live"]["account"]["user"] = "another_operator"
+    assert canonical_configuration_identity(source, model="v9") == identity
+    node = source
+    for part in path[:-1]:
+        node = node[part]
+    node[path[-1]] = (node[path[-1]] or 0.0) + 1.0
+    assert canonical_configuration_identity(source, model="v9") != identity
+    assert original == get_template_config()
 
 
 def test_canonical_numbers_are_lossless_and_distinct_from_tag_shaped_user_data():

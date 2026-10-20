@@ -21,9 +21,10 @@ COLD_PHASES = frozenset({"preparation", "startup", "compilation", "gpu_tuning", 
 _ACTIVITY = frozenset({"fill_count", "close_fill_count", "active_days", "traded_notional",
                        "exposed_fraction"})
 _OPERATIONAL = {
-    "live": frozenset({"user", "base_dir", "base_config_path", "session_name"}),
-    "backtest": frozenset({"base_dir", "hlcvs_data_dir", "ohlcv_source_dir", "organillo_csv",
-                            "compress_cache", "offline", "hsl_detailed_report"}),
+    ("live",): frozenset({"base_dir", "base_config_path", "session_name"}),
+    ("live", "account"): frozenset({"user"}),
+    ("backtest",): frozenset({"base_dir", "hlcvs_data_dir", "ohlcv_source_dir", "organillo_csv",
+                             "compress_cache", "offline", "hsl_detailed_report"}),
 }
 
 
@@ -57,7 +58,7 @@ def _canonical(value, path=()):
                 continue
             if key.startswith("_"):
                 continue
-            if len(path) == 1 and key in _OPERATIONAL.get(path[0], ()):
+            if key in _OPERATIONAL.get(path, ()):
                 continue
             result[key] = _canonical(item, (*path, key))
         return ["mapping", sorted(result.items())]

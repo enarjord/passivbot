@@ -20540,10 +20540,7 @@ async def _run_live(startup_context: dict):
 
     startup_context["stage"] = "custom_endpoints"
     custom_endpoints_cli = args.custom_endpoints
-    live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
-    custom_endpoints_cfg = (
-        live_section.get("custom_endpoints_path") if live_section else None
-    )
+    custom_endpoints_cfg = get_optional_live_value(config, "custom_endpoints_path", None)
 
     override_path = None
     autodiscover = True
