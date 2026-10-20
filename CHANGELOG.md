@@ -6,10 +6,6 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Assess native GPU optimizer batch-width trials after six successful warm observations and
-  three seconds of completed work, retaining cold-shape exclusion, prepared work and scratch
-  limits, demand and memory checks, cooldowns and rollback.
-
 - Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.
@@ -299,6 +295,10 @@ since the latest release tag; these features may already be available when insta
 - Multicoin GPU backtests compile away unstuck selection and exclusive close state
   when every effective candidate, coin override and active side disables it;
   shared realized-loss and HSL consumers remain independently enabled.
+
+- Assess native GPU optimizer batch-width trials after six successful warm observations and
+  three seconds of completed work, retaining cold-shape exclusion, prepared work and scratch
+  limits, demand and memory checks, cooldowns and rollback.
 
 - Native GPU batch tuning retains compatible queued demand through each scenario
   evidence window, so a cohort tail does not hide opportunities to test a larger width.
