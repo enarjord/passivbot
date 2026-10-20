@@ -126,7 +126,7 @@ def test_coin_flag_file_migration_works_without_research_runtime(tmp_path):
     migrated = json.loads(output.read_text())
     assert coin_file.read_bytes() == original
     assert "coin_flags" not in migrated["live"]
-    assert migrated["coin_overrides"]["AAA"]["live"]["forced_mode_long"] == "graceful_stop"
+    assert migrated["coin_overrides"]["AAA"]["live"]["modes"]["long"] == "graceful_stop"
     scenario = migrated["backtest"]["scenarios"][0]["overrides"]
-    assert scenario["coin_overrides"]["AAA"]["live"]["forced_mode_long"] == "manual"
+    assert scenario["coin_overrides"]["AAA"]["live"]["modes"]["long"] == "manual"
     assert not any("coin_flags" in key for key in scenario)
