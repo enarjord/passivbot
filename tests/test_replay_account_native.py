@@ -11,7 +11,7 @@ from tools.optimizer_benchmark.replay_account import (
 )
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("through_execute", [False, True])
 def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, through_execute):
     import passivbot_rust
@@ -25,6 +25,9 @@ def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, thr
 
     config, markets, _ = inputs(mode)
     args = payload(mode, cfg=config, mss=markets)
+    assert args[-1]["equity_hard_stop_loss"]["mode"] == (
+        "pside" if mode == "position_side" else mode
+    )
     if through_execute:
         from backtest import execute_backtest
 
