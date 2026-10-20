@@ -292,6 +292,7 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     ),
     "config-explain": CommandSpec(
         "tools.config_explain", "explain config values, sources and search treatment offline"
+    ),
     "config-schema": CommandSpec(
         "tools.config_schema", "print/check the authored-config JSON Schema or field metadata"
     ),

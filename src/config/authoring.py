@@ -16,14 +16,18 @@ from .overrides import parse_overrides, normalize_coin_override_keys
 from .param_paths import resolve_dotted_config_path
 from .result_records import extract_result_config
 from .scenario_overrides import normalize_scenario_overrides
+from .universe import COIN_SOURCE_FIELDS, require_side_universe_sources, set_side_universe_sources
 
 
 _MISSING = object()
+_UNIVERSE_PATHS = tuple(("bot", side, "universe", field)
+                        for side in ("long", "short") for field in sorted(COIN_SOURCE_FIELDS))
 _PROTECTED = (
     ("coin_overrides",), ("optimize", "bounds"),
     ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
     ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),
-    ("backtest", "scenarios"), ("live", "approved_coins"), ("live", "ignored_coins"),
+    ("backtest", "scenarios"), *_UNIVERSE_PATHS,
+    *(("bot", side, "forager", "always_include") for side in ("long", "short")),
     ("bot", "global", "hsl"),
 )
 
@@ -110,10 +114,12 @@ def compact_config(source, *, base_config_path="", destination_path=""):
     baseline = {"config_version": authored["config_version"]}
     if "bot" in authored:
         baseline["bot"] = {side: {} for side in ("long", "short") if side in authored["bot"]}
+    if "bot" in authored:
+        baseline["bot"]["global"] = {"strategy_kind": full["bot"]["global"]["strategy_kind"]}
     if "live" in authored:
-        baseline["live"] = {"strategy_kind": full["live"]["strategy_kind"]}
+        baseline["live"] = {}
     if full["bot"]["global"]["hsl"]["scope"] == "portfolio":
-        baseline["bot"]["global"] = {"hsl": deepcopy(full["bot"]["global"]["hsl"])}
+        baseline["bot"].setdefault("global", {})["hsl"] = deepcopy(full["bot"]["global"]["hsl"])
     defaults = cleanup_config(baseline, base_config_path=base_config_path, _allow_sparse=True)
     registry = get_field_registry()
     keep_empty = {("bot",), ("live",), ("bot", "long"), ("bot", "short")}
@@ -165,12 +171,12 @@ def _resolve_coin_sources(config, *, require_complete):
                 raise FileNotFoundError(f"coin-list file not found: {value}")
 
     for name in ("approved_coins", "ignored_coins"):
-        value = result["live"][name]
+        value = require_side_universe_sources(result, name)
         check_source(value)
         resolved = normalize_coins_source(value, allow_all=name == "approved_coins")
         for side, coins in resolved.items():
             if coins == ["all"]:
-                unresolved.append(f"live.{name}.{side}")
+                unresolved.append(f"bot.{side}.universe.{name}")
             elif require_complete and any(
                 _resolve_coins_file_path(coin) is not None for coin in coins
             ):
@@ -178,7 +184,7 @@ def _resolve_coin_sources(config, *, require_complete):
                     "a coin-list file remains unresolved inside a multi-item source; "
                     "use a single list-file source or explicit coin identifiers"
                 )
-        result["live"][name] = resolved
+        set_side_universe_sources(result, name, resolved)
     if require_complete and unresolved:
         raise ValueError(
             "offline resolved export cannot expand approved_coins='all'; "
@@ -219,7 +225,7 @@ def resolved_config(source, *, base_config_path=""):
         effective, _ = _resolved_context(_patch(full, raw), base_config_path=base_config_path)
         for selector in list(raw):
             parts = tuple(selector.split("."))
-            if parts[:2] in {("live", "approved_coins"), ("live", "ignored_coins")}:
+            if parts in _UNIVERSE_PATHS:
                 raw[selector] = deepcopy(_get(effective, parts))
             elif selector == "coin_overrides":
                 raw[selector] = deepcopy(effective["coin_overrides"])
@@ -241,7 +247,7 @@ def _bound_target(config, path):
     selected = path[2:]
     if selected and str(selected[-1]).isdigit():
         selected = selected[:-1]
-    kind = config["live"]["strategy_kind"]
+    kind = config["bot"]["global"]["strategy_kind"]
     bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
     for key, target in iter_optimizer_key_paths(config, bounds):
         singleton = {}
@@ -257,7 +263,7 @@ def _search_treatment(config, path, authored, *, coin_patch=None, applied_overri
     from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
     from optimization.bounds import Bound
 
-    bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["live"]["strategy_kind"])
+    bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["global"]["strategy_kind"])
     matches = [(key, bounds[key]) for key, target in iter_optimizer_key_paths(config, bounds) if target == path]
     if not matches:
         return {"status": "not_in_bounds"}
@@ -270,7 +276,7 @@ def _search_treatment(config, path, authored, *, coin_patch=None, applied_overri
     fixed_by = [selector for selector in selectors
                 if key in resolve_bound_selectors(config, [selector], bounds)]
     authored_bounds = flatten_optimize_bounds(
-        authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["live"]["strategy_kind"],
+        authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["global"]["strategy_kind"],
     )
     status = "fixed_selector" if fixed_by else "fixed_bound" if bound.low == bound.high else "searched"
     gene_status = status
@@ -341,7 +347,7 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
             "coins", "ignored_coins", "exchanges", "coin_sources",
         ) if name in selected}
         if any(_intersects(parts, prefix) for prefix in (
-            ("live", "approved_coins"), ("live", "ignored_coins"),
+            *_UNIVERSE_PATHS,
             ("backtest", "coin_sources"),
         )):
             raise ValueError(
@@ -365,28 +371,30 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     # The same non-live loader resolves null inheritance, ignored lists and
     # dynamic dates without fetching market data.
     effective = prepare_config(effective, base_config_path=base_config_path, verbose=False, log_config_transforms=False)
-    for name in ("approved_coins", "ignored_coins"):
-        prefix = ("live", name)
+    for prefix in _UNIVERSE_PATHS:
         if not _intersects(parts, prefix):
             continue
         from utils import _resolve_coins_file_path
 
         def references(value):
-            if isinstance(value, dict):
-                for child in value.values():
-                    yield from references(child)
-            elif isinstance(value, list) and len(value) == 1:
+            if isinstance(value, list) and len(value) == 1:
                 yield from references(value[0])
             elif isinstance(value, str):
                 resolved_file = _resolve_coins_file_path(value)
                 if resolved_file is not None:
                     yield str(resolved_file)
 
-        for reference in sorted(set(references(before_files["live"][name]))):
+        for reference in sorted(set(references(_get(before_files, prefix)))):
             events.append({"kind": "coin_list_file", "path": ".".join(prefix), "file": reference})
     if parts == ("backtest", "filter_by_min_effective_cost") and _get(context, parts) is None:
-        events.append({"kind": "inherited", "path": "live.filter_by_min_effective_cost",
-                       "value": effective["live"]["filter_by_min_effective_cost"]})
+        from .policy import effective_minimum_cost_filter
+
+        value = effective_minimum_cost_filter(effective)
+        events.append({"kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost",
+                       "value": value})
+        # Explain the effective simulation policy without changing authored or
+        # resolved exports, which preserve explicit null inheritance.
+        effective["backtest"]["filter_by_min_effective_cost"] = value
     coin_patch = None
     if coin is not None:
         from .overrides import nested_update

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from config.universe import require_side_universe_sources, set_side_universe_sources
 from config.authoring import compact_config, resolved_config, explain_config
 from config.load import prepare_config
 from config.overrides import parse_overrides
@@ -18,8 +19,8 @@ from tools.clean_config import cleanup_config, main as clean_main
 
 def policy():
     config = get_template_config()
-    config["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": []}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     return config
 
 
@@ -43,14 +44,14 @@ def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
     assert source == before
     assert len(json.dumps(compact)) < len(json.dumps(source)) * 0.7
     assert "logging" not in compact
-    assert "warmup_ratio" not in compact["live"]
+    assert "warmup" not in compact["bot"].get("global", {})
     assert effective(compact) == effective(source)
     assert compact_config(compact) == compact
 
 
 @pytest.mark.parametrize("sections", [
     {}, {"bot": {}}, {"live": {}}, {"bot": {}, "live": {}},
-    {"bot": {"long": {}}}, {"live": {"strategy_kind": "ema_anchor"}},
+    {"bot": {"long": {}}}, {"bot": {"global": {"strategy_kind": "ema_anchor"}}},
 ])
 def test_authoring_views_preserve_whole_section_omission(sections):
     source = {"config_version": "v9.0.0", **deepcopy(sections)}
@@ -71,7 +72,7 @@ def test_authoring_views_preserve_whole_section_omission(sections):
 
 
 @pytest.mark.parametrize("export", [compact_config, resolved_config,
-                                    lambda config: explain_config(config, "live.hedge_mode")])
+                                    lambda config: explain_config(config, "bot.global.hedge_mode")])
 @pytest.mark.parametrize("patch", [{"unknown": {}}, {"live": {"hsl_engine": "legacy"}},
                                    {"bot": {"global": {"unknown": True}}}])
 def test_sparse_authoring_does_not_bypass_unknown_or_retired_validation(export, patch):
@@ -82,9 +83,9 @@ def test_sparse_authoring_does_not_bypass_unknown_or_retired_validation(export, 
 
 def test_compact_preserves_nondefault_strategy_selector():
     source = policy()
-    source["live"]["strategy_kind"] = "ema_anchor"
+    source['bot']['global']['strategy_kind'] = "ema_anchor"
     compact = compact_config(source)
-    assert compact["live"]["strategy_kind"] == "ema_anchor"
+    assert compact['bot']['global']['strategy_kind'] == "ema_anchor"
     assert effective(compact) == effective(source)
 
 
@@ -126,16 +127,16 @@ def test_compact_preserves_authored_search_authority_and_sparse_pins():
 def test_compact_preserves_null_inheritance_and_eligibility_sources():
     source = policy()
     source["backtest"]["filter_by_min_effective_cost"] = None
-    source["live"]["approved_coins"] = []
-    source["live"]["ignored_coins"] = {"long": ["ETH"], "short": []}
+    set_side_universe_sources(source, 'approved_coins', [])
+    set_side_universe_sources(source, 'ignored_coins', {'long': ['ETH'], 'short': []})
     compact = compact_config(source)
     assert compact["backtest"]["filter_by_min_effective_cost"] is None
-    assert compact["live"]["approved_coins"] == []
-    assert compact["live"]["ignored_coins"] == source["live"]["ignored_coins"]
+    assert require_side_universe_sources(compact, 'approved_coins') == {'long': [], 'short': []}
+    assert require_side_universe_sources(compact, 'ignored_coins') == require_side_universe_sources(source, 'ignored_coins')
     for flag in (False, True):
         left, right = deepcopy(source), deepcopy(compact)
-        left["live"]["filter_by_min_effective_cost"] = flag
-        right["live"]["filter_by_min_effective_cost"] = flag
+        left['bot']['global']['universe']['filter_by_min_effective_cost'] = flag
+        right['bot'].setdefault('global', {}).setdefault('universe', {})['filter_by_min_effective_cost'] = flag
         assert effective(left) == effective(right)
 
 
@@ -162,8 +163,8 @@ def test_resolved_export_inlines_files_and_preserves_sparse_override_precedence(
     coins = write_json(tmp_path / "approved.json", {"long": ["BTC", "ETH"], "short": []})
     override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5, "close_pct": 0.12}}}})
     source = policy()
-    source["live"]["approved_coins"] = str(coins)
-    source["live"]["ignored_coins"] = {"long": ["ETH"], "short": []}
+    set_side_universe_sources(source, 'approved_coins', str(coins))
+    set_side_universe_sources(source, 'ignored_coins', {'long': ['ETH'], 'short': []})
     source["backtest"]["filter_by_min_effective_cost"] = None
     source["coin_overrides"] = {"BTC": {"override_config_path": override.name,
                                        "bot": {"long": {"unstuck": {"close_pct": 0.13}}}}}
@@ -171,7 +172,7 @@ def test_resolved_export_inlines_files_and_preserves_sparse_override_precedence(
     before = deepcopy(source)
     resolved = resolved_config(source, base_config_path=str(input_path))
     assert source == before
-    assert resolved["live"]["approved_coins"] == {"long": ["BTC", "ETH"], "short": []}
+    assert require_side_universe_sources(resolved, 'approved_coins') == {"long": ["BTC", "ETH"], "short": []}
     assert resolved["backtest"]["filter_by_min_effective_cost"] is None
     assert resolved["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"ema_span_0": 17.5, "close_pct": 0.13}}}}
     assert effective(resolved) == effective(source, str(input_path))
@@ -185,12 +186,12 @@ def test_resolved_export_materializes_scenario_file_sources(tmp_path):
     override = write_json(tmp_path / "scenario-coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 19.5}}}})
     source = policy()
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
-        "live.approved_coins.long": str(coins),
+        "bot.long.universe.approved_coins": str(coins),
         "coin_overrides": {"ETH": {"override_config_path": override.name}},
     }}]
     resolved = resolved_config(source, base_config_path=str(tmp_path / "input.json"))
     patch = resolved["backtest"]["scenarios"][0]["overrides"]
-    assert patch["live.approved_coins.long"] == ["ETH"]
+    assert patch["bot.long.universe.approved_coins"] == ["ETH"]
     assert patch["coin_overrides"] == {"ETH": {"bot": {"long": {"unstuck": {"ema_span_0": 19.5}}}}}
     override.unlink()
     coins.unlink()
@@ -211,10 +212,10 @@ def test_exports_keep_strict_authored_and_result_boundaries(exporter):
 
 def test_resolved_refuses_unavailable_market_universe_and_missing_coin_file(tmp_path):
     source = policy()
-    source["live"]["approved_coins"] = "all"
+    set_side_universe_sources(source, 'approved_coins', 'all')
     with pytest.raises(ValueError, match="cannot expand"):
         resolved_config(source)
-    source["live"]["approved_coins"] = str(tmp_path / "missing.json")
+    set_side_universe_sources(source, 'approved_coins', str(tmp_path / 'missing.json'))
     with pytest.raises(FileNotFoundError, match="coin-list file"):
         resolved_config(source)
 
@@ -257,8 +258,8 @@ def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
 
 def test_search_treatment_reports_runtime_and_scenario_shadowing():
     source = policy()
-    path = "bot.long.risk.total_exposure_enforcer_threshold"
-    source["optimize"]["bounds"]["long"]["risk"]["total_exposure_enforcer_threshold"] = [0.5, 1.0]
+    path = "bot.long.risk.total_exposure_enforcer.threshold"
+    source["optimize"]["bounds"]["long"]["risk"]["total_exposure_enforcer"]["threshold"] = [0.5, 1.0]
     source["optimize"]["fixed_runtime_overrides"] = {path: 0.8}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {path: 0.9}}]
     ordinary = explain_config(source, path)
@@ -275,7 +276,7 @@ def test_search_treatment_reports_runtime_and_scenario_shadowing():
         {"kind": "fixed_runtime_override", "path": path},
         {"kind": "scenario_override", "path": path},
     ]
-    bounds = explain_config(source, "optimize.bounds.long.risk.total_exposure_enforcer_threshold", optimize=True)
+    bounds = explain_config(source, "optimize.bounds.long.risk.total_exposure_enforcer.threshold", optimize=True)
     assert bounds["search"]["status"] == "fixed_runtime_override"
 
 
@@ -302,7 +303,7 @@ def test_explain_reports_null_inheritance_fixed_selectors_and_fixed_bounds():
     source["backtest"]["filter_by_min_effective_cost"] = None
     report = explain_config(source, "backtest.filter_by_min_effective_cost")
     assert report["value"] is True
-    assert report["sources"][-1] == {"kind": "inherited", "path": "live.filter_by_min_effective_cost", "value": True}
+    assert report["sources"][-1] == {"kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost", "value": True}
     source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0", "short.unstuck.close_pct"]
     search = explain_config(source, "bot.long.unstuck.ema_span_0")["search"]
     assert search["status"] == "fixed_selector"
@@ -320,14 +321,14 @@ def test_explain_scenario_dates_and_dataset_limit_are_explicit():
     assert report["sources"][-1]["kind"] == "scenario_selection"
     assert report["dataset_selection"] == {"coins": ["BTC"]}
     with pytest.raises(ValueError, match="prepared dataset"):
-        explain_config(source, "live.approved_coins", scenario="one")
+        explain_config(source, "bot.long.universe.approved_coins", scenario="one")
 
 
 def test_explain_keeps_unexpanded_all_visible_and_does_not_invent_units():
     source = policy()
-    source["live"]["approved_coins"] = "all"
-    report = explain_config(source, "live.approved_coins")
-    assert report["unresolved"] == ["live.approved_coins.long", "live.approved_coins.short"]
+    set_side_universe_sources(source, 'approved_coins', 'all')
+    report = explain_config(source, "bot.long.universe.approved_coins")
+    assert report["unresolved"] == ["bot.long.universe.approved_coins", "bot.short.universe.approved_coins"]
     assert report["unit"] is None
 
 
@@ -381,10 +382,10 @@ def test_explain_rejects_unknown_or_inactive_fields(path):
 def test_explain_local_coin_list_source_is_report_evidence_only(tmp_path):
     coins = write_json(tmp_path / "coins.json", ["BTC", "ETH"])
     source = policy()
-    source["live"]["approved_coins"] = str(coins)
-    report = explain_config(source, "live.approved_coins")
-    assert report["value"] == {"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]}
-    assert report["sources"][-1] == {"kind": "coin_list_file", "path": "live.approved_coins", "file": str(coins)}
+    set_side_universe_sources(source, 'approved_coins', str(coins))
+    report = explain_config(source, "bot.long.universe.approved_coins")
+    assert report["value"] == ["BTC", "ETH"]
+    assert report["sources"][-1] == {"kind": "coin_list_file", "path": "bot.long.universe.approved_coins", "file": str(coins)}
     assert "sources" not in source
 
 
@@ -403,7 +404,7 @@ def test_authoring_tools_never_connect_to_network(monkeypatch):
 def test_explain_cli_prints_report_and_never_rewrites_input(tmp_path, capsys):
     path = write_json(tmp_path / "input.json", policy())
     before = path.read_bytes()
-    assert cli_main(["tool", "config-explain", str(path), "live.warmup_ratio", "--json"]) == 0
+    assert cli_main(["tool", "config-explain", str(path), "bot.global.warmup.ratio", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["value"] == 0.3
     assert report["context"]["scope"] == "offline_policy"
