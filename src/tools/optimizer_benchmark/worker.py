@@ -20,6 +20,7 @@ import traceback
 from .workloads import array_digest, digest, harness_digest, load_manifest
 
 _CPU_CONTEXT = None
+_SOCKET_CONNECT = socket.socket.connect
 
 
 def initialize_cpu_worker(specs, markets, exchange, metrics):
@@ -39,6 +40,19 @@ def cpu_config(config):
 
 def deny_network(*_args, **_kwargs):
     raise RuntimeError("optimizer benchmark forbids network connections")
+
+
+def _local_ipc_connect(sock, address):
+    if hasattr(socket, "AF_UNIX") and sock.family == socket.AF_UNIX:
+        return _SOCKET_CONNECT(sock, address)
+    return deny_network(sock, address)
+
+
+def block_network():
+    # Forkserver and multiprocessing use local Unix sockets. Retain the original
+    # implementation once, so repeated candidate setup cannot wrap itself.
+    socket.socket.connect = _local_ipc_connect
+    socket.create_connection = deny_network
 
 
 def strict_json(value):
@@ -105,8 +119,7 @@ class Resources:
 
 
 def cpu_candidate(task):
-    socket.socket.connect = deny_network
-    socket.create_connection = deny_network
+    block_network()
     config, candles, markets, btc, timestamps, exchange, metrics = task
     from backtest import build_backtest_payload, execute_backtest
     from config.metrics import resolve_metric_value
@@ -521,8 +534,7 @@ def main():
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(Path(args.backend).resolve() / "src"))
-    socket.socket.connect = deny_network
-    socket.create_connection = deny_network
+    block_network()
     try:
         result = run(args)
     except Exception as error:

@@ -3,11 +3,14 @@
 from copy import deepcopy
 from itertools import combinations, product
 import json
+import multiprocessing
 import random
 import os
 from pathlib import Path
 import subprocess
 import sys
+import socket
+import tempfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -30,6 +33,45 @@ def restore_rng_states():
     finally:
         random.setstate(python_state)
         np.random.set_state(numpy_state)
+
+
+@pytest.fixture
+def blocked_worker_network(monkeypatch):
+    # Register the original methods for restoration before process-scoped setup.
+    monkeypatch.setattr(socket.socket, "connect", socket.socket.connect)
+    monkeypatch.setattr(socket, "create_connection", socket.create_connection)
+    worker.block_network()
+    worker.block_network()
+
+
+@pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6])
+def test_worker_rejects_network_families_before_connecting(blocked_worker_network, monkeypatch, family):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("network rejection must precede the original socket connect")
+    monkeypatch.setattr(worker, "_SOCKET_CONNECT", forbidden)
+    with pytest.raises(RuntimeError, match="forbids network connections"):
+        socket.socket.connect(SimpleNamespace(family=family), ("localhost", 1))
+    with pytest.raises(RuntimeError, match="forbids network connections"):
+        socket.create_connection(("localhost", 1))
+
+
+def test_worker_preserves_local_unix_ipc_after_repeated_setup(blocked_worker_network):
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Unix-domain sockets unavailable")
+    # Keep the socket path below macOS's short Unix-domain address limit.
+    with tempfile.TemporaryDirectory(prefix="pb-bench-ipc-") as directory:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.settimeout(2)
+            listener.bind(str(Path(directory) / "ipc"))
+            listener.listen(1)
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(2)
+                client.connect(str(Path(directory) / "ipc"))
+                connection, _address = listener.accept()
+                with connection:
+                    connection.settimeout(2)
+                    client.sendall(b"ok")
+                    assert connection.recv(2) == b"ok"
 
 
 def test_pairwise_covers_all_pairs_and_states():
@@ -561,14 +603,24 @@ def test_search_matches_backend_signature_and_prepares_recording_contract(frozen
         worker.search_run(entry, arrays, args)
 
 
-def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen):
+@pytest.mark.parametrize("start_method", [None, "forkserver"])
+def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, start_method):
+    if start_method is not None and start_method not in multiprocessing.get_all_start_methods():
+        pytest.skip(f"{start_method} multiprocessing unavailable")
     directory, manifest = frozen
     entry = manifest["entries"][0]
     # Network rejection belongs to the worker process, including the Rust
     # verification pass; it must not alter the pytest process's socket methods.
     output = directory / "cpu-search.json"
     root = Path(__file__).resolve().parents[2]
-    subprocess.run([sys.executable, "-m", "tools.optimizer_benchmark.worker",
+    invocation = [sys.executable, "-m", "tools.optimizer_benchmark.worker"]
+    if start_method is not None:
+        invocation = [sys.executable, "-c", (
+            "import multiprocessing, runpy; "
+            f"multiprocessing.set_start_method({start_method!r}); "
+            "runpy.run_module('tools.optimizer_benchmark.worker', run_name='__main__')"
+        )]
+    subprocess.run([*invocation,
                     "--backend", str(root), "--workload", str(directory),
                     "--entry", entry["id"], "--engine", "search-cpu", "--workers", "1",
                     "--search-iters", "8", "--output", str(output)],
