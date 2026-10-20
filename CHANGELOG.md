@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reuse validated GPU optimizer execution identities when every registered
+  scenario/exchange variant replays exactly one selected coin and a bounded
+  planner-local guard proves that only finite request-owned numeric values
+  changed. Preserve full cleaning for other views, changed policies and external callers.
+
 - Generate optimizer benchmark default bounds for the selected HSL scope, so frozen
   portfolio-HSL populations can reconstruct valid search bounds without inactive side parameters.
 
