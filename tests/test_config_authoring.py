@@ -73,7 +73,7 @@ def test_authoring_views_preserve_whole_section_omission(sections):
 @pytest.mark.parametrize("export", [compact_config, resolved_config,
                                     lambda config: explain_config(config, "live.hedge_mode")])
 @pytest.mark.parametrize("patch", [{"unknown": {}}, {"live": {"hsl_engine": "legacy"}},
-                                   {"bot": {"risk": {"unknown": True}}}])
+                                   {"bot": {"global": {"unknown": True}}}])
 def test_sparse_authoring_does_not_bypass_unknown_or_retired_validation(export, patch):
     source = {"config_version": "v9.0.0", **patch}
     with pytest.raises((ValueError, TypeError)):
@@ -142,7 +142,7 @@ def test_compact_preserves_null_inheritance_and_eligibility_sources():
 def test_compact_retains_optional_portfolio_authorization():
     source = generated_template(policy(), "portfolio")
     compact = compact_config(source)
-    assert compact["bot"]["risk"]["hsl"] == source["bot"]["risk"]["hsl"]
+    assert compact["bot"]["global"]["hsl"] == source["bot"]["global"]["hsl"]
     assert effective(compact) == effective(source)
 
 
@@ -333,7 +333,7 @@ def test_explain_keeps_unexpanded_all_visible_and_does_not_invent_units():
 
 @pytest.mark.parametrize("path,target,element_type", [
     ("optimize.bounds.long.risk.max_positions", "bot.long.risk.max_positions", "integer"),
-    ("optimize.bounds.long.forager.score_weights_volume", "bot.long.forager.score_weights.volume", "float"),
+    ("optimize.bounds.long.forager.score_weights.volume", "bot.long.forager.score_weights.volume", "float"),
 ])
 def test_explain_bounds_reuses_existing_parameter_path_adapter(path, target, element_type):
     report = explain_config(policy(), path)

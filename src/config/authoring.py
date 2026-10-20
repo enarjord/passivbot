@@ -24,7 +24,7 @@ _PROTECTED = (
     ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
     ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),
     ("backtest", "scenarios"), ("live", "approved_coins"), ("live", "ignored_coins"),
-    ("bot", "risk", "hsl"),
+    ("bot", "global", "hsl"),
 )
 
 
@@ -112,8 +112,8 @@ def compact_config(source, *, base_config_path="", destination_path=""):
         baseline["bot"] = {side: {} for side in ("long", "short") if side in authored["bot"]}
     if "live" in authored:
         baseline["live"] = {"strategy_kind": full["live"]["strategy_kind"]}
-    if full["bot"]["risk"]["hsl"]["scope"] == "portfolio":
-        baseline["bot"]["risk"] = {"hsl": deepcopy(full["bot"]["risk"]["hsl"])}
+    if full["bot"]["global"]["hsl"]["scope"] == "portfolio":
+        baseline["bot"]["global"] = {"hsl": deepcopy(full["bot"]["global"]["hsl"])}
     defaults = cleanup_config(baseline, base_config_path=base_config_path, _allow_sparse=True)
     registry = get_field_registry()
     keep_empty = {("bot",), ("live",), ("bot", "long"), ("bot", "short")}
