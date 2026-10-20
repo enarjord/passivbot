@@ -18,7 +18,7 @@ from .field_policies import (
     CONDITIONAL_HSL_OVERRIDE_PATHS,
     OVERRIDABLE_SHARED_BOT_PATHS,
     OVERRIDABLE_STANDALONE_BOT_KEYS,
-    LIVE_COIN_OVERRIDE_KEYS,
+    get_live_coin_override_paths,
 )
 from .shared_bot import BOT_GROUP_FIELD_MAP, canonicalize_shared_bot_side
 from .strategy import (
@@ -185,12 +185,18 @@ def _allowed_bot_side_modifications(*, hsl_signal_mode: str = "coin") -> dict:
 
 
 def get_allowed_modifications(*, hsl_signal_mode: str = "coin"):
+    live = {}
+    for path in get_live_coin_override_paths():
+        owner = live
+        for part in path[1:-1]:
+            owner = owner.setdefault(part, {})
+        owner[path[-1]] = True
     return {
         "bot": {
             "long": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
             "short": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
         },
-        "live": {key: True for key in LIVE_COIN_OVERRIDE_KEYS},
+        "live": live,
     }
 
 
@@ -417,8 +423,8 @@ def _validate_patch_leaf_types(
             continue
         if isinstance(value, str):
             if path in {
-                ("live", "forced_mode_long"),
-                ("live", "forced_mode_short"),
+                ("live", "modes", "long"),
+                ("live", "modes", "short"),
             }:
                 if value:
                     try:
@@ -447,10 +453,10 @@ def _validate_patch_leaf_types(
                 raise TypeError(f"{display_path} must be numeric")
             if not math.isfinite(float(value)) or float(value) < 0.0:
                 raise ValueError(f"{display_path} must be finite and >= 0.0")
-    leverage = patch.get("live", {}).get("leverage")
+    leverage = patch.get("live", {}).get("account", {}).get("leverage")
     if leverage is not None and float(leverage) <= 0.0:
         raise ValueError(
-            f"coin_overrides.{coin}.live.leverage ({origin}) must be > 0.0"
+            f"coin_overrides.{coin}.live.account.leverage ({origin}) must be > 0.0"
         )
 
 

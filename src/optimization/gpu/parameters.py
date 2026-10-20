@@ -94,7 +94,9 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
     kind = config['bot']['global']['strategy_kind']
     keys = {"ema_anchor": EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
             "trailing_martingale": TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS}[kind]
-    mode = config["bot"]["global"]["hsl"]["scope"]
+    from config.hsl import native_hsl_mode
+
+    mode = native_hsl_mode(config["bot"]["global"]["hsl"]["scope"])
     result = {}
     for side in sides:
         bot = project_bot(payload, 0, side, config)

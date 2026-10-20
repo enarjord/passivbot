@@ -13,20 +13,23 @@ before backtesting a proposed replacement.
 
 | Released field | Final v9 field or action |
 |---|---|
-| `live.hsl_signal_mode` | `bot.global.hsl.scope`: `coin`, `pside` or `portfolio` |
+| `live.hsl_signal_mode` | `bot.global.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
+| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_ratio_threshold`, with the same fractional value |
+| `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
 | `bot.hsl` portfolio policy | `bot.global.hsl` alongside its scope |
 | HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
 | `live.max_realized_loss_pct` | `bot.global.loss_gate.max_drawdown_ratio` |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
 | `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |
-| `live.auto_gs` | `live.disapproved_position_mode`: `graceful_stop` or `manual` |
+| `live.auto_gs` | `live.modes.disapproved_position`: `graceful_stop` or `manual` |
 | `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.global` |
 | `live.approved_coins`, `live.ignored_coins` | Separate `bot.<side>.universe` sources |
 | Shared minimum-age and minimum-cost filters | `bot.global.universe`; simulation minimum-cost override remains nullable |
 | Shared market-order policy | `bot.global.execution` |
 | `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_pct`, `bot.global.warmup` |
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
+| Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |
 | `forager.volume_drop_pct` | Removed; volume-based ranking remains |
 | Optional total-exposure entry gate | Removed; the entry cap always applies |
 | `trailing_grid_v7`, Defx and Paradex | Removed; select a retained strategy/venue explicitly |
@@ -179,7 +182,7 @@ checkpoints cannot be resumed. Public examples now select ordinary metrics expli
 are starting points, not translations of a private trading policy.
 
 Live risk acquisition has its own bounded horizon, including supported cooldown, capped by
-`live.risk_bootstrap_max_lookback_minutes`. This is not a finite exponential-memory cutoff.
+`live.startup.risk_bootstrap_max_lookback_minutes`. This is not a finite exponential-memory cutoff.
 HSL retains compact forward state while pruning factual support; cold restart or a correction
 requiring discarded history can need observable approximate reconstruction. Unknown prefix
 error can move HSL timing in either direction. The independent unstuck and loss-gate origin

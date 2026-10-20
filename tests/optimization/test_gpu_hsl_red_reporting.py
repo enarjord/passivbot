@@ -58,7 +58,7 @@ kernel void red_reporting_probe(constant float* params, device HslNode* trees,
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_cooldown_reporting_changes_only_red_samples_in_real_replay(monkeypatch, strategy, mode):
     import passivbot_rust
     from optimization.gpu import mps_kernel

@@ -15,7 +15,7 @@ from passivbot import Passivbot
 
 def _prepared_config(overrides):
     source = get_template_config()
-    source["live"]["user"] = "tester"
+    source["live"]["account"]["user"] = "tester"
     source["coin_overrides"] = deepcopy(overrides)
     return prepare_config(source, verbose=False, log_config_transforms=False)
 
@@ -162,7 +162,7 @@ def test_unstuck_ema_distance_validation_applies_to_effective_config():
         ValueError,
         match=r"coin_overrides\.BTC produces an invalid config after file and inline precedence resolution",
     ):
-        _parse({"BTC": {"bot": {"long": {"unstuck": {"ema_dist": -1.0}}}}})
+        _parse({"BTC": {"bot": {"long": {"unstuck": {"ema_distance_fraction": -1.0}}}}})
 
 
 def test_effective_validation_normalization_is_retained_in_patch():
@@ -237,7 +237,7 @@ def test_strategy_kind_mismatch_fails_in_inline_patch():
                 "BTC": {
                     "bot": {
                         "long": {
-                            "strategy": {"ema_anchor": {"entry": {"ema_dist": -0.01}}}
+                            "strategy": {"ema_anchor": {"entry": {"ema_distance_fraction": -0.01}}}
                         }
                     }
                 }
@@ -284,8 +284,8 @@ def test_override_file_strategy_kind_mismatch_fails():
 
 @pytest.mark.parametrize("value", [0, -1.0])
 def test_non_positive_leverage_override_fails(value):
-    with pytest.raises(ValueError, match=r"live\.leverage .*must be > 0\.0"):
-        _parse({"BTC": {"live": {"leverage": value}}})
+    with pytest.raises(ValueError, match="live\\.account\\.leverage .*must be > 0\\.0"):
+        _parse({"BTC": {"live": {"account": {"leverage": value}}}})
 
 
 def test_normalized_coin_collision_fails():
@@ -395,27 +395,34 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                         },
                         "entry_cooldown": deepcopy(side["entry_cooldown"]),
                         "risk": {
-                            "we_excess_allowance_pct": side['risk']['we_excess_allowance_pct'],
+                            "we_excess_allowance_pct": side["risk"][
+                                "we_excess_allowance_pct"
+                            ],
                             "position_exposure_enforcer": {
-                                "enabled": side['risk']['position_exposure_enforcer']['enabled'],
-                                "threshold": side['risk']['position_exposure_enforcer']['threshold'],
+                                "enabled": side["risk"]["position_exposure_enforcer"][
+                                    "enabled"
+                                ],
+                                "threshold": side["risk"]["position_exposure_enforcer"][
+                                    "threshold"
+                                ],
                             },
                         },
                         "unstuck": {
                             "close_pct": side["unstuck"]["close_pct"],
-                            "ema_dist": side["unstuck"]["ema_dist"],
+                            "ema_distance_fraction": side["unstuck"]["ema_distance_fraction"],
                             "ema_gating_enabled": side["unstuck"]["ema_gating_enabled"],
                             "enabled": side["unstuck"]["enabled"],
                             "loss_allowance_pct": side["unstuck"]["loss_allowance_pct"],
-                            "exposure_trigger_ratio": side["unstuck"]["exposure_trigger_ratio"],
+                            "exposure_trigger_ratio": side["unstuck"][
+                                "exposure_trigger_ratio"
+                            ],
                         },
                         "wallet_exposure_limit": 0.1,
                     }
                 },
                 "live": {
-                    "forced_mode_long": "",
-                    "forced_mode_short": "normal",
-                    "leverage": template["live"]["leverage"],
+                    "modes": {"long": "", "short": "normal"},
+                    "account": {"leverage": template["live"]["account"]["leverage"]},
                 },
             }
         }

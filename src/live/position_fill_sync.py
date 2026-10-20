@@ -196,10 +196,10 @@ def permits(bot, order):
     config = bot.config
     policy = config["bot"]["global"]["hsl"]
     mode = policy["scope"]
-    if not isinstance(mode, str) or mode not in {"coin", "pside", "portfolio"}:
+    if not isinstance(mode, str) or mode not in {"coin", "position_side", "portfolio"}:
         raise ValueError("invalid HSL scope in bot.global.hsl.scope")
     if mode == "portfolio" and policy["enabled"]:
         keys.update(gate.pending)
-    elif mode == "pside" and config["bot"][key[1]]["hsl"]["enabled"]:
+    elif mode == "position_side" and config["bot"][key[1]]["hsl"]["enabled"]:
         keys.update(k for k in gate.pending if k[1] == key[1])
     return not any(gate.blocked(k) for k in keys)

@@ -3177,7 +3177,7 @@ def _format_starting_seed_bot(bot, live=None):
         live[field] = deepcopy(template["live"][field])
     defaults = template["bot"]["long"]["hsl"]
     numeric_fields = (
-        "red_threshold", "memory_ema_span_minutes",
+        "drawdown_ratio_threshold", "memory_ema_span_minutes",
         "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red",
     )
     numeric_seeds = {}
@@ -3751,7 +3751,7 @@ async def main():
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
+    require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
     config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     if "couple_unstuck_ema_spans" in (

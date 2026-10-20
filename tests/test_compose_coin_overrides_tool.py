@@ -25,7 +25,7 @@ def _single_coin_config(coin: str) -> dict:
     config = get_template_config()
     set_side_universe_sources(config, 'approved_coins', {"long": [coin], "short": [coin]})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    config["live"]["user"] = "test_user"
+    config["live"]["account"]["user"] = "test_user"
     config["coin_overrides"] = {}
     for side in ("long", "short"):
         risk = config["bot"][side]["risk"]
@@ -62,12 +62,12 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     second["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.0
     first["bot"]["long"]["forager"]["volatility_ema_span_1m"] = 100.0
     second["bot"]["long"]["forager"]["volatility_ema_span_1m"] = 200.0
-    first["live"]["leverage"] = 3
-    second["live"]["leverage"] = 5
+    first["live"]["account"]["leverage"] = 3
+    second["live"]["account"]["leverage"] = 5
 
-    first["bot"]["long"]["hsl"]["red_threshold"] = 0.21
-    second["bot"]["long"]["hsl"]["red_threshold"] = 0.11
-    first["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.03, 0.25, 0.01]
+    first["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.21
+    second["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.11
+    first["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.03, 0.25, 0.01]
     first['bot']['long']['risk']['position_exposure_enforcer']['threshold'] = 0.9
     second['bot']['long']['risk']['position_exposure_enforcer']['threshold'] = 0.8
     first['optimize']['bounds']['long']['risk']['position_exposure_enforcer']['threshold'] = [0.7, 1.0, 0.01]
@@ -93,7 +93,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     assert composed["bot"]["short"]["risk"]["max_positions"] == 1.0
     assert report.position_count_changes == {"long": (1.0, 2.0)}
     assert composed["bot"]["long"]["hsl"]["enabled"] is False
-    assert composed["bot"]["long"]["hsl"]["red_threshold"] == 0.03
+    assert composed["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.03
     assert (
         composed['bot']['long']['risk']['position_exposure_enforcer']['threshold'] == 0.7
     )
@@ -107,7 +107,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
         == 0.02
     )
     assert eth["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 2.0
-    assert eth["live"]["leverage"] == 5
+    assert eth["live"]["account"]["leverage"] == 5
     assert "hsl" not in eth["bot"]["long"]
     assert "position_exposure_enforcer_threshold" not in eth["bot"]["long"].get("risk", {})
     assert "bot.long.forager.volatility_ema_span_1m" in report.account_wide_conflicts
@@ -150,7 +150,7 @@ def test_mixed_feature_enablement_omits_inert_dependent_overrides(tmp_path: Path
         config["bot"]["long"]["unstuck"]["enabled"] = True
         config['bot']['long']['risk']['position_exposure_enforcer']['enabled'] = True
     disabled["bot"]["long"]["hsl"].update(
-        {"enabled": False, "red_threshold": 0.24, "drawdown_ratio_ema_span_minutes": 12.0}
+        {"enabled": False, "drawdown_ratio_threshold": 0.24, "drawdown_ratio_ema_span_minutes": 12.0}
     )
     disabled["bot"]["long"]["unstuck"].update(
         {"enabled": False, "exposure_trigger_ratio": 0.88, "close_pct": 0.11}
@@ -182,7 +182,7 @@ def test_rejects_non_single_and_precomposed_inputs(tmp_path: Path):
         compose_directory(tmp_path)
 
     invalid = _single_coin_config("ETH")
-    invalid["coin_overrides"] = {"ETH": {"live": {"leverage": 4}}}
+    invalid["coin_overrides"] = {"ETH": {"live": {"account": {"leverage": 4}}}}
     _write(tmp_path / "b.json", invalid)
     with pytest.raises(ValueError, match="must not contain coin_overrides"):
         compose_directory(tmp_path)
@@ -191,14 +191,14 @@ def test_rejects_non_single_and_precomposed_inputs(tmp_path: Path):
 def test_rejects_retired_config_wrapper(tmp_path: Path):
     _write(tmp_path / "a.json", _single_coin_config("BTC"))
     nested = _single_coin_config("ETH")
-    nested["coin_overrides"] = {"ETH": {"live": {"leverage": 4}}}
+    nested["coin_overrides"] = {"ETH": {"live": {"account": {"leverage": 4}}}}
     _write(tmp_path / "b.json", {"config": nested})
 
     with pytest.raises(ValueError, match="explicit migration"):
         compose_directory(tmp_path)
 
 
-@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Path, scope):
     first = _single_coin_config("BTC")
     second = _single_coin_config("ETH")
@@ -209,8 +209,8 @@ def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Pat
     first["bot"]["global"]["loss_gate"].update(memory_ema_span_minutes=31.5, max_drawdown_ratio=0.1)
     second["bot"]["global"]["loss_gate"].update(memory_ema_span_minutes=63.0, max_drawdown_ratio=0.2)
     if scope == "portfolio":
-        first["bot"]["global"]["hsl"].update(enabled=True, red_threshold=0.03)
-        second["bot"]["global"]["hsl"].update(enabled=True, red_threshold=0.07)
+        first["bot"]["global"]["hsl"].update(enabled=True, drawdown_ratio_threshold=0.03)
+        second["bot"]["global"]["hsl"].update(enabled=True, drawdown_ratio_threshold=0.07)
     _write(tmp_path / "a.json", first)
     _write(tmp_path / "b.json", second)
 
@@ -222,8 +222,8 @@ def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Pat
     assert "bot.global.loss_gate.memory_ema_span_minutes" in report.account_wide_conflicts
     assert "bot.global.loss_gate.max_drawdown_ratio" in report.account_wide_conflicts
     if scope == "portfolio":
-        assert composed["bot"]["global"]["hsl"]["red_threshold"] == 0.03
-        assert "bot.global.hsl.red_threshold" in report.account_wide_conflicts
+        assert composed["bot"]["global"]["hsl"]["drawdown_ratio_threshold"] == 0.03
+        assert "bot.global.hsl.drawdown_ratio_threshold" in report.account_wide_conflicts
     for patch in composed["coin_overrides"].values():
         assert "risk" not in patch.get("bot", {})
         assert "unstuck" not in patch.get("bot", {})
@@ -232,7 +232,7 @@ def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Pat
 def test_direct_composition_rejects_mixed_global_hsl_scopes(tmp_path: Path):
     first = _single_coin_config("BTC")
     second = _single_coin_config("ETH")
-    second["bot"]["global"]["hsl"]["scope"] = "pside"
+    second["bot"]["global"]["hsl"]["scope"] = "position_side"
     sources = [
         compose_tool.SingleCoinConfig(path=tmp_path / "a.json", config=first, coin="BTC", approved_sides=frozenset({"long"})),
         compose_tool.SingleCoinConfig(path=tmp_path / "b.json", config=second, coin="ETH", approved_sides=frozenset({"long"})),
@@ -286,7 +286,7 @@ def test_external_master_supplies_baseline_without_adding_coins(
     master = _single_coin_config("SOL")
     master['bot']["long"]['universe']['approved_coins'].append("XRP")
     master['bot']["long"]['universe']['ignored_coins'] = ["BTC", "DOGE"]
-    master["live"]["leverage"] = 7
+    master["live"]["account"]["leverage"] = 7
     master["bot"]["long"]["forager"]["volume_ema_span_1m"] = 777.0
     master["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 12.0
     master["optimize"]["iters"] = 321
@@ -316,7 +316,7 @@ def test_external_master_supplies_baseline_without_adding_coins(
         "short": ["BTC", "ETH"],
     }
     assert composed['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
-    assert composed["live"]["leverage"] == 7
+    assert composed["live"]["account"]["leverage"] == 7
     assert composed["bot"]["long"]["forager"]["volume_ema_span_1m"] == 777.0
     assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
     assert composed["optimize"]["backend"] == "gpu"
@@ -384,7 +384,7 @@ def test_external_master_rejects_existing_overrides(tmp_path: Path):
     _write(inputs / "a.json", _single_coin_config("BTC"))
     _write(inputs / "b.json", _single_coin_config("ETH"))
     master = _single_coin_config("SOL")
-    master["coin_overrides"] = {"BTC": {"live": {"leverage": 10}}}
+    master["coin_overrides"] = {"BTC": {"live": {"account": {"leverage": 10}}}}
     _write(tmp_path / "master.json", master)
     with pytest.raises(
         ValueError, match="master config must not contain coin_overrides"
@@ -590,7 +590,7 @@ def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, c
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl_signal_mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("hsl_signal_mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("external_master", [False, True])
 def test_verbose_overrides_survive_master_edits(
     tmp_path: Path, strategy_kind: str, hsl_signal_mode: str, external_master: bool
@@ -601,9 +601,9 @@ def test_verbose_overrides_survive_master_edits(
         config = _single_coin_config(coin)
         config['bot']['global']['strategy_kind'] = strategy_kind
         config["bot"]["global"]["hsl"]["scope"] = hsl_signal_mode
-        config["live"]["leverage"] = 3
+        config["live"]["account"]["leverage"] = 3
         config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
-        config["bot"]["long"]["hsl"]["red_threshold"] = 0.123
+        config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.123
         _write(inputs / name, config)
     master_path = None
     if external_master:
@@ -631,7 +631,7 @@ def test_verbose_overrides_survive_master_edits(
 
     # Exercise the real override loader after changing global values which were
     # equal at composition time, including a disabled feature's enable flag.
-    verbose["live"]["leverage"] = 9
+    verbose["live"]["account"]["leverage"] = 9
     verbose["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 99.0
     verbose["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.0
     verbose["bot"]["long"]["strategy"][strategy_kind] = deepcopy(
@@ -645,21 +645,21 @@ def test_verbose_overrides_survive_master_edits(
         ] = 0.15
     if hsl_signal_mode == "coin":
         verbose["bot"]["long"]["hsl"]["enabled"] = True
-        verbose["bot"]["long"]["hsl"]["red_threshold"] = 0.2
+        verbose["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.2
     prepared = prepare_config(verbose, verbose=False, log_config_transforms=False)
     parsed = parse_overrides(prepared, verbose=False)
     policy = get_allowed_modifications(hsl_signal_mode=hsl_signal_mode)
     for source in sources:
         patch = parsed["coin_overrides"][source.coin]
         effective = apply_allowed_modifications(prepared, patch, policy)
-        assert effective["live"]["leverage"] == 3
+        assert effective["live"]["account"]["leverage"] == 3
         assert effective["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 7.0
         assert effective["bot"]["long"]["strategy"] == source.config["bot"]["long"]["strategy"]
         assert effective["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.0
         assert "max_positions" not in patch["bot"]["long"]["risk"]
         if hsl_signal_mode == "coin":
             assert effective["bot"]["long"]["hsl"]["enabled"] is False
-            assert effective["bot"]["long"]["hsl"]["red_threshold"] == 0.123
+            assert effective["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.123
         else:
             assert "hsl" not in patch["bot"]["long"]
 
@@ -667,14 +667,14 @@ def test_verbose_overrides_survive_master_edits(
 def test_verbose_cli_keeps_original_inactive_values(tmp_path: Path, capsys):
     for name, coin, threshold in (("a.json", "BTC", 0.123), ("b.json", "ETH", 0.234)):
         config = _single_coin_config(coin)
-        config["bot"]["long"]["hsl"]["red_threshold"] = threshold
+        config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = threshold
         _write(tmp_path / name, config)
     output = tmp_path / "result.json"
     assert main([str(tmp_path), str(output), "--override-mode", "verbose"]) == 0
     payload = json.loads(output.read_text())
     for coin, threshold in (("BTC", 0.123), ("ETH", 0.234)):
         assert (
-            payload["coin_overrides"][coin]["bot"]["long"]["hsl"]["red_threshold"]
+            payload["coin_overrides"][coin]["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
             == threshold
         )
     assert "Coin override mode: verbose" in capsys.readouterr().out
@@ -923,7 +923,7 @@ def test_custom_group_only_includes_allowed_leaves(tmp_path: Path):
     for coin in ("BTC", "ETH"):
         _write(tmp_path / f"{coin}.json", _single_coin_config(coin))
     composed, _ = compose_directory(
-        tmp_path, override_params="long.risk,long.entry_cooldown,live.leverage"
+        tmp_path, override_params="long.risk,long.entry_cooldown,live.account.leverage"
     )
     for patch in composed["coin_overrides"].values():
         assert "base_duration_minutes" in patch["bot"]["long"]["entry_cooldown"]
@@ -931,7 +931,9 @@ def test_custom_group_only_includes_allowed_leaves(tmp_path: Path):
             "position_exposure_enforcer", "we_excess_allowance_pct",
         }
         assert set(patch["bot"]["long"]["risk"]["position_exposure_enforcer"]) == {"enabled", "threshold"}
-        assert patch["live"] == {"leverage": composed["live"]["leverage"]}
+        assert patch["live"] == {
+            "account": {"leverage": composed["live"]["account"]["leverage"]}
+        }
 
 
 def test_custom_strategy_leaf_uses_active_strategy_shorthand(tmp_path: Path):
@@ -961,11 +963,11 @@ def test_custom_hsl_selection_obeys_signal_mode_and_preserves_inactive_value(
 ):
     for coin in ("BTC", "ETH"):
         config = _single_coin_config(coin)
-        config["bot"]["long"]["hsl"]["red_threshold"] = 0.123
+        config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.123
         _write(tmp_path / f"{coin}.json", config)
-    composed, _ = compose_directory(tmp_path, override_params="long.hsl.red_threshold")
+    composed, _ = compose_directory(tmp_path, override_params="long.hsl.drawdown_ratio_threshold")
     assert composed["coin_overrides"]["BTC"] == {
-        "bot": {"long": {"hsl": {"red_threshold": 0.123}}}
+        "bot": {"long": {"hsl": {"drawdown_ratio_threshold": 0.123}}}
     }
     for coin in ("BTC", "ETH"):
         set_side_universe_sources(config, 'approved_coins', {"long": [coin], "short": [coin]})

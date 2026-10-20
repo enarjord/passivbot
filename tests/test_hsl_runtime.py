@@ -40,7 +40,7 @@ def bot(mode="coin", *, side="long", events=()):
     for pside in ("long", "short"):
         config["bot"][pside]["hsl"].update(
             enabled=pside == side,
-            red_threshold=0.05,
+            drawdown_ratio_threshold=0.05,
             # Availability/admission fixtures use an unsmoothed one-minute
             # policy; dedicated bootstrap fixtures exercise very slow spans.
             drawdown_ratio_ema_span_minutes=1.0,
@@ -113,7 +113,7 @@ def run(value, marks=None, sources=None, **changes):
     return evaluate(requests), unavailable
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     value = bot(mode, side=side)
@@ -133,7 +133,7 @@ def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     assert decision.execution_type == ("market" if mode == "portfolio" else "limit")
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_canonical_cashflows_survive_pending_quantity_and_missing_candles(mode):
     value = bot(
         mode,
@@ -259,7 +259,7 @@ def test_capture_is_immutable_and_does_not_inherit_prior_state():
     assert not unavailable
     before = evaluate(requests)
     value.positions[SYMBOL]["long"]["price"] = 80.0
-    value.config["bot"]["long"]["hsl"]["red_threshold"] = 0.99
+    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
     assert evaluate(requests) == before
     assert run(value)[0][0].action == "normal"
 
@@ -350,7 +350,7 @@ def test_missing_flat_quote_uses_historical_close_but_never_for_held_exposure():
     assert not result and unavailable[0].reason == "current_mark_unavailable"
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     events = [
         event(
@@ -583,7 +583,7 @@ def test_native_errors_use_the_bot_fatal_contract(monkeypatch):
         run(bot())
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_future_only_symbol_does_not_demand_a_current_quote_or_metadata(mode):
     value = bot(
         mode, events=[event(symbol="FUTURE", timestamp=NOW + 60_000, c_mult=1.0)]
@@ -621,7 +621,7 @@ def test_coin_membership_keeps_eligible_and_historical_sides_separate():
 
 
 def test_long_only_history_never_requires_metadata_for_the_empty_short_scope():
-    value = bot("pside", events=[event(symbol="LONG_ONLY", timestamp=NOW - 60_000)])
+    value = bot("position_side", events=[event(symbol="LONG_ONLY", timestamp=NOW - 60_000)])
     value.config["bot"]["short"]["hsl"]["enabled"] = True
     result, unavailable = run(value)
     assert [(d.scope.pside, d.action) for d in result] == [("short", "normal")]
@@ -802,7 +802,7 @@ def test_scope_selection_requires_explicit_valid_side_membership(symbols):
         )
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_empty_aggregate_retains_unknown_fill_capture_diagnostic(mode):
     value = bot(mode)
     value.positions = {}
@@ -815,7 +815,7 @@ def test_empty_aggregate_retains_unknown_fill_capture_diagnostic(mode):
     assert not unavailable and "fill_capture_unknown" not in result[0].reasons
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     from passivbot import Passivbot
 
@@ -831,7 +831,7 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
         "TEST": {
             "bot": {
                 "long": {
-                    "hsl": {"red_threshold": 0.99, "panic_close_order_type": "market"}
+                    "hsl": {"drawdown_ratio_threshold": 0.99, "panic_close_order_type": "market"}
                 }
             }
         }
@@ -854,11 +854,11 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
         0.99 if mode == "coin" else 0.05
     )
     assert json.loads(request.payload)["drawdown_ratio_ema_span_minutes"] == 1_000_000.0
-    assert request.execution_type == ("limit" if mode == "pside" else "market")
+    assert request.execution_type == ("limit" if mode == "position_side" else "market")
     assert evaluate(requests)[0].action == ("normal" if mode == "coin" else "panic")
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_undated_flat_fill_quality_survives_without_market_requirements(mode):
     value = bot(mode)
     value.positions = {}
@@ -884,7 +884,7 @@ def test_undated_other_coin_diagnostic_does_not_cross_coin_scope():
     assert "unidentified_or_undated_fill" not in result[0].reasons
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("history", ["empty", "damaged", "closed"])
 def test_compact_price_transport_preserves_complete_decisions(
@@ -961,7 +961,7 @@ def test_compact_price_transport_preserves_complete_decisions(
     assert run(value, quotes(side), sources, **options) == actual
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_actual_unchanged_position_read_can_precede_fill_tail_without_forged_time(mode):
     from live.hsl_runtime import observe_positions
 
@@ -1022,7 +1022,7 @@ def test_position_read_cannot_be_reused_for_different_current_facts(change):
         run(value, position_observation=observed)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_flat_retained_fills_do_not_require_a_delisted_market_quote(mode):
     events = [
         event(
@@ -1081,7 +1081,7 @@ def test_recent_but_invalidated_account_observation_is_not_current(surface):
     assert not unavailable and decisions[0].action == "panic"
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("history", ["empty", "partial", "coarse", "complete"])
 def test_native_grid_transport_matches_complete_json_and_is_immutable(
@@ -1191,7 +1191,7 @@ def test_native_grid_transport_rejects_mismatched_observation(defect):
         pbr.hsl_v9_evaluate_grids(json.dumps(value), grids)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
     import passivbot_rust as pbr
     from live.hsl_inputs import Candle, CandleTape
@@ -1297,7 +1297,7 @@ async def test_owner_candle_acquisition_uses_utc_with_exchange_timeline_manager(
     assert max(map(int, prices)) == NOW
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_targeted_permission_keeps_the_complete_relevant_scope(mode, side):
     other = "PEER/USDT:USDT"
@@ -1341,7 +1341,7 @@ def test_targeted_permission_keeps_the_complete_relevant_scope(mode, side):
     assert bool(selected_absent) == (mode != "coin")
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("cooldown", [1.0, 10.0])
 def test_historical_flat_and_cooldown_survive_newer_position_reads(
@@ -1391,7 +1391,7 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
         else value.config["bot"][side]["hsl"]
     )
     policy.update(
-        drawdown_ratio_ema_span_minutes=1.0, cooldown_minutes_after_red=cooldown, red_threshold=0.05
+        drawdown_ratio_ema_span_minutes=1.0, cooldown_minutes_after_red=cooldown, drawdown_ratio_threshold=0.05
     )
     marks = {SYMBOL: MarketSnapshot(SYMBOL, 100.0, 100.0, 100.0, NOW - 100, "fixture")}
     results = []
@@ -1408,7 +1408,7 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
     assert results[1:] == [results[0], results[0]]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("cap", ["all", 0])
 def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, cap):
     from live.hsl_runtime import observe_fills
@@ -1418,7 +1418,7 @@ def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, cap):
         value.config["bot"][side]["hsl"]["enabled"] = False
     if mode == "portfolio":
         value.config["bot"]["global"]["hsl"]["enabled"] = False
-    value.config["live"]["risk_bootstrap_max_lookback_minutes"] = cap
+    value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = cap
     # These are not needed by HSL when it has no enabled scope. The ordinary
     # owner still validates its account receipt before any connector write.
     del value._pnls_manager, value.c_mults, value._ensure_freshness_ledger
@@ -1434,7 +1434,7 @@ def test_flat_unselected_coin_override_still_requires_hsl_history_window():
     value.coin_overrides["OTHER/USDT:USDT"] = {
         "bot": {"short": {"hsl": {"enabled": True}}}
     }
-    value.config["live"]["risk_bootstrap_max_lookback_minutes"] = 0
+    value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 0
     assert enabled(value)
     with pytest.raises(ValueError, match="bootstrap"):
         run(value)
@@ -1463,7 +1463,7 @@ def test_explicit_balance_override_is_the_current_coin_hsl_budget():
     assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(0.01)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
     # Execution marks both units at 90 before the partial close: D=200. The
     # remaining unit then recovers100 at the next minute. Current budget changes
@@ -1497,7 +1497,7 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
         if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
-    policy.update(drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.095)
+    policy.update(drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.095)
     marks = {SYMBOL: replace(quotes()[SYMBOL], bid=100.0, ask=100.0, last=100.0)}
     tape = capture_candles(
         [
@@ -1522,14 +1522,14 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
     assert decision.action == "panic"
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 @pytest.mark.parametrize("source", ["config", "runtime"])
 def test_aggregate_live_override_rejected_before_history_or_account_capture(
     mode, source
 ):
     value = bot(mode)
     if source == "config":
-        value.config["live"]["balance_override"] = 1000.0
+        value.config["live"]["account"]["balance_override"] = 1000.0
     else:
         value.balance_override = 1000.0
 
@@ -1541,14 +1541,16 @@ def test_aggregate_live_override_rejected_before_history_or_account_capture(
     value._ensure_freshness_ledger = forbidden
     value.get_raw_balance = forbidden
     value._pnls_manager.get_events = forbidden
-    with pytest.raises(ValueError, match="does not support live.balance_override"):
+    with pytest.raises(
+        ValueError, match="does not support live.account.balance_override"
+    ):
         run(value)
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
     value = bot(mode)
-    value.config["live"]["balance_override"] = 1000.0
+    value.config["live"]["account"]["balance_override"] = 1000.0
     if mode == "portfolio":
         value.config["bot"]["global"]["hsl"]["enabled"] = False
     else:
@@ -1571,7 +1573,7 @@ def test_order_only_unselected_flat_pair_gets_current_hsl_decision(side):
     ]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("damage", ["empty", "undated", "unidentified"])
 def test_flat_order_only_pair_without_quote_cannot_block_current_protection(mode, damage):
     value = bot(mode)
@@ -1602,7 +1604,7 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
         max_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_pct=0.0
     )
     value.positions[SYMBOL][side]["size"] = 1 if side == "long" else -1
-    value.config["bot"][side]["hsl"]["red_threshold"] = 0.2
+    value.config["bot"][side]["hsl"]["drawdown_ratio_threshold"] = 0.2
     mark = 78.0 if side == "long" else 122.0
     marks = {SYMBOL: MarketSnapshot(SYMBOL, mark, mark, mark, NOW - 100, "fake")}
     ordinary, unavailable = run(value, marks=marks)

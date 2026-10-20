@@ -158,9 +158,23 @@ def _materialized_coin_patch(overrides, effective):
             continue
         if "override_config_path" in parts[2:]:
             parts = parts[:2]
-        value = effective
-        for part in parts:
-            value = value[part]
+        from config.migrations.operational_live import operational_live_selector
+
+        # A referenced coin file has already completed sparse conversion,
+        # while a file-free released coin patch still uses its source paths.
+        candidates = (parts, operational_live_selector(".".join(parts)).split("."))
+        for candidate in candidates:
+            value = effective
+            for part in candidate:
+                if not isinstance(value, dict) or part not in value:
+                    break
+                value = value[part]
+            else:
+                break
+        else:
+            raise ValueError(
+                f"{key} is missing after released coin-file materialization"
+            )
         result[".".join(parts)] = deepcopy(value)
     return result
 
@@ -204,7 +218,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             reason="materialized legacy flags; canonical coin_overrides take precedence",
         ))
     mode = result.get("live", {}).get("hsl_signal_mode", "coin")
-    mode = "portfolio" if mode == "unified" else mode
+    mode = {"unified": "portfolio", "pside": "position_side"}.get(mode, mode)
     for coin, inline in result.get("coin_overrides", {}).items():
         if not isinstance(inline, dict):
             raise ValueError(f"coin_overrides.{coin} must be a mapping")
@@ -273,6 +287,19 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         )
         inline = deepcopy(inline)
         inline.pop("override_config_path")
+        from config.migrations.operational_live import move_operational_live
+
+        def record_operational(path, old, new, reason):
+            changes.append(
+                dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.{path}",
+                    old=deepcopy(old),
+                    new=deepcopy(new),
+                    reason=reason,
+                )
+            )
+
+        move_operational_live(inline, record=record_operational)
         # Resolve structural aliases independently on each authored patch before
         # merging. Otherwise a canonicalized file value can beat the higher-
         # precedence inline legacy value during later hydration. Keep raw HSL
@@ -296,6 +323,43 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                         reason="explicit released-v8 shared field conversion before file/inline merge",
                     ))
             canonicalize_shared_bot_side(values)
+            risk = values.get("risk", {})
+            for owner, leaf in (
+                ("position_exposure_enforcer", "enabled"),
+                ("position_exposure_enforcer", "threshold"),
+                ("total_exposure_enforcer", "enabled"),
+                ("total_exposure_enforcer", "threshold"),
+                ("total_exposure_enforcer", "policy"),
+            ):
+                old = f"{owner}_{leaf}"
+                if old not in risk:
+                    continue
+                value = risk.pop(old)
+                block = risk.setdefault(owner, {})
+                if not isinstance(block, dict) or (leaf in block and block[leaf] != value):
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{leaf}")
+                block[leaf] = deepcopy(value)
+                changes.append(dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{old}",
+                    old=deepcopy(value), new={f"{owner}.{leaf}": deepcopy(value)},
+                    reason="explicit released-v8 enforcer conversion before file/inline merge",
+                ))
+            for group, old, new in (
+                ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+                ("unstuck", "ema_dist", "ema_distance_fraction"),
+            ):
+                block = values.get(group, {})
+                if old not in block:
+                    continue
+                value = block.pop(old)
+                if new in block and block[new] != value:
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.{group}.{old} conflicts with {new}")
+                block[new] = value
+                changes.append(dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{group}.{old}",
+                    old=deepcopy(value), new={new: deepcopy(value)},
+                    reason="explicit released-v8 quantity rename before file/inline merge",
+                ))
         result["coin_overrides"][coin] = nested_update(patch, inline)
     return result
 

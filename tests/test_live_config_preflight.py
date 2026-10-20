@@ -18,95 +18,72 @@ def _write_config(path, config):
 def _sample_config() -> dict:
     return {
         "config_version": "v9.0.0",
-        "_raw": {
-            "live": {
-                "api_key": "super-secret-api-key"
-            }
-        },
-        "backtest": {
-            "exchanges": ["binance"]
-        },
+        "_raw": {"live": {"api_key": "super-secret-api-key"}},
+        "backtest": {"exchanges": ["binance"]},
         "live": {
-            "user": "binance_01",
-            "max_forager_candle_staleness_minutes": 12,
-            "max_forager_candle_refresh_seconds": 45,
-            "force_cold_startup": False,
-            "risk_bootstrap_max_lookback_minutes": 129600.0
+            "account": {"user": "binance_01"},
+            "candles": {
+                "max_forager_candle_staleness_minutes": 12,
+                "max_forager_candle_refresh_seconds": 45,
+            },
+            "startup": {
+                "force_cold_startup": False,
+                "risk_bootstrap_max_lookback_minutes": 129600.0,
+            },
         },
         "bot": {
             "global": {
-                "unstuck": {
-                    "memory_ema_span_minutes": 10080.0
-                },
+                "unstuck": {"memory_ema_span_minutes": 10080.0},
                 "loss_gate": {
                     "memory_ema_span_minutes": 20160.0,
-                    "max_drawdown_ratio": 0.2
+                    "max_drawdown_ratio": 0.2,
                 },
                 "hsl": {
                     "scope": "portfolio",
                     "enabled": True,
-                    "red_threshold": 0.05,
+                    "drawdown_ratio_threshold": 0.05,
                     "cooldown_minutes_after_red": 60.0,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit"
+                    "panic_close_order_type": "limit",
                 },
-                "forager": {
-                    "score_hysteresis_pct": 0.02
-                },
-                "warmup": {
-                    "max_minutes": 30
-                }
+                "forager": {"score_hysteresis_pct": 0.02},
+                "warmup": {"max_minutes": 30},
             },
             "long": {
-                "risk": {
-                    "max_positions": 3,
-                    "total_wallet_exposure_limit": 1.0
-                },
-                "unstuck": {
-                    "enabled": True
-                },
-                "forager": {
-                    "volume_ema_span_1m": 120.0
-                },
+                "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.0},
+                "unstuck": {"enabled": True},
+                "forager": {"volume_ema_span_1m": 120.0},
                 "hsl": {
                     "enabled": True,
-                    "red_threshold": 0.05,
+                    "drawdown_ratio_threshold": 0.05,
                     "cooldown_minutes_after_red": 60,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit"
+                    "panic_close_order_type": "limit",
                 },
                 "universe": {
                     "approved_coins": ["BTC", "ETH", "SOL", "XMR"],
-                    "ignored_coins": ["DOGE"]
-                }
+                    "ignored_coins": ["DOGE"],
+                },
             },
             "short": {
-                "risk": {
-                    "max_positions": 1,
-                    "total_wallet_exposure_limit": 0.0
-                },
-                "unstuck": {
-                    "enabled": False
-                },
+                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.0},
+                "unstuck": {"enabled": False},
                 "hsl": {
                     "enabled": False,
-                    "red_threshold": 0.04,
+                    "drawdown_ratio_threshold": 0.04,
                     "cooldown_minutes_after_red": 30,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit"
+                    "panic_close_order_type": "limit",
                 },
-                "universe": {
-                    "approved_coins": ["BTC"],
-                    "ignored_coins": []
-                }
-            }
-        }
+                "universe": {"approved_coins": ["BTC"], "ignored_coins": []},
+            },
+        },
     }
 
 
@@ -131,7 +108,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert report["hsl"]["signal_mode"] == "portfolio"
     assert report["hsl"]["sides"]["long"]["enabled"] is True
-    assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["drawdown_ratio_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
     hsl_evidence = report["cache"]["readiness"]["surfaces"]["hsl"]["evidence"]
     assert {item["code"] for item in hsl_evidence} >= {
@@ -219,7 +196,7 @@ def test_live_preflight_rejects_unknown_secret_field_without_rendering_value(tmp
 
 def test_live_preflight_rejects_cooldown_beyond_reconstructable_bootstrap_cap(tmp_path):
     config = _sample_config()
-    config["live"]["risk_bootstrap_max_lookback_minutes"] = 30.0
+    config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 30.0
     path = tmp_path / "bound.json"
     _write_config(path, config)
     report = live_config_preflight.build_live_config_preflight_report(path)
@@ -229,7 +206,7 @@ def test_live_preflight_rejects_cooldown_beyond_reconstructable_bootstrap_cap(tm
 
 def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
     config = _sample_config()
-    config["live"]["balance_hysteresis_snap_pct"] = 0.06
+    config["live"]["account"]["balance_hysteresis_snap_pct"] = 0.06
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -253,11 +230,9 @@ def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
         {
             "code": "balance_hysteresis_snap_pct_high",
             "message": (
-                "live.balance_hysteresis_snap_pct is above 5%; snapped-balance "
-                "entry sizing/gating may diverge noticeably from raw-balance "
-                "exposure repair near risk boundaries"
+                "live.account.balance_hysteresis_snap_pct is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
             ),
-            "path": "live.balance_hysteresis_snap_pct",
+            "path": "live.account.balance_hysteresis_snap_pct",
             "severity": "warning",
         }
     ]
@@ -266,7 +241,7 @@ def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
 @pytest.mark.parametrize("value", [-0.01, "wide", True])
 def test_live_config_preflight_warns_on_invalid_balance_hysteresis(tmp_path, value):
     config = _sample_config()
-    config["live"]["balance_hysteresis_snap_pct"] = value
+    config["live"]["account"]["balance_hysteresis_snap_pct"] = value
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -278,7 +253,7 @@ def test_live_config_preflight_warns_on_invalid_balance_hysteresis(tmp_path, val
         "invalid",
         "invalid_bool",
     }
-    assert report["issues"][0]["path"] == "live.balance_hysteresis_snap_pct"
+    assert report["issues"][0]["path"] == "live.account.balance_hysteresis_snap_pct"
 
 
 def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
@@ -288,13 +263,22 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
     config["bot"]["global"]["warmup"]["ratio"] = 0.3
     config["live"].update(
         {
-            "defer_broad_candle_warmup": True,
-            "enable_archive_candle_fetch": False,
-            "fills_confirmation_overlap_minutes": 60,
-            "fills_recent_overlap_minutes": 10,
-            "max_active_candle_tail_gap_minutes": 10,
-            "max_disk_candles_per_symbol_per_tf": 2_000_000,
-            "max_memory_candles_per_symbol": 200_000,
+            "startup": {
+                **config["live"].get("startup", {}),
+                "defer_broad_candle_warmup": True,
+            },
+            "candles": {
+                **config["live"].get("candles", {}),
+                "enable_archive_candle_fetch": False,
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_disk_candles_per_symbol_per_tf": 2_000_000,
+                "max_memory_candles_per_symbol": 200_000,
+            },
+            "fills": {
+                **config["live"].get("fills", {}),
+                "fills_confirmation_overlap_minutes": 60,
+                "fills_recent_overlap_minutes": 10,
+            },
         }
     )
     config_path = tmp_path / "live.json"
@@ -329,7 +313,7 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
 
 def test_live_config_preflight_flags_account_hsl_with_config_balance_override(tmp_path):
     config = _sample_config()
-    config["live"]["balance_override"] = 1000
+    config["live"]["account"]["balance_override"] = 1000
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -340,7 +324,7 @@ def test_live_config_preflight_flags_account_hsl_with_config_balance_override(tm
     assert report["hsl"]["balance_override"] == {
         "active": True,
         "present": True,
-        "source": "live.balance_override",
+        "source": "live.account.balance_override",
         "status": "valid",
         "value": 1000.0,
     }
@@ -348,7 +332,7 @@ def test_live_config_preflight_flags_account_hsl_with_config_balance_override(tm
     assert report["issues"][0]["code"] == (
         "hsl_balance_override_account_level_replay_unsafe"
     )
-    assert report["issues"][0]["path"] == "live.balance_override"
+    assert report["issues"][0]["path"] == "live.account.balance_override"
     hsl_attention = report["cache"]["readiness"]["surfaces"]["hsl"]["attention"]
     assert [item["code"] for item in hsl_attention] == [
         "hsl_balance_override_account_level_replay_unsafe"
@@ -456,7 +440,7 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
         "forager": {"volume_ema_span_1m": 120.0},
         "hsl": {
             "enabled": True,
-            "red_threshold": 0.05,
+            "drawdown_ratio_threshold": 0.05,
             "cooldown_minutes_after_red": 60,
             "memory_ema_span_minutes": 43200.0,
             "drawdown_ratio_ema_span_minutes": 120.0,
@@ -471,7 +455,7 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     assert report["ok"] is True
     assert report["hsl"]["sides"]["long"]["present"] is True
     assert report["hsl"]["sides"]["long"]["enabled"] is True
-    assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["drawdown_ratio_threshold"] == 0.05
     assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
     assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
@@ -481,12 +465,12 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
 def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):
     baseline = _sample_config()
     target = _sample_config()
-    target["live"]["user"] = "okx_01"
+    target["live"]["account"]["user"] = "okx_01"
     target["backtest"]["exchanges"] = ["okx"]
     target["bot"]["global"]["hsl"]["scope"] = "pside"
     target['bot']["long"]['universe']['approved_coins'] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
     target['bot']["short"]['universe']['ignored_coins'] = ["DOGE", "XRP"]
-    target["live"]["max_forager_candle_staleness_minutes"] = 20
+    target["live"]["candles"]["max_forager_candle_staleness_minutes"] = 20
     target['bot']['global']['warmup']['max_minutes'] = 45
     target["_raw"]["live"]["api_key"] = "new-secret-api-key"
     target["bot"]["long"]["hsl"]["enabled"] = False
@@ -508,7 +492,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     assert report["ok"] is True
     assert report["diff"]["ok"] is True
     assert report["diff"]["summary"]["category_counts"]["hsl"] == 2
-    assert changes["live.user"]["before"] == {
+    assert changes["live.account.user"]["before"] == {
         "present": True,
         "value": "binance_01",
     }
@@ -521,7 +505,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         "present": True,
         "value": False,
     }
-    assert changes["live.max_forager_candle_staleness_minutes"]["after"] == {
+    assert changes["live.candles.max_forager_candle_staleness_minutes"]["after"] == {
         "present": True,
         "value": 20,
     }
@@ -699,7 +683,7 @@ def test_live_config_preflight_compare_cli_emits_diff(tmp_path, capsys):
     target_path = tmp_path / "target.json"
     baseline = _sample_config()
     target = _sample_config()
-    target["live"]["force_cold_startup"] = True
+    target["live"]["startup"]["force_cold_startup"] = True
     _write_config(baseline_path, baseline)
     _write_config(target_path, target)
 
@@ -714,7 +698,7 @@ def test_live_config_preflight_compare_cli_emits_diff(tmp_path, capsys):
     changes = {change["field"]: change for change in report["diff"]["changes"]}
 
     assert report["diff"]["summary"]["change_count"] == 2
-    assert changes["live.force_cold_startup"]["after"] == {
+    assert changes["live.startup.force_cold_startup"]["after"] == {
         "present": True,
         "value": True,
     }
@@ -764,7 +748,7 @@ def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(
 @pytest.mark.parametrize("portfolio_enabled", [False, True])
 def test_portfolio_preflight_uses_only_portfolio_policy(tmp_path, portfolio_enabled):
     config = _sample_config()
-    config["live"]["balance_override"] = 1000
+    config["live"]["account"]["balance_override"] = 1000
     config["bot"]["global"]["hsl"]["enabled"] = portfolio_enabled
     for side in ("long", "short"):
         config["bot"][side]["hsl"]["enabled"] = not portfolio_enabled

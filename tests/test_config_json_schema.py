@@ -86,7 +86,7 @@ def test_all_intentional_examples_match_editor_schema(validator):
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_templates_and_canonical_roundtrips_match_schema(validator, strategy, scope):
     payload = generated_template(get_template_config(), scope)
     payload["bot"]["global"]["strategy_kind"] = strategy
@@ -106,7 +106,7 @@ def test_templates_and_canonical_roundtrips_match_schema(validator, strategy, sc
     }]}),
     source(optimize={"scoring": ["adg", {"metric": "adg_strategy_eq", "goal": "max", "scenario": None}],
                      "limits": [{"metric": "adg", "penalize_if": "less_than", "value": 0.0}]}),
-    source(live={"startup_phase_budgets": {"account": {"elapsed_ms": 123, "since_previous_ms": 0}}}),
+    source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_ms": 123, "since_previous_ms": 0}}}}),
     source(backtest={"market_settings": {"overrides": {"BTC": {"min_cost": 0.1}},
                                         "overrides_by_exchange": {"bybit": {"ETH": {"c_mult": 1.0}}}}}),
 ])
@@ -120,9 +120,9 @@ def test_sparse_dynamic_forms_validate_without_default_insertion(validator, payl
     {}, {"config_version": "v8.6.0"}, source(unknown=1), source(fitness=0.5),
     {"config": source()}, source(_raw={}), source(bot={"risk": {}}),
     source(bot={"long": {"not_a_field": 1.0}}),
-    source(live={"startup_phase_budgets": {"wrong_phase": {"elapsed_ms": 1}}}),
-    source(live={"startup_phase_budgets": {"account": {"elapsed_ms": 1.5}}}),
-    source(live={"startup_phase_budgets": {"account": {"bad_key": 1}}}),
+    source(live={"startup": {"startup_phase_budgets": {"wrong_phase": {"elapsed_ms": 1}}}}),
+    source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_ms": 1.5}}}}),
+    source(live={"startup": {"startup_phase_budgets": {"account": {"bad_key": 1}}}}),
     source(bot={"long": {"universe": {"approved_coins": {"long": ["BTC"], "wrong_side": []}}}}),
     source(optimize={"scoring": [{"metric": "adg", "surprise": True}]}),
     source(backtest={"scenarios": [{"unknown": True}]}),
@@ -178,7 +178,7 @@ def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, 
     {"bot": {"long.unstuck": {"close_pct": 0.1}}},
     {"optimize.prefilter.penalty_weight": 1.0},
     {"optimize": {"prefilter": {"penalty_weight": 1.0}}},
-    {"coin_overrides": {"BTC": {"live": {"leverage": 2}}}},
+    {"coin_overrides": {"BTC": {"live": {"account": {"leverage": 2}}}}},
     {"coin_overrides.BTC.bot.long.unstuck": {"close_pct": 0.1}},
 ])
 def test_fixed_runtime_schema_reuses_paths_but_rejects_object_pins_and_prefilter_policy(validator, patch):
@@ -192,7 +192,7 @@ def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
         "unstuck": {"ema_span_0": 15.5},
     }}}})
     validator.validate(payload)
-    for scope in ("pside", "portfolio"):
+    for scope in ("position_side", "portfolio"):
         payload["bot"] = {"global": {"hsl": {"scope": scope}}}
         with pytest.raises(ValidationError):
             validator.validate(payload)
@@ -205,7 +205,7 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
     registry = get_field_registry()
     assert get_special_optimizer_bindings() == OPTIMIZABLE_BOT_KEY_PATHS
     assert "long_unstuck_ema_span_0" not in OPTIMIZABLE_BOT_KEY_PATHS
-    for scope in ("coin", "pside", "portfolio"):
+    for scope in ("coin", "position_side", "portfolio"):
         config = generated_template(get_template_config(), scope)
         for key, path in get_shared_optimizer_bindings().items():
             if key.startswith("hsl_") and scope != "portfolio":
@@ -214,7 +214,7 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
             field = registry.find(path)
             assert field.optimize_key == key
             assert field.optimizable
-    field = registry.find(("bot", "long", "hsl", "red_threshold"))
+    field = registry.find(("bot", "long", "hsl", "drawdown_ratio_threshold"))
     assert field.recommended_bounds == (0.15, 0.15, 0.001)
     assert field.domain.minimum == 0 and field.domain.maximum == 1
     assert field.domain.exclusive_minimum
@@ -273,3 +273,35 @@ def test_side_owned_coin_sources_and_persistent_selection_have_distinct_shapes(v
     ):
         with pytest.raises(ValidationError):
             validator.validate(source(bot={"long": patch}))
+
+
+def test_grouped_operational_metadata_reuses_runtime_consumers_and_permissions():
+    from config.field_registry import describe_field, LIVE_OPERATIONAL_PATHS
+    from config.field_policies import get_live_coin_override_paths
+
+    allowed = {LIVE_OPERATIONAL_PATHS[field] for field in
+               ('forced_mode_long', 'forced_mode_short', 'leverage')}
+    assert get_live_coin_override_paths() == allowed
+    for field, path in LIVE_OPERATIONAL_PATHS.items():
+        metadata = describe_field(path)
+        assert metadata['coin_override'] == ('allowed' if path in allowed else 'forbidden')
+    for field in ('fee_pct_fallback', 'fee_pct_sanity_abs_max'):
+        metadata = describe_field(LIVE_OPERATIONAL_PATHS[field])
+        assert metadata['consumers'] == ['live', 'backtest', 'optimize']
+    sparse = describe_field(('coin_overrides', 'BTC', *LIVE_OPERATIONAL_PATHS['leverage']))
+    assert sparse['types'] == ['integer']
+    assert sparse['default'] == {'declared': False}
+    assert sparse['optimizer']['eligible'] is False
+
+
+def test_grouped_operational_coin_permissions_are_closed(validator):
+    validator.validate(source(coin_overrides={'BTC': {'live': {
+        'account': {'leverage': 2}, 'modes': {'long': 'normal', 'short': 'manual'},
+    }}}))
+    for group, field, value in (
+        ('account', 'user', 'example'), ('modes', 'disapproved_position', 'manual'),
+        ('execution', 'execution_delay_seconds', 3.0),
+    ):
+        assert list(validator.iter_errors(source(coin_overrides={
+            'BTC': {'live': {group: {field: value}}},
+        })))

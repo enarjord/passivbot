@@ -75,7 +75,7 @@ def test_policy_change_reuses_the_raw_initializer_with_the_current_policy():
     value = bot()
     initial, replay = query(value, NOW, 90.0)
     anchor = replay.anchor
-    value.config["bot"]["long"]["hsl"]["red_threshold"] = 0.99
+    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
     current, same = query(value, NOW + 1, 90.0)
     assert initial.action == "panic" and current.action == "normal"
     assert same is replay and replay.anchor is anchor

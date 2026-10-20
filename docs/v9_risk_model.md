@@ -8,7 +8,7 @@ qualification must be reviewed together; this specification alone does not estab
 
 Rust owns HSL, realized-loss memory, episode transitions and permissions. Python supplies
 account, fill, price, coverage and configuration facts and enforces execution admission.
-`coin` means a symbol/position-side pair, `pside` means every position on one side, and
+`coin` means a symbol/position-side pair, `position_side` means every position on one side, and
 `portfolio` means all positions. Flatness means zero gross inventory, including in a hedged
 portfolio. Changing a constituent of an exposed aggregate does not reset its episode.
 
@@ -201,7 +201,7 @@ exposed, report unavailable until a fresh account cohort reconciles the facts. K
 fill facts and boundary, without committing the stale preview.
 
 Target five slow spans of live reconstruction, capped by
-`live.risk_bootstrap_max_lookback_minutes` (default 129600, maximum 90 days). Report actual
+`live.startup.risk_bootstrap_max_lookback_minutes` (default 129600, maximum 90 days). Report actual
 coverage, unknown prefix, missing marks, ambiguous fills and any shortened target. Keep the
 history retention/acquisition horizon distinct from exponential memory.
 The effective HSL acquisition horizon is the larger of this bounded slow-span target

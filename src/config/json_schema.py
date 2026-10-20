@@ -7,7 +7,7 @@ runtime permissions. Existing owners enforce context-dependent and trading rules
 from copy import deepcopy
 import re
 
-from .field_registry import get_field_registry
+from .field_registry import LIVE_OPERATIONAL_PATHS, get_field_registry
 from .field_spec import CoinOverridePolicy, FieldType, NO_DEFAULT
 
 
@@ -85,7 +85,7 @@ def generate_schema():
         "if": {"required": ["bot"], "properties": {"bot": {
             "required": ["global"], "properties": {"global": {
                 "required": ["hsl"], "properties": {"hsl": {
-                    "required": ["scope"], "properties": {"scope": {"enum": ["pside", "portfolio"]}}
+                    "required": ["scope"], "properties": {"scope": {"enum": ["position_side", "portfolio"]}}
                 }}
             }}
         }}},
@@ -136,7 +136,7 @@ def _object_schema(tree, path, definitions):
         result["properties"] = properties
         result["additionalProperties"] = (_object_schema(children["*"], (*path, "*"), definitions)
                                           if "*" in children else False)
-    if path == ("live", "startup_phase_budgets"):
+    if path == LIVE_OPERATIONAL_PATHS["startup_phase_budgets"]:
         from live.event_bus import STARTUP_TIMING_PHASES
 
         result["propertyNames"] = {"enum": sorted(STARTUP_TIMING_PHASES)}

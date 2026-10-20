@@ -8,16 +8,16 @@ import pytest
     ("ema_anchor", "coin", 2, "long", False),
     ("ema_anchor", "coin", 1, "both", False),
     ("ema_anchor", "coin", 2, "both", False),
-    ("ema_anchor", "pside", 2, "both", True),
+    ("ema_anchor", "position_side", 2, "both", True),
     ("ema_anchor", "portfolio", 2, "both", True),
     ("trailing_martingale", "coin", 2, "long", True),
-    ("trailing_martingale", "pside", 2, "long", True),
+    ("trailing_martingale", "position_side", 2, "long", True),
     ("trailing_martingale", "portfolio", 2, "long", True),
     ("trailing_martingale", "coin", 2, "short", True),
-    ("trailing_martingale", "pside", 2, "short", True),
+    ("trailing_martingale", "position_side", 2, "short", True),
     ("trailing_martingale", "portfolio", 2, "short", True),
     ("trailing_martingale", "coin", 2, "both", True),
-    ("trailing_martingale", "pside", 2, "both", True),
+    ("trailing_martingale", "position_side", 2, "both", True),
     ("trailing_martingale", "portfolio", 2, "both", True),
 ])
 def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides, shocks):
@@ -38,11 +38,11 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
             total_wallet_exposure_limit=2 if enabled else 0,
         )
         inputs[0]["bot"][side]["hsl"].update(
-            red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     if mode == "portfolio":
         inputs[0]["bot"]["hsl"].update(
-            red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     if shocks:
         # Trigger TM at a practical threshold after established exposure;
@@ -125,7 +125,7 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
         enabled = side == "long" or sides == "both"
         bot["risk"].update(n_positions=1 if enabled else 0,
                            total_wallet_exposure_limit=(5.0 if side == "long" else 0.001) if enabled else 0)
-        bot["hsl"].update(enabled=enabled, red_threshold=0.002, ema_span_minutes=1,
+        bot["hsl"].update(enabled=enabled, drawdown_ratio_threshold=0.002, ema_span_minutes=1,
                           cooldown_minutes_after_red=5,
                           panic_close_order_type="market" if terminal_fill else "limit")
         bot["strategy"]["ema_anchor"]["base_qty_pct"] = 0.8

@@ -204,7 +204,7 @@ def _build_managers(
                 target="live",
                 runtime="live",
             )
-            config.setdefault("live", {})["user"] = user
+            config.setdefault("live", {})["account"]["user"] = user
             bot = _instantiate_bot(config)
             symbol_pool = _extract_symbol_pool(config, symbols_override)
             fetcher = _build_fetcher_for_bot(bot, symbol_pool)
@@ -248,7 +248,7 @@ def _rebuild_manager(data: Dict[str, Any]) -> None:
             target="live",
             runtime="live",
         )
-        config.setdefault("live", {})["user"] = data["user"]
+        config.setdefault("live", {})["account"]["user"] = data["user"]
         bot = _instantiate_bot(config)
         symbol_pool = _extract_symbol_pool(config, data["symbols_override"])
         fetcher = _build_fetcher_for_bot(bot, symbol_pool)
@@ -1177,7 +1177,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--users",
         required=True,
-        help="Comma-separated list of live.user identifiers",
+        help="Comma-separated list of live.account.user identifiers",
     )
     parser.add_argument(
         "--cache-root",

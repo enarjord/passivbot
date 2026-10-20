@@ -7,13 +7,13 @@ the [user guide](../../equity_hard_stop_loss.md) covers configuration.
 
 ## Signal authority
 
-- `coin` is one symbol/position-side scope; `pside` is every position on one side;
+- `coin` is one symbol/position-side scope; `position_side` is every position on one side;
   `portfolio` has one explicit `bot.global.hsl` policy across both sides.
 - Slow decaying currency drawdown uses scoped UPNL deltas and ordered net realized
   cashflows, including fees and signed rebates. Balance/slot changes are budget facts,
   never scoped trading PnL. The independent fast EMA smooths the contemporaneous ratio,
   rather than currency drawdown normalized against a later budget.
-- Current RED is strict `min(raw_ratio, ratio_ema) > red_threshold`. Finite nonpositive
+- Current RED is strict `min(raw_ratio, ratio_ema) > drawdown_ratio_threshold`. Finite nonpositive
   equity or denominator is immediate RED with diagnostic ratio 1. Nonfinite or
   overflowing required inputs are errors. GREEN retires unfinished panic intent.
 - Completed minute marks, genuine fill boundaries, observed budget changes and factual
@@ -55,7 +55,7 @@ exposure never sets that multiplier. Reject aggregate scaling; coin policies may
 missing historical budgets require an explicit estimate diagnostic.
 
 Each effective HSL policy uses its own `memory_ema_span_minutes` and independent
-`drawdown_ratio_ema_span_minutes`. Bootstrap targets five memory spans, capped by `live.risk_bootstrap_max_lookback_minutes` (at most 90 days), and retains
+`drawdown_ratio_ema_span_minutes`. Bootstrap targets five memory spans, capped by `live.startup.risk_bootstrap_max_lookback_minutes` (at most 90 days), and retains
 the full finite HSL cooldown horizon. Live policies whose cooldown exceeds the supported
 cap fail explicitly. Acquisition coverage is distinct from exponential memory.
 Historical candle gaps/coarse projections follow the numerical contract and disclose

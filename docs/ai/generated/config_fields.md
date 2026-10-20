@@ -81,12 +81,12 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.hedge_mode` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.hsl.cooldown_minutes_after_red` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_cooldown_minutes_after_red`); portfolio HSL scope; recommended `[2160, 2160, 10]` | forbidden | >= 0.0; finite | python |
 | `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_drawdown_ratio_ema_span_minutes`); portfolio HSL scope; recommended `[720, 720, 1]` | forbidden | >= 1.0; finite | python |
+| `bot.global.hsl.drawdown_ratio_threshold` | float | Not declared | fraction / scope equity plus remembered drawdown | global; live, backtest, optimize | Eligible (`hsl_red_threshold`); portfolio HSL scope; recommended `[0.15, 0.15, 0.001]` | forbidden | > 0.0; <= 1.0; finite | python |
 | `bot.global.hsl.enabled` | boolean | Not declared | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.hsl.memory_ema_span_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_memory_ema_span_minutes`); portfolio HSL scope | forbidden | >= 1.0; finite | python |
 | `bot.global.hsl.panic_close_order_type` | string | Not declared | — | global; live, backtest, optimize | No | forbidden | `limit`, `market` | python |
-| `bot.global.hsl.red_threshold` | float | Not declared | fraction / scope equity plus remembered drawdown | global; live, backtest, optimize | Eligible (`hsl_red_threshold`); portfolio HSL scope; recommended `[0.15, 0.15, 0.001]` | forbidden | > 0.0; <= 1.0; finite | python |
 | `bot.global.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | — | global; live, backtest, optimize | No | forbidden | — | python |
-| `bot.global.hsl.scope` | string | `"coin"` | — | global; live, backtest, optimize | No | forbidden | `coin`, `pside`, `portfolio` | python |
+| `bot.global.hsl.scope` | string | `"coin"` | — | global; live, backtest, optimize | No | forbidden | `coin`, `position_side`, `portfolio` | python |
 | `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | fraction / raw balance plus loss-gate remembered drawdown | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.global.strategy_kind` | string | `"trailing_martingale"` | — | global; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
@@ -109,12 +109,12 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.forager.unilateralness_ema_span_1m` | float | `60.0` | one-minute candles | long; live, backtest, optimize | Eligible (`long_unilateralness_ema_span_1m`) | forbidden | >= 1.0; <= 100000.0; finite | python |
 | `bot.long.forager.volatility_ema_span_1m` | float | `2274.0` | one-minute candles | long; live, backtest, optimize | Eligible (`long_forager_volatility_ema_span_1m`); recommended `[10, 2880, 1]` | forbidden | — | python |
 | `bot.long.forager.volume_ema_span_1m` | float | `310.0` | one-minute candles | long; live, backtest, optimize | Eligible (`long_forager_volume_ema_span_1m`); recommended `[180, 2880, 1]` | forbidden | — | python |
-| `bot.long.hsl.cooldown_minutes_after_red` | float | `2160.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_cooldown_minutes_after_red`); coin or pside HSL scope; recommended `[2160, 2160, 10]` | coin HSL scope only | >= 0.0; finite | python |
-| `bot.long.hsl.drawdown_ratio_ema_span_minutes` | float | `720.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_drawdown_ratio_ema_span_minutes`); coin or pside HSL scope; recommended `[720, 720, 1]` | coin HSL scope only | >= 1.0; finite | python |
+| `bot.long.hsl.cooldown_minutes_after_red` | float | `2160.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_cooldown_minutes_after_red`); coin or position_side HSL scope; recommended `[2160, 2160, 10]` | coin HSL scope only | >= 0.0; finite | python |
+| `bot.long.hsl.drawdown_ratio_ema_span_minutes` | float | `720.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_drawdown_ratio_ema_span_minutes`); coin or position_side HSL scope; recommended `[720, 720, 1]` | coin HSL scope only | >= 1.0; finite | python |
+| `bot.long.hsl.drawdown_ratio_threshold` | float | `0.15` | fraction / scope equity plus remembered drawdown | long; live, backtest, optimize | Eligible (`long_hsl_red_threshold`); coin or position_side HSL scope; recommended `[0.15, 0.15, 0.001]` | coin HSL scope only | > 0.0; <= 1.0; finite | python |
 | `bot.long.hsl.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | coin HSL scope only | — | python |
-| `bot.long.hsl.memory_ema_span_minutes` | float | `43200.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_memory_ema_span_minutes`); coin or pside HSL scope | coin HSL scope only | >= 1.0; finite | python |
+| `bot.long.hsl.memory_ema_span_minutes` | float | `43200.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_memory_ema_span_minutes`); coin or position_side HSL scope | coin HSL scope only | >= 1.0; finite | python |
 | `bot.long.hsl.panic_close_order_type` | string | `"limit"` | — | long; live, backtest, optimize | No | coin HSL scope only | `limit`, `market` | python |
-| `bot.long.hsl.red_threshold` | float | `0.15` | fraction / scope equity plus remembered drawdown | long; live, backtest, optimize | Eligible (`long_hsl_red_threshold`); coin or pside HSL scope; recommended `[0.15, 0.15, 0.001]` | coin HSL scope only | > 0.0; <= 1.0; finite | python |
 | `bot.long.hsl.scale_budget_with_excess_allowance` | boolean | `false` | — | long; live, backtest, optimize | No | coin HSL scope only | — | python |
 | `bot.long.risk.max_positions` | integer | `7` | positions | long; live, backtest, optimize | Eligible (`long_n_positions`); recommended `[7, 7, 1]` | forbidden | >= 0; finite | python |
 | `bot.long.risk.position_exposure_enforcer.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | allowed | — | python |
@@ -161,7 +161,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.universe.approved_coins` | array \| string \| null | 41 items (see template) | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.unstuck.close_pct` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
-| `bot.long.unstuck.ema_dist` | float | `-0.0269` | fraction / unstuck EMA band reference | long; live, backtest, optimize | Eligible (`long_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | > -1.0; finite | python |
+| `bot.long.unstuck.ema_distance_fraction` | float | `-0.0269` | fraction / unstuck EMA band reference | long; live, backtest, optimize | Eligible (`long_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | > -1.0; finite | python |
 | `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
 | `bot.long.unstuck.ema_span_0` | float | `790.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_0`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
 | `bot.long.unstuck.ema_span_1` | float | `1080.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_1`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
@@ -182,12 +182,12 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.forager.unilateralness_ema_span_1m` | float | `60.0` | one-minute candles | short; live, backtest, optimize | Eligible (`short_unilateralness_ema_span_1m`) | forbidden | >= 1.0; <= 100000.0; finite | python |
 | `bot.short.forager.volatility_ema_span_1m` | float | `10.0` | one-minute candles | short; live, backtest, optimize | Eligible (`short_forager_volatility_ema_span_1m`); recommended `[10, 1440, 1]` | forbidden | — | python |
 | `bot.short.forager.volume_ema_span_1m` | float | `60.0` | one-minute candles | short; live, backtest, optimize | Eligible (`short_forager_volume_ema_span_1m`); recommended `[180, 2880, 1]` | forbidden | — | python |
-| `bot.short.hsl.cooldown_minutes_after_red` | float | `1.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_cooldown_minutes_after_red`); coin or pside HSL scope; recommended `[2160, 4320, 10]` | coin HSL scope only | >= 0.0; finite | python |
-| `bot.short.hsl.drawdown_ratio_ema_span_minutes` | float | `1.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_drawdown_ratio_ema_span_minutes`); coin or pside HSL scope; recommended `[1, 720, 1]` | coin HSL scope only | >= 1.0; finite | python |
+| `bot.short.hsl.cooldown_minutes_after_red` | float | `1.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_cooldown_minutes_after_red`); coin or position_side HSL scope; recommended `[2160, 4320, 10]` | coin HSL scope only | >= 0.0; finite | python |
+| `bot.short.hsl.drawdown_ratio_ema_span_minutes` | float | `1.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_drawdown_ratio_ema_span_minutes`); coin or position_side HSL scope; recommended `[1, 720, 1]` | coin HSL scope only | >= 1.0; finite | python |
+| `bot.short.hsl.drawdown_ratio_threshold` | float | `0.01` | fraction / scope equity plus remembered drawdown | short; live, backtest, optimize | Eligible (`short_hsl_red_threshold`); coin or position_side HSL scope; recommended `[0.01, 0.15, 0.001]` | coin HSL scope only | > 0.0; <= 1.0; finite | python |
 | `bot.short.hsl.enabled` | boolean | `false` | — | short; live, backtest, optimize | No | coin HSL scope only | — | python |
-| `bot.short.hsl.memory_ema_span_minutes` | float | `43200.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_memory_ema_span_minutes`); coin or pside HSL scope | coin HSL scope only | >= 1.0; finite | python |
+| `bot.short.hsl.memory_ema_span_minutes` | float | `43200.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_memory_ema_span_minutes`); coin or position_side HSL scope | coin HSL scope only | >= 1.0; finite | python |
 | `bot.short.hsl.panic_close_order_type` | string | `"limit"` | — | short; live, backtest, optimize | No | coin HSL scope only | `limit`, `market` | python |
-| `bot.short.hsl.red_threshold` | float | `0.01` | fraction / scope equity plus remembered drawdown | short; live, backtest, optimize | Eligible (`short_hsl_red_threshold`); coin or pside HSL scope; recommended `[0.01, 0.15, 0.001]` | coin HSL scope only | > 0.0; <= 1.0; finite | python |
 | `bot.short.hsl.scale_budget_with_excess_allowance` | boolean | `false` | — | short; live, backtest, optimize | No | coin HSL scope only | — | python |
 | `bot.short.risk.max_positions` | integer | `1` | positions | short; live, backtest, optimize | Eligible (`short_n_positions`); recommended `[5, 5, 1]` | forbidden | >= 0; finite | python |
 | `bot.short.risk.position_exposure_enforcer.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
@@ -234,7 +234,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.universe.approved_coins` | array \| string \| null | 41 items (see template) | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.unstuck.close_pct` | float | `0.01` | fraction / raw balance times effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
-| `bot.short.unstuck.ema_dist` | float | `-0.2` | fraction / unstuck EMA band reference | short; live, backtest, optimize | Eligible (`short_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | < 1.0; finite | python |
+| `bot.short.unstuck.ema_distance_fraction` | float | `-0.2` | fraction / unstuck EMA band reference | short; live, backtest, optimize | Eligible (`short_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | < 1.0; finite | python |
 | `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
 | `bot.short.unstuck.ema_span_0` | float | `60.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_0`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
 | `bot.short.unstuck.ema_span_1` | float | `60.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_1`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
@@ -261,55 +261,55 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `live.balance_hysteresis_snap_pct` | float | `0.01` | — | — | — | forbidden | — | python |
-| `live.balance_override` | float \| null | `null` | — | — | — | forbidden | — | python |
-| `live.candle_lock_timeout_seconds` | float | `10.0` | — | — | — | forbidden | — | python |
-| `live.custom_endpoints_path` | string \| null | `null` | — | — | — | forbidden | — | python |
-| `live.defer_broad_candle_warmup` | boolean | `true` | — | — | — | forbidden | — | python |
-| `live.disapproved_position_mode` | string | `"graceful_stop"` | — | — | — | forbidden | — | python |
-| `live.enable_archive_candle_fetch` | boolean | `false` | — | — | — | forbidden | — | python |
-| `live.enable_forager_ws_candles` | boolean | `true` | — | — | — | forbidden | — | python |
-| `live.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | — | —; live | — | forbidden | — | python |
-| `live.execution_delay_seconds` | float | `2.0` | — | — | — | forbidden | — | python |
-| `live.fee_conversion_max_age_ms` | integer | `86400000` | — | —; live | — | forbidden | — | python |
-| `live.fee_pct_fallback` | float | `0.0002` | — | —; live, backtest, optimize | — | forbidden | — | python |
-| `live.fee_pct_sanity_abs_max` | float | `0.001` | — | —; live, backtest, optimize | — | forbidden | — | python |
-| `live.fills_confirmation_overlap_minutes` | float | `60.0` | — | — | — | forbidden | — | python |
-| `live.fills_recent_overlap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
-| `live.forager_ws_candle_rest_audit_minutes` | float | `30.0` | — | — | — | forbidden | — | python |
-| `live.force_cold_startup` | boolean | `false` | — | — | — | forbidden | — | python |
-| `live.forced_mode_long` | string | `""` | — | — | — | allowed | — | python |
-| `live.forced_mode_short` | string | `""` | — | — | — | allowed | — | python |
-| `live.inactive_coin_candle_ttl_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
-| `live.leverage` | integer | `10` | — | — | — | allowed | — | python |
-| `live.limit_order_create_max_market_dist_pct` | float | `0.8` | — | —; live | — | forbidden | — | python |
-| `live.margin_mode_preference` | string | `"cross"` | — | — | — | forbidden | — | python |
-| `live.market_snapshot_ticker_strategy` | string | `"auto"` | — | — | — | forbidden | — | python |
-| `live.max_active_candle_tail_gap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
-| `live.max_concurrent_api_requests` | integer \| null | `null` | — | — | — | forbidden | — | python |
-| `live.max_disk_candles_per_symbol_per_tf` | integer | `2000000` | — | — | — | forbidden | — | python |
-| `live.max_forager_candle_refresh_seconds` | float | `45.0` | — | — | — | forbidden | — | python |
-| `live.max_forager_candle_staleness_minutes` | float \| null | `null` | — | — | — | forbidden | — | python |
-| `live.max_memory_candles_per_symbol` | integer | `200000` | — | — | — | forbidden | — | python |
-| `live.max_n_cancellations_per_batch` | integer | `5` | — | — | — | forbidden | — | python |
-| `live.max_n_creations_per_batch` | integer | `3` | — | — | — | forbidden | — | python |
-| `live.max_n_restarts_per_day` | integer | `10` | — | — | — | forbidden | — | python |
-| `live.max_ohlcv_fetches_per_minute` | integer | `30` | — | — | — | forbidden | — | python |
-| `live.order_match_tolerance_pct` | float | `0.0002` | — | — | — | forbidden | — | python |
-| `live.order_replacement_churn_gate_activation_count` | integer | `10` | — | —; live | — | forbidden | — | python |
-| `live.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | — | —; live | — | forbidden | — | python |
-| `live.order_replacement_churn_gate_stability_minutes` | float | `2.0` | — | —; live | — | forbidden | — | python |
-| `live.order_replacement_churn_gate_window_minutes` | float | `10.0` | — | —; live | — | forbidden | — | python |
-| `live.recv_window_ms` | integer | `5000` | — | — | — | forbidden | — | python |
-| `live.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | — | —; live | — | forbidden | — | python |
-| `live.startup_phase_budgets` | object | `{}` | — | — | — | forbidden | — | python |
-| `live.startup_phase_budgets.*` | object | Not declared | — | — | — | — | — | python |
-| `live.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | milliseconds | — | — | — | >= 0 | python |
-| `live.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | milliseconds | — | — | — | >= 0 | python |
-| `live.time_in_force` | string | `"good_till_cancelled"` | — | — | — | forbidden | — | python |
-| `live.user` | string | `"bybit_01"` | — | — | — | forbidden | — | python |
-| `live.warmup_concurrency` | integer | `0` | — | — | — | forbidden | — | python |
-| `live.warmup_jitter_seconds` | float | `30.0` | — | — | — | forbidden | — | python |
+| `live.account.balance_hysteresis_snap_pct` | float | `0.01` | — | — | — | forbidden | — | python |
+| `live.account.balance_override` | float \| null | `null` | — | — | — | forbidden | — | python |
+| `live.account.leverage` | integer | `10` | — | — | — | allowed | — | python |
+| `live.account.margin_mode_preference` | string | `"cross"` | — | — | — | forbidden | — | python |
+| `live.account.user` | string | `"bybit_01"` | — | — | — | forbidden | — | python |
+| `live.api.custom_endpoints_path` | string \| null | `null` | — | — | — | forbidden | — | python |
+| `live.api.market_snapshot_ticker_strategy` | string | `"auto"` | — | — | — | forbidden | — | python |
+| `live.api.max_concurrent_api_requests` | integer \| null | `null` | — | — | — | forbidden | — | python |
+| `live.api.recv_window_ms` | integer | `5000` | — | — | — | forbidden | — | python |
+| `live.candles.candle_lock_timeout_seconds` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.candles.enable_archive_candle_fetch` | boolean | `false` | — | — | — | forbidden | — | python |
+| `live.candles.enable_forager_ws_candles` | boolean | `true` | — | — | — | forbidden | — | python |
+| `live.candles.forager_ws_candle_rest_audit_minutes` | float | `30.0` | — | — | — | forbidden | — | python |
+| `live.candles.inactive_coin_candle_ttl_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.candles.max_active_candle_tail_gap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.candles.max_disk_candles_per_symbol_per_tf` | integer | `2000000` | — | — | — | forbidden | — | python |
+| `live.candles.max_forager_candle_refresh_seconds` | float | `45.0` | — | — | — | forbidden | — | python |
+| `live.candles.max_forager_candle_staleness_minutes` | float \| null | `null` | — | — | — | forbidden | — | python |
+| `live.candles.max_memory_candles_per_symbol` | integer | `200000` | — | — | — | forbidden | — | python |
+| `live.candles.max_ohlcv_fetches_per_minute` | integer | `30` | — | — | — | forbidden | — | python |
+| `live.execution.execution_delay_seconds` | float | `2.0` | — | — | — | forbidden | — | python |
+| `live.execution.limit_order_create_max_market_dist_pct` | float | `0.8` | — | —; live | — | forbidden | — | python |
+| `live.execution.max_n_cancellations_per_batch` | integer | `5` | — | — | — | forbidden | — | python |
+| `live.execution.max_n_creations_per_batch` | integer | `3` | — | — | — | forbidden | — | python |
+| `live.execution.order_match_tolerance_pct` | float | `0.0002` | — | — | — | forbidden | — | python |
+| `live.execution.order_replacement_churn_gate_activation_count` | integer | `10` | — | —; live | — | forbidden | — | python |
+| `live.execution.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | — | —; live | — | forbidden | — | python |
+| `live.execution.order_replacement_churn_gate_stability_minutes` | float | `2.0` | — | —; live | — | forbidden | — | python |
+| `live.execution.order_replacement_churn_gate_window_minutes` | float | `10.0` | — | —; live | — | forbidden | — | python |
+| `live.execution.time_in_force` | string | `"good_till_cancelled"` | — | — | — | forbidden | — | python |
+| `live.fills.fee_conversion_max_age_ms` | integer | `86400000` | — | —; live | — | forbidden | — | python |
+| `live.fills.fee_pct_fallback` | float | `0.0002` | — | —; live, backtest, optimize | — | forbidden | — | python |
+| `live.fills.fee_pct_sanity_abs_max` | float | `0.001` | — | —; live, backtest, optimize | — | forbidden | — | python |
+| `live.fills.fills_confirmation_overlap_minutes` | float | `60.0` | — | — | — | forbidden | — | python |
+| `live.fills.fills_recent_overlap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.modes.disapproved_position` | string | `"graceful_stop"` | — | — | — | forbidden | — | python |
+| `live.modes.long` | string | `""` | — | — | — | allowed | — | python |
+| `live.modes.short` | string | `""` | — | — | — | allowed | — | python |
+| `live.recovery.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | — | —; live | — | forbidden | — | python |
+| `live.recovery.max_n_restarts_per_day` | integer | `10` | — | — | — | forbidden | — | python |
+| `live.startup.defer_broad_candle_warmup` | boolean | `true` | — | — | — | forbidden | — | python |
+| `live.startup.force_cold_startup` | boolean | `false` | — | — | — | forbidden | — | python |
+| `live.startup.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | — | —; live | — | forbidden | — | python |
+| `live.startup.startup_phase_budgets` | object | `{}` | — | — | — | forbidden | — | python |
+| `live.startup.startup_phase_budgets.*` | object | Not declared | — | — | — | forbidden | — | python |
+| `live.startup.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | milliseconds | — | — | forbidden | >= 0 | python |
+| `live.startup.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | milliseconds | — | — | forbidden | >= 0 | python |
+| `live.startup.warmup_concurrency` | integer | `0` | — | — | — | forbidden | — | python |
+| `live.startup.warmup_jitter_seconds` | float | `30.0` | — | — | — | forbidden | — | python |
 
 ## logging
 

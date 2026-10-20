@@ -237,7 +237,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
-    'bot.global.universe.minimum_coin_age_days': {
+    "bot.global.universe.minimum_coin_age_days": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -246,7 +246,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
-    'bot.global.forager.score_hysteresis_pct': {
+    "bot.global.forager.score_hysteresis_pct": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -255,37 +255,37 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
-    "live.exchange_symbol_unavailable_cooldown_hours": {
+    "live.recovery.exchange_symbol_unavailable_cooldown_hours": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.order_replacement_churn_gate_activation_count": {
+    "live.execution.order_replacement_churn_gate_activation_count": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.order_replacement_churn_gate_market_dist_pct": {
+    "live.execution.order_replacement_churn_gate_market_dist_pct": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.order_replacement_churn_gate_stability_minutes": {
+    "live.execution.order_replacement_churn_gate_stability_minutes": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.order_replacement_churn_gate_window_minutes": {
+    "live.execution.order_replacement_churn_gate_window_minutes": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.limit_order_create_max_market_dist_pct": {
+    "live.execution.limit_order_create_max_market_dist_pct": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    'bot.global.hedge_mode': {
+    "bot.global.hedge_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -294,7 +294,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    'bot.global.execution.market_orders_allowed': {
+    "bot.global.execution.market_orders_allowed": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -303,7 +303,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    'bot.global.execution.market_order_near_touch_threshold': {
+    "bot.global.execution.market_order_near_touch_threshold": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -312,7 +312,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.fee_pct_fallback": {
+    "live.fills.fee_pct_fallback": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -321,7 +321,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.fee_pct_sanity_abs_max": {
+    "live.fills.fee_pct_sanity_abs_max": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -330,7 +330,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.fee_conversion_max_age_ms": {
+    "live.fills.fee_conversion_max_age_ms": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
@@ -344,7 +344,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    'bot.global.warmup.max_minutes': {
+    "bot.global.warmup.max_minutes": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -362,8 +362,10 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.risk_bootstrap_max_lookback_minutes": {
-        "owner": "live", "consumed_by": {"live"}, "cli_exposed_on": {"live"},
+    "live.startup.risk_bootstrap_max_lookback_minutes": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
     },
     "bot.global.hsl.scope": {
         "owner": "live",
@@ -975,9 +977,9 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file.",
     },
-    'bot.global.universe.minimum_coin_age_days': {
+    "bot.global.universe.minimum_coin_age_days": {
         "visible": ["--minimum-coin-age-days", "-mcad"],
-        "hidden": ['--bot_global_universe_minimum_coin_age_days'],
+        "hidden": ["--bot_global_universe_minimum_coin_age_days"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -988,9 +990,9 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Minimum coin age in days required before a coin is eligible to trade.",
     },
-    'bot.global.forager.score_hysteresis_pct': {
+    "bot.global.forager.score_hysteresis_pct": {
         "visible": ["--forager-score-hysteresis-pct"],
-        "hidden": ['--bot_global_forager_score_hysteresis_pct'],
+        "hidden": ["--bot_global_forager_score_hysteresis_pct"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1001,11 +1003,11 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Forager incumbent score tolerance. Keeps an already-selected flat forager coin when a challenger score is within this fractional normalized-score gap.",
     },
-    "live.exchange_symbol_unavailable_cooldown_hours": {
+    "live.recovery.exchange_symbol_unavailable_cooldown_hours": {
         "visible": ["--exchange-symbol-unavailable-cooldown-hours"],
         "hidden": [
-            "--live.exchange_symbol_unavailable_cooldown_hours",
-            "--live_exchange_symbol_unavailable_cooldown_hours",
+            "--live.recovery.exchange_symbol_unavailable_cooldown_hours",
+            "--live_recovery_exchange_symbol_unavailable_cooldown_hours",
         ],
         "type": float,
         "metavar": "FLOAT",
@@ -1017,11 +1019,11 @@ RESERVED_CLI_ARGS = {
             "RAM-only cooldown resets on bot restart; 0 disables this suppression."
         ),
     },
-    "live.order_replacement_churn_gate_activation_count": {
+    "live.execution.order_replacement_churn_gate_activation_count": {
         "visible": ["--order-replacement-churn-gate-activation-count"],
         "hidden": [
-            "--live.order_replacement_churn_gate_activation_count",
-            "--live_order_replacement_churn_gate_activation_count",
+            "--live.execution.order_replacement_churn_gate_activation_count",
+            "--live_execution_order_replacement_churn_gate_activation_count",
         ],
         "type": int,
         "metavar": "INT",
@@ -1029,11 +1031,11 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Account-wide rolling create-attempt count that activates economy deferral for far unstable orders. Set to 0 to disable only that deferral; reconciliation safety remains active.",
     },
-    "live.order_replacement_churn_gate_market_dist_pct": {
+    "live.execution.order_replacement_churn_gate_market_dist_pct": {
         "visible": ["--order-replacement-churn-gate-market-dist-pct"],
         "hidden": [
-            "--live.order_replacement_churn_gate_market_dist_pct",
-            "--live_order_replacement_churn_gate_market_dist_pct",
+            "--live.execution.order_replacement_churn_gate_market_dist_pct",
+            "--live_execution_order_replacement_churn_gate_market_dist_pct",
         ],
         "type": float,
         "metavar": "FLOAT",
@@ -1041,11 +1043,11 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Final market-distance threshold that always admits a limit order despite churn allowance exhaustion.",
     },
-    "live.order_replacement_churn_gate_stability_minutes": {
+    "live.execution.order_replacement_churn_gate_stability_minutes": {
         "visible": ["--order-replacement-churn-gate-stability-minutes"],
         "hidden": [
-            "--live.order_replacement_churn_gate_stability_minutes",
-            "--live_order_replacement_churn_gate_stability_minutes",
+            "--live.execution.order_replacement_churn_gate_stability_minutes",
+            "--live_execution_order_replacement_churn_gate_stability_minutes",
         ],
         "type": float,
         "metavar": "FLOAT",
@@ -1053,11 +1055,11 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Minimum sustained drift duration; the same tight-match duration clears older evidence.",
     },
-    "live.order_replacement_churn_gate_window_minutes": {
+    "live.execution.order_replacement_churn_gate_window_minutes": {
         "visible": ["--order-replacement-churn-gate-window-minutes"],
         "hidden": [
-            "--live.order_replacement_churn_gate_window_minutes",
-            "--live_order_replacement_churn_gate_window_minutes",
+            "--live.execution.order_replacement_churn_gate_window_minutes",
+            "--live_execution_order_replacement_churn_gate_window_minutes",
         ],
         "type": float,
         "metavar": "FLOAT",
@@ -1065,11 +1067,11 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Window for per-symbol ideal-order evidence and account-wide create-attempt accounting.",
     },
-    "live.limit_order_create_max_market_dist_pct": {
+    "live.execution.limit_order_create_max_market_dist_pct": {
         "visible": ["--limit-order-create-max-market-dist-pct"],
         "hidden": [
-            "--live.limit_order_create_max_market_dist_pct",
-            "--live_limit_order_create_max_market_dist_pct",
+            "--live.execution.limit_order_create_max_market_dist_pct",
+            "--live_execution_limit_order_create_max_market_dist_pct",
         ],
         "type": float,
         "metavar": "FLOAT",
@@ -1081,18 +1083,18 @@ RESERVED_CLI_ARGS = {
             "market*1.8 are skipped until price action moves closer."
         ),
     },
-    'bot.global.universe.filter_by_min_effective_cost': {
+    "bot.global.universe.filter_by_min_effective_cost": {
         "visible": ["--filter-by-min-effective-cost", "-fbmec"],
-        "hidden": ['--bot_global_universe_filter_by_min_effective_cost'],
+        "hidden": ["--bot_global_universe_filter_by_min_effective_cost"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live"},
         "group": {"live": "Behavior"},
         "help": "Filter out coins whose minimum effective cost exceeds the configured size.",
     },
-    'bot.global.hedge_mode': {
+    "bot.global.hedge_mode": {
         "visible": ["--hedge-mode", "-hm"],
-        "hidden": ['--bot_global_hedge_mode'],
+        "hidden": ["--bot_global_hedge_mode"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live", "backtest", "optimize"},
@@ -1106,18 +1108,18 @@ RESERVED_CLI_ARGS = {
             "long and short on the same coin, the bot will use hedge_mode=false."
         ),
     },
-    "live.leverage": {
+    "live.account.leverage": {
         "visible": ["--leverage", "-lev"],
-        "hidden": ["--live.leverage", "--live_leverage"],
+        "hidden": ["--live.account.leverage", "--live_account_leverage"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live"},
         "group": {"live": "Behavior"},
         "help": "Set leverage for this run.",
     },
-    'bot.global.execution.market_orders_allowed': {
+    "bot.global.execution.market_orders_allowed": {
         "visible": ["--market-orders-allowed", "-moa"],
-        "hidden": ['--bot_global_execution_market_orders_allowed'],
+        "hidden": ["--bot_global_execution_market_orders_allowed"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live", "backtest", "optimize"},
@@ -1131,9 +1133,9 @@ RESERVED_CLI_ARGS = {
             "Disabled by default; live exchange slippage controls apply."
         ),
     },
-    'bot.global.execution.market_order_near_touch_threshold': {
+    "bot.global.execution.market_order_near_touch_threshold": {
         "visible": ["--market-order-near-touch-threshold", "-montt"],
-        "hidden": ['--bot_global_execution_market_order_near_touch_threshold'],
+        "hidden": ["--bot_global_execution_market_order_near_touch_threshold"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1149,7 +1151,7 @@ RESERVED_CLI_ARGS = {
     },
     "bot.global.loss_gate.max_drawdown_ratio": {
         "visible": ["--loss-gate-max-drawdown-ratio"],
-        "hidden": ['--bot_global_loss_gate_max_drawdown_ratio'],
+        "hidden": ["--bot_global_loss_gate_max_drawdown_ratio"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1160,9 +1162,9 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Limit non-panic close losses using independent loss-gate drawdown memory; >=1 disables the gate.",
     },
-    "live.fee_pct_fallback": {
+    "live.fills.fee_pct_fallback": {
         "visible": ["--fee-pct-fallback"],
-        "hidden": ["--live.fee_pct_fallback", "--live_fee_pct_fallback"],
+        "hidden": ["--live.fills.fee_pct_fallback", "--live_fills_fee_pct_fallback"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1173,9 +1175,12 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Fallback fill fee percentage used when reported fee data cannot be converted to quote currency.",
     },
-    "live.fee_pct_sanity_abs_max": {
+    "live.fills.fee_pct_sanity_abs_max": {
         "visible": ["--fee-pct-sanity-abs-max"],
-        "hidden": ["--live.fee_pct_sanity_abs_max", "--live_fee_pct_sanity_abs_max"],
+        "hidden": [
+            "--live.fills.fee_pct_sanity_abs_max",
+            "--live_fills_fee_pct_sanity_abs_max",
+        ],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1184,13 +1189,13 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Absolute fee/notional sanity threshold; outliers are replaced with live.fee_pct_fallback.",
+        "help": "Absolute fee/notional sanity threshold; outliers are replaced with live.fills.fee_pct_fallback.",
     },
-    "live.fee_conversion_max_age_ms": {
+    "live.fills.fee_conversion_max_age_ms": {
         "visible": ["--fee-conversion-max-age-ms"],
         "hidden": [
-            "--live.fee_conversion_max_age_ms",
-            "--live_fee_conversion_max_age_ms",
+            "--live.fills.fee_conversion_max_age_ms",
+            "--live_fills_fee_conversion_max_age_ms",
         ],
         "type": int,
         "metavar": "INT",
@@ -1200,16 +1205,23 @@ RESERVED_CLI_ARGS = {
     },
     "bot.global.unstuck.memory_ema_span_minutes": {
         "visible": ["--unstuck-memory-ema-span-minutes"],
-        "hidden": ['--bot_global_unstuck_memory_ema_span_minutes'],
+        "hidden": ["--bot_global_unstuck_memory_ema_span_minutes"],
         "type": normalize_memory_ema_span_minutes,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
-        "group": {"live": "Behavior", "backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
         "help": "Global unstuck realized-memory EMA span in minutes.",
     },
-    "live.risk_bootstrap_max_lookback_minutes": {
+    "live.startup.risk_bootstrap_max_lookback_minutes": {
         "visible": ["--risk-bootstrap-max-lookback-minutes"],
-        "hidden": ["--live.risk_bootstrap_max_lookback_minutes", "--live_risk_bootstrap_max_lookback_minutes"],
+        "hidden": [
+            "--live.startup.risk_bootstrap_max_lookback_minutes",
+            "--live_startup_risk_bootstrap_max_lookback_minutes",
+        ],
         "type": normalize_risk_bootstrap_max_lookback_minutes,
         "metavar": "FLOAT",
         "commands": {"live"},
@@ -1218,7 +1230,7 @@ RESERVED_CLI_ARGS = {
     },
     "bot.global.hsl.scope": {
         "visible": ["--hsl-scope"],
-        "hidden": ['--bot_global_hsl_scope'],
+        "hidden": ["--bot_global_hsl_scope"],
         "type": normalize_hsl_signal_mode,
         "metavar": "MODE",
         "choices": tuple(HSL_SIGNAL_MODES),
@@ -1230,22 +1242,22 @@ RESERVED_CLI_ARGS = {
         },
         "help": (
             "HSL signal mode. portfolio uses one account-level strategy signal for both "
-            "sides; pside tracks long/short independently; coin tracks each coin+side "
+            "sides; position_side tracks long/short independently; coin tracks each coin+side "
             "slot and panic-closes only the affected slot."
         ),
     },
-    "live.time_in_force": {
+    "live.execution.time_in_force": {
         "visible": ["--time-in-force", "-tif"],
-        "hidden": ["--live.time_in_force", "--live_time_in_force"],
+        "hidden": ["--live.execution.time_in_force", "--live_execution_time_in_force"],
         "type": str,
         "metavar": "VALUE",
         "commands": {"live"},
         "group": {"live": "Behavior"},
         "help": "Time-in-force policy for live orders.",
     },
-    "live.user": {
+    "live.account.user": {
         "visible": ["--user", "-u"],
-        "hidden": ["--live.user", "--live_user"],
+        "hidden": ["--live.account.user", "--live_account_user"],
         "type": str,
         "metavar": "VALUE",
         "commands": {"live"},
@@ -1747,7 +1759,7 @@ for _pside in ("long", "short"):
                 "Default false; allows coin overrides in coin HSL scope."
             ),
             f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
-            f"bot.{_pside}.hsl.red_threshold": (
+            f"bot.{_pside}.hsl.drawdown_ratio_threshold": (
                 f"RED drawdown trigger for {_pside} HSL, as part-per-one."
             ),
             f"bot.{_pside}.hsl.drawdown_ratio_ema_span_minutes": (
@@ -1808,32 +1820,32 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         'bot.global.universe.minimum_coin_age_days',
     }
     behavior = {
-        'bot.global.universe.filter_by_min_effective_cost',
-        "live.fee_conversion_max_age_ms",
-        "live.fee_pct_fallback",
-        "live.fee_pct_sanity_abs_max",
-        "live.forced_mode_long",
-        "live.forced_mode_short",
-        'bot.global.hedge_mode',
-        "live.exchange_symbol_unavailable_cooldown_hours",
-        "live.leverage",
-        'bot.global.execution.market_orders_allowed',
+        "bot.global.universe.filter_by_min_effective_cost",
+        "live.fills.fee_conversion_max_age_ms",
+        "live.fills.fee_pct_fallback",
+        "live.fills.fee_pct_sanity_abs_max",
+        "live.modes.long",
+        "live.modes.short",
+        "bot.global.hedge_mode",
+        "live.recovery.exchange_symbol_unavailable_cooldown_hours",
+        "live.account.leverage",
+        "bot.global.execution.market_orders_allowed",
         "bot.global.loss_gate.max_drawdown_ratio",
-        "live.limit_order_create_max_market_dist_pct",
-        "live.order_match_tolerance_pct",
-        "live.order_replacement_churn_gate_activation_count",
-        "live.order_replacement_churn_gate_market_dist_pct",
-        "live.order_replacement_churn_gate_stability_minutes",
-        "live.order_replacement_churn_gate_window_minutes",
+        "live.execution.limit_order_create_max_market_dist_pct",
+        "live.execution.order_match_tolerance_pct",
+        "live.execution.order_replacement_churn_gate_activation_count",
+        "live.execution.order_replacement_churn_gate_market_dist_pct",
+        "live.execution.order_replacement_churn_gate_stability_minutes",
+        "live.execution.order_replacement_churn_gate_window_minutes",
     }
     runtime = {
-        "live.execution_delay_seconds",
-        "live.max_concurrent_api_requests",
-        "live.max_n_restarts_per_day",
-        "live.max_ohlcv_fetches_per_minute",
-        "live.recv_window_ms",
-        "live.time_in_force",
-        "live.user",
+        "live.execution.execution_delay_seconds",
+        "live.api.max_concurrent_api_requests",
+        "live.recovery.max_n_restarts_per_day",
+        "live.candles.max_ohlcv_fetches_per_minute",
+        "live.api.recv_window_ms",
+        "live.execution.time_in_force",
+        "live.account.user",
     }
     if full_name in coin_selection:
         return "Coin Selection"
@@ -1966,33 +1978,31 @@ def classify_config_argument(
 
 def project_template_config_for_cli(config: dict, command: Optional[str]) -> dict:
     result = deepcopy(config)
+
+    def fixed_policy(node, prefix):
+        if field_cli_exposed_on(prefix, command):
+            return deepcopy(node)
+        if isinstance(node, dict):
+            retained = {
+                key: fixed_policy(value, f"{prefix}.{key}")
+                for key, value in node.items()
+            }
+            return {
+                key: value for key, value in retained.items() if value is not None
+            } or None
+        return None
+
     if command == "backtest":
         result.pop("optimize", None)
         live_cfg = result.get("live")
         if isinstance(live_cfg, dict):
-            result["live"] = {
-                key: live_cfg[key]
-                for key in sorted(live_cfg)
-                if field_cli_exposed_on(f"live.{key}", "backtest")
-            }
+            result["live"] = fixed_policy(live_cfg, "live") or {}
         return result
     if command == "optimize":
-        def fixed_policy(node, prefix):
-            if field_cli_exposed_on(prefix, command):
-                return deepcopy(node)
-            if isinstance(node, dict):
-                retained = {key: fixed_policy(value, f"{prefix}.{key}") for key, value in node.items()}
-                return {key: value for key, value in retained.items() if value is not None}
-            return None
-
         result["bot"] = fixed_policy(result.get("bot", {}), "bot")
         live_cfg = result.get("live")
         if isinstance(live_cfg, dict):
-            result["live"] = {
-                key: live_cfg[key]
-                for key in sorted(live_cfg)
-                if field_cli_exposed_on(f"live.{key}", "optimize")
-            }
+            result["live"] = fixed_policy(live_cfg, "live") or {}
         return result
     return result
 

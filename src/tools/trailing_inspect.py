@@ -171,12 +171,12 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         f"bot.{pside}.risk.total_wallet_exposure_limit",
     )
     max_positions = int(_finite_float(risk.get("max_positions"), f"bot.{pside}.risk.max_positions"))
-    forced_mode_raw = str(live.get(f"forced_mode_{pside}", "") or "").strip()
+    forced_mode_raw = str(live.get("modes", {}).get(pside, "") or "").strip()
     try:
         forced_mode = expand_PB_mode(forced_mode_raw) if forced_mode_raw else "normal"
     except Exception as exc:
         raise ValueError(
-            f"invalid live.forced_mode_{pside}={forced_mode_raw!r}: {exc}"
+            f"invalid live.modes.{pside}={forced_mode_raw!r}: {exc}"
         ) from exc
     coin_overrides = _require_mapping(config.get("coin_overrides", {}), "coin_overrides")
     coin_strategy_override_symbols: list[str] = []
@@ -186,8 +186,10 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         override = _require_mapping(raw_override, f"coin_overrides.{symbol}")
         context_paths: list[str] = []
         override_live = override.get("live", {})
-        if isinstance(override_live, Mapping) and f"forced_mode_{pside}" in override_live:
-            context_paths.append(f"live.forced_mode_{pside}")
+        if isinstance(override_live, Mapping) and pside in override_live.get(
+            "modes", {}
+        ):
+            context_paths.append(f"live.modes.{pside}")
         override_bot = override.get("bot", {})
         if not isinstance(override_bot, Mapping):
             continue

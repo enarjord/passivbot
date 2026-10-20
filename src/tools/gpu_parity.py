@@ -58,7 +58,7 @@ def build_parser():
     parser.add_argument("--coins", type=int)
     parser.add_argument("--bars", type=int)
     parser.add_argument("--seed", type=int)
-    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "portfolio"))
+    parser.add_argument("--hsl", choices=("disabled", "coin", "position_side", "portfolio"))
     add_fixture_stress_options(parser)
     parser.add_argument("--unstuck", action="store_true", default=None)
     parser.add_argument("--market-orders", action="store_true", default=None)
@@ -189,8 +189,8 @@ def fixture_inputs(args):
         bot = config["bot"][side]
         bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
         bot["hsl"].update(
-            enabled=side in active and args.hsl in {"coin", "pside"},
-            red_threshold=args.hsl_red_threshold,
+            enabled=side in active and args.hsl in {"coin", "position_side"},
+            drawdown_ratio_threshold=args.hsl_red_threshold,
             drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_minutes_after_red=args.hsl_cooldown_minutes,
@@ -199,7 +199,7 @@ def fixture_inputs(args):
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
     if args.hsl == "portfolio":
         config["bot"]["global"]["hsl"].update(
-            enabled=True, red_threshold=args.hsl_red_threshold,
+            enabled=True, drawdown_ratio_threshold=args.hsl_red_threshold,
             drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_minutes_after_red=args.hsl_cooldown_minutes,

@@ -28,9 +28,8 @@ def get_shared_optimizer_bindings():
         for group, keys in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.items():
             for local, flat in keys.items():
                 paths[f"{side}_{flat}"] = ("bot", side, group, *_shared_bound_local_path(group, local))
-    for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
-                 "memory_ema_span_minutes", "cooldown_minutes_after_red"):
-        paths[f"hsl_{name}"] = ("bot", "global", "hsl", name)
+    for local, native in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].items():
+        paths[native] = ("bot", "global", "hsl", local)
     return paths
 
 
@@ -38,7 +37,7 @@ def get_coin_override_paths(hsl_signal_mode="coin"):
     """Registry-led view of the existing shared per-coin permission policy."""
     from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, OVERRIDABLE_SHARED_BOT_PATHS
 
-    if hsl_signal_mode not in {"coin", "pside", "portfolio"}:
+    if hsl_signal_mode not in {"coin", "position_side", "portfolio"}:
         raise ValueError("invalid HSL scope for coin override policy")
     return (OVERRIDABLE_SHARED_BOT_PATHS if hsl_signal_mode == "coin" else
             OVERRIDABLE_SHARED_BOT_PATHS - CONDITIONAL_HSL_OVERRIDE_PATHS)
@@ -73,6 +72,55 @@ def describe_field(path):
                       "when": field.optimize_when, "recommended_bounds": field.recommended_bounds},
         "coin_override": field.coin_override.value if field.coin_override else None,
     }
+# One structural definition for operational field identities, current paths and
+# their released-v8 origins. Internal live-value APIs address these identities;
+# authored configuration accepts only the returned canonical paths.
+LIVE_OPERATIONAL_PATHS = {
+    name: ("live", group, name)
+    for group, names in {
+        "account": "user balance_override balance_hysteresis_snap_pct leverage margin_mode_preference",
+        "api": "custom_endpoints_path recv_window_ms max_concurrent_api_requests market_snapshot_ticker_strategy",
+        "candles": """
+            candle_lock_timeout_seconds enable_archive_candle_fetch enable_forager_ws_candles
+            forager_ws_candle_rest_audit_minutes inactive_coin_candle_ttl_minutes
+            max_active_candle_tail_gap_minutes max_disk_candles_per_symbol_per_tf
+            max_forager_candle_refresh_seconds max_forager_candle_staleness_minutes
+            max_memory_candles_per_symbol max_ohlcv_fetches_per_minute
+        """,
+        "startup": """
+            defer_broad_candle_warmup force_cold_startup risk_bootstrap_max_lookback_minutes
+            startup_phase_budgets warmup_concurrency warmup_jitter_seconds
+        """,
+        "fills": """
+            fee_conversion_max_age_ms fee_pct_fallback fee_pct_sanity_abs_max
+            fills_confirmation_overlap_minutes fills_recent_overlap_minutes
+        """,
+        "execution": """
+            execution_delay_seconds limit_order_create_max_market_dist_pct
+            max_n_cancellations_per_batch max_n_creations_per_batch order_match_tolerance_pct
+            order_replacement_churn_gate_activation_count order_replacement_churn_gate_market_dist_pct
+            order_replacement_churn_gate_stability_minutes order_replacement_churn_gate_window_minutes
+            time_in_force
+        """,
+        "recovery": "exchange_symbol_unavailable_cooldown_hours max_n_restarts_per_day",
+    }.items()
+    for name in names.split()
+}
+LIVE_OPERATIONAL_PATHS.update(
+    {
+        "forced_mode_long": ("live", "modes", "long"),
+        "forced_mode_short": ("live", "modes", "short"),
+        "disapproved_position_mode": ("live", "modes", "disapproved_position"),
+    }
+)
+
+
+def live_field_path(field_id: str) -> str:
+    """Return an explicit canonical path for an internal operational field ID."""
+    if field_id == "base_config_path":
+        # Internal source provenance; never an authored operational field.
+        return "live.base_config_path"
+    return ".".join(LIVE_OPERATIONAL_PATHS[field_id])
 
 
 # These declarations describe the current public schema. Keep numeric types
@@ -203,13 +251,13 @@ _SHARED_SIDE_FIELDS = {
         forager.score_weights.volatility forager.score_weights.volume
         forager.unilateralness_ema_span_1m forager.volatility_ema_span_1m
         forager.volume_ema_span_1m hsl.memory_ema_span_minutes
-        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.red_threshold
+        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
         risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
-        unstuck.close_pct unstuck.ema_dist unstuck.ema_span_0 unstuck.ema_span_1
+        unstuck.close_pct unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
         unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
@@ -242,6 +290,12 @@ def get_field_registry() -> FieldRegistry:
             description="", optimize_key=None, domain=None, recommended_bounds=None,
             coin_override=None):
         parts = tuple(path.split("."))
+        if (
+            parts[0] == "live"
+            and len(parts) >= 2
+            and parts[1] in LIVE_OPERATIONAL_PATHS
+        ):
+            parts = (*LIVE_OPERATIONAL_PATHS[parts[1]], *parts[2:])
         semantic_parts = parts[2:] if parts[0] == "coin_overrides" else parts
         is_bot_field = semantic_parts[:1] == ("bot",)
         scope = None
@@ -287,7 +341,7 @@ def get_field_registry() -> FieldRegistry:
     for name in ("enabled", "scale_budget_with_excess_allowance"):
         add(f"bot.global.hsl.{name}", FieldType.BOOLEAN)
     add("bot.global.hsl.panic_close_order_type", FieldType.STRING)
-    for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
+    for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_minutes_after_red"):
         add(f"bot.global.hsl.{name}", FieldType.FLOAT)
 

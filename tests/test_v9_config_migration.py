@@ -250,6 +250,8 @@ def test_v8_equal_released_section_aliases_preserve_authored_value(section, old,
     result = migrate(source, memory_span_minutes=123.5)
     if new == "minimum_coin_age_days":
         assert result.config["bot"]["global"]["universe"][new] == value
+    elif new == "inactive_coin_candle_ttl_minutes":
+        assert result.config["live"]["candles"][new] == value
     else:
         assert result.config[section][new] == value
     assert old not in result.config[section]
@@ -727,7 +729,7 @@ def test_move_output_materializes_file_with_inline_precedence(tmp_path):
                      base_config_path=str(source_dir / "base.json"))
     assert coin_file.read_bytes() == original
     assert "override_config_path" not in result.config["coin_overrides"]["AAA"]
-    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["red_threshold"] == 0.22
+    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.22
     coin_file.unlink()
     assert prepare_config(result.config, base_config_path=str(output_dir / "moved.json"), verbose=False)
 
@@ -1162,16 +1164,17 @@ def test_legacy_coin_flag_files_are_materialized_with_flags_and_authorization(
         assert output["bot"]["global"]["universe"]["minimum_coin_age_days"] == 7.0
     patch = output["coin_overrides"]["AAA"]
     assert "override_config_path" not in patch
-    assert patch["live"]["forced_mode_long"] == "graceful_stop"
-    assert patch["live"]["forced_mode_short"] == "manual"
-    assert patch["live"]["leverage"] == 4.0
+    assert patch["live"]["modes"]["long"] == "graceful_stop"
+    assert patch["live"]["modes"]["short"] == "manual"
+    assert patch["live"]["account"]["leverage"] == 4.0
     assert patch["bot"]["long"]["wallet_exposure_limit"] == 0.37
     assert patch["bot"]["short"]["wallet_exposure_limit"] == 0.21
     assert patch["bot"]["long"]["hsl"]["enabled"]
-    assert patch["bot"]["long"]["hsl"]["red_threshold"] == 0.19
+    assert patch["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.19
     assert "restart_after_red_policy" not in patch["bot"]["long"]["hsl"]
     assert output["coin_overrides"]["BBB"]["live"] == {
-        "forced_mode_long": "tp_only", "leverage": 3.0,
+        "modes": {"long": "tp_only"},
+        "account": {"leverage": 3.0},
     }
     coin_file.unlink()
     assert prepare_config(output, base_config_path=str(tmp_path / "moved" / "base.json"), verbose=False)
@@ -1190,7 +1193,9 @@ def test_explicit_coin_overrides_keep_precedence_but_ignored_flag_file_never_req
         migrate(cfg, **kwargs)
     converted = migrate(cfg, acknowledge_never_removal=True, **kwargs).config
     assert not converted["live"].get("coin_flags")
-    assert converted["coin_overrides"] == {"AAA": {"live": {"forced_mode_long": "normal"}}}
+    assert converted["coin_overrides"] == {
+        "AAA": {"live": {"modes": {"long": "normal"}}}
+    }
     coin_file.unlink()
     assert prepare_config(converted, verbose=False)
 
@@ -1361,14 +1366,14 @@ def test_live_rejects_cooldown_longer_than_reconstructible_history_cap():
 
     cfg = get_template_config()
     cfg["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 1.0
-    cfg["live"]["risk_bootstrap_max_lookback_minutes"] = 100.0
+    cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     cfg["bot"]["long"]["hsl"].update(enabled=True, cooldown_minutes_after_red=200.0)
     prepared = prepare_config(cfg, verbose=False)
     # This is a live history capability boundary, not an offline-model limit.
     assert compile_runtime_config(prepared, runtime="backtest")
     with pytest.raises(ValueError, match="cannot reconstruct its full finite cooldown"):
         compile_runtime_config(prepared, runtime="live")
-    cfg["live"]["risk_bootstrap_max_lookback_minutes"] = 200.0
+    cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 200.0
     assert require_live_runtime_support(cfg) == 200.0
 
 
@@ -1376,7 +1381,7 @@ def test_live_history_cap_checks_effective_coin_policy_and_disabled_policies():
     from config.hsl import require_live_runtime_support
 
     cfg = get_template_config()
-    cfg["live"]["risk_bootstrap_max_lookback_minutes"] = 100.0
+    cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     assert require_live_runtime_support(cfg) == 0.0
     cfg["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": {
         "enabled": True, "cooldown_minutes_after_red": 101.0}}}}}

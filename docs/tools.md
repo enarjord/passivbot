@@ -528,7 +528,7 @@ Useful suite controls:
   clusters such as a DEXE/M event.
 - `--scenario-kind single-coin` keeps strict one-coin crashes only.
 - `--write-filtered-suites` writes all three filtered suites alongside the main suite.
-- `--scenario-force-normal long|short|both` emits per-coin `forced_mode_* = "normal"` overrides
+- `--scenario-force-normal long|short|both` emits per-coin `live.modes.<side> = "normal"` overrides
   only for idiosyncratic non-market-wide crash coins. Market-wide scenario coins are not forced.
   If a merged scenario would contain more than two forced coins, the tool splits it into repeated
   scenario windows with at most two forced coins per scenario.

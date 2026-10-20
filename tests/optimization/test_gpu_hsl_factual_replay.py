@@ -40,7 +40,7 @@ def forbid_cpu(monkeypatch, reference):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coin_count", [1, 2])
 def test_native_forward_dispatch(reference, forbid_cpu, strategy, mode, sides, coin_count):
@@ -55,7 +55,7 @@ def test_native_forward_dispatch(reference, forbid_cpu, strategy, mode, sides, c
     _equal(repeated, first)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coin_count", [1, 2])
 def test_forward_context_rebinds_after_every_temporal_chunk(reference, forbid_cpu, mode, sides, coin_count):
@@ -87,7 +87,7 @@ def test_shared_scenario_inputs_keep_compatible_interruption_ownership(reference
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_policy_disable_restore_does_not_leak_episode_state(reference, forbid_cpu, strategy, mode):
     from test_gpu_hsl_multicoin import make_proxy, raw
 
@@ -106,7 +106,7 @@ def test_coin_override_enables_forward_risk_with_inherited_policy_off(reference,
     from test_gpu_hsl_multicoin import make_proxy, raw
 
     proxy = make_proxy("coin", strategy, ("long",), minutes=128, coin_count=1,
-                       enabled=False, override={"enabled": True, "red_threshold": 1e-8})
+                       enabled=False, override={"enabled": True, "drawdown_ratio_threshold": 1e-8})
     runner, actual = raw(proxy, [{}])
     assert actual["hsl_triggers_long"].item() > 0
     assert runner.hsl_fact_capacity == 0

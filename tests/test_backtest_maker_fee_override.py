@@ -275,14 +275,14 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
     config["bot"]["global"]["hsl"]["scope"] = "coin"
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["long"]["hsl"]["red_threshold"] = 0.2
+    config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.2
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
                 "long": {
                     "hsl": {
                         "enabled": True,
-                        "red_threshold": 0.01,
+                        "drawdown_ratio_threshold": 0.01,
                     }
                 }
             }

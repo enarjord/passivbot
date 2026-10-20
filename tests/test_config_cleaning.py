@@ -23,7 +23,7 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
         "coin_overrides": {
             "BTC": {
                 "_meta": "do not keep",
-                "live": {"forced_mode_long": "manual"},
+                "live": {"modes": {"long": "manual"}},
             }
         },
         "_transform_log": ["noise"],
@@ -51,8 +51,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert "BTC" in cleaned["coin_overrides"]
     assert "_meta" not in cleaned["coin_overrides"]["BTC"]
     assert (
-        cleaned["coin_overrides"]["BTC"]["live"]["forced_mode_long"]
-        == config["coin_overrides"]["BTC"]["live"]["forced_mode_long"]
+        cleaned["coin_overrides"]["BTC"]["live"]["modes"]["long"]
+        == config["coin_overrides"]["BTC"]["live"]["modes"]["long"]
     )
 
 
@@ -93,7 +93,7 @@ def _mutable_container_ids(node):
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sparse", [False, True])
 def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     strategy, mode, sparse
@@ -103,7 +103,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     source = generated_template(get_template_config(), mode)
     source['bot']['global']['strategy_kind'] = strategy
     set_side_universe_sources(source, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
-    source["live"]["startup_phase_budgets"] = {"candles": 15.0}
+    source["live"]["startup"]["startup_phase_budgets"] = {"candles": 15.0}
     source["backtest"]["reducer"] = {"adg_strategy_eq": "max"}
     source["backtest"]["market_settings"]["overrides"] = {"BTC": {"min_qty": 0.001}}
     source["backtest"]["scenarios"] = [
@@ -131,7 +131,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert not (_mutable_container_ids(source) & _mutable_container_ids(cleaned))
     assert not (_mutable_container_ids(cleaned) & _mutable_container_ids(repeated))
     assert cleaned["backtest"]["reducer"] == {"adg_strategy_eq": "max", "default": "mean"}
-    assert cleaned["live"]["startup_phase_budgets"] == {"candles": 15.0}
+    assert cleaned["live"]["startup"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
     assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
         "unilateralness"
@@ -324,7 +324,7 @@ def test_clean_config_preserves_sparse_backtest_reducer():
     assert cleaned["backtest"]["reducer"] == {"default": "mean"}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     from config.hsl import generated_template, REMOVED_FIELDS
 
@@ -359,7 +359,7 @@ def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
     assert clean_config(cfg)["bot"]["global"]["hsl"] == {"scope": "portfolio"}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     from config.hsl import generated_template
     from optimization.evaluation_contract import build_evaluation_contract
@@ -376,13 +376,13 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     assert contract["version"] == 6
     assert "independent_loss_memories" in contract["risk_model"]
     assert contract["risk_model"].startswith("v9_")
-    assert "red_threshold" not in block  # candidate value, not fixed policy
+    assert "drawdown_ratio_threshold" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     assert _resume_config_mismatches(record, cfg) == []
     candidate_block = (
         cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     )
-    candidate_block["red_threshold"] = 0.031
+    candidate_block["drawdown_ratio_threshold"] = 0.031
     assert _resume_config_mismatches(record, cfg) == []
     path = (
         "bot.global.hsl.panic_close_order_type"
@@ -403,11 +403,11 @@ def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
     cfg["bot"]["global"]["hsl"].update(
         enabled=True,
         drawdown_ratio_ema_span_minutes=12.5,
-        red_threshold=0.07,
+        drawdown_ratio_threshold=0.07,
     )
-    cfg["optimize"]["bounds"]["global"]["hsl"] = {"red_threshold": [0.02, 0.2]}
+    cfg["optimize"]["bounds"]["global"]["hsl"] = {"drawdown_ratio_threshold": [0.02, 0.2]}
     exported = sanitize_prepared_config_for_dump(cfg)
     loaded = format_config(json.loads(json.dumps(exported)), verbose=False)
     assert loaded["bot"]["global"]["hsl"] == cfg["bot"]["global"]["hsl"]
-    assert loaded["optimize"]["bounds"]["global"]["hsl"]["red_threshold"] == [0.02, 0.2]
+    assert loaded["optimize"]["bounds"]["global"]["hsl"]["drawdown_ratio_threshold"] == [0.02, 0.2]
     assert not REMOVED_FIELDS.intersection(loaded["bot"]["long"]["hsl"])

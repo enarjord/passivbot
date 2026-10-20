@@ -94,13 +94,13 @@ def test_resume_ignores_machine_settings_and_overridden_source_values():
     config["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": False}
     old = _record(config)
     config["bot"]["long"]["hsl"]["enabled"] = True
-    config["live"]["execution_delay_seconds"] = 17
+    config["live"]["execution"]["execution_delay_seconds"] = 17
     config["optimize"]["n_cpus"] += 1
     assert _resume_config_mismatches(old, config) == []
 
 
 @pytest.mark.parametrize("path,value", [
-    ("bot.long.hsl.red_threshold", 0.123),
+    ("bot.long.hsl.drawdown_ratio_threshold", 0.123),
     ("bot.long.risk.max_positions", 3),
     ("bot.global.unstuck.memory_ema_span_minutes", 1000.5),
     ("bot.global.loss_gate.memory_ema_span_minutes", 2000.5),
@@ -174,7 +174,7 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
     old = _record(config)
     old["metrics"] = {"objectives": {"w_0": -1.0}}
     (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
-    config["bot"]["global"]["hsl"]["scope"] = "pside"
+    config["bot"]["global"]["hsl"]["scope"] = "position_side"
     with pytest.raises(ValueError, match="critical parameters have changed"):
         _validate_resume_results(str(tmp_path), config)
 
@@ -196,7 +196,7 @@ def test_pre_shared_gate_contract_version_cannot_reuse_saved_fitness(tmp_path, v
 
 
 @pytest.mark.parametrize("backend", ["pymoo"])
-@pytest.mark.parametrize("mode", ["disabled", "coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["disabled", "coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("suite", [False, True])
 def test_result_writers_persist_contract_before_candidate_projection(
     backend, mode, suite, monkeypatch
@@ -620,7 +620,7 @@ def test_resume_checks_each_reconstructed_record_contract(tmp_path, change):
     first = _record(config)
     second = deepcopy(first)
     if change == "fixed_policy":
-        second["bot"]["global"]["hsl"]["scope"] = "pside"
+        second["bot"]["global"]["hsl"]["scope"] = "position_side"
         second[CONTRACT_KEY] = build_evaluation_contract(second)
     elif change == "implementation":
         second[CONTRACT_KEY]["implementation"][

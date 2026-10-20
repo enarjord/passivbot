@@ -1453,7 +1453,7 @@ async def test_format_approved_ignored_coins_supports_fake_exchange_all_via_api_
     )
 
     config = {
-        "live": {"user": "fake_api_keys_user"},
+        "live": {"account": {"user": "fake_api_keys_user"}},
         "bot": {
             "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
             "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},

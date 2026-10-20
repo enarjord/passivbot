@@ -19,9 +19,13 @@ class GateIOBot(CCXTBot):
         )
         self.hedge_mode = False
         max_cancel = int(require_live_value(config, "max_n_cancellations_per_batch"))
-        self.config["live"]["max_n_cancellations_per_batch"] = min(max_cancel, 20)
+        self.config["live"]["execution"]["max_n_cancellations_per_batch"] = min(
+            max_cancel, 20
+        )
         max_create = int(require_live_value(config, "max_n_creations_per_batch"))
-        self.config["live"]["max_n_creations_per_batch"] = min(max_create, 10)
+        self.config["live"]["execution"]["max_n_creations_per_batch"] = min(
+            max_create, 10
+        )
         self.custom_id_max_length = 28
 
     def create_ccxt_sessions(self):

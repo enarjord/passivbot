@@ -171,7 +171,7 @@
             },
             "forager": {"score_hysteresis_pct": 0.02},
             "hedge_mode": false,
-            "hsl": {"scope": "pside"},
+            "hsl": {"scope": "position_side"},
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 1440.0},
             "strategy_kind": "trailing_martingale",
             "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 0.0},
@@ -203,7 +203,7 @@
                 "enabled": true,
                 "memory_ema_span_minutes": 1440.0,
                 "panic_close_order_type": "market",
-                "red_threshold": 0.05,
+                "drawdown_ratio_threshold": 0.05,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
@@ -252,7 +252,7 @@
             "universe": {"approved_coins": [], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.01,
-                "ema_dist": 0,
+                "ema_distance_fraction": 0,
                 "ema_gating_enabled": true,
                 "ema_span_0": 2.0,
                 "ema_span_1": 4.0,
@@ -286,7 +286,7 @@
                 "enabled": false,
                 "memory_ema_span_minutes": 1440.0,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.01,
+                "drawdown_ratio_threshold": 0.01,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
@@ -335,7 +335,7 @@
             "universe": {"approved_coins": [], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.01,
-                "ema_dist": -0.2,
+                "ema_distance_fraction": -0.2,
                 "ema_gating_enabled": true,
                 "ema_span_0": 60.0,
                 "ema_span_1": 60.0,
@@ -348,52 +348,68 @@
     "coin_overrides": {},
     "config_version": "v9.0.0",
     "live": {
-        "balance_hysteresis_snap_pct": 0.01,
-        "balance_override": null,
-        "candle_lock_timeout_seconds": 10,
-        "custom_endpoints_path": null,
-        "defer_broad_candle_warmup": true,
-        "disapproved_position_mode": "graceful_stop",
-        "enable_archive_candle_fetch": false,
-        "enable_forager_ws_candles": true,
-        "exchange_symbol_unavailable_cooldown_hours": 6.0,
-        "execution_delay_seconds": 1,
-        "fee_conversion_max_age_ms": 86400000,
-        "fee_pct_fallback": 0.0002,
-        "fee_pct_sanity_abs_max": 0.001,
-        "fills_confirmation_overlap_minutes": 60,
-        "fills_recent_overlap_minutes": 10,
-        "forager_ws_candle_rest_audit_minutes": 30,
-        "force_cold_startup": false,
-        "forced_mode_long": "",
-        "forced_mode_short": "",
-        "inactive_coin_candle_ttl_minutes": 10,
-        "leverage": 5,
-        "limit_order_create_max_market_dist_pct": 0.8,
-        "margin_mode_preference": "cross",
-        "market_snapshot_ticker_strategy": "auto",
-        "max_active_candle_tail_gap_minutes": 10,
-        "max_concurrent_api_requests": null,
-        "max_disk_candles_per_symbol_per_tf": 2000000,
-        "max_forager_candle_refresh_seconds": 45,
-        "max_forager_candle_staleness_minutes": null,
-        "max_memory_candles_per_symbol": 2000,
-        "max_n_cancellations_per_batch": 5,
-        "max_n_creations_per_batch": 3,
-        "max_n_restarts_per_day": 10,
-        "max_ohlcv_fetches_per_minute": 30,
-        "order_match_tolerance_pct": 0.0002,
-        "order_replacement_churn_gate_activation_count": 10,
-        "order_replacement_churn_gate_market_dist_pct": 0.005,
-        "order_replacement_churn_gate_stability_minutes": 2.0,
-        "order_replacement_churn_gate_window_minutes": 10.0,
-        "recv_window_ms": 5000,
-        "risk_bootstrap_max_lookback_minutes": 129600.0,
-        "startup_phase_budgets": {},
-        "time_in_force": "good_till_cancelled",
-        "user": "fake_hsl_runner",
-        "warmup_concurrency": 0,
-        "warmup_jitter_seconds": 0
+        "account": {
+            "user": "fake_hsl_runner",
+            "balance_override": null,
+            "balance_hysteresis_snap_pct": 0.01,
+            "leverage": 5,
+            "margin_mode_preference": "cross"
+        },
+        "api": {
+            "custom_endpoints_path": null,
+            "recv_window_ms": 5000,
+            "max_concurrent_api_requests": null,
+            "market_snapshot_ticker_strategy": "auto"
+        },
+        "candles": {
+            "candle_lock_timeout_seconds": 10,
+            "enable_archive_candle_fetch": false,
+            "enable_forager_ws_candles": true,
+            "forager_ws_candle_rest_audit_minutes": 30,
+            "inactive_coin_candle_ttl_minutes": 10,
+            "max_active_candle_tail_gap_minutes": 10,
+            "max_disk_candles_per_symbol_per_tf": 2000000,
+            "max_forager_candle_refresh_seconds": 45,
+            "max_forager_candle_staleness_minutes": null,
+            "max_memory_candles_per_symbol": 2000,
+            "max_ohlcv_fetches_per_minute": 30
+        },
+        "startup": {
+            "defer_broad_candle_warmup": true,
+            "force_cold_startup": false,
+            "risk_bootstrap_max_lookback_minutes": 129600.0,
+            "startup_phase_budgets": {},
+            "warmup_concurrency": 0,
+            "warmup_jitter_seconds": 0
+        },
+        "fills": {
+            "fee_conversion_max_age_ms": 86400000,
+            "fee_pct_fallback": 0.0002,
+            "fee_pct_sanity_abs_max": 0.001,
+            "fills_confirmation_overlap_minutes": 60,
+            "fills_recent_overlap_minutes": 10
+        },
+        "execution": {
+            "execution_delay_seconds": 1,
+            "limit_order_create_max_market_dist_pct": 0.8,
+            "max_n_cancellations_per_batch": 5,
+            "max_n_creations_per_batch": 3,
+            "order_match_tolerance_pct": 0.0002,
+            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "order_replacement_churn_gate_stability_minutes": 2.0,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "time_in_force": "good_till_cancelled"
+        },
+        "recovery": {
+            "exchange_symbol_unavailable_cooldown_hours": 6.0,
+            "max_n_restarts_per_day": 10
+        },
+        "modes": {
+            "long": "",
+            "short": "",
+            "disapproved_position": "graceful_stop"
+        }
     },
     "logging": {
         "backup_count": 5,
@@ -451,7 +467,7 @@
                     "cooldown_minutes_after_red": [2160, 2160, 10],
                     "drawdown_ratio_ema_span_minutes": [720, 720, 1],
                     "memory_ema_span_minutes": [1440.0, 1440.0],
-                    "red_threshold": [0.15, 0.15, 0.001]
+                    "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
                 },
                 "risk": {
                     "max_positions": [7, 7, 1],
@@ -493,7 +509,7 @@
                 },
                 "unstuck": {
                     "close_pct": [0.01, 0.12, 0.001],
-                    "ema_dist": [-0.2, 0.01, 0.0001],
+                    "ema_distance_fraction": [-0.2, 0.01, 0.0001],
                     "ema_span_0": [2, 2],
                     "ema_span_1": [4, 4],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],
@@ -521,7 +537,7 @@
                     "cooldown_minutes_after_red": [2160, 4320, 10],
                     "drawdown_ratio_ema_span_minutes": [1, 720, 1],
                     "memory_ema_span_minutes": [1440.0, 1440.0],
-                    "red_threshold": [0.01, 0.15, 0.001]
+                    "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
                 },
                 "risk": {
                     "max_positions": [5, 5, 1],
@@ -563,7 +579,7 @@
                 },
                 "unstuck": {
                     "close_pct": [0.01, 0.12, 0.001],
-                    "ema_dist": [-0.2, 0.01, 0.0001],
+                    "ema_distance_fraction": [-0.2, 0.01, 0.0001],
                     "ema_span_0": [60.0, 60.0],
                     "ema_span_1": [60.0, 60.0],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],

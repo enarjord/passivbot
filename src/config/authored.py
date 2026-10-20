@@ -11,12 +11,14 @@ from .scenario_overrides import normalize_scenario_overrides
 
 
 _METADATA_KEYS = frozenset({"_raw", "_raw_effective", "_transform_log", "_coins_sources"})
-_DYNAMIC_MAPS = frozenset({
-    ("backtest", "coin_sources"),
-    ("backtest", "market_settings_sources"),
-    ("backtest", "reducer"),
-    ("live", "startup_phase_budgets"),
-})
+_DYNAMIC_MAPS = frozenset(
+    {
+        ("backtest", "coin_sources"),
+        ("backtest", "market_settings_sources"),
+        ("backtest", "reducer"),
+        ("live", "startup", "startup_phase_budgets"),
+    }
+)
 _SCENARIO_FIELDS = frozenset({
     "label", "start_date", "end_date", "coins", "ignored_coins", "exchanges",
     "coin_sources", "overrides",
@@ -89,7 +91,7 @@ def validate_authored_config(config, template, *, policy_context=None):
     bounds.setdefault("global", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
     bounds.setdefault("global", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
     bounds["global"].setdefault("hsl", {}).update({
-        "red_threshold": [], "drawdown_ratio_ema_span_minutes": [],
+        "drawdown_ratio_threshold": [], "drawdown_ratio_ema_span_minutes": [],
         "memory_ema_span_minutes": [], "cooldown_minutes_after_red": [],
     })
 

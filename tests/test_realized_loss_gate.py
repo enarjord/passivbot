@@ -152,7 +152,7 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
 
 def _set_memory_horizon(bot, *, minutes: float, now_ms: int) -> None:
     bot.config = _risk_memory_config(minutes / 5.0)
-    bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = minutes
+    bot.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = minutes
     bot.get_exchange_time = lambda: now_ms
 
 
@@ -374,7 +374,7 @@ class TestGetRealizedMemories:
         rows = [_make_fill_event(-15.0, timestamp=540_001)]
         bot = _make_bot_with_events(rows)
         bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
-        bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        bot.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         bot.get_exchange_time = lambda: 600_000
         with caplog.at_level(logging.WARNING):
             first = bot._get_realized_memories()["loss_gate"]
@@ -413,7 +413,7 @@ class TestGetRealizedMemories:
             _make_fill_event(-15.0, timestamp=540_001),
         ])
         bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
-        bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        bot.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         now = [600_000]
         bot.get_exchange_time = lambda: now[0]
         with caplog.at_level(logging.WARNING):
@@ -423,7 +423,9 @@ class TestGetRealizedMemories:
                 now[0] = 599_999
                 expected = 15.0  # No elapsed minute after this fill.
             else:
-                bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 2.0
+                bot.config["live"]["startup"][
+                    "risk_bootstrap_max_lookback_minutes"
+                ] = 2.0
                 expected = first["drawdown"]
             assert bot._get_realized_memories()["loss_gate"]["drawdown"] == expected
             assert bot._get_realized_memories()["loss_gate"]["drawdown"] == expected
@@ -441,7 +443,7 @@ class TestGetRealizedMemories:
         first, restarted = _make_bot_with_events(rows), _make_bot_with_events(rows)
         for bot in (first, restarted):
             bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
-            bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+            bot.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         first.get_exchange_time = lambda: 600_000
         first._get_realized_memories()["loss_gate"]
         # Supplying the same factual initializer is different from inventing
@@ -461,7 +463,7 @@ class TestGetRealizedMemories:
             _make_fill_event(-15.0, timestamp=600_000),  # No elapsed minute after this fill.
         ])
         bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
-        bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
+        bot.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         bot.get_exchange_time = lambda: 600_000
         bot._max_configured_entry_cooldown_minutes = lambda: 720.0
         assert bot._required_fill_history_start_ms(600_000, pnl_start_ms=540_000) == (True, 0)
@@ -1118,13 +1120,16 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         hs = bp["equity_hard_stop_loss"]
         assert hs["mode"] == "coin"
         assert hs["portfolio"] is None
-        assert hs["sides"] == [config["bot"][s]["hsl"] for s in ("long", "short")]
+        expected = [deepcopy(config["bot"][s]["hsl"]) for s in ("long", "short")]
+        for policy in expected:
+            policy["red_threshold"] = policy.pop("drawdown_ratio_threshold")
+        assert hs["sides"] == expected
         assert not any(s["enabled"] for s in hs["sides"])
 
     def test_custom_passthrough(self):
         policy = dict(
             enabled=True,
-            red_threshold=0.3,
+            drawdown_ratio_threshold=0.3,
             drawdown_ratio_ema_span_minutes=45.5,
             memory_ema_span_minutes=123.5,
             cooldown_minutes_after_red=30.0,
@@ -1132,15 +1137,15 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         )
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
-        assert bp["equity_hard_stop_loss"]["sides"][0] == {
-            **policy, "scale_budget_with_excess_allowance": False
-        }
+        expected = {**policy, "scale_budget_with_excess_allowance": False}
+        expected["red_threshold"] = expected.pop("drawdown_ratio_threshold")
+        assert bp["equity_hard_stop_loss"]["sides"][0] == expected
 
     @pytest.mark.parametrize(
         "policy,field",
         [
             ({"cooldown_minutes_after_red": -1.0}, "cooldown_minutes_after_red"),
-            ({"red_threshold": 0.0}, "red_threshold"),
+            ({"drawdown_ratio_threshold": 0.0}, "drawdown_ratio_threshold"),
             ({"drawdown_ratio_ema_span_minutes": 0.5}, "drawdown_ratio_ema_span_minutes"),
             ({"memory_ema_span_minutes": 0.5}, "memory_ema_span_minutes"),
             ({"restart_after_red_policy": "threshold"}, "restart_after_red_policy"),

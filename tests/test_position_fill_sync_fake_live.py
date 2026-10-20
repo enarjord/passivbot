@@ -49,7 +49,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         )
     cfg["bot"][side]["hsl"].update(
         enabled=True,
-        red_threshold=0.9,
+        drawdown_ratio_threshold=0.9,
         # Isolate the fill-sync deadline from intentional fast-EMA warmup.
         memory_ema_span_minutes=288.0,
         drawdown_ratio_ema_span_minutes=1.0,
@@ -89,7 +89,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         bot.cca.positions[(symbol, side)]["size"] = 2.0
         await bot.refresh_protective_authoritative_state(require_balance=True)
         assert sync.blocked((symbol, side))
-        bot.config["bot"][side]["hsl"]["red_threshold"] = 0.03
+        bot.config["bot"][side]["hsl"]["drawdown_ratio_threshold"] = 0.03
         bot.cca.get_current_step()["prices"][symbol] = 10.0 if side == "long" else 190.0
         bot.market_snapshot_provider._cache.clear()
         owner = bot._hsl_live = hsl_live.Owner(bot)

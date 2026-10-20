@@ -569,7 +569,7 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
     config["optimize"]["enable_overrides"] = [
         "mirror_short_from_long", "couple_unstuck_ema_spans",
     ]
-    config["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.1, 0.5, 0.01]
+    config["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.1, 0.5, 0.01]
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.hsl.cooldown_minutes_after_red": 1.0,
     }
@@ -579,7 +579,7 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
     vector = [0.35]
     if anchored:
         install_anchored_fine_tune_plan(
-            config, ["bot.long.hsl.red_threshold"], "<memory>",
+            config, ["bot.long.hsl.drawdown_ratio_threshold"], "<memory>",
             starting_configs_override=[deepcopy(config)],
         )
         vector = [0.0, *vector]
@@ -594,12 +594,12 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
 
     candidate = build_optimizer_vector_config(
         vector, config,
-        key_paths=[("long_hsl_red_threshold", ("bot", "long", "hsl", "red_threshold"))],
+        key_paths=[("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_ratio_threshold"))],
     )
 
     assert config == before
     for side in ("long", "short"):
-        assert candidate["bot"][side]["hsl"]["red_threshold"] == pytest.approx(0.35)
+        assert candidate["bot"][side]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.35)
         assert candidate["bot"][side]["hsl"]["cooldown_minutes_after_red"] == 1.0
         assert candidate["bot"][side]["forager"]["score_weights"] == {
             "volume": 0.25, "ema_readiness": 0.75, "volatility": 0.0, "unilateralness": 0.0,

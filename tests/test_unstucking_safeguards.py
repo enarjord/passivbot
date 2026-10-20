@@ -358,12 +358,12 @@ def _dummy_config():
     from config_utils import get_template_config, format_config
 
     cfg = get_template_config()
-    cfg["live"]["user"] = "test_user"
+    cfg["live"]["account"]["user"] = "test_user"
     cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"].update(
             loss_allowance_pct=0.01, exposure_trigger_ratio=0.5,
-            close_pct=0.1, ema_dist=0.0,
+            close_pct=0.1, ema_distance_fraction=0.0,
         )
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
         strategy["entry"]["ema_span_0"] = 1.0
@@ -382,7 +382,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
         def __init__(self, cfg):
             # minimal init without hitting live APIs
             self.config = cfg
-            self.user = cfg["live"]["user"]
+            self.user = cfg["live"]["account"]["user"]
             self.user_info = {"exchange": "test_exchange"}
             self.exchange = self.user_info["exchange"]
             self.broker_code = ""
@@ -424,7 +424,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.approved_coins_minus_ignored_coins = {"long": [], "short": []}
             self.PB_modes = {"long": {}, "short": {}}
             self.PB_mode_stop = {
-                side: cfg["live"]["disapproved_position_mode"]
+                side: cfg["live"]["modes"]["disapproved_position"]
                 for side in ("long", "short")
             }
             self._runtime_forced_modes = {"long": {}, "short": {}}
@@ -2722,7 +2722,7 @@ async def test_trailing_extrema_rejects_coarse_history_without_exact_1m_suffix()
 @pytest.mark.asyncio
 async def test_trailing_extrema_projects_bounded_open_tail_without_persisting():
     cfg = _dummy_config()
-    cfg["live"]["max_active_candle_tail_gap_minutes"] = 10
+    cfg["live"]["candles"]["max_active_candle_tail_gap_minutes"] = 10
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot._pnls_manager = _DummyPnlsManager(
@@ -2786,7 +2786,7 @@ async def test_trailing_extrema_projects_bounded_open_tail_without_persisting():
 @pytest.mark.asyncio
 async def test_trailing_extrema_rejects_open_tail_beyond_active_bound():
     cfg = _dummy_config()
-    cfg["live"]["max_active_candle_tail_gap_minutes"] = 1
+    cfg["live"]["candles"]["max_active_candle_tail_gap_minutes"] = 1
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot._pnls_manager = _DummyPnlsManager(
@@ -3029,7 +3029,7 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     cfg = _dummy_config()
     # Keep this malformed-envelope test focused on the requested diagnostic
     # failure rather than auto-GS changing the synthetic symbol-state modes.
-    cfg["live"]["disapproved_position_mode"] = "manual"
+    cfg["live"]["modes"]["disapproved_position"] = "manual"
     bot = _make_dummy_bot(cfg)
     bot._bot_value_defaults["n_positions"] = 1
     bot._bot_value_defaults["total_wallet_exposure_limit"] = 1.0
@@ -3167,7 +3167,7 @@ def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_ord
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
-    bot._live_values["forager_score_hysteresis_pct"] = 0.005
+    bot.config["bot"]["global"]["forager"]["score_hysteresis_pct"] = 0.005
     bot.open_orders[symbol] = [
         {
             "symbol": symbol,
@@ -3735,7 +3735,7 @@ def test_runtime_forced_mode_takes_precedence_over_config():
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
 
-    bot.config["live"]["forced_mode_long"] = "manual"
+    bot.config["live"]["modes"]["long"] = "manual"
     bot._runtime_forced_modes["long"][symbol] = "panic"
 
     assert bot.get_forced_PB_mode("long", symbol) == "panic"

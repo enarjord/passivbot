@@ -311,17 +311,17 @@ LIVE_COMMAND_VALUE_FLAGS = {
     "-bo": "balance_override",
     "--balance-override": "balance_override",
     "--balance_override": "balance_override",
-    "--live.balance_override": "balance_override",
+    "--live.account.balance_override": "balance_override",
     "--live.balance-override": "balance_override",
 }
 LIVE_COMMAND_EQ_PREFIXES = {
     "--user=": "account",
     "--balance-override=": "balance_override",
     "--balance_override=": "balance_override",
-    "--live.balance_override=": "balance_override",
+    "--live.account.balance_override=": "balance_override",
     "--live.balance-override=": "balance_override",
 }
-ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"portfolio", "pside", "per_side"}
+ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"portfolio", "position_side", "pside", "per_side"}
 HSL_BALANCE_OVERRIDE_UNSAFE_CODE = "hsl_balance_override_account_level_replay_unsafe"
 
 
@@ -7088,13 +7088,13 @@ def _smoke_config_check_records(
         live = config.get("live") if isinstance(config.get("live"), dict) else {}
         global_hsl = config.get("bot", {}).get("global", {}).get("hsl", {})
         signal_mode = _normalize_smoke_hsl_signal_mode(global_hsl.get("scope"))
-        config_balance_override = live.get("balance_override")
+        config_balance_override = live.get("account", {}).get("balance_override")
         launch_balance_override = record.get("balance_override")
         balance_override_source = None
         if _balance_override_active(launch_balance_override):
             balance_override_source = "argument"
         elif _balance_override_active(config_balance_override):
-            balance_override_source = "live.balance_override"
+            balance_override_source = "live.account.balance_override"
         enabled_scopes = _smoke_hsl_enabled_scopes(config)
         if (
             enabled_scopes

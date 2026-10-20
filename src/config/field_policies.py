@@ -100,7 +100,7 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
         "hsl.scale_budget_with_excess_allowance",
         "hsl.enabled",
         "hsl.panic_close_order_type",
-        "hsl.red_threshold",
+        "hsl.drawdown_ratio_threshold",
     }
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
@@ -114,7 +114,7 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "risk.position_exposure_enforcer.threshold",
         "risk.we_excess_allowance_pct",
         "unstuck.close_pct",
-        "unstuck.ema_dist",
+        "unstuck.ema_distance_fraction",
         "unstuck.ema_span_0",
         "unstuck.ema_span_1",
         "unstuck.ema_gating_enabled",
@@ -128,3 +128,10 @@ OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
 
 
 LIVE_COIN_OVERRIDE_KEYS = ("forced_mode_long", "forced_mode_short", "leverage")
+
+
+def get_live_coin_override_paths():
+    """Project existing operational permissions through canonical field IDs."""
+    from .field_registry import LIVE_OPERATIONAL_PATHS
+
+    return frozenset(LIVE_OPERATIONAL_PATHS[field] for field in LIVE_COIN_OVERRIDE_KEYS)

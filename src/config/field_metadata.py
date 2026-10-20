@@ -12,7 +12,7 @@ from .field_spec import CoinOverridePolicy, FieldDomain, FieldType
 
 def enrich_fields(fields):
     from .field_registry import get_shared_optimizer_bindings
-    from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, LIVE_COIN_OVERRIDE_KEYS
+    from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, get_live_coin_override_paths
     from .field_registry import get_coin_override_paths
     from .optimize_bounds import flatten_optimize_bounds, get_optimize_bounds_defaults
     from .strategy_spec import get_strategy_param_keys
@@ -44,7 +44,7 @@ def enrich_fields(fields):
                     data["coin_override"] = CoinOverridePolicy.ALLOWED
             if "hsl" in path and key:
                 data["optimize_when"] = ("portfolio HSL scope" if path[1] == "global"
-                                         else "coin or pside HSL scope")
+                                         else "coin or position_side HSL scope")
             elif path[2] == "strategy" and key:
                 data["optimize_when"] = f"{path[3]} is the active strategy"
             data.update(_bot_metadata(path))
@@ -61,13 +61,12 @@ def enrich_fields(fields):
             # their shared-field classification into a second static list.
             from config_utils import get_field_runtime_rule
 
-            rule = get_field_runtime_rule(".".join(path[:2]))
+            rule = get_field_runtime_rule(".".join(path))
             if rule.get("consumed_by"):
                 data["consumers"] = tuple(command for command in ("live", "backtest", "optimize")
                                           if command in rule["consumed_by"])
-            if len(path) == 2:
-                data["coin_override"] = (CoinOverridePolicy.ALLOWED if path[1] in LIVE_COIN_OVERRIDE_KEYS
-                                         else CoinOverridePolicy.FORBIDDEN)
+            data["coin_override"] = (CoinOverridePolicy.ALLOWED if path in get_live_coin_override_paths()
+                                     else CoinOverridePolicy.FORBIDDEN)
         if path == ("optimize", "scoring", "*", "goal"):
             from .scoring import OBJECTIVE_GOALS
 
@@ -128,7 +127,7 @@ def _bot_metadata(path):
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."
-    elif local == "hsl.red_threshold":
+    elif local == "hsl.drawdown_ratio_threshold":
         data.update(unit="fraction", denominator="scope equity plus remembered drawdown",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_minimum=True, finite=True),
                     description="RED requires both current and smoothed drawdown ratios to exceed this threshold.")
@@ -137,7 +136,7 @@ def _bot_metadata(path):
     elif local == "hsl.panic_close_order_type":
         data["domain"] = FieldDomain(choices=("limit", "market"))
     elif local == "hsl.scope":
-        data["domain"] = FieldDomain(choices=("coin", "pside", "portfolio"))
+        data["domain"] = FieldDomain(choices=("coin", "position_side", "portfolio"))
     elif local == "loss_gate.max_drawdown_ratio":
         data.update(unit="fraction", denominator="raw balance plus loss-gate remembered drawdown",
                     domain=FieldDomain(minimum=0.0, finite=True),
@@ -171,7 +170,7 @@ def _bot_metadata(path):
         data.update(unit="ratio", denominator="effective per-position wallet exposure limit",
                     domain=FieldDomain(finite=True),
                     description="Eligibility requires position wallet exposure / effective WEL strictly above this value.")
-    elif local == "unstuck.ema_dist":
+    elif local == "unstuck.ema_distance_fraction":
         data.update(unit="fraction", denominator="unstuck EMA band reference",
                     domain=FieldDomain(minimum=-1.0, exclusive_minimum=True, finite=True) if path[1] == "long"
                     else FieldDomain(maximum=1.0, exclusive_maximum=True, finite=True))

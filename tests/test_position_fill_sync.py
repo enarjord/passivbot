@@ -86,7 +86,7 @@ def test_change_during_fetch_does_not_accept_stale_receipt_or_reset_hard_deadlin
     "mode,blocked",
     [
         ("coin", [True, False, False]),
-        ("pside", [True, False, True]),
+        ("position_side", [True, False, True]),
         ("portfolio", [True, True, True]),
     ],
 )
@@ -223,7 +223,7 @@ def test_successful_cap_authorized_fetch_rearms_a_new_burst():
     assert sync.fetch_ready()
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_disabled_aggregate_policy_keeps_only_own_coin_side_dependency(mode):
     sync, now = gate()
     bot = SimpleNamespace(
@@ -236,9 +236,9 @@ def test_disabled_aggregate_policy_keeps_only_own_coin_side_dependency(mode):
 
 
 @pytest.mark.parametrize("pending,scope,blocked", [
-    (A, "coin", {A}), (A, "pside", {A, C}), (A, "portfolio", {A, B, C}),
-    (B, "coin", {B}), (B, "pside", {B}), (B, "portfolio", {A, B, C}),
-    (C, "coin", {C}), (C, "pside", {A, C}), (C, "portfolio", {A, B, C}),
+    (A, "coin", {A}), (A, "position_side", {A, C}), (A, "portfolio", {A, B, C}),
+    (B, "coin", {B}), (B, "position_side", {B}), (B, "portfolio", {A, B, C}),
+    (C, "coin", {C}), (C, "position_side", {A, C}), (C, "portfolio", {A, B, C}),
 ])
 def test_canonical_aggregate_scope_defers_every_contributing_pending_position(pending, scope, blocked):
     now = [0.0]
@@ -255,7 +255,7 @@ def test_canonical_aggregate_scope_defers_every_contributing_pending_position(pe
 
 def test_pside_gate_uses_only_the_canonical_order_side_enabled_policy():
     sync, _ = gate()
-    config = settling_config("pside")
+    config = settling_config("position_side")
     config["bot"]["long"]["hsl"]["enabled"] = False
     bot = SimpleNamespace(_position_fill_sync=sync, config=config)
     assert not permits(bot, dict(symbol=A[0], position_side="long"))
@@ -265,14 +265,14 @@ def test_pside_gate_uses_only_the_canonical_order_side_enabled_policy():
     assert not permits(bot, dict(symbol=C[0], position_side="long"))
 
 
-@pytest.mark.parametrize("scope", ["pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["position_side", "portfolio"])
 def test_legacy_policy_fields_cannot_override_canonical_scope(scope):
     sync, _ = gate()
     config = settling_config(scope)
     config["live"] = {"hsl_signal_mode": "coin"}
     config["bot"]["hsl"] = {"enabled": False}
     bot = SimpleNamespace(_position_fill_sync=sync, config=config)
-    target = C if scope == "pside" else B
+    target = C if scope == "position_side" else B
     assert not permits(bot, dict(symbol=target[0], position_side=target[1]))
 
 
@@ -296,7 +296,7 @@ def test_missing_canonical_scope_has_no_legacy_or_coin_fallback(config):
                 dict(symbol=C[0], position_side=C[1]))
 
 
-@pytest.mark.parametrize("scope", ["pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["position_side", "portfolio"])
 def test_missing_enabled_fact_for_consumed_aggregate_policy_fails(scope):
     sync, _ = gate()
     config = settling_config(scope)

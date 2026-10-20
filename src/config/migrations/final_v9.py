@@ -274,6 +274,8 @@ def reject_v8_alias_conflicts(source):
         for group, old, new in (
             ("risk", "n_positions", "max_positions"),
             ("unstuck", "threshold", "exposure_trigger_ratio"),
+            ("unstuck", "ema_dist", "ema_distance_fraction"),
+            ("hsl", "red_threshold", "drawdown_ratio_threshold"),
             ("hsl", "ema_span_minutes", "drawdown_ratio_ema_span_minutes"),
         ):
             if parts[-2:] == [group, old]:
@@ -353,11 +355,13 @@ def _migrate_shared_fixed_selector(path, *, scope):
         "n_positions": ("risk", "max_positions"),
         "threshold": ("unstuck", "exposure_trigger_ratio"),
         "ema_span_minutes": ("hsl", "drawdown_ratio_ema_span_minutes"),
+        "red_threshold": ("hsl", "drawdown_ratio_threshold"),
+        "ema_dist": ("unstuck", "ema_distance_fraction"),
     }
     if parts[-1] not in renames:
         return path
     group, new = renames[parts[-1]]
-    consumers = ([("bot", "hsl", "ema_span_minutes")]
+    consumers = ([("bot", "hsl", parts[-1])]
                  if group == "hsl" and scope == "portfolio" else
                  [("bot", side, group, parts[-1]) for side in ("long", "short")])
     if any(bound_path_matches_selector(consumer, parts) for consumer in consumers):
@@ -373,6 +377,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from .shared_policy import (COIN_SOURCE_FIELDS,
                                 move_shared_policy, preserve_forced_normal_selection,
                                 preserve_forced_selection_overrides, shared_policy_selector)
+    from .operational_live import move_operational_live, operational_live_selector
 
     result = deepcopy(source)
     if not sparse:
@@ -439,6 +444,12 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 "total_exposure_enforcer_policy",
             } else (part,)
         )]
+        for group, old, new in (
+            ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+            ("unstuck", "ema_dist", "ema_distance_fraction"),
+        ):
+            if parts[-2:] == [group, old]:
+                parts[-1] = new
         path = ".".join(parts)
         for old, new in (
             ("live.hsl_signal_mode", "bot.global.hsl.scope"),
@@ -456,7 +467,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
         ):
             path = path.replace(old, new)
-        return shared_policy_selector(path)
+        return operational_live_selector(shared_policy_selector(path))
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides
@@ -466,7 +477,16 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         scope = "portfolio" if scope == "unified" else scope
         converted = {}
         for key, value in values.items():
+            authored_value = deepcopy(value)
             reject_retired_gpu_selector(key, value, context=path)
+            if key.endswith(".live") and isinstance(value, dict):
+                # A dotted object is replacement authority, not a flattened
+                # list of fields. Convert its sparse contents in place.
+                move_operational_live(
+                    {"live": value},
+                    record=record,
+                    path=f"{path}.{key}".removesuffix(".live"),
+                )
             if key.endswith((".forager.volume_drop_pct", ".risk.total_exposure_entry_gate_enabled")):
                 record(f"{path}.{key}", value, None, "retired policy control")
                 continue
@@ -491,6 +511,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 record(f"{path}.{key}", value, converted, "side-owned universe source paths")
                 continue
             new = selector(key)
+            if new == "bot.global.hsl.scope" and value in {"unified", "pside"}:
+                value = "portfolio" if value == "unified" else "position_side"
             if key == "live.auto_gs":
                 if type(value) is not bool:
                     raise ValueError(f"{path}.{key} must be a boolean")
@@ -498,8 +520,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             if new in converted and converted[new] != value:
                 raise ValueError(f"{path}.{key} conflicts with {new}")
             converted[new] = deepcopy(value)
-            if new != key:
-                record(f"{path}.{key}", values[key], {new: value}, "canonical v9 override path")
+            if new != key or authored_value != value:
+                record(f"{path}.{key}", authored_value, {new: value}, "canonical v9 override path")
         return converted
 
     scope = policy_scope(result, "coin")
@@ -510,10 +532,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     ):
         if old in live:
             value = live.pop(old)
-            if old == "hsl_signal_mode" and value == "unified":
-                value = "portfolio"
+            authored_value = deepcopy(value)
+            if old == "hsl_signal_mode" and value in {"unified", "pside"}:
+                value = "portfolio" if value == "unified" else "position_side"
             put(result, target, value, f"live.{old}")
-            record(f"live.{old}", value, {".".join(target): value}, "consumer-owned global risk policy")
+            record(f"live.{old}", authored_value, {".".join(target): value}, "consumer-owned global risk policy")
     if "auto_gs" in live:
         value = live.pop("auto_gs")
         if type(value) is not bool:
@@ -544,6 +567,10 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         if not isinstance(node, dict):
             return
         if path.endswith(".hsl"):
+            rename(node, "red_threshold", "drawdown_ratio_threshold", path)
+            if node.get("scope") == "pside":
+                node["scope"] = "position_side"
+                record(f"{path}.scope", "pside", "position_side", "explicit position-side scope spelling")
             rename(node, "ema_span_minutes", "drawdown_ratio_ema_span_minutes", path)
         if path.endswith(".risk"):
             rename(node, "n_positions", "max_positions", path)
@@ -558,6 +585,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                             "explicit released-v8 exposure-enforcer object conversion",
                         )
         if path.endswith(".unstuck"):
+            rename(node, "ema_dist", "ema_distance_fraction", path)
             rename(node, "threshold", "exposure_trigger_ratio", path)
         for key in list(node):
             current = f"{path}.{key}" if path else key
@@ -591,6 +619,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         migrate_entry_cooldown_tree(result)
         migrate_entry_ema_tree(result)
         move_shared_policy(result, record=record)
+        move_operational_live(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
         return result
@@ -617,6 +646,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     move_shared_policy(result, record=record)
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
+    move_operational_live(result, record=record)
     preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
         canonicalize_shared_bot_side(result.get("bot", {}).get(side))

@@ -1413,7 +1413,7 @@ def _resolve_fake_scenario_path(config) -> Optional[str]:
     scenario_path = live.get("fake_scenario_path")
     if scenario_path:
         return scenario_path
-    user = live.get("user")
+    user = live.get("account", {}).get("user")
     if not user:
         return None
     from procedures import load_user_info

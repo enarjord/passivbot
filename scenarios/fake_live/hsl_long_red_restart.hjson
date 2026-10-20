@@ -90,7 +90,7 @@
     }
     hsl_paths: {
       hsl.engine: hsl
-      hsl.signal_mode: pside
+      hsl.signal_mode: position_side
       hsl.counts.unavailable: 0
       hsl.scopes.0.action: normal
       // The completed episode retains its decaying signal after flattening.

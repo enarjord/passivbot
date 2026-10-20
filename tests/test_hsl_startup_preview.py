@@ -17,9 +17,7 @@ def _write_config(path, config):
 def _sample_config() -> dict:
     return {
         "config_version": "v9.0.0",
-        "live": {
-            "user": "binance_01",
-        },
+        "live": {"account": {"user": "binance_01"}},
         "bot": {
             "global": {
                 "hsl": {
@@ -29,7 +27,7 @@ def _sample_config() -> dict:
             "long": {
                 "hsl": {
                     "enabled": True,
-                    "red_threshold": 0.1,
+                    "drawdown_ratio_threshold": 0.1,
                     "cooldown_minutes_after_red": 45,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
@@ -39,7 +37,7 @@ def _sample_config() -> dict:
             "short": {
                 "hsl": {
                     "enabled": False,
-                    "red_threshold": 0.12,
+                    "drawdown_ratio_threshold": 0.12,
                     "cooldown_minutes_after_red": 30,
                 },
             },
@@ -190,11 +188,11 @@ def test_hsl_preview_portfolio_policy_uses_explicit_block():
     config["bot"]["global"]["hsl"] = {
         "scope": "portfolio",
         "enabled": True,
-        "red_threshold": 0.25,
+        "drawdown_ratio_threshold": 0.25,
         "secret": "do-not-render",
     }
     report = hsl_startup_preview._config_report(config)
-    assert report["hsl"]["portfolio"]["red_threshold"] == 0.25
+    assert report["hsl"]["portfolio"]["drawdown_ratio_threshold"] == 0.25
     assert "do-not-render" not in json.dumps(report)
 
 

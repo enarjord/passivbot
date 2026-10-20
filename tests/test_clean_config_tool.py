@@ -80,7 +80,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     cfg["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.risk.total_wallet_exposure_limit": 2.5
     }
-    cfg["coin_overrides"] = {"BTC": {"live": {"leverage": 3.0}}}
+    cfg["coin_overrides"] = {"BTC": {"live": {"account": {"leverage": 3.0}}}}
     cfg["_raw"] = {"bad": "metadata"}
     wrapper = {"config": cfg, "analysis": {"adg": 123}, "timestamp": 456}
     original = deepcopy(wrapper)
@@ -106,7 +106,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     assert "coins" not in result["backtest"]
     assert "base_config_path" not in result["live"]
     assert set(result["bot"]["long"]["strategy"]) == {"trailing_martingale"}
-    assert result["coin_overrides"]["BTC"] == {"live": {"leverage": 3.0}}
+    assert result["coin_overrides"]["BTC"] == {"live": {"account": {"leverage": 3.0}}}
     assert (
         result["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
         == cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
@@ -236,7 +236,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
                         "strategy": {"trailing_martingale": {"close": close}},
                     }
                 },
-                "live": {"leverage": number(3)},
+                "live": {"account": {"leverage": number(3)}},
             }
         }
         cfg["backtest"]["scenarios"] = [
@@ -278,7 +278,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
     assert set(patch["bot"]["long"]["strategy"]["trailing_martingale"]["close"]) == {
         "retracement_volatility_1h_weight"
     }
-    assert type(patch["live"]["leverage"]) is int
+    assert type(patch["live"]["account"]["leverage"]) is int
     assert '"retracement_volatility_1h_weight": 0.0' in outputs[0]
     if "backtest" in result:
         assert type(result["backtest"]["balance_sample_divider"]) is int
@@ -328,7 +328,7 @@ def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
         ("bot.long.risk.max_positions", 7, int),
         ("bot.long.strategy.trailing_martingale.entry.ema_span_0", 60, float),
         ("coin_overrides.BTC.bot.long.unstuck.ema_span_0", 60, float),
-        ("coin_overrides.BTC.live.leverage", 3, int),
+        ("coin_overrides.BTC.live.account.leverage", 3, int),
     ],
 )
 def test_cleanup_resolves_override_selector_numeric_types(
@@ -340,7 +340,7 @@ def test_cleanup_resolves_override_selector_numeric_types(
         cfg["coin_overrides"] = {
             "BTC": {
                 "bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
-                "live": {"leverage": 3},
+                "live": {"account": {"leverage": 3}},
             }
         }
         cfg["optimize"]["fixed_runtime_overrides"] = {selector: number(value)}
@@ -456,7 +456,7 @@ def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field
 
 @pytest.mark.parametrize("mode", ["full", "optimize"])
 @pytest.mark.parametrize("field", [
-    "red_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
+    "drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
     "cooldown_minutes_after_red",
 ])
 def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
@@ -479,7 +479,7 @@ def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
         "bot": {"long": {"unstuck": {"ema_span_0": 60.25, "enabled": False}}},
         "backtest": {"starting_balance": 1000.25, "end_date": "now"},
         "monitor": {"max_total_bytes": 2**60 + 1},
-        "coin_overrides": {"BTC": {"live": {"forced_mode_long": "0.0"}}},
+        "coin_overrides": {"BTC": {"live": {"modes": {"long": "0.0"}}}},
     }
     original = deepcopy(cfg)
     result = normalize_export_numbers(cfg)
@@ -496,7 +496,7 @@ def test_export_numeric_normalization_rejects_lossy_float_conversion(value):
 
 
 @pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
-@pytest.mark.parametrize("hsl_mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("hsl_mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize(
     "strategy", ["trailing_martingale", "ema_anchor"]
 )

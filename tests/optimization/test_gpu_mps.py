@@ -3173,7 +3173,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
         config["bot"][side]["hsl"]["enabled"] = enabled
-        config["bot"][side]["hsl"]["red_threshold"] = 0.9
+        config["bot"][side]["hsl"]["drawdown_ratio_threshold"] = 0.9
         config["bot"][side]["hsl"]["ema_span_minutes"] = 1.0
         config["bot"][side]["unstuck"]["enabled"] = False
     for side in enabled_sides:

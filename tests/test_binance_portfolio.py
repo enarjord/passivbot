@@ -210,7 +210,7 @@ async def signed_pm_bot(request):
     bot.exchange_ccxt_id = 'binanceusdm'
     bot.ws_enabled = request.param
     bot.endpoint_override = None
-    bot.config = {'live': {'time_in_force': 'gtc'}}
+    bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
     bot.broker_code = load_broker_code('binance')
     bot.custom_id_max_length = 36
     bot.create_ccxt_sessions()

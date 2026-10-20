@@ -25,28 +25,35 @@ def _roundtrip(source):
 
 def test_startup_budget_records_keep_integer_millisecond_leaves():
     source = get_template_config()
-    source["live"]["startup_phase_budgets"] = {
+    source["live"]["startup"]["startup_phase_budgets"] = {
         "account": {"elapsed_ms": 120_000, "since_previous_ms": 60_000},
         "full-warmup": {"elapsed_ms": 900_000},
     }
     registry = get_field_registry()
-    for phase, budgets in source["live"]["startup_phase_budgets"].items():
-        record = registry.find(("live", "startup_phase_budgets", phase))
+    for phase, budgets in source["live"]["startup"]["startup_phase_budgets"].items():
+        record = registry.find(("live", "startup", "startup_phase_budgets", phase))
         assert record.types == (FieldType.OBJECT,)
         assert record.numeric_type is None
         for key in budgets:
-            field = registry.find(("live", "startup_phase_budgets", phase, key))
+            field = registry.find(
+                ("live", "startup", "startup_phase_budgets", phase, key)
+            )
             assert field.numeric_type is int
             assert field.unit == "milliseconds"
             assert field.domain.minimum == 0
     exported = _roundtrip(source)
-    assert exported["live"]["startup_phase_budgets"] == source["live"]["startup_phase_budgets"]
-    assert all(type(value) is int
-               for budget in exported["live"]["startup_phase_budgets"].values()
-               for value in budget.values())
-    assert prepare_config(exported, verbose=False)["live"]["startup_phase_budgets"] == (
-        source["live"]["startup_phase_budgets"]
+    assert (
+        exported["live"]["startup"]["startup_phase_budgets"]
+        == source["live"]["startup"]["startup_phase_budgets"]
     )
+    assert all(
+        type(value) is int
+        for budget in exported["live"]["startup"]["startup_phase_budgets"].values()
+        for value in budget.values()
+    )
+    assert prepare_config(exported, verbose=False)["live"]["startup"][
+        "startup_phase_budgets"
+    ] == (source["live"]["startup"]["startup_phase_budgets"])
 
 
 @pytest.mark.parametrize("field_name", ["coins", "ignored_coins"])

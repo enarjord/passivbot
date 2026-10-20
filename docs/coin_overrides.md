@@ -10,12 +10,12 @@ Allowed fields are intentionally limited:
 
 - **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
   selected risk fields (position-exposure enforcer settings and
-  `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
+  `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_distance_fraction`,
   `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `exposure_trigger_ratio`); and
   every HSL field when the global `bot.global.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
-- **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
+- **Live flags**: `live.modes.long`, `live.modes.short`, `live.account.leverage`.
 
 Not overrideable: approved/ignored coins, exchange settings, and arbitrary new keys. A disallowed or
 unknown inline override is rejected with its full path. A full override config file may contain
@@ -44,7 +44,7 @@ The complete conditional HSL override group is:
 
 - `hsl.enabled`
 - `hsl.scale_budget_with_excess_allowance`
-- `hsl.red_threshold`
+- `hsl.drawdown_ratio_threshold`
 - `hsl.memory_ema_span_minutes`
 - `hsl.drawdown_ratio_ema_span_minutes`
 - `hsl.cooldown_minutes_after_red`
@@ -52,7 +52,7 @@ The complete conditional HSL override group is:
 
 These fields are per `coin+side` only when the main config selects
 `bot.global.hsl.scope = "coin"`. The signal mode itself remains global and is not overridable.
-An inline HSL patch in `pside` or `portfolio` mode is rejected. HSL values in a complete override
+An inline HSL patch in `position_side` or `portfolio` mode is rejected. HSL values in a complete override
 file are warned about and ignored in those modes, while other eligible fields in that file still
 apply. A `bot.global.hsl.scope` value inside an override file or inline patch cannot authorize the
 HSL patch; the main config's effective global mode always decides.
@@ -96,7 +96,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           },
           "hsl": {
             "enabled": true,
-            "red_threshold": 0.08,
+            "drawdown_ratio_threshold": 0.08,
             "drawdown_ratio_ema_span_minutes": 10.0,
             "cooldown_minutes_after_red": 60.0,
             "panic_close_order_type": "market"
@@ -107,7 +107,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.055}}}
         }
       },
-      "live": {"forced_mode_long": "normal"}
+      "live": {"modes": {"long": "normal"}}
     }
   },
   "bot": {
@@ -163,8 +163,8 @@ Main config:
     }
   },
   "live": {
-    "forced_mode_short": "graceful_stop",
-    "leverage": 4
+      "account": {"leverage": 4},
+      "modes": {"short": "graceful_stop"}
   }
 }
 ```
@@ -250,7 +250,7 @@ this selection produces the same patches.
 Selectors use the fine-tune dotted-path matcher: an optional `bot.` prefix, groups or individual
 leaves, full-segment prefix/suffix matching, and `*` as a one-segment wildcard. For example,
 `bot.long.strategy`, `long.strategy.entry.initial_qty_pct` (Trailing Martingale),
-`*.entry_cooldown.base_duration_minutes`, and `live.leverage` are valid selections. A bare leaf such as
+`*.entry_cooldown.base_duration_minutes`, and `live.account.leverage` are valid selections. A bare leaf such as
 `base_duration_minutes` selects both sides. Overlapping selectors are deduplicated. Group selectors
 include only fields allowed by the coin-override policy; `long.risk` does not override global
 exposure or position-count settings. Empty selectors and selectors matching no allowed input
@@ -301,5 +301,5 @@ excluded from discovery, but other JSON/HJSON files in that directory are treate
 - Mis-keyed coins: invalid coin names and normalized-name collisions are rejected.
 - Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
   coerced into trading parameters.
-- Conditional HSL: setting HSL fields in a coin patch while the main config uses `pside` or
+- Conditional HSL: setting HSL fields in a coin patch while the main config uses `position_side` or
   `portfolio` mode is invalid; changing `bot.global.hsl.scope` inside the patch does not change that.

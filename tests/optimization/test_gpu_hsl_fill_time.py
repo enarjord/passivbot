@@ -28,7 +28,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
     for direction in ("long", "short"):
         policy = config["bot"][direction]["hsl"]
         policy.update(enabled=direction == side and mode != "portfolio",
-                      red_threshold=.01, ema_span_minutes=1.,
+                      drawdown_ratio_threshold=.01, ema_span_minutes=1.,
                       cooldown_minutes_after_red=5.,
                       panic_close_order_type="market")
         strategy = config["bot"][direction]["strategy"]["trailing_martingale"]
@@ -63,7 +63,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
 
 @pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode, strategy_kind):
     from backtest import build_backtest_payload, execute_backtest
     from config.metrics import resolve_metric_value

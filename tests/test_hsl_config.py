@@ -27,7 +27,7 @@ def as_legacy(cfg, version="v8.6.0"):
     bot, live = cfg["bot"], cfg["live"]
     global_policy = bot.pop("global")
     mode = global_policy["hsl"]["scope"]
-    live["hsl_signal_mode"] = "unified" if mode == "portfolio" else mode
+    live["hsl_signal_mode"] = {"portfolio": "unified", "position_side": "pside"}.get(mode, mode)
     live["max_realized_loss_pct"] = global_policy["loss_gate"]["max_drawdown_ratio"]
     live["auto_gs"] = live.pop("disapproved_position_mode") == "graceful_stop"
     live.pop("risk_bootstrap_max_lookback_minutes", None)
@@ -45,18 +45,22 @@ def as_legacy(cfg, version="v8.6.0"):
         side_bot = bot[side]
         side_bot["risk"]["n_positions"] = side_bot["risk"].pop("max_positions")
         side_bot["unstuck"]["threshold"] = side_bot["unstuck"].pop("exposure_trigger_ratio")
+        side_bot["unstuck"]["ema_dist"] = side_bot["unstuck"].pop("ema_distance_fraction")
         side_bounds = bounds[side]
         side_bounds["risk"]["n_positions"] = side_bounds["risk"].pop("max_positions")
         side_bounds["unstuck"]["threshold"] = side_bounds["unstuck"].pop("exposure_trigger_ratio")
+        side_bounds["unstuck"]["ema_dist"] = side_bounds["unstuck"].pop("ema_distance_fraction")
     policies = [bot[side]["hsl"] for side in ("long", "short")]
     policies += [bot["hsl"]] if mode == "portfolio" else []
     bound_policies = [bounds[side]["hsl"] for side in ("long", "short") if "hsl" in bounds[side]]
     bound_policies += [bounds["hsl"]] if mode == "portfolio" else []
     for block in policies:
+        block["red_threshold"] = block.pop("drawdown_ratio_threshold")
         block.pop("memory_ema_span_minutes", None)
         block["ema_span_minutes"] = block.pop("drawdown_ratio_ema_span_minutes")
         block["restart_after_red_policy"] = "always" if block["enabled"] else None
     for block in bound_policies:
+        block["red_threshold"] = block.pop("drawdown_ratio_threshold")
         block.pop("memory_ema_span_minutes", None)
         block["ema_span_minutes"] = block.pop("drawdown_ratio_ema_span_minutes")
     return cfg
@@ -66,7 +70,7 @@ def prepared(cfg):
     return prepare_config(cfg, verbose=False, target="canonical", runtime=None)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_explicit_hsl_config_roundtrips_without_legacy_fields(mode):
     cfg = source(mode)
     result = prepared(cfg)
@@ -97,7 +101,7 @@ def test_explicit_legacy_selector_is_rejected_before_runtime():
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("policy", [None, "always", "never", "threshold", [], {}])
 def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
     cfg = source(mode)
@@ -107,7 +111,7 @@ def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode):
     cfg = prepared(source(mode, enabled=False))
     path = "bot.global.hsl" if mode == "portfolio" else "bot.long.hsl"
@@ -130,7 +134,7 @@ def test_portfolio_missing_portfolio_block_is_not_hydrated_even_with_equal_sides
 
 
 def test_cli_mode_change_rechecks_portfolio_presence():
-    cfg = prepared(source("pside"))
+    cfg = prepared(source("position_side"))
     update_config_with_args(
         cfg, Namespace(**{"bot.global.hsl.scope": "portfolio"}), verbose=False
     )
@@ -159,7 +163,7 @@ def test_independent_slow_and_fast_spans_preserve_fractional_minutes(span):
 @pytest.mark.parametrize("cap", [0.0, -1.0, 0.99, 129600.01, float("inf"), float("nan"), True])
 def test_startup_coverage_cap_is_bounded_independently_of_memory_age(cap):
     cfg = source()
-    cfg["live"]["risk_bootstrap_max_lookback_minutes"] = cap
+    cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = cap
     with pytest.raises(ValueError, match="risk_bootstrap_max_lookback_minutes"):
         prepared(cfg)
 
@@ -202,7 +206,7 @@ def test_removed_metric_is_rejected_in_keys_and_values(section, tier):
 def test_portfolio_optimizer_paths_target_portfolio_only():
     cfg = prepared(source("portfolio"))
     keys = dict(get_optimization_key_paths(cfg))
-    assert keys["hsl_red_threshold"] == ("bot", "global", "hsl", "red_threshold")
+    assert keys["hsl_red_threshold"] == ("bot", "global", "hsl", "drawdown_ratio_threshold")
     assert keys["hsl_drawdown_ratio_ema_span_minutes"] == ("bot", "global", "hsl", "drawdown_ratio_ema_span_minutes")
     assert not any(k.startswith(("long_hsl_", "short_hsl_")) for k in keys)
     assert "hsl_red_threshold" in flatten_optimize_bounds(
@@ -214,9 +218,9 @@ def test_portfolio_optimizer_paths_target_portfolio_only():
 def test_portfolio_rejects_inactive_side_optimizer_paths(section):
     cfg = source("portfolio")
     if section == "bounds":
-        cfg["optimize"][section]["long"]["hsl"] = {"red_threshold": [0.1, 0.2]}
+        cfg["optimize"][section]["long"]["hsl"] = {"drawdown_ratio_threshold": [0.1, 0.2]}
     else:
-        cfg["optimize"][section]["bot.short.hsl.red_threshold"] = 0.2
+        cfg["optimize"][section]["bot.short.hsl.drawdown_ratio_threshold"] = 0.2
     with pytest.raises(ValueError, match="inactive in portfolio"):
         prepared(cfg)
 
@@ -231,22 +235,22 @@ def test_enabling_coin_override_inherits_finite_policy():
     assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_inactive_coin_hsl_override_is_not_silently_ignored(mode):
     cfg = source(mode)
-    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"red_threshold": 0.2}}}}}
+    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"drawdown_ratio_threshold": 0.2}}}}}
     with pytest.raises(ValueError, match="inactive in portfolio|overridable only.*scope"):
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_unimplemented_runtime_mode_is_explicitly_rejected(mode):
     with pytest.raises(ValueError, match="runtime integration is not available"):
         require_runtime_support(prepared(source(mode)))
     require_runtime_support(prepared(get_template_config()), supported_modes=("coin",))
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_live_constructor_accepts_hsl_before_offline_credential_sentinel(
     monkeypatch, mode
 ):
@@ -278,7 +282,7 @@ def test_live_constructor_rejects_unknown_engine_before_credentials(monkeypatch)
 
 @pytest.mark.parametrize(
     "path",
-    ["bot.long.hsl.red_threshold", "bot.short.hsl.no_restart_drawdown_threshold"],
+    ["bot.long.hsl.drawdown_ratio_threshold", "bot.short.hsl.no_restart_drawdown_threshold"],
 )
 def test_cli_cannot_target_inactive_or_removed_hsl_settings(path):
     cfg = prepared(source("portfolio"))
@@ -291,11 +295,11 @@ def test_hsl_coin_override_parsing_keeps_explicit_threshold():
 
     cfg = source()
     cfg["coin_overrides"] = {
-        "TEST": {"bot": {"long": {"hsl": {"red_threshold": 0.12}}}}
+        "TEST": {"bot": {"long": {"hsl": {"drawdown_ratio_threshold": 0.12}}}}
     }
     result = parse_overrides(prepared(cfg), verbose=False)
     assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"] == {
-        "red_threshold": 0.12
+        "drawdown_ratio_threshold": 0.12
     }
 
 
@@ -309,7 +313,7 @@ def test_scenario_rechecks_effective_hsl_contract(change):
         "enable": {"bot.long.hsl.enabled": True},
         "mode": {"bot.global.hsl.scope": "portfolio"},
         "removed": {"bot.long.hsl.no_restart_drawdown_threshold": 0.3},
-        "inactive": {"bot.long.hsl.red_threshold": 0.3},
+        "inactive": {"bot.long.hsl.drawdown_ratio_threshold": 0.3},
     }[change]
     scenario = SuiteScenario(
         "test", None, None, ["TEST"], [], exchanges=["binance"], overrides=overrides
@@ -350,7 +354,7 @@ def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
 @pytest.mark.parametrize(
     "field,bounds",
     [
-        ("red_threshold", [0, 0.2]),
+        ("drawdown_ratio_threshold", [0, 0.2]),
         ("drawdown_ratio_ema_span_minutes", [0.5, 2]),
         ("cooldown_minutes_after_red", [-1, 2]),
     ],
@@ -376,12 +380,12 @@ def test_engine_cannot_be_changed_by_optimizer_override():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, mode):
     import passivbot
 
     cfg = source(mode)
-    cfg["live"]["user"] = "offline_test"
+    cfg["live"]["account"]["user"] = "offline_test"
     monkeypatch.setattr(passivbot.sys, "argv", ["passivbot"])
     monkeypatch.setattr(passivbot, "configure_logging", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -427,20 +431,22 @@ def test_retired_recovery_controls_cannot_be_optimizer_parameters(field, section
         prepared(cfg)
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_aggregate_balance_override_constructor_rejects_before_credentials(
     mode, monkeypatch
 ):
     import passivbot
 
     config = prepared(source(mode))
-    config["live"]["balance_override"] = 1000.0
+    config["live"]["account"]["balance_override"] = 1000.0
     monkeypatch.setattr(
         passivbot,
         "load_user_info",
         lambda *args: pytest.fail("unsupported override reached credentials"),
     )
-    with pytest.raises(ValueError, match="does not support live.balance_override"):
+    with pytest.raises(
+        ValueError, match="does not support live.account.balance_override"
+    ):
         passivbot.Passivbot(config)
 
 
@@ -771,7 +777,7 @@ async def test_cli_current_external_suite_reaches_preparation(
         await module.main()
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("selector", [None, "legacy", "revised"])
 def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mode, selector):
     from tools.migrate_config_v9 import migrate

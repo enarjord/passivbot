@@ -216,7 +216,7 @@ def test_build_backtest_payload_marks_normal_forced_coin_active():
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["long"]["risk"]["max_positions"] = 2
-    config["coin_overrides"] = {"OM": {"live": {"forced_mode_long": "normal"}}}
+    config["coin_overrides"] = {"OM": {"live": {"modes": {"long": "normal"}}}}
     mss = {
         coin: {
             "qty_step": 0.001,

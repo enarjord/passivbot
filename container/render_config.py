@@ -94,7 +94,7 @@ def main() -> int:
         raise SystemExit("Rendered container config must be a dictionary at the top level")
 
     require_v9_runtime_config(config)
-    set_nested(config, ["live", "user"], os.environ["PB_USER"])
+    set_nested(config, ["live", "account", "user"], os.environ["PB_USER"])
 
     approved_coins = os.environ.get("PB_APPROVED_COINS", "").strip()
     if approved_coins:

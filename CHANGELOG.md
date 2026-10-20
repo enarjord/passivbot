@@ -9,6 +9,13 @@ since the latest release tag; these features may already be available when insta
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.
+- Name HSL's configured trigger `drawdown_ratio_threshold`, unstuck's EMA offset
+  `ema_distance_fraction`, and HSL's aggregate side scope `position_side`. Preserve
+  existing units, values and native engine identifiers through explicit adapters;
+  released-v8 migration converts fields, bounds, overrides and fixed selectors.
+- Group operational live configuration by account, API, candles, startup, fills, execution,
+  recovery and modes. Canonical consumers, CLI flags, coin patches and diagnostics use the
+  nested paths; the explicit released-v8 converter reports every relocation.
 
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently
@@ -26,7 +33,8 @@ since the latest release tag; these features may already be available when insta
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.
 - Group each side's exposure-enforcer switch, threshold, and policy under
   `risk.position_exposure_enforcer` and `risk.total_exposure_enforcer`, with matching
-  optimizer-bound paths and explicit released-v8 conversion. Native trading values are unchanged.
+  optimizer-bound paths and explicit released-v8 conversion, preserving inline coin-policy
+  precedence over referenced files. Native trading values are unchanged.
 - Move shared strategy, universe, execution, Forager selection and warmup policy into
   `bot.global` and directional `bot.<side>` scopes. Keep side-specific coin-list sources
   reloadable, add `forager.always_include`, and preserve nullable simulation minimum-cost
