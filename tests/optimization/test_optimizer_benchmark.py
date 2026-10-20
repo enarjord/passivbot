@@ -564,10 +564,18 @@ def test_search_matches_backend_signature_and_prepares_recording_contract(frozen
 def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen):
     directory, manifest = frozen
     entry = manifest["entries"][0]
-    with np.load(directory / entry["data_file"]) as data:
-        arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
-    report = worker.search_run(entry, arrays, SimpleNamespace(
-        engine="search-cpu", workers=1, search_iters=8, width="8", dispatch_budget=100000))
+    # Network rejection belongs to the worker process, including the Rust
+    # verification pass; it must not alter the pytest process's socket methods.
+    output = directory / "cpu-search.json"
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run([sys.executable, "-m", "tools.optimizer_benchmark.worker",
+                    "--backend", str(root), "--workload", str(directory),
+                    "--entry", entry["id"], "--engine", "search-cpu", "--workers", "1",
+                    "--search-iters", "8", "--output", str(output)],
+                   cwd=root, env=dict(os.environ, PYTHONPATH=str(root / "src")),
+                   check=True, timeout=60)
+    report = json.loads(output.read_text())
+    assert report["status"] == "completed", report
     assert report["samples"][0]["completed"] == 8
     assert report["persisted_bytes"] > 0
     assert report["rust_reference_verification"]["status"] == "passed"
