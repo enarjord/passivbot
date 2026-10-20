@@ -1,6 +1,7 @@
 """Exposure controls share one object without changing native parameter values."""
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -77,3 +78,60 @@ def test_released_fixed_selector_suffixes_keep_their_gene_authority(owner, nativ
     assert config["optimize"]["fixed_params"] == [f"{prefix}{owner}_exposure_enforcer.threshold"]
     assert any(item["path"] == "optimize.fixed_params" and item["old"] == [selector]
                and item["new"] == config["optimize"]["fixed_params"] for item in migrated.changes)
+
+
+@pytest.mark.parametrize("location", ["root", "scenario"])
+@pytest.mark.parametrize("file_old,inline_old", [(False, False), (False, True), (True, False), (True, True)])
+def test_released_file_inline_enforcer_authority_is_converted_before_merging(
+    tmp_path, location, file_old, inline_old,
+):
+    from tools.migrate_config_v9 import _set_patch
+
+    def risk(old, enabled, threshold):
+        return ({"position_exposure_enforcer_enabled": enabled,
+                 "position_exposure_enforcer_threshold": threshold} if old else
+                {"position_exposure_enforcer": {"enabled": enabled, "threshold": threshold}})
+
+    source = released_v8_policy()
+    file = tmp_path / "coin.json"
+    file.write_text(json.dumps({"bot": {"long": {"risk": risk(file_old, True, 0.55)}}}))
+    original_file = file.read_bytes()
+    patch = {"TEST": {"override_config_path": file.name,
+                      "bot": {"long": {"risk": risk(inline_old, False, 0.8)}}}}
+    if location == "root":
+        source["coin_overrides"] = patch
+    else:
+        source["backtest"]["scenarios"] = [{"label": "enforcer", "overrides": {"coin_overrides": patch}}]
+    before = deepcopy(source)
+    migration = migrate(source, memory_span_minutes=123.5,
+                        base_config_path=str(tmp_path / "input.json"))
+    assert source == before
+    assert file.read_bytes() == original_file
+    file.unlink()
+    result = migration.config
+    if location == "scenario":
+        _set_patch(result, result["backtest"]["scenarios"][0]["overrides"], scenario=True)
+    result = prepare_config(result, base_config_path=str(tmp_path / "moved.json"), verbose=False)
+    values = result["coin_overrides"]["TEST"]["bot"]["long"]["risk"]
+    assert values == {"position_exposure_enforcer": {"enabled": False, "threshold": 0.8}}
+    if inline_old:
+        assert any(item["path"].endswith("coin_overrides.TEST.bot.long.risk.position_exposure_enforcer_threshold")
+                   and item["old"] == 0.8 for item in migration.changes)
+
+
+@pytest.mark.parametrize("canonical_first", [False, True])
+def test_released_inline_enforcer_alias_conflicts_remain_errors_with_a_file(tmp_path, canonical_first):
+    source = released_v8_policy()
+    file = tmp_path / "coin.json"
+    file.write_text(json.dumps({"bot": {"long": {"risk": {
+        "position_exposure_enforcer_threshold": 0.55,
+    }}}}))
+    entries = [("position_exposure_enforcer_threshold", 0.8),
+               ("position_exposure_enforcer", {"threshold": 0.9})]
+    source["coin_overrides"] = {"TEST": {"override_config_path": file.name, "bot": {"long": {
+        "risk": dict(reversed(entries) if canonical_first else entries),
+    }}}}
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="conflict"):
+        migrate(source, memory_span_minutes=123.5, base_config_path=str(tmp_path / "input.json"))
+    assert source == before
