@@ -54,6 +54,30 @@ def selected_report(source, coin, form, *, base, scenario=None, field="close_pct
                           scenario=scenario, optimize=True)
 
 
+def suite_policy(source, *, base, scenario=None, optimize=False):
+    """Replay the suite's local policy stages without selecting a dataset."""
+    from config.load import prepare_config
+    from config.overrides import parse_overrides
+    from config.scenario_overrides import normalize_scenario_overrides
+    from optimization.warmup import _apply_config_overrides
+    from optimizer_overrides import apply_coupled_unstuck_ema_spans, optimizer_overrides
+    from suite_runner import apply_scenario_overrides
+
+    context = parse_overrides(prepare_config(source, base_config_path=base, verbose=False), verbose=False)
+    if optimize:
+        _apply_config_overrides(context, context["optimize"]["fixed_runtime_overrides"])
+        transforms = context["optimize"]["enable_overrides"]
+        for side in (None, "long", "short"):
+            context = optimizer_overrides(transforms, context, side)
+    if scenario is not None:
+        selected = next(item for item in context["backtest"]["scenarios"] if item["label"] == scenario)
+        apply_scenario_overrides(context, normalize_scenario_overrides(selected.get("overrides", {})))
+        if optimize:
+            context = apply_coupled_unstuck_ema_spans(context)
+        context = parse_overrides(context, verbose=False)
+    return context
+
+
 @pytest.mark.parametrize("coin", COINS)
 @pytest.mark.parametrize("form", ["selected", "direct"])
 @pytest.mark.parametrize("scenario_form", [None, "leaf", "coin", "map"])
@@ -180,18 +204,19 @@ def test_alias_scenario_layer_is_visible_under_the_canonical_coin(tmp_path, form
     source = policy()
     source["coin_overrides"] = {"1000SHIB": coin_patch(0.12)}
     if scope == "leaf":
-        selector, value = "coin_overrides.1000SHIB.bot.long.unstuck.close_pct", 0.31
+        selector, value = "coin_overrides.SHIB.bot.long.unstuck.close_pct", 0.31
         expected_path = "coin_overrides.SHIB.bot.long.unstuck.close_pct"
     elif scope == "coin":
-        selector, value = "coin_overrides.1000SHIB", coin_patch(0.31)
+        selector, value = "coin_overrides.SHIB", coin_patch(0.31)
         expected_path = "coin_overrides.SHIB"
     else:
         selector, value = "coin_overrides", {"1000SHIB": coin_patch(0.31)}
         expected_path = selector
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {selector: value}}]
     original = deepcopy(source)
+    expected = suite_policy(source, base=str(tmp_path / "input.json"), scenario="one", optimize=True)
     report = selected_report(source, "SHIB", form, base=str(tmp_path / "input.json"), scenario="one")
-    assert report["value"] == 0.31
+    assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"]["close_pct"] == 0.31
     assert report["sources"][-1]["kind"] == "scenario_override"
     assert report["sources"][-1]["path"] == expected_path
     assert report["search"]["status"] == "scenario_override"
@@ -209,11 +234,14 @@ def test_explain_preserves_strict_fixed_runtime_alias_selector_authority(tmp_pat
     selector = f"coin_overrides.{selector_coin}.bot.long.unstuck.close_pct"
     source["optimize"]["fixed_runtime_overrides"] = {selector: 0.21}
     if authored_coin == "1000SHIB":
-        with pytest.raises((KeyError, ValueError), match="Unknown override path"):
+        with pytest.raises((KeyError, ValueError), match="Unknown override path") as owner_error:
+            suite_policy(source, base=str(tmp_path / "input.json"), optimize=True)
+        with pytest.raises(owner_error.type, match="Unknown override path"):
             selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"))
     else:
+        expected = suite_policy(source, base=str(tmp_path / "input.json"), optimize=True)
         report = selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"))
-        assert report["value"] == 0.21
+        assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"]["close_pct"] == 0.21
         assert report["sources"][-1]["kind"] == "fixed_runtime_override"
         assert report["search"]["status"] == "fixed_runtime_override"
 
@@ -234,7 +262,9 @@ def test_coupling_keeps_untouched_sources_and_identifies_its_generated_span(
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     original = deepcopy(source)
     original_file = override.read_bytes()
+    expected = suite_policy(source, base=str(tmp_path / "input.json"), optimize=True)
     report = selected_report(source, canonical_coin, form, base=str(tmp_path / "input.json"), field=field)
+    assert report["value"] == expected["coin_overrides"][canonical_coin]["bot"]["long"]["unstuck"][field]
     event = report["sources"][-1]
     assert event["path"] == f"coin_overrides.{canonical_coin}.bot.long.unstuck.{field}"
     if field == "ema_span_0":
@@ -274,7 +304,11 @@ def test_coupling_scenario_replacement_does_not_reuse_an_earlier_file_source(tmp
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {selector: value}}]
     original = deepcopy(source)
     originals = {path: path.read_bytes() for path in (old_file, new_file)}
+    expected = suite_policy(source, base=str(tmp_path / "input.json"), scenario="one", optimize=True)
     report = selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"), scenario="one")
+    assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"].get(
+        "close_pct", expected["bot"]["long"]["unstuck"]["close_pct"],
+    )
     assert report["value"] == (source["bot"]["long"]["unstuck"]["close_pct"]
                                if replacement == "removed" else 0.31)
     file_events = [event for event in report["sources"] if event["kind"] == "override_file"]
@@ -289,7 +323,7 @@ def test_coupling_scenario_replacement_does_not_reuse_an_earlier_file_source(tmp
     assert {path: path.read_bytes() for path in originals} == originals
 
 
-def test_alias_coupling_scenario_keeps_the_runtime_duplicate_key_rejection(tmp_path):
+def test_alias_coupling_scenario_keeps_the_suite_owner_selector_rejection(tmp_path):
     source = policy()
     override = write_json(tmp_path / "alias.json", coin_patch(0.12))
     source["coin_overrides"] = {"1000SHIB": {"override_config_path": str(override)}}
@@ -297,5 +331,55 @@ def test_alias_coupling_scenario_keeps_the_runtime_duplicate_key_rejection(tmp_p
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
         "coin_overrides.1000SHIB": coin_patch(0.31),
     }}]
-    with pytest.raises(ValueError, match="both normalize to 'SHIB'"):
+    with pytest.raises(KeyError, match="1000SHIB") as owner_error:
+        suite_policy(source, base=str(tmp_path / "input.json"), scenario="one", optimize=True)
+    with pytest.raises(owner_error.type, match="1000SHIB"):
         selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"), scenario="one")
+
+
+@pytest.mark.parametrize("scope", ["leaf", "coin"])
+def test_raw_alias_scenario_selector_does_not_gain_authority_in_explain(tmp_path, scope):
+    source = policy()
+    source["coin_overrides"] = {"1000SHIB": coin_patch(0.12)}
+    selector = ("coin_overrides.1000SHIB.bot.long.unstuck.close_pct"
+                if scope == "leaf" else "coin_overrides.1000SHIB")
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
+        selector: 0.31 if scope == "leaf" else coin_patch(0.31),
+    }}]
+    with pytest.raises(KeyError, match="1000SHIB") as owner_error:
+        suite_policy(source, base=str(tmp_path / "input.json"), scenario="one")
+    with pytest.raises(owner_error.type, match="1000SHIB"):
+        selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"), scenario="one")
+
+
+def test_duplicate_authored_aliases_remain_rejected_by_suite_and_explain(tmp_path):
+    source = policy()
+    source["coin_overrides"] = {"1000SHIB": coin_patch(0.12), "SHIB": coin_patch(0.31)}
+    with pytest.raises(ValueError, match="both normalize to 'SHIB'"):
+        suite_policy(source, base=str(tmp_path / "input.json"))
+    with pytest.raises(ValueError, match="both normalize to 'SHIB'"):
+        selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"))
+
+
+@pytest.mark.parametrize("selected", ["SHIB", "1000SHIB"])
+@pytest.mark.parametrize("origin", ["inline", "file", "mixed"])
+def test_whole_coin_alias_queries_report_the_aggregate_authored_and_file_sources(tmp_path, selected, origin):
+    source = policy()
+    override = write_json(tmp_path / "container.json", {"bot": {"long": {"unstuck": {
+        "close_pct": 0.12, "ema_span_0": 17.5,
+    }}}})
+    patch = (coin_patch(0.31) if origin == "inline" else {"override_config_path": str(override)})
+    if origin == "mixed":
+        patch.update(coin_patch(0.31))
+    source["coin_overrides"] = {"1000SHIB": patch}
+    original = deepcopy(source)
+    expected = suite_policy(source, base=str(tmp_path / "input.json"))["coin_overrides"]["SHIB"]
+    report = explain_config(source, f"coin_overrides.{selected}", base_config_path=str(tmp_path / "input.json"))
+    assert report["path"] == "coin_overrides.SHIB"
+    assert report["value"] == expected
+    assert any(event["kind"] == "authored" and event["value"] == patch for event in report["sources"])
+    assert not any(event["kind"] in {"default_or_derived", "normalization"} for event in report["sources"])
+    files = [event["file"] for event in report["sources"] if event["kind"] == "override_file"]
+    assert set(files) == (set() if origin == "inline" else {str(override)})
+    assert report["search"]["status"] == "not_in_bounds"
+    assert source == original
