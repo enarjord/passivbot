@@ -264,8 +264,10 @@ def migrate_v8_to_v9(
                                path_prefix="config." if wrapped else "")
     reject_v8_alias_conflicts(result)
     if not _coin_patch:
+        from .released_v8 import materialize_released_v8_minimum_cost_defaults
         from .final_v9 import replace_retired_metrics
 
+        materialize_released_v8_minimum_cost_defaults(result, changes=inferred_changes)
         metric_changes = inferred_changes
         replace_retired_metrics(result, replacements=metric_replacements,
                                 acknowledge=acknowledge_metric_formula_change, changes=metric_changes,
