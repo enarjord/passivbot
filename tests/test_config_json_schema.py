@@ -273,3 +273,35 @@ def test_side_owned_coin_sources_and_persistent_selection_have_distinct_shapes(v
     ):
         with pytest.raises(ValidationError):
             validator.validate(source(bot={"long": patch}))
+
+
+def test_grouped_operational_metadata_reuses_runtime_consumers_and_permissions():
+    from config.field_registry import describe_field, LIVE_OPERATIONAL_PATHS
+    from config.field_policies import get_live_coin_override_paths
+
+    allowed = {LIVE_OPERATIONAL_PATHS[field] for field in
+               ('forced_mode_long', 'forced_mode_short', 'leverage')}
+    assert get_live_coin_override_paths() == allowed
+    for field, path in LIVE_OPERATIONAL_PATHS.items():
+        metadata = describe_field(path)
+        assert metadata['coin_override'] == ('allowed' if path in allowed else 'forbidden')
+    for field in ('fee_pct_fallback', 'fee_pct_sanity_abs_max'):
+        metadata = describe_field(LIVE_OPERATIONAL_PATHS[field])
+        assert metadata['consumers'] == ['live', 'backtest', 'optimize']
+    sparse = describe_field(('coin_overrides', 'BTC', *LIVE_OPERATIONAL_PATHS['leverage']))
+    assert sparse['types'] == ['integer']
+    assert sparse['default'] == {'declared': False}
+    assert sparse['optimizer']['eligible'] is False
+
+
+def test_grouped_operational_coin_permissions_are_closed(validator):
+    validator.validate(source(coin_overrides={'BTC': {'live': {
+        'account': {'leverage': 2}, 'modes': {'long': 'normal', 'short': 'manual'},
+    }}}))
+    for group, field, value in (
+        ('account', 'user', 'example'), ('modes', 'disapproved_position', 'manual'),
+        ('execution', 'execution_delay_seconds', 3.0),
+    ):
+        assert list(validator.iter_errors(source(coin_overrides={
+            'BTC': {'live': {group: {field: value}}},
+        })))
