@@ -8,7 +8,7 @@ qualification must be reviewed together; this specification alone does not estab
 
 Rust owns HSL, realized-loss memory, episode transitions and permissions. Python supplies
 account, fill, price, coverage and configuration facts and enforces execution admission.
-`coin` means a symbol/position-side pair, `pside` means every position on one side, and
+`coin` means a symbol/position-side pair, `position_side` means every position on one side, and
 `portfolio` means all positions. Flatness means zero gross inventory, including in a hedged
 portfolio. Changing a constituent of an exposed aggregate does not reset its episode.
 

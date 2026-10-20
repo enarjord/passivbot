@@ -39,7 +39,7 @@ def evaluate(replay, value):
     return json.loads(replay.evaluate(json.dumps(value, allow_nan=False)))
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_actual_capture_fill_payload_cannot_cross_its_independent_source_cut(mode):
     """The manager may contain a fill newer than the completed fetch receipt."""
     from live.hsl_runtime import capture, evaluate as evaluate_requests
@@ -566,7 +566,7 @@ def test_real_utc_capture_latency_cannot_retime_monotonic_account_facts(processi
     from test_hsl_runtime import NOW, SYMBOL, bot
 
     value, executions = bot(), []
-    value.config["bot"]["long"]["hsl"]["red_threshold"] = 0.012
+    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.012
     value._pnls_manager.get_events = lambda **_: list(executions)
 
     def read(utc, now, source, size, mark):

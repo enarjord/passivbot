@@ -732,7 +732,7 @@ def _cache_readiness_report(
         if (
             isinstance(balance_override, dict)
             and balance_override.get("active") is True
-            and signal_mode in {"portfolio", "pside"}
+            and signal_mode in {"portfolio", "position_side"}
         ):
             _append_attention(
                 hsl,
@@ -1105,14 +1105,14 @@ def build_live_config_preflight_report(
     if (
         _any_hsl_enabled(hsl_sides)
         and balance_override_report.get("active") is True
-        and hsl_signal_mode in {"portfolio", "pside"}
+        and hsl_signal_mode in {"portfolio", "position_side"}
     ):
         issues.append(
             _issue(
                 "error",
                 "hsl_balance_override_account_level_replay_unsafe",
                 (
-                    "HSL signal modes 'portfolio' and 'pside' reconstruct "
+                    "HSL signal modes 'portfolio' and 'position_side' reconstruct "
                     "account-level equity history and are unsafe with an active "
                     "balance override; use bot.global.hsl.scope='coin', remove the "
                     "balance override, or disable HSL before live trading"

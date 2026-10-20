@@ -78,10 +78,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.hedge_mode` | boolean | `false` | python |
 | `bot.global.hsl.cooldown_minutes_after_red` | float | Not declared | python |
 | `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | python |
+| `bot.global.hsl.drawdown_ratio_threshold` | float | Not declared | python |
 | `bot.global.hsl.enabled` | boolean | Not declared | python |
 | `bot.global.hsl.memory_ema_span_minutes` | float | Not declared | python |
 | `bot.global.hsl.panic_close_order_type` | string | Not declared | python |
-| `bot.global.hsl.red_threshold` | float | Not declared | python |
 | `bot.global.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | python |
 | `bot.global.hsl.scope` | string | `"coin"` | python |
 | `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | python |
@@ -108,10 +108,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.forager.volume_ema_span_1m` | float | `310.0` | python |
 | `bot.long.hsl.cooldown_minutes_after_red` | float | `2160.0` | python |
 | `bot.long.hsl.drawdown_ratio_ema_span_minutes` | float | `720.0` | python |
+| `bot.long.hsl.drawdown_ratio_threshold` | float | `0.15` | python |
 | `bot.long.hsl.enabled` | boolean | `false` | python |
 | `bot.long.hsl.memory_ema_span_minutes` | float | `43200.0` | python |
 | `bot.long.hsl.panic_close_order_type` | string | `"limit"` | python |
-| `bot.long.hsl.red_threshold` | float | `0.15` | python |
 | `bot.long.hsl.scale_budget_with_excess_allowance` | boolean | `false` | python |
 | `bot.long.risk.max_positions` | integer | `7` | python |
 | `bot.long.risk.position_exposure_enforcer.enabled` | boolean | `false` | python |
@@ -158,7 +158,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.universe.approved_coins` | array \| string \| null | 41 items (see template) | python |
 | `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | python |
 | `bot.long.unstuck.close_pct` | float | `0.041` | python |
-| `bot.long.unstuck.ema_dist` | float | `-0.0269` | python |
+| `bot.long.unstuck.ema_distance_fraction` | float | `-0.0269` | python |
 | `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | python |
 | `bot.long.unstuck.ema_span_0` | float | `790.0` | python |
 | `bot.long.unstuck.ema_span_1` | float | `1080.0` | python |
@@ -181,10 +181,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.forager.volume_ema_span_1m` | float | `60.0` | python |
 | `bot.short.hsl.cooldown_minutes_after_red` | float | `1.0` | python |
 | `bot.short.hsl.drawdown_ratio_ema_span_minutes` | float | `1.0` | python |
+| `bot.short.hsl.drawdown_ratio_threshold` | float | `0.01` | python |
 | `bot.short.hsl.enabled` | boolean | `false` | python |
 | `bot.short.hsl.memory_ema_span_minutes` | float | `43200.0` | python |
 | `bot.short.hsl.panic_close_order_type` | string | `"limit"` | python |
-| `bot.short.hsl.red_threshold` | float | `0.01` | python |
 | `bot.short.hsl.scale_budget_with_excess_allowance` | boolean | `false` | python |
 | `bot.short.risk.max_positions` | integer | `1` | python |
 | `bot.short.risk.position_exposure_enforcer.enabled` | boolean | `true` | python |
@@ -231,7 +231,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.universe.approved_coins` | array \| string \| null | 41 items (see template) | python |
 | `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | python |
 | `bot.short.unstuck.close_pct` | float | `0.01` | python |
-| `bot.short.unstuck.ema_dist` | float | `-0.2` | python |
+| `bot.short.unstuck.ema_distance_fraction` | float | `-0.2` | python |
 | `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | python |
 | `bot.short.unstuck.ema_span_0` | float | `60.0` | python |
 | `bot.short.unstuck.ema_span_1` | float | `60.0` | python |

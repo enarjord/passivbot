@@ -1458,7 +1458,7 @@ class TestIndividualToConfig:
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_pct": 0.0, "threshold_we_weight": 0.0}},
                     },
-                    "hsl": {"red_threshold": 0.25},
+                    "hsl": {"drawdown_ratio_threshold": 0.25},
                 },
             },
             "optimize": {
@@ -1482,14 +1482,14 @@ class TestIndividualToConfig:
         )
 
         assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == pytest.approx(60.0)
-        assert result["bot"]["short"]["hsl"]["red_threshold"] == pytest.approx(0.22)
+        assert result["bot"]["short"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.22)
 
     def test_applies_optimize_fixed_runtime_overrides_without_mutating_template(self):
         individual = [1.0, 2.0, 0.25, 3.0, 4.0]
         template = {
             "bot": {
                 "long": {
-                    "hsl": {"red_threshold": 0.2, "cooldown_minutes_after_red": 0.3},
+                    "hsl": {"drawdown_ratio_threshold": 0.2, "cooldown_minutes_after_red": 0.3},
                     "hsl_cooldown_minutes_after_red": 0.3,
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_pct": 0.0, "threshold_we_weight": 0.0}},
@@ -1517,11 +1517,11 @@ class TestIndividualToConfig:
         original_template = deepcopy(template)
         result = individual_to_config(individual, lambda x, y, z: y, [], template)
 
-        assert result["bot"]["long"]["hsl"]["red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl"][
             "cooldown_minutes_after_red"
         ] == pytest.approx(1.0)
-        assert result["bot"]["long"]["hsl"]["red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl"][
             "cooldown_minutes_after_red"
         ] == pytest.approx(1.0)
@@ -1558,8 +1558,8 @@ class TestIndividualToConfig:
                             "volatility": 1.0,
                         },
                     },
-                    "hsl": {"enabled": False, "red_threshold": 0.2},
-                    "unstuck": {"close_pct": 0.05, "ema_dist": -0.05},
+                    "hsl": {"enabled": False, "drawdown_ratio_threshold": 0.2},
+                    "unstuck": {"close_pct": 0.05, "ema_distance_fraction": -0.05},
                     "strategy": {
                         "ema_anchor": {
                             "base_qty_pct": 0.012,
@@ -1588,8 +1588,8 @@ class TestIndividualToConfig:
                             "volatility": 0.5,
                         },
                     },
-                    "hsl": {"enabled": True, "red_threshold": 0.1},
-                    "unstuck": {"close_pct": 0.11, "ema_dist": -0.11},
+                    "hsl": {"enabled": True, "drawdown_ratio_threshold": 0.1},
+                    "unstuck": {"close_pct": 0.11, "ema_distance_fraction": -0.11},
                     "strategy": {
                         "ema_anchor": {
                             "base_qty_pct": 0.004,
@@ -2253,7 +2253,7 @@ class TestConfigToIndividual:
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_pct": 3.0, "threshold_we_weight": 4.0}},
                     },
-                    "hsl": {"red_threshold": 0.22},
+                    "hsl": {"drawdown_ratio_threshold": 0.22},
                 },
             },
             "optimize": {
@@ -3238,20 +3238,20 @@ class TestApplyFineTuneBounds:
         config = {
             "optimize": {
                 "bounds": {
-                    "long": {"hsl": {"red_threshold": [0.1, 0.3]}},
+                    "long": {"hsl": {"drawdown_ratio_threshold": [0.1, 0.3]}},
                 },
-                "fixed_params": ["long.hsl.red_threshold"],
+                "fixed_params": ["long.hsl.drawdown_ratio_threshold"],
             },
             "bot": {
                 "long": {
-                    "hsl": {"red_threshold": 0.22},
+                    "hsl": {"drawdown_ratio_threshold": 0.22},
                 },
                 "short": {},
             },
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [
+        assert config["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] == [
             0.22,
             0.22,
         ]

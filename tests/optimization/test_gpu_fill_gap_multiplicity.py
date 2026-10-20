@@ -60,7 +60,7 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         if config["live"]["hsl_signal_mode"] != "portfolio":
             config = generated_template(config, "portfolio")
         config["live"].update(hsl_signal_mode="portfolio", lookback_ema_span_minutes=1440)
-        config["bot"]["hsl"].update(enabled=True, red_threshold=1., ema_span_minutes=2.5,
+        config["bot"]["hsl"].update(enabled=True, drawdown_ratio_threshold=1., ema_span_minutes=2.5,
             cooldown_minutes_after_red=5, restart_after_red_policy="always")
         inputs[0] = prepare_config(config,verbose=False,target="canonical",runtime=None)
         # Prepared candle columns retain their original order across canonical

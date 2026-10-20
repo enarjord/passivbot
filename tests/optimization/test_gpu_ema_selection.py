@@ -23,11 +23,11 @@ def test_native_ema_current_ranking_matches_cpu(mode, sides):
             total_wallet_exposure_limit=2 if active else 0,
         )
         inputs[0]["bot"][side]["hsl"].update(
-            red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     if mode == "portfolio":
         inputs[0]["bot"]["hsl"].update(
-            red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
                "hard_stop_triggers_per_year", "hard_stop_restarts_per_year", "hard_stop_time_in_red_pct")

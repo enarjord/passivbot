@@ -10,7 +10,7 @@ pytestmark = pytest.mark.skipif(
     not (torch.backends.mps.is_available() or torch.cuda.is_available()), reason="GPU required")
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_canonical_hsl_policy_reaches_shared_native_shader(mode, strategy):
     from test_gpu_hsl_multicoin import make_proxy, raw
@@ -39,7 +39,7 @@ def test_portfolio_candidate_and_static_coin_override_precedence():
         np.testing.assert_allclose(matrix[:, proxy.param_keys.index("hsl_red_threshold")], [.03, .06])
     assert candidates == before
     coin = make_proxy("coin", coin_count=1, minutes=128,
-                       override={"red_threshold": .07, "ema_span_minutes": 4.5})
+                       override={"drawdown_ratio_threshold": .07, "ema_span_minutes": 4.5})
     matrix = coin._parameter_matrix([{"long_hsl_red_threshold": .03}], "long")
     assert matrix[0, coin.param_keys.index("hsl_red_threshold")] == pytest.approx(.03)
     runner = coin.fused_runner or coin.runners["long"]

@@ -162,7 +162,7 @@ def test_unstuck_ema_distance_validation_applies_to_effective_config():
         ValueError,
         match=r"coin_overrides\.BTC produces an invalid config after file and inline precedence resolution",
     ):
-        _parse({"BTC": {"bot": {"long": {"unstuck": {"ema_dist": -1.0}}}}})
+        _parse({"BTC": {"bot": {"long": {"unstuck": {"ema_distance_fraction": -1.0}}}}})
 
 
 def test_effective_validation_normalization_is_retained_in_patch():
@@ -237,7 +237,7 @@ def test_strategy_kind_mismatch_fails_in_inline_patch():
                 "BTC": {
                     "bot": {
                         "long": {
-                            "strategy": {"ema_anchor": {"entry": {"ema_dist": -0.01}}}
+                            "strategy": {"ema_anchor": {"entry": {"ema_distance_fraction": -0.01}}}
                         }
                     }
                 }
@@ -403,7 +403,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                         },
                         "unstuck": {
                             "close_pct": side["unstuck"]["close_pct"],
-                            "ema_dist": side["unstuck"]["ema_dist"],
+                            "ema_distance_fraction": side["unstuck"]["ema_distance_fraction"],
                             "ema_gating_enabled": side["unstuck"]["ema_gating_enabled"],
                             "enabled": side["unstuck"]["enabled"],
                             "loss_allowance_pct": side["unstuck"]["loss_allowance_pct"],

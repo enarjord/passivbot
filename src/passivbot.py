@@ -1320,7 +1320,7 @@ class Passivbot:
         """Initialise the bot with configuration, user context, and runtime caches."""
         from config.hsl import require_runtime_support, require_live_balance_support
 
-        require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
+        require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
         require_live_balance_support(config)
         self.config = config
         try:
@@ -20560,7 +20560,7 @@ async def _run_live(startup_context: dict):
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
+    require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

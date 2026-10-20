@@ -118,7 +118,7 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
     source = get_template_config()
     source["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.threshold_base_pct": 0.123,
-        "bot.short.hsl.red_threshold": 0.1,
+        "bot.short.hsl.drawdown_ratio_threshold": 0.1,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -564,7 +564,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["hsl_red_threshold"]
-        == canonical["bot"]["long"]["hsl"]["red_threshold"]
+        == canonical["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
     )
     assert (
         compiled["bot"]["long"]["forager_volume_ema_span_1m"]
@@ -1000,8 +1000,8 @@ def test_prepare_config_rejects_invalid_memory_ema_span_minutes_string():
 @pytest.mark.parametrize(
     ("pside", "value", "expected"),
     [
-        ("long", -1.0, r"bot\.long\.unstuck_ema_dist must be > -1\.0"),
-        ("short", 1.0, r"bot\.short\.unstuck_ema_dist must be < 1\.0"),
+        ("long", -1.0, r"bot\.long\.unstuck\.ema_distance_fraction must be > -1\.0"),
+        ("short", 1.0, r"bot\.short\.unstuck\.ema_distance_fraction must be < 1\.0"),
     ],
 )
 def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected):
@@ -1016,7 +1016,7 @@ def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected)
         "live": {},
         "optimize": {"bounds": {}},
     }
-    source["bot"][pside]["unstuck"] = {"ema_dist": value}
+    source["bot"][pside]["unstuck"] = {"ema_distance_fraction": value}
 
     with pytest.raises(ValueError, match=expected):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1156,7 +1156,7 @@ def test_prepare_config_preserves_fractional_hsl_ema_span():
 
 def test_prepare_config_rejects_retired_hsl_terminal_threshold():
     source = get_template_config()
-    source["bot"]["long"]["hsl"]["red_threshold"] = 0.20
+    source["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.20
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
     with pytest.raises(ValueError, match="removed in v9"):
@@ -1166,7 +1166,7 @@ def test_prepare_config_rejects_retired_hsl_terminal_threshold():
 @pytest.mark.parametrize(
     ("group", "field", "value", "match"),
     [
-        ("hsl", "red_threshold", 0.0, r"bot\.long\.hsl\.red_threshold"),
+        ("hsl", "drawdown_ratio_threshold", 0.0, r"bot\.long\.hsl\.drawdown_ratio_threshold"),
         (
             "hsl",
             "cooldown_minutes_after_red",

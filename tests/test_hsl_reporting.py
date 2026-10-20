@@ -29,14 +29,14 @@ def payload(*args, **kwargs):
     return result
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_native_scope_values_and_effective_threshold_are_plotted(mode):
     cfg, markets, _ = inputs(mode)
     if mode == "coin":
         cfg["coin_overrides"] = {
             "AAA": {
                 "bot": {
-                    "long": {"hsl": {"red_threshold": 0.025, "drawdown_ratio_ema_span_minutes": 2.75}}
+                    "long": {"hsl": {"drawdown_ratio_threshold": 0.025, "drawdown_ratio_ema_span_minutes": 2.75}}
                 }
             }
         }
@@ -242,7 +242,7 @@ def test_retired_unified_report_mode_requires_fresh_v9_replay():
         hsl_report({"hsl": {"schema_version": 1, "engine": "hsl", "mode": "unified"}})
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
     cfg, markets, _ = inputs(mode)
     policy = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
@@ -307,7 +307,7 @@ def test_report_rows_and_reason_lists_are_independent():
     assert run(payload("coin"))[4]["hsl"] == before
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_default_report_preserves_trading_metrics_and_events_without_samples(mode):
     # Exercise canonical default transport rather than the plotting fixture opt-in.
     args = base_payload(mode)

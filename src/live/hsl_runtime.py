@@ -13,7 +13,7 @@ import struct
 
 import passivbot_rust as pbr
 
-from config.hsl import FIELDS, engine, require_live_balance_support, require_live_runtime_support
+from config.hsl import FIELDS, engine, native_hsl_mode, require_live_balance_support, require_live_runtime_support
 from config.risk_memory import risk_bootstrap_horizon_minutes
 from live.hsl_budget import BudgetObservations
 from live.hsl_continuity import FactualReplays, continuity_status
@@ -88,7 +88,7 @@ def enabled(bot):
     Check overrides even for currently unselected or flat coins: their history
     may still contribute a cooldown when they next become eligible.
     """
-    mode = bot.config["bot"]["global"]["hsl"]["scope"]
+    mode = native_hsl_mode(bot.config["bot"]["global"]["hsl"]["scope"])
     if mode == "portfolio":
         return bot.config["bot"]["global"]["hsl"]["enabled"]
     if mode not in {"coin", "pside"}:
@@ -230,7 +230,7 @@ def _source_reasons(source):
 
 
 def _policies(bot, pairs):
-    mode = bot.config["bot"]["global"]["hsl"]["scope"]
+    mode = native_hsl_mode(bot.config["bot"]["global"]["hsl"]["scope"])
     if mode == "portfolio":
         policy = dict(bot.config["bot"]["global"]["hsl"])
         if policy["enabled"]:
@@ -676,7 +676,7 @@ def capture(
             slots=slots,
             memory_ema_span_minutes=policy["memory_ema_span_minutes"],
             drawdown_ratio_ema_span_minutes=policy["drawdown_ratio_ema_span_minutes"],
-            threshold=policy["red_threshold"],
+            threshold=policy["drawdown_ratio_threshold"],
             cooldown_ms=math.floor(policy["cooldown_minutes_after_red"] * 60_000 + 0.5),
         )
         payload["scale_budget_with_excess_allowance"] = policy[

@@ -82,7 +82,7 @@ def _get_shared_bot_defaults():
                 "enabled": False,
                 "scale_budget_with_excess_allowance": False,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.15,
+                "drawdown_ratio_threshold": 0.15,
             },
             "entry_cooldown": {
                 "base_duration_minutes": 24.1,
@@ -106,7 +106,7 @@ def _get_shared_bot_defaults():
             },
             "unstuck": {
                 "close_pct": 0.041,
-                "ema_dist": -0.0269,
+                "ema_distance_fraction": -0.0269,
                 "ema_gating_enabled": True,
                 "ema_span_0": 790.0,
                 "ema_span_1": 1080.0,
@@ -135,7 +135,7 @@ def _get_shared_bot_defaults():
                 "enabled": False,
                 "scale_budget_with_excess_allowance": False,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.01,
+                "drawdown_ratio_threshold": 0.01,
             },
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
@@ -159,7 +159,7 @@ def _get_shared_bot_defaults():
             },
             "unstuck": {
                 "close_pct": 0.01,
-                "ema_dist": -0.2,
+                "ema_distance_fraction": -0.2,
                 "ema_gating_enabled": True,
                 "ema_span_0": 60.0,
                 "ema_span_1": 60.0,

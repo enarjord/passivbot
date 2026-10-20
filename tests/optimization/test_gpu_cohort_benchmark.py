@@ -86,7 +86,7 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     assert len(configs) == len(parameters) == 2
     for config in configs:
         assert config["bot"]["global"]["hsl"]["scope"] == "portfolio"
-        assert config["bot"]["global"]["hsl"]["red_threshold"] == .002
+        assert config["bot"]["global"]["hsl"]["drawdown_ratio_threshold"] == .002
         assert config["bot"]["global"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 2.5
         assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 15.5
         assert config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 31.25

@@ -251,12 +251,12 @@ def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_reject
 
     options = dict(profile="standard", patterns=["ema_anchor/both/forager/hsl_portfolio/*"],
                    candidates=3, bars=128)
-    explicit = {"global": {"hsl": {"red_threshold": [0.11, 0.19, 0.01]}}}
+    explicit = {"global": {"hsl": {"drawdown_ratio_threshold": [0.11, 0.19, 0.01]}}}
     original = deepcopy(explicit)
     manifest = freeze(tmp_path / "explicit", bounds_config=explicit, **options)
     assert explicit == original
     specs = manifest["entries"][0]["bounds"]
-    assert specs == [dict(key="hsl_red_threshold", path=["bot", "global", "hsl", "red_threshold"],
+    assert specs == [dict(key="hsl_red_threshold", path=["bot", "global", "hsl", "drawdown_ratio_threshold"],
                           low=0.11, high=0.19, step=0.01)]
     invalid = get_template_config()["optimize"]["bounds"]
     original = deepcopy(invalid)
@@ -854,7 +854,8 @@ def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scop
     from tools.gpu_parity import build_parser, fixture_inputs
     from tools.optimizer_benchmark.workloads import apply_features, get_path, sampled_population
     config, _candles, markets, _btc, _timestamps = fixture_inputs(build_parser().parse_args(
-        ["--fixture", "trailing_martingale", "--hsl", scope, "--coins", "4", "--bars", "128"]))
+        ["--fixture", "trailing_martingale", "--hsl", "position_side" if scope == "pside" else scope,
+         "--coins", "4", "--bars", "128"]))
     case = Case("trailing_martingale", features=(f"hsl_{scope}", "hsl_slow_memory", "hsl_market",
                                                 "hsl_scaled", "hsl_zero_cooldown", "loss_gate"))
     apply_features(config, case, config["backtest"]["coins"]["binance"], markets, 128)
@@ -871,6 +872,6 @@ def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scop
     for spec in bounds:
         if spec["path"][-1] in {"memory_ema_span_minutes", "max_positions"}:
             assert spec["low"] == spec["high"] == get_path(config, spec["path"])
-        if spec["path"][:3] == ("bot", "global", "hsl") and spec["path"][-1] == "red_threshold":
+        if spec["path"][:3] == ("bot", "global", "hsl") and spec["path"][-1] == "drawdown_ratio_threshold":
             assert (spec["low"] < spec["high"]) == (scope == "portfolio")
     assert all(candidate["bot"]["long"]["risk"]["max_positions"] == 2 for candidate in population)

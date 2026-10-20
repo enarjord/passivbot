@@ -1517,7 +1517,7 @@ def test_one_sided_single_coin_hsl_accepts_portfolio_signal_mode():
 
 
 def test_single_coin_hsl_rejects_unknown_signal_mode():
-    with pytest.raises(ValueError, match="coin, pside, or portfolio"):
+    with pytest.raises(ValueError, match="coin, position_side, or portfolio"):
         validate_hsl_signal_topology("unified", coin_count=1, enabled_side_count=1)
 
 
@@ -1542,7 +1542,7 @@ def test_dual_side_multicoin_hsl_accepts_shared_account_controller(signal_mode):
 
 @pytest.mark.parametrize("signal_mode", ["coin", "portfolio"])
 def test_dual_side_multicoin_hsl_rejects_joint_account_modes(signal_mode):
-    with pytest.raises(ValueError, match="supports only pside"):
+    with pytest.raises(ValueError, match="supports only position_side"):
         validate_hsl_signal_topology(signal_mode, coin_count=3, enabled_side_count=2)
 
 
@@ -1743,7 +1743,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                             "enabled": True,
                             "ema_gating_enabled": False,
                             "close_pct": 0.125,
-                            "ema_dist": -0.01,
+                            "ema_distance_fraction": -0.01,
                             "loss_allowance_pct": 0.02,
                             "exposure_trigger_ratio": 0.85,
                         },
@@ -2094,7 +2094,7 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     _complete_hsl_payload(payload)
     hsl_patch = {
         "enabled": False,
-        "red_threshold": 0.2,
+        "drawdown_ratio_threshold": 0.2,
         "drawdown_ratio_ema_span_minutes": 5.5,
         "memory_ema_span_minutes": 7.5,
         "scale_budget_with_excess_allowance": True,
@@ -2276,7 +2276,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                             "enabled": True,
                             "ema_gating_enabled": False,
                             "close_pct": 0.125,
-                            "ema_dist": -0.01,
+                            "ema_distance_fraction": -0.01,
                             "loss_allowance_pct": 0.02,
                             "exposure_trigger_ratio": 0.85,
                         },

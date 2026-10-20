@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name HSL's configured trigger `drawdown_ratio_threshold`, unstuck's EMA offset
+  `ema_distance_fraction`, and HSL's aggregate side scope `position_side`. Preserve
+  existing units, values and native engine identifiers through explicit adapters;
+  released-v8 migration converts fields, bounds, overrides and fixed selectors.
+
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently
   of template spelling, while preserving values, sparse overrides, and integer counts.

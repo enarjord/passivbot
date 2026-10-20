@@ -727,7 +727,7 @@ def test_move_output_materializes_file_with_inline_precedence(tmp_path):
                      base_config_path=str(source_dir / "base.json"))
     assert coin_file.read_bytes() == original
     assert "override_config_path" not in result.config["coin_overrides"]["AAA"]
-    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["red_threshold"] == 0.22
+    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.22
     coin_file.unlink()
     assert prepare_config(result.config, base_config_path=str(output_dir / "moved.json"), verbose=False)
 
@@ -1168,7 +1168,7 @@ def test_legacy_coin_flag_files_are_materialized_with_flags_and_authorization(
     assert patch["bot"]["long"]["wallet_exposure_limit"] == 0.37
     assert patch["bot"]["short"]["wallet_exposure_limit"] == 0.21
     assert patch["bot"]["long"]["hsl"]["enabled"]
-    assert patch["bot"]["long"]["hsl"]["red_threshold"] == 0.19
+    assert patch["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.19
     assert "restart_after_red_policy" not in patch["bot"]["long"]["hsl"]
     assert output["coin_overrides"]["BBB"]["live"] == {
         "forced_mode_long": "tp_only", "leverage": 3.0,

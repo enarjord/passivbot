@@ -89,7 +89,7 @@
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.05,
+                "drawdown_ratio_threshold": 0.05,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
@@ -120,7 +120,7 @@
             "universe": {"approved_coins": ["SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.099,
-                "ema_dist": -0.1046,
+                "ema_distance_fraction": -0.1046,
                 "ema_gating_enabled": true,
                 "ema_span_0": 415.0,
                 "ema_span_1": 793.0,
@@ -154,7 +154,7 @@
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.05,
+                "drawdown_ratio_threshold": 0.05,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
@@ -185,7 +185,7 @@
             "universe": {"approved_coins": ["SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.099,
-                "ema_dist": -0.1046,
+                "ema_distance_fraction": -0.1046,
                 "ema_gating_enabled": true,
                 "ema_span_0": 415.0,
                 "ema_span_1": 793.0,
@@ -301,7 +301,7 @@
                     "cooldown_minutes_after_red": [2160, 4320, 10],
                     "drawdown_ratio_ema_span_minutes": [1, 720, 1],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "red_threshold": [0.01, 0.15, 0.001]
+                    "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
                 },
                 "risk": {
                     "max_positions": [1, 1, 1],
@@ -326,7 +326,7 @@
                 },
                 "unstuck": {
                     "close_pct": [0.01, 0.12, 0.001],
-                    "ema_dist": [-0.2, 0.01, 0.0001],
+                    "ema_distance_fraction": [-0.2, 0.01, 0.0001],
                     "ema_span_0": [415.0, 415.0],
                     "ema_span_1": [793.0, 793.0],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],
@@ -354,7 +354,7 @@
                     "cooldown_minutes_after_red": [2160, 4320, 10],
                     "drawdown_ratio_ema_span_minutes": [1, 720, 1],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "red_threshold": [0.01, 0.15, 0.001]
+                    "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
                 },
                 "risk": {
                     "max_positions": [1, 1, 1],
@@ -379,7 +379,7 @@
                 },
                 "unstuck": {
                     "close_pct": [0.01, 0.12, 0.001],
-                    "ema_dist": [-0.2, 0.01, 0.0001],
+                    "ema_distance_fraction": [-0.2, 0.01, 0.0001],
                     "ema_span_0": [415.0, 415.0],
                     "ema_span_1": [793.0, 793.0],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],

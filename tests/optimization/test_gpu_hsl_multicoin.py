@@ -47,7 +47,7 @@ def make_proxy(
         config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
         config["bot"][side]["hsl"].update(
             enabled=enabled and mode != "portfolio",
-            red_threshold=0.02,
+            drawdown_ratio_threshold=0.02,
             drawdown_ratio_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
@@ -55,7 +55,7 @@ def make_proxy(
     if mode == "portfolio":
         config["bot"]["global"]["hsl"].update(
             enabled=enabled,
-            red_threshold=0.02,
+            drawdown_ratio_threshold=0.02,
             drawdown_ratio_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
@@ -104,7 +104,7 @@ def make_proxy(
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_multicoin_hsl_service_dispatch(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides)
@@ -150,7 +150,7 @@ def compare(a, b):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides, enabled=False)
@@ -171,7 +171,7 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
     assert not (baseline["hsl_triggers_long"] + baseline["hsl_triggers_short"]).any()
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_temporal_replay_and_scratch_batches(mode):
     candidates = [
         {f"long_hsl_red_threshold": 1e-6, "hsl_red_threshold": 1e-6},
@@ -193,7 +193,7 @@ def test_multicoin_temporal_replay_and_scratch_batches(mode):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_candidates_do_not_share_history(strategy, mode):
     p = make_proxy(mode, strategy)
     candidates = [
@@ -216,7 +216,7 @@ def test_multicoin_candidates_do_not_share_history(strategy, mode):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
     p = make_proxy(mode, strategy)
     _, r = raw(
@@ -240,7 +240,7 @@ def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_multicoin_static_policy_does_not_replace_other_coin_base(strategy):
-    p = make_proxy("coin", strategy, override={"enabled": False, "red_threshold": 0.7})
+    p = make_proxy("coin", strategy, override={"enabled": False, "drawdown_ratio_threshold": 0.7})
     assert p.base_params["long"]["hsl_enabled"] == 1.0
     assert p.base_params["long"]["hsl_red_threshold"] == pytest.approx(0.02)
     _, r = raw(p, [{"long_hsl_red_threshold": 1e-6, "short_hsl_red_threshold": 1e-6}])
@@ -283,7 +283,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy, chunk, sides):
     not torch.backends.mps.is_available(), reason="Metal specialization"
 )
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
 def test_metal_hsl_capacity_matches_full_arrays(strategy, mode, sides):
     candidates = [

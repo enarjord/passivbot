@@ -43,7 +43,7 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
         "drawdown_ratio_ema_span_minutes": "hsl_drawdown_ratio_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
-        "red_threshold": "hsl_red_threshold",
+        "drawdown_ratio_threshold": "hsl_red_threshold",
     },
     "risk": {
         "max_positions": "n_positions",
@@ -54,7 +54,7 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     },
     "unstuck": {
         "close_pct": "unstuck_close_pct",
-        "ema_dist": "unstuck_ema_dist",
+        "ema_distance_fraction": "unstuck_ema_dist",
         "ema_span_0": "unstuck_ema_span_0",
         "ema_span_1": "unstuck_ema_span_1",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",
@@ -85,7 +85,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "hsl": {
             "cooldown_minutes_after_red": [2160, 2160, 10],
             "drawdown_ratio_ema_span_minutes": [720, 720, 1],
-            "red_threshold": [0.15, 0.15, 0.001]
+            "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
@@ -101,7 +101,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         },
         "unstuck": {
             "close_pct": [0.01, 0.12, 0.001],
-            "ema_dist": [-0.2, 0.01, 0.0001],
+            "ema_distance_fraction": [-0.2, 0.01, 0.0001],
             "ema_span_0": [60, 2880, 10],
             "ema_span_1": [60, 2880, 10],
             "loss_allowance_pct": [0.005, 0.2, 0.0001],
@@ -121,7 +121,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "hsl": {
             "cooldown_minutes_after_red": [2160, 4320, 10],
             "drawdown_ratio_ema_span_minutes": [1, 720, 1],
-            "red_threshold": [0.01, 0.15, 0.001]
+            "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
@@ -137,7 +137,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         },
         "unstuck": {
             "close_pct": [0.01, 0.12, 0.001],
-            "ema_dist": [-0.2, 0.01, 0.0001],
+            "ema_distance_fraction": [-0.2, 0.01, 0.0001],
             "ema_span_0": [60, 2880, 10],
             "ema_span_1": [60, 2880, 10],
             "loss_allowance_pct": [0.005, 0.2, 0.0001],
@@ -171,7 +171,8 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
         flat[f"unstuck_{key}"] = deepcopy(value)
     for group in ("hsl", "loss_gate"):
         for key, value in bounds.get("global", {}).get(group, {}).items():
-            flat[f"{group}_{key}"] = deepcopy(value)
+            flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group, {}).get(key, f"{group}_{key}")
+            flat[flat_key] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
         side_bounds = bounds.get(pside, {})
         if not isinstance(side_bounds, dict):
@@ -293,7 +294,8 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
         bounds.setdefault("global", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
         return
     if flat_key.startswith("hsl_"):
-        bounds.setdefault("global", {}).setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
+        local_key = SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY["hsl"].get(flat_key, flat_key.removeprefix("hsl_"))
+        bounds.setdefault("global", {}).setdefault("hsl", {})[local_key] = deepcopy(value)
         return
     pside, key = flat_key.split("_", 1)
     if pside not in BOT_POSITION_SIDES:

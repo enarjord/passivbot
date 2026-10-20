@@ -67,15 +67,15 @@ class TestConfigAdapter:
 
     def test_get_optimization_key_paths_includes_pside_hsl_keys_when_bounded(self):
         config = _canonical_config_with_bounds({
-            "long": {"hsl": {"red_threshold": [0.15, 0.35, 0.01],
+            "long": {"hsl": {"drawdown_ratio_threshold": [0.15, 0.35, 0.01],
                              "memory_ema_span_minutes": [100.0, 200.0, 1.0]}},
             "short": {"hsl": {"drawdown_ratio_ema_span_minutes": [30.0, 180.0, 5.0]}},
         })
-        config["bot"]["global"]["hsl"]["scope"] = "pside"
+        config["bot"]["global"]["hsl"]["scope"] = "position_side"
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "red_threshold")) in key_paths
+        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_ratio_threshold")) in key_paths
         assert ("long_hsl_memory_ema_span_minutes",
                 ("bot", "long", "hsl", "memory_ema_span_minutes")) in key_paths
         assert ("short_hsl_drawdown_ratio_ema_span_minutes",
@@ -120,7 +120,7 @@ class TestConfigAdapter:
         self, bound_key, bound_value, expected
     ):
         side = bound_key.split("_", 1)[0]
-        config = _canonical_config_with_bounds({side: {"unstuck": {"ema_dist": bound_value}}})
+        config = _canonical_config_with_bounds({side: {"unstuck": {"ema_distance_fraction": bound_value}}})
 
         with pytest.raises(ValueError, match=expected):
             get_optimization_key_paths(config)
@@ -180,7 +180,7 @@ class TestConfigAdapter:
         config = _canonical_config_with_bounds({
             "long": {"strategy": {"trailing_martingale": {"entry": {
                 "ema_span_0": [200.0, 1440.0, 10.0],
-            }}}, "hsl": {"red_threshold": [0.15, 0.35, 0.01]}},
+            }}}, "hsl": {"drawdown_ratio_threshold": [0.15, 0.35, 0.01]}},
             "short": {"strategy": {"trailing_martingale": {"entry": {
                 "threshold_base_pct": [0.01, 0.04, 1e-5],
             }}}},
@@ -203,7 +203,7 @@ class TestConfigAdapter:
                 "threshold_base_pct",
             ),
         ) in key_paths
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "red_threshold")) in key_paths
+        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_ratio_threshold")) in key_paths
 
     def test_get_optimization_key_paths_routes_ema_anchor_fields_to_strategy_section(self):
         config = _canonical_config_with_bounds({

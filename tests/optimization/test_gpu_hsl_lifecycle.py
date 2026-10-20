@@ -9,7 +9,7 @@ import pytest
     (strategy, mode, sides)
     for strategy in ("ema_anchor", "trailing_martingale")
     for mode, sides in (("coin", "long"), ("coin", "short"), ("coin", "both"),
-                        ("pside", "both"), ("portfolio", "both"))
+                        ("position_side", "both"), ("portfolio", "both"))
 ])
 def test_native_hsl_lifecycle_metrics_match_cpu(strategy, mode, sides):
     torch = pytest.importorskip("torch")
@@ -24,12 +24,12 @@ def test_native_hsl_lifecycle_metrics_match_cpu(strategy, mode, sides):
     ]))
     for side in ("long", "short"):
         inputs[0]["bot"][side]["hsl"].update(
-            red_threshold=.002, ema_span_minutes=2.5,
+            drawdown_ratio_threshold=.002, ema_span_minutes=2.5,
             cooldown_minutes_after_red=5,
         )
     if mode == "portfolio":
         inputs[0]["bot"]["hsl"].update(
-            red_threshold=.002, ema_span_minutes=2.5,
+            drawdown_ratio_threshold=.002, ema_span_minutes=2.5,
             cooldown_minutes_after_red=5,
         )
     inputs[1][1500:, 0, :3] *= .7
@@ -52,7 +52,7 @@ def test_native_hsl_lifecycle_metrics_match_cpu(strategy, mode, sides):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", ["long", "both"])
 @pytest.mark.parametrize("terminal_fill", [False, True], ids=["open-panic", "open-halt"])
 def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode, sides, terminal_fill):
@@ -70,7 +70,7 @@ def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode
     config['live'].update(lookback_ema_span_minutes=1440.0)
     config['bot']['global']['strategy_kind'] = strategy
     config['bot']['global']['hedge_mode'] = sides == 'both'
-    policy = dict(red_threshold=.002, ema_span_minutes=1,
+    policy = dict(drawdown_ratio_threshold=.002, ema_span_minutes=1,
                   cooldown_minutes_after_red=10000,
 
                   panic_close_order_type="market" if terminal_fill else "limit")
@@ -128,7 +128,7 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     config['bot']['global']['hedge_mode'] = False
     config["bot"]["long"]["risk"].update(n_positions=1, total_wallet_exposure_limit=5.0)
     config["bot"]["long"]["hsl"].update(
-        enabled=True, red_threshold=.002, ema_span_minutes=1,
+        enabled=True, drawdown_ratio_threshold=.002, ema_span_minutes=1,
         cooldown_minutes_after_red=10000,
         panic_close_order_type="limit",
     )

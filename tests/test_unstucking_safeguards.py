@@ -363,7 +363,7 @@ def _dummy_config():
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"].update(
             loss_allowance_pct=0.01, exposure_trigger_ratio=0.5,
-            close_pct=0.1, ema_dist=0.0,
+            close_pct=0.1, ema_distance_fraction=0.0,
         )
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
         strategy["entry"]["ema_span_0"] = 1.0

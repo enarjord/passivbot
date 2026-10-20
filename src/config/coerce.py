@@ -5,7 +5,7 @@ from .access import require_config_dict
 from .risk_memory import normalize_risk_memory_config
 from .schema import get_template_config
 
-HSL_SIGNAL_MODES = ("coin", "pside", "portfolio")
+HSL_SIGNAL_MODES = ("coin", "position_side", "portfolio")
 MONITOR_BOOL_KEYS = (
     "enabled",
     "retain_price_ticks",

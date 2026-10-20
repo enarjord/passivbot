@@ -34,11 +34,11 @@ BOT_GROUP_FIELD_MAP = {
         "enabled": "hsl_enabled",
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
-        "red_threshold": "hsl_red_threshold",
+        "drawdown_ratio_threshold": "hsl_red_threshold",
     },
     "unstuck": {
         "close_pct": "unstuck_close_pct",
-        "ema_dist": "unstuck_ema_dist",
+        "ema_distance_fraction": "unstuck_ema_dist",
         "ema_span_0": "unstuck_ema_span_0",
         "ema_span_1": "unstuck_ema_span_1",
         "ema_gating_enabled": "unstuck_ema_gating_enabled",

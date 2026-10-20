@@ -35,7 +35,7 @@ import tools.run_fake_live as runner
         "flat_order_reason_gap",
     ],
 )
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 async def test_hsl_protective_wave_uses_actual_executor_without_history(
     tmp_path, monkeypatch, mode, path, side
 ):
@@ -60,7 +60,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
     for block in blocks:
         block.update(
             enabled=True,
-            red_threshold=0.06,
+            drawdown_ratio_threshold=0.06,
             # Execution/admission fixtures isolate the connector from EMA warmup.
             drawdown_ratio_ema_span_minutes=1.0,
             panic_close_order_type="market",
@@ -409,7 +409,7 @@ def test_hsl_wave_is_not_execution_authority_after_inputs_change(monkeypatch, ch
     elif change == "stale_quote":
         instance.quotes[SYMBOL] = replace(quotes()[SYMBOL], fetched_ms=NOW - 10_001)
     elif change == "policy":
-        bot.config["bot"]["long"]["hsl"]["red_threshold"] = 0.99
+        bot.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
     elif change == "disabled":
         bot.config["bot"]["long"]["hsl"]["enabled"] = False
     elif change == "generation":
@@ -421,7 +421,7 @@ def test_hsl_wave_is_not_execution_authority_after_inputs_change(monkeypatch, ch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("raw_balance_drift", [False, True])
 @pytest.mark.parametrize("execution", ["direct", "owner_refresh_drift"])
 async def test_hsl_green_can_plan_entries_without_hsl_history(
@@ -442,7 +442,7 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
     set_risk_memory_spans(cfg, 288.0)
     policy = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
-    policy.update(enabled=True, drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.5)
+    policy.update(enabled=True, drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.5)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
@@ -545,7 +545,7 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
     cfg["bot"]["long"]["hsl"].update(
         enabled=True,
         drawdown_ratio_ema_span_minutes=1.0,
-        red_threshold=0.06,
+        drawdown_ratio_threshold=0.06,
         panic_close_order_type="limit",
     )
     set_risk_memory_spans(cfg, 288.0)
@@ -781,7 +781,7 @@ def test_fill_receipt_is_atomic_and_clipped_before_first_consumer(change):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("cooldown_minutes", [2.0, 4.0])
 @pytest.mark.parametrize("partial", [False, True])
 async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
@@ -803,7 +803,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
     block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
-        red_threshold=0.06,
+        drawdown_ratio_threshold=0.06,
         drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
         cooldown_minutes_after_red=cooldown_minutes,
@@ -967,7 +967,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize(
     "stage",
     [
@@ -993,7 +993,7 @@ async def test_hsl_startup_services_new_red_during_stalled_warmup(
     block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
-        red_threshold=0.06,
+        drawdown_ratio_threshold=0.06,
         drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
@@ -1843,7 +1843,7 @@ async def test_failed_fill_refresh_revokes_only_required_consumers_until_repaire
     assert instance.admit(protective)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode):
     import utils
     import passivbot_rust as pbr
@@ -1885,7 +1885,7 @@ def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode)
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize(
     "change",
@@ -1904,7 +1904,7 @@ def test_ordinary_admission_rejects_changed_risk_inputs(
         if mode == "portfolio"
         else bot.config["bot"][side]["hsl"]
     )
-    block["red_threshold"] = 0.2
+    block["drawdown_ratio_threshold"] = 0.2
     bot.get_exchange_time = lambda: NOW
     bot.approved_coins_minus_ignored_coins = {
         s: {SYMBOL} if s == side else set() for s in ("long", "short")
@@ -2161,7 +2161,7 @@ async def test_hsl_run_exits_on_each_canonical_shutdown_flag(flag):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("fresh_owner", [False, True])
 async def test_partial_panic_recovery_retires_resting_close_without_ordinary_planning(
     tmp_path, monkeypatch, mode, fresh_owner
@@ -2179,7 +2179,7 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
     block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
-        red_threshold=0.06,
+        drawdown_ratio_threshold=0.06,
         drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
@@ -2366,7 +2366,7 @@ async def test_disabled_hsl_owner_keeps_ordinary_fill_refresh_without_hsl_window
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 async def test_disabled_hsl_protection_does_not_acquire_quotes(mode):
     from test_hsl_runtime import bot, SYMBOL
 

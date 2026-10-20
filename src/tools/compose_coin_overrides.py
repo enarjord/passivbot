@@ -490,17 +490,17 @@ def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
                 for item in configs
             ]
             if all(ema_gating_disabled):
-                lower = _bound_lower(master, side, "unstuck", "ema_dist")
+                lower = _bound_lower(master, side, "unstuck", "ema_distance_fraction")
                 for item in configs:
-                    item.config["bot"][side]["unstuck"]["ema_dist"] = lower
+                    item.config["bot"][side]["unstuck"]["ema_distance_fraction"] = lower
                 actions.append(
-                    f"bot.{side}.unstuck.ema_dist (EMA gating disabled in every input)"
+                    f"bot.{side}.unstuck.ema_distance_fraction (EMA gating disabled in every input)"
                 )
             else:
-                master_ema_dist = master["bot"][side]["unstuck"]["ema_dist"]
+                master_ema_dist = master["bot"][side]["unstuck"]["ema_distance_fraction"]
                 for item, disabled in zip(configs, ema_gating_disabled):
                     if disabled:
-                        item.config["bot"][side]["unstuck"]["ema_dist"] = master_ema_dist
+                        item.config["bot"][side]["unstuck"]["ema_distance_fraction"] = master_ema_dist
 
         wel_enforcer_disabled = [
             not bool(

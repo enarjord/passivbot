@@ -156,7 +156,7 @@ def test_observed_portfolio_tail_on_public_twenty_day_shock(strategy, relative_b
     ]))
     for side in ("long", "short"):
         inputs[0]["bot"][side]["hsl"].update(
-            red_threshold=.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
+            drawdown_ratio_threshold=.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
     inputs[1][1440:, 0, :3] *= .7
     inputs[1][1800:, 1, :3] *= 1.3

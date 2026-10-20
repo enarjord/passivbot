@@ -247,19 +247,19 @@ def test_override_file_own_scenario_reference_remains_a_real_cycle(tmp_path):
 def test_sparse_file_keeps_only_authored_pins_and_explicit_wallet_extension(tmp_path):
     document = {"bot": {"long": {
         "wallet_exposure_limit": 0.12,
-        "unstuck": {"enabled": False, "ema_dist": 0.0},
+        "unstuck": {"enabled": False, "ema_distance_fraction": 0.0},
     }}}
     config, path = _config_with_file(tmp_path, document)
-    config["coin_overrides"]["BTC"]["bot"] = {"long": {"unstuck": {"ema_dist": -0.1}}}
+    config["coin_overrides"]["BTC"]["bot"] = {"long": {"unstuck": {"ema_distance_fraction": -0.1}}}
     parsed = _prepare_file_config(config)
     assert parsed["coin_overrides"]["BTC"] == {"bot": {"long": {
         "wallet_exposure_limit": 0.12,
-        "unstuck": {"enabled": False, "ema_dist": -0.1},
+        "unstuck": {"enabled": False, "ema_distance_fraction": -0.1},
     }}}
     assert json.loads(path.read_text()) == document
 
 
-@pytest.mark.parametrize("scope", ["pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["position_side", "portfolio"])
 def test_full_file_hsl_cannot_authorize_its_own_scope(tmp_path, caplog, scope):
     document = config_utils.get_template_config()
     document["bot"]["global"]["hsl"]["scope"] = "coin"

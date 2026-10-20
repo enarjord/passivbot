@@ -171,7 +171,7 @@ def validate_bot_config(result: dict) -> None:
         )
         validate_unstuck_ema_dist_value(
             get_grouped_bot_value(bot_side, "unstuck_ema_dist"),
-            path=f"bot.{pside}.unstuck_ema_dist",
+            path=f"bot.{pside}.unstuck.ema_distance_fraction",
             pside=pside,
         )
 

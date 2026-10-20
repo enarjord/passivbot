@@ -270,7 +270,7 @@ Operational notes:
 ### D. Equity Hard Stop Loss
 
 HSL uses one Rust forward risk model in live trading, backtesting and optimization. Coin mode
-uses one signal per coin and position side; pside mode uses one per active side;
+uses one signal per coin and position side; position_side mode uses one per active side;
 portfolio mode uses one explicit policy under `bot.global.hsl`.
 
 HSL maintains slowly decaying currency drawdown and an independent fast EMA of its

@@ -171,7 +171,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
             if bound.low <= 0:
                 raise ValueError("active-side exposure bounds must stay positive")
         if path[2] == "hsl" and enabled and bounds_config is None:
-            bound = {"red_threshold": Bound(.002, .01, .001), "drawdown_ratio_ema_span_minutes": Bound(2, 20, 1),
+            bound = {"drawdown_ratio_threshold": Bound(.002, .01, .001), "drawdown_ratio_ema_span_minutes": Bound(2, 20, 1),
                      "cooldown_minutes_after_red": Bound(5, 30, 1)}[path[-1]]
         if not enabled:
             bound = Bound(float(value), float(value))
@@ -221,6 +221,8 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
         for seed in seeds:
             hsl = next((mode for mode in ("coin", "pside", "portfolio") if f"hsl_{mode}" in case.features),
                        "coin" if any(f.startswith("hsl") for f in case.features) else "disabled")
+            # Catalogue feature IDs remain stable; authored scope uses its full name.
+            hsl = "position_side" if hsl == "pside" else hsl
             options = ["--fixture", case.strategy,
                        "--sides", case.sides, "--coins", str(1 if case.topology == "single" else coins),
                        "--bars", str(bars), "--seed", str(seed), "--hsl", hsl,

@@ -1230,7 +1230,7 @@ RESERVED_CLI_ARGS = {
         },
         "help": (
             "HSL signal mode. portfolio uses one account-level strategy signal for both "
-            "sides; pside tracks long/short independently; coin tracks each coin+side "
+            "sides; position_side tracks long/short independently; coin tracks each coin+side "
             "slot and panic-closes only the affected slot."
         ),
     },
@@ -1747,7 +1747,7 @@ for _pside in ("long", "short"):
                 "Default false; allows coin overrides in coin HSL scope."
             ),
             f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
-            f"bot.{_pside}.hsl.red_threshold": (
+            f"bot.{_pside}.hsl.drawdown_ratio_threshold": (
                 f"RED drawdown trigger for {_pside} HSL, as part-per-one."
             ),
             f"bot.{_pside}.hsl.drawdown_ratio_ema_span_minutes": (

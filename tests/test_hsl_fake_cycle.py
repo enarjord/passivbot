@@ -19,7 +19,7 @@ import tools.run_fake_live as runner
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", ["in_process", "cli"])
 @pytest.mark.parametrize("case", ["panic", "entry"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 async def test_standard_fake_runner_hsl_execution_and_trace(
     tmp_path, monkeypatch, mode, side, case, entrypoint
@@ -39,13 +39,13 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
     block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     block.update(
         enabled=True,
-        red_threshold=0.06,
+        drawdown_ratio_threshold=0.06,
         drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
     set_risk_memory_spans(cfg, 288.0)
     if case == "entry":
-        block["red_threshold"] = 0.5
+        block["drawdown_ratio_threshold"] = 0.5
         for pside in ("long", "short"):
             cfg["bot"][pside]["unstuck"]["enabled"] = False
             cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
