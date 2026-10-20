@@ -112,7 +112,7 @@ def test_hsl_runtime_boundary_rejects_removed_metrics(tier):
 def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
     cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
-    cfg["optimize"]["bounds"].setdefault("risk", {})["hsl"] = {"red_threshold": [0.01, 0.9]}
+    cfg["optimize"]["bounds"].setdefault("global", {})["hsl"] = {"red_threshold": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["drawdown_worst_ema_hsl_long"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)

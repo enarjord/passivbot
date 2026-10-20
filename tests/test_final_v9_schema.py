@@ -4,8 +4,6 @@ from copy import deepcopy
 import json
 
 import pytest
-from released_v8_fixtures import released_v8_policy
-
 from config import prepare_config
 from config.overrides import parse_overrides
 from config.parse import load_raw_config
