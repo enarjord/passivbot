@@ -4099,7 +4099,7 @@ def test_active_candle_incomplete_actionable_gap_still_warns(monkeypatch, caplog
 
 def test_candle_health_missing_trailing_1m_gap_is_not_actionable_during_grace():
     bot = _unit_bot()
-    bot.config = _unit_config()
+    bot.config = _unit_config({})
 
     assert (
         bot._candle_health_missing_is_actionable(

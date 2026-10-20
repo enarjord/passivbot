@@ -47,6 +47,7 @@ from config_utils import (
     format_config,
 )
 from warmup_utils import compute_backtest_warmup_minutes
+from released_v8_fixtures import released_v8_policy
 
 
 def _strategy_side(config, pside, kind=None):
@@ -67,9 +68,8 @@ def _migrate_released_v8(source):
 
     with pytest.raises(ValueError, match="unknown|retired|explicit migration"):
         prepare_config(source, verbose=False)
-    legacy = deepcopy(source)
-    legacy["config_version"] = "v8.6.0"
-    return migrate_v8_to_v9(legacy, memory_span_minutes=43200.0)
+    assert source["config_version"] == "v8.6.0"
+    return migrate_v8_to_v9(deepcopy(source), memory_span_minutes=43200.0)
 
 
 def _prepare_released_v8(source):
@@ -301,7 +301,7 @@ def test_order_replacement_churn_gate_defaults_and_validation():
     )
     for key, value in invalid_cases:
         invalid = get_template_config()
-        invalid["live"][key] = value
+        invalid["live"]["execution"][key] = value
         with pytest.raises((TypeError, ValueError), match=key):
             validate_config(invalid, verbose=False)
 
@@ -312,7 +312,7 @@ def test_order_replacement_churn_gate_defaults_and_validation():
 
 
 def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
-    source = get_template_config()
+    source = released_v8_policy()
     for key in (
         "order_replacement_churn_gate_activation_count",
         "order_replacement_churn_gate_market_dist_pct",
@@ -324,7 +324,7 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
 
     migration = _migrate_released_v8(source)
     prepared = prepare_config(migration.config, verbose=False)
-    live = prepared["live"]
+    live = prepared["live"]["execution"]
 
     assert "initial_entry_exec_max_market_dist_pct" not in live
     assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
@@ -337,7 +337,7 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
 
 
 def test_explicit_v8_converter_removes_retired_churn_tracking_tolerance():
-    source = get_template_config()
+    source = released_v8_policy()
     source["live"]["order_replacement_churn_gate_tracking_tolerance_pct"] = 0.002
     migration = _migrate_released_v8(source)
     prepared = prepare_config(migration.config, verbose=False)
@@ -350,12 +350,12 @@ def test_explicit_v8_converter_removes_retired_churn_tracking_tolerance():
 def test_retired_disabled_initial_entry_gate_migrates_to_disabled_churn_gate(
     legacy_value,
 ):
-    source = get_template_config()
+    source = released_v8_policy()
     source["live"].pop("order_replacement_churn_gate_activation_count")
     source["live"]["initial_entry_exec_max_market_dist_pct"] = legacy_value
 
     prepared = _prepare_released_v8(source)
-    live = prepared["live"]
+    live = prepared["live"]["execution"]
 
     assert "initial_entry_exec_max_market_dist_pct" not in live
     assert live["order_replacement_churn_gate_activation_count"] == 0
@@ -363,7 +363,7 @@ def test_retired_disabled_initial_entry_gate_migrates_to_disabled_churn_gate(
 
 
 def test_retired_initial_entry_gate_accepts_matching_new_distance():
-    source = get_template_config()
+    source = released_v8_policy()
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
 
     prepared = _prepare_released_v8(source)
@@ -375,7 +375,7 @@ def test_retired_initial_entry_gate_accepts_matching_new_distance():
 
 
 def test_retired_initial_entry_gate_rejects_conflicting_new_distance():
-    source = get_template_config()
+    source = released_v8_policy()
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.004
 
     with pytest.raises(ValueError, match="conflicts with"):
@@ -383,7 +383,7 @@ def test_retired_initial_entry_gate_rejects_conflicting_new_distance():
 
 
 def test_retired_disabled_initial_entry_gate_rejects_enabled_new_gate():
-    source = get_template_config()
+    source = released_v8_policy()
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.0
 
     with pytest.raises(ValueError, match="enables the replacement"):
@@ -391,11 +391,9 @@ def test_retired_disabled_initial_entry_gate_rejects_enabled_new_gate():
 
 
 def test_retired_enabled_initial_entry_gate_rejects_disabled_new_gate():
-    source = get_template_config()
-    source["live"].get("execution", {}).pop(
-        "order_replacement_churn_gate_market_dist_pct"
-    )
-    source["live"]["execution"]["order_replacement_churn_gate_activation_count"] = 0
+    source = released_v8_policy()
+    source["live"].pop("order_replacement_churn_gate_market_dist_pct")
+    source["live"]["order_replacement_churn_gate_activation_count"] = 0
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
 
     with pytest.raises(ValueError, match="disables the replacement"):
@@ -446,9 +444,7 @@ def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     )
     assert (
         config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_1m"]
-        == get_template_config()["optimize"]["bounds"]["long"]["forager"][
-            "volume_ema_span_1m"
-        ]
+        == [config["bot"]["long"]["forager"]["volume_ema_span_1m"]] * 2
     )
 
 
@@ -504,7 +500,7 @@ def test_rename_config_keys_records_tracker_events():
 
 def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_pct(tmp_path):
     raw = {
-        "config_version": "v9.0.0",
+        "config_version": "v8.6.0",
         "backtest": {"panic_market_slippage_pct": 0.0015},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},

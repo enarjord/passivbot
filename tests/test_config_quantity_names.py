@@ -246,7 +246,7 @@ def test_smoke_config_checks_recognize_the_public_position_side_scope(tmp_path):
 
     config = generated_template(get_template_config(), "position_side")
     config["bot"]["long"]["hsl"]["enabled"] = True
-    config["live"]["balance_override"] = 1000.0
+    config["live"]["account"]["balance_override"] = 1000.0
     file = tmp_path / "policy.json"
     file.write_text(json.dumps(config))
     report = _smoke_config_check_records([{"config_path": file.name}], config_base_dir=tmp_path)
