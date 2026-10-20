@@ -45,7 +45,7 @@ without changing the document's field contract.
 passivbot tool config-schema                         # print the schema
 passivbot tool config-schema --check                 # check the repository artifact, read-only
 passivbot tool config-schema --output schema.json     # export to an explicit destination
-passivbot tool config-schema --field bot.long.hsl.red_threshold
+passivbot tool config-schema --field bot.long.hsl.drawdown_ratio_threshold
 PYTHONPATH=src python src/tools/generate_config_field_reference.py --check
 ```
 
