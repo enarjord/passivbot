@@ -20,6 +20,7 @@ import traceback
 from .workloads import array_digest, digest, harness_digest, load_manifest
 
 _CPU_CONTEXT = None
+_SOCKET_CONNECT = socket.socket.connect
 
 
 def initialize_cpu_worker(specs, markets, exchange, metrics):
@@ -39,6 +40,26 @@ def cpu_config(config):
 
 def deny_network(*_args, **_kwargs):
     raise RuntimeError("optimizer benchmark forbids network connections")
+
+
+def _local_ipc_connect(sock, address):
+    if hasattr(socket, "AF_UNIX") and sock.family == socket.AF_UNIX:
+        return _SOCKET_CONNECT(sock, address)
+    return deny_network(sock, address)
+
+
+def block_network():
+    # Forkserver and multiprocessing use local Unix sockets. Retain the original
+    # implementation once, so repeated candidate setup cannot wrap itself.
+    socket.socket.connect = _local_ipc_connect
+    socket.create_connection = deny_network
+
+
+def initialize_optimizer_worker():
+    """Apply benchmark policy in fresh CPU pool workers before evaluation."""
+    block_network()
+    from optimize import ignore_sigint_in_worker
+    ignore_sigint_in_worker()
 
 
 def strict_json(value):
@@ -105,8 +126,7 @@ class Resources:
 
 
 def cpu_candidate(task):
-    socket.socket.connect = deny_network
-    socket.create_connection = deny_network
+    block_network()
     config, candles, markets, btc, timestamps, exchange, metrics = task
     from backtest import build_backtest_payload, execute_backtest
     from config.metrics import resolve_metric_value
@@ -359,6 +379,9 @@ def search_run(entry, arrays, args):
     config["optimize"]["gpu"].update(batch_size=None if args.width == "auto" else int(args.width),
         tuning_mode="refresh" if args.width == "auto" else "off", max_dispatch_candidate_bars=args.dispatch_budget,
         exact_workers=args.workers)
+    # Match optimize.main: construct the immutable recording contract once during
+    # preparation, before creating the evaluator and starting the backend clock.
+    config[optimize.CONTRACT_CACHE_KEY] = optimize.build_evaluation_contract(config)
     seed_rngs(entry["seed"], context="frozen benchmark search")
     manager = SharedArrayManager()
     records = []
@@ -381,12 +404,11 @@ def search_run(entry, arrays, args):
                 with profile_search_host(getattr(args, "host_profile", False)) as host_profile:
                     result = get_backend_runner(backend)(config=config, evaluator=base, evaluator_for_pool=base,
                         recorder=recorder, overrides_list=[], duplicate_counter={"count": 0},
-                        starting_configs_path="frozen-population", constraint_fitness_cls=None,
-                        ignore_sigint_in_worker=optimize.ignore_sigint_in_worker,
+                        starting_configs_path="frozen-population",
+                        ignore_sigint_in_worker=initialize_optimizer_worker,
                         get_starting_configs=lambda _path: entry["configs"],
                         configs_to_individuals=lambda configs, _bounds, _digits, **_kwargs: [[get_path(c, path)
                             for _key, path in base.key_paths] for c in configs],
-                        record_individual_result=optimize._record_individual_result, run_evolution=None,
                         build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,
                         checkpoint_path=str(Path(directory) / "checkpoint.pkl"), resume=False,
                         **({"standalone_candle_coins": {exchange: tuple(config["backtest"]["coins"][exchange])}}
@@ -519,8 +541,7 @@ def main():
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(Path(args.backend).resolve() / "src"))
-    socket.socket.connect = deny_network
-    socket.create_connection = deny_network
+    block_network()
     try:
         result = run(args)
     except Exception as error:

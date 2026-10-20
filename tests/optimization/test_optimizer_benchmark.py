@@ -3,11 +3,15 @@
 from copy import deepcopy
 from itertools import combinations, product
 import json
+import multiprocessing
 import random
 import os
 from pathlib import Path
 import subprocess
 import sys
+import socket
+import signal
+import tempfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -30,6 +34,91 @@ def restore_rng_states():
     finally:
         random.setstate(python_state)
         np.random.set_state(numpy_state)
+
+
+@pytest.fixture
+def blocked_worker_network(monkeypatch):
+    # Register the original methods for restoration before process-scoped setup.
+    monkeypatch.setattr(socket.socket, "connect", socket.socket.connect)
+    monkeypatch.setattr(socket, "create_connection", socket.create_connection)
+    worker.block_network()
+    worker.block_network()
+
+
+@pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6])
+def test_worker_rejects_network_families_before_connecting(blocked_worker_network, monkeypatch, family):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("network rejection must precede the original socket connect")
+    monkeypatch.setattr(worker, "_SOCKET_CONNECT", forbidden)
+    with pytest.raises(RuntimeError, match="forbids network connections"):
+        socket.socket.connect(SimpleNamespace(family=family), ("localhost", 1))
+    with pytest.raises(RuntimeError, match="forbids network connections"):
+        socket.create_connection(("localhost", 1))
+
+
+def test_worker_preserves_local_unix_ipc_after_repeated_setup(blocked_worker_network):
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("Unix-domain sockets unavailable")
+    # Keep the socket path below macOS's short Unix-domain address limit.
+    with tempfile.TemporaryDirectory(prefix="pb-bench-ipc-") as directory:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.settimeout(2)
+            listener.bind(str(Path(directory) / "ipc"))
+            listener.listen(1)
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(2)
+                client.connect(str(Path(directory) / "ipc"))
+                connection, _address = listener.accept()
+                with connection:
+                    connection.settimeout(2)
+                    client.sendall(b"ok")
+                    assert connection.recv(2) == b"ok"
+
+
+def _optimizer_pool_network_policy():
+    """Probe child policy without attempting any real socket connection."""
+    from optimization import problem
+    statuses = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            socket.socket.connect(SimpleNamespace(family=family), ("localhost", 1))
+        except RuntimeError as error:
+            statuses.append(str(error) == "optimizer benchmark forbids network connections")
+        except TypeError:
+            # An unpatched original descriptor rejects this non-socket safely.
+            statuses.append(False)
+        else:
+            statuses.append(False)
+    return dict(
+        network_families_blocked=statuses,
+        create_connection_blocked=socket.create_connection is worker.deny_network,
+        ignores_sigint=signal.getsignal(signal.SIGINT) == signal.SIG_IGN,
+        evaluator_marker=problem._PYMOO_WORKER_EVALUATOR.marker,
+    )
+
+
+@pytest.mark.parametrize("start_method", ["spawn", "forkserver"])
+def test_optimizer_pool_initializer_blocks_network_in_fresh_children(start_method):
+    if start_method not in multiprocessing.get_all_start_methods():
+        pytest.skip(f"{start_method} multiprocessing unavailable")
+    from optimization.problem import initialize_pymoo_worker
+
+    context = multiprocessing.get_context(start_method)
+    with context.Pool(processes=1, initializer=initialize_pymoo_worker,
+                      initargs=(SimpleNamespace(marker="benchmark"), [], 2, False, 7,
+                                worker.initialize_optimizer_worker)) as pool:
+        policy = pool.apply_async(_optimizer_pool_network_policy).get(timeout=30)
+    assert policy == dict(network_families_blocked=[True, True], create_connection_blocked=True,
+                          ignores_sigint=True, evaluator_marker="benchmark")
+
+
+def test_optimizer_worker_policy_precedes_existing_signal_setup(monkeypatch):
+    import optimize
+    calls = []
+    monkeypatch.setattr(worker, "block_network", lambda: calls.append("network"))
+    monkeypatch.setattr(optimize, "ignore_sigint_in_worker", lambda: calls.append("signal"))
+    worker.initialize_optimizer_worker()
+    assert calls == ["network", "signal"]
 
 
 def test_pairwise_covers_all_pairs_and_states():
@@ -526,6 +615,70 @@ def test_search_transports_continuous_bounds_without_null_step(frozen, monkeypat
     with pytest.raises(BackendReached):
         worker.search_run(entry, arrays, args)
     assert not any("step is null" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("engine", ["search-cpu", "search-gpu"])
+def test_search_matches_backend_signature_and_prepares_recording_contract(frozen, monkeypatch, engine):
+    import inspect
+    import optimize
+    from optimization import backends
+    from optimization.backends import gpu_backend, pymoo_backend
+
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    with np.load(directory / entry["data_file"]) as data:
+        arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
+    original_evaluator = optimize.Evaluator
+    prepared = []
+    def evaluator(*args, **kwargs):
+        config = args[3]
+        assert config[optimize.CONTRACT_CACHE_KEY] == optimize.build_evaluation_contract(config)
+        prepared.append(config[optimize.CONTRACT_CACHE_KEY])
+        return original_evaluator(*args, **kwargs)
+    monkeypatch.setattr(optimize, "Evaluator", evaluator)
+    runner = gpu_backend.run_backend if engine == "search-gpu" else pymoo_backend.run_backend
+    class BackendReached(Exception):
+        pass
+    def inspect_call(**kwargs):
+        inspect.signature(runner).bind(**kwargs)
+        assert kwargs["config"][optimize.CONTRACT_CACHE_KEY] is prepared[0]
+        assert kwargs["ignore_sigint_in_worker"] is worker.initialize_optimizer_worker
+        assert not {"constraint_fitness_cls", "record_individual_result", "run_evolution"} & kwargs.keys()
+        raise BackendReached
+    monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_call)
+    args = SimpleNamespace(engine=engine, workers=1, search_iters=8, width="8", dispatch_budget=100000)
+    with pytest.raises(BackendReached):
+        worker.search_run(entry, arrays, args)
+
+
+@pytest.mark.parametrize("start_method", [None, "forkserver"])
+def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, start_method):
+    if start_method is not None and start_method not in multiprocessing.get_all_start_methods():
+        pytest.skip(f"{start_method} multiprocessing unavailable")
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    # Network rejection belongs to the worker process, including the Rust
+    # verification pass; it must not alter the pytest process's socket methods.
+    output = directory / "cpu-search.json"
+    root = Path(__file__).resolve().parents[2]
+    invocation = [sys.executable, "-m", "tools.optimizer_benchmark.worker"]
+    if start_method is not None:
+        invocation = [sys.executable, "-c", (
+            "import multiprocessing, runpy; "
+            f"multiprocessing.set_start_method({start_method!r}); "
+            "runpy.run_module('tools.optimizer_benchmark.worker', run_name='__main__', alter_sys=True)"
+        )]
+    subprocess.run([*invocation,
+                    "--backend", str(root), "--workload", str(directory),
+                    "--entry", entry["id"], "--engine", "search-cpu", "--workers", "1",
+                    "--search-iters", "8", "--output", str(output)],
+                   cwd=root, env=dict(os.environ, PYTHONPATH=str(root / "src")),
+                   check=True, timeout=60)
+    report = json.loads(output.read_text())
+    assert report["status"] == "completed", report
+    assert report["samples"][0]["completed"] == 8
+    assert report["persisted_bytes"] > 0
+    assert report["rust_reference_verification"]["status"] == "passed"
 
 
 @pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
