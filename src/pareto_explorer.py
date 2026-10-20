@@ -331,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Methods:\n"
             "  knee         Approximate balanced compromise selector.\n"
-            "  reference    Closest to user targets (--target metric=value).\n"
+            "  reference    Closest to user targets; uses the full post-limit pool.\n"
             "  ideal        Closest to the observed ideal point.\n"
             "  utility      Highest weighted normalized utility (--weight metric=value).\n"
             "  lexicographic Strict priority order (--priority metric_a,metric_b,...).\n"
@@ -1409,6 +1409,7 @@ def format_selection_result(
     retained_count: int,
     scenario: Optional[str] = None,
     scenario_front_count: Optional[int] = None,
+    active_front_count: Optional[int] = None,
     active_limits: Sequence[Dict[str, Any]],
     result: SelectionResult,
     show_top: int = 1,
@@ -1422,8 +1423,13 @@ def format_selection_result(
         ("Pareto directory", _display_path(pareto_dir)),
         ("Loaded candidates", str(loaded_count)),
         ("Retained after limits", str(retained_count)),
-        ("Active front", str(len(candidates))),
+        ("Active front", str(len(candidates) if active_front_count is None else active_front_count)),
     ]
+    if result.method == "reference":
+        summary_rows.extend([
+            ("Ranked candidates", str(len(candidates))),
+            ("Normalization", "post-limit pool (reference targets)"),
+        ])
     if scenario is not None:
         summary_rows.extend(
             [
@@ -1784,14 +1790,20 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         target_map=_parse_key_value_pairs(getattr(args, "target", None) or [], value_name="target"),
         method=method,
     )
+    weight_map = _parse_key_value_pairs(getattr(args, "weight", None) or [], value_name="weight")
+    weights = _weights_for_metrics([spec.metric for spec in active_specs], weight_map)
+    if method in {"ideal", "reference", "utility", "outranking"}:
+        active_specs = [spec for spec, weight in zip(active_specs, weights) if weight > 0.0]
     active_front = build_objective_front(filtered_candidates, active_specs)
     if not active_front:
         raise ValueError("No Pareto candidates remained after rebuilding the active-objective front.")
+    # Exact reference targets need not be Pareto-optimal in the original goals.
+    selection_pool = filtered_candidates if method == "reference" else active_front
     result = select_candidate(
-        active_front,
-        scoring_specs,
+        selection_pool,
+        active_specs,
         method=method,
-        objectives_arg=getattr(args, "objectives", None),
+        objectives_arg=",".join(spec.metric for spec in active_specs),
         weight_pairs=getattr(args, "weight", None),
         target_pairs=getattr(args, "target", None),
         priority_arg=getattr(args, "priority", None),
@@ -1840,14 +1852,16 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
-        ranking_order = result.details.get("ranking_order") or [active_front.index(result.candidate)]
-        score_vector = result.details.get("score_vector") or [result.score] * len(active_front)
+        ranking_order = result.details.get("ranking_order") or [selection_pool.index(result.candidate)]
+        score_vector = result.details.get("score_vector") or [result.score] * len(selection_pool)
         active_metrics = result.details.get("active_metrics") or list(result.objective_values)
         payload = {
             "pareto_dir": str(pareto_dir),
             "loaded_count": len(candidates),
             "retained_count": len(filtered_candidates),
             "active_front_count": len(active_front),
+            "selection_count": len(selection_pool),
+            "normalization_scope": "post_limit_pool" if method == "reference" else "active_front",
             "applied_limits": _json_ready(active_limits),
             "method": result.method,
             "method_description": _method_explanation(result.method),
@@ -1861,7 +1875,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             },
             "top_candidates": _json_ready(
                 _ranked_rows(
-                    active_front,
+                    selection_pool,
                     active_metrics,
                     ranking_order,
                     score_vector,
@@ -1890,9 +1904,10 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     else:
         output = format_selection_result(
             pareto_dir,
-            candidates=active_front,
+            candidates=selection_pool,
             loaded_count=len(candidates),
             retained_count=len(filtered_candidates),
+            active_front_count=len(active_front),
             scenario=scenario,
             scenario_front_count=len(active_front) if scenario is not None else None,
             active_limits=active_limits,

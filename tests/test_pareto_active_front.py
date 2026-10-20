@@ -71,6 +71,56 @@ def test_reference_targets_define_active_objectives(front, capsys):
     _, output = run(front, capsys, "-m", "reference", "--target", "metric_a=1",
                     "--target", "metric_b=1")
     assert output["active_front_count"] == 2
+    assert output["selection_count"] == 4
+    assert output["normalization_scope"] == "post_limit_pool"
+
+
+def test_reference_keeps_dominated_exact_target(front, capsys):
+    result, output = run(front, capsys, "-m", "reference", "--target", "metric_a=0.5",
+                         "--target", "metric_b=0.5")
+    assert result.candidate.path.stem == "d"
+    assert output["active_front_count"] == 2
+    assert output["selection_count"] == 4
+    assert output["selected"]["score"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("method", ["ideal", "utility", "outranking", "reference"])
+def test_zero_weight_metrics_do_not_affect_front_or_normalization(front, capsys, method):
+    flags = ["-m", method, "--weight", "metric_c=0"]
+    if method == "reference":
+        flags += ["--target", "metric_a=1", "--target", "metric_b=1", "--target", "metric_c=1"]
+    first, output = run(front, capsys, *flags)
+    path = front / "c.json"
+    payload = json.loads(path.read_text())
+    payload["metrics"]["objectives"]["metric_c"] = -1000.0
+    path.write_text(json.dumps(payload))
+    second, changed = run(front, capsys, *flags)
+    assert output["active_front_count"] == changed["active_front_count"] == 2
+    assert first.candidate.path.name == second.candidate.path.name
+    assert first.score == second.score
+    assert "metric_c" not in first.objective_values
+
+
+def test_all_zero_weights_fail(front, capsys):
+    with pytest.raises(ValueError, match="At least one weight"):
+        run(front, capsys, "-o", "metric_a", "--weight", "metric_a=0")
+
+
+def test_reference_preserves_exact_target_for_min_objective(front, capsys):
+    result, output = run(front, capsys, "-m", "reference", "--target", "fills_gap_p95_hours=102")
+    assert result.candidate.path.stem == "a"
+    assert output["active_front_count"] == 1
+    assert output["selection_count"] == 4
+
+
+def test_reference_text_distinguishes_front_and_ranked_pool(front, capsys):
+    run_from_args(build_parser().parse_args([
+        str(front), "-m", "reference", "--target", "metric_a=0.5", "--target", "metric_b=0.5",
+    ]))
+    output = capsys.readouterr().out
+    assert "| Active front          | 2" in output
+    assert "| Ranked candidates     | 4" in output
+    assert "post-limit pool (reference targets)" in output
 
 
 def test_lexicographic_priority_defines_active_objectives(front, capsys):

@@ -66,6 +66,12 @@ promoting one config out of a large Pareto front without opening the dashboard. 
 methods are practical decision heuristics for high-dimensional Passivbot fronts, not full formal
 multi-criteria decision-analysis implementations.
 
+Weighted methods exclude zero-weight objectives before rebuilding and normalizing the front.
+The `reference` method preserves closest-target semantics: an exact target match may be dominated,
+so it ranks and normalizes the full post-limit pool instead. Its output still reports the active
+Pareto-front count, plus the ranked candidate count and normalization scope. JSON includes
+`selection_count` and `normalization_scope` for every method.
+
 For suite optimization results, `--scenario LABEL` projects every saved Pareto member onto that
 scenario's stored metric values, applies CLI limits in that scenario context, rebuilds a
 nondominated sub-front using the active objectives and their min/max goals, and then runs the selected
