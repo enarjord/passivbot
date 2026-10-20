@@ -12,6 +12,7 @@ from config.hsl import generated_template, require_runtime_support
 from config.optimize_bounds import flatten_optimize_bounds
 from config_utils import update_config_with_args
 from optimization.config_adapter import get_optimization_key_paths
+from released_v8_fixtures import released_v8_policy
 
 
 def source(mode="coin", enabled=True):
@@ -22,47 +23,30 @@ def source(mode="coin", enabled=True):
 
 
 def as_legacy(cfg, version="v8.6.0"):
-    """Restore released-v8 field placement for explicit converter regressions."""
-    cfg["config_version"] = version
-    bot, live = cfg["bot"], cfg["live"]
-    global_policy = bot.pop("global")
-    mode = global_policy["hsl"]["scope"]
-    live["hsl_signal_mode"] = {"portfolio": "unified", "position_side": "pside"}.get(mode, mode)
-    live["max_realized_loss_pct"] = global_policy["loss_gate"]["max_drawdown_ratio"]
-    live["auto_gs"] = live.pop("disapproved_position_mode") == "graceful_stop"
-    live.pop("risk_bootstrap_max_lookback_minutes", None)
-    live["pnls_max_lookback_days"] = 30.0
-    cfg["backtest"]["liquidation_threshold"] = cfg["backtest"].pop("equity_floor_ratio")
-    if mode == "portfolio":
-        bot["hsl"] = global_policy["hsl"]
-        bot["hsl"].pop("scope")
-    bounds = cfg["optimize"]["bounds"]
-    global_bounds = bounds.pop("global", {})
-    if "hsl" in global_bounds:
-        bounds["hsl"] = global_bounds["hsl"]
-    bounds.pop("unstuck", None)
+    """Use frozen v8 authoring with the requested HSL scope and enablement."""
+    mode = cfg["bot"]["global"]["hsl"]["scope"]
+    enabled = {side: cfg["bot"][side]["hsl"]["enabled"] for side in ("long", "short")}
+    portfolio_enabled = cfg["bot"]["global"]["hsl"].get("enabled", False)
+    legacy = released_v8_policy()
+    legacy["config_version"] = version
+    legacy["live"]["hsl_signal_mode"] = {
+        "portfolio": "unified", "position_side": "pside"
+    }.get(mode, mode)
     for side in ("long", "short"):
-        side_bot = bot[side]
-        side_bot["risk"]["n_positions"] = side_bot["risk"].pop("max_positions")
-        side_bot["unstuck"]["threshold"] = side_bot["unstuck"].pop("exposure_trigger_ratio")
-        side_bot["unstuck"]["ema_dist"] = side_bot["unstuck"].pop("ema_distance_fraction")
-        side_bounds = bounds[side]
-        side_bounds["risk"]["n_positions"] = side_bounds["risk"].pop("max_positions")
-        side_bounds["unstuck"]["threshold"] = side_bounds["unstuck"].pop("exposure_trigger_ratio")
-        side_bounds["unstuck"]["ema_dist"] = side_bounds["unstuck"].pop("ema_distance_fraction")
-    policies = [bot[side]["hsl"] for side in ("long", "short")]
-    policies += [bot["hsl"]] if mode == "portfolio" else []
-    bound_policies = [bounds[side]["hsl"] for side in ("long", "short") if "hsl" in bounds[side]]
-    bound_policies += [bounds["hsl"]] if mode == "portfolio" else []
-    for block in policies:
-        block["red_threshold"] = block.pop("drawdown_ratio_threshold")
-        block.pop("memory_ema_span_minutes", None)
-        block["ema_span_minutes"] = block.pop("drawdown_ratio_ema_span_minutes")
-        block["restart_after_red_policy"] = "always" if block["enabled"] else None
-    for block in bound_policies:
-        block["red_threshold"] = block.pop("drawdown_ratio_threshold")
-        block.pop("memory_ema_span_minutes", None)
-        block["ema_span_minutes"] = block.pop("drawdown_ratio_ema_span_minutes")
+        policy = legacy["bot"][side]["hsl"]
+        policy["enabled"] = enabled[side]
+        policy["restart_after_red_policy"] = "always" if enabled[side] else None
+    if mode == "portfolio":
+        policy = deepcopy(legacy["bot"]["long"]["hsl"])
+        policy["enabled"] = portfolio_enabled
+        policy["restart_after_red_policy"] = "always" if portfolio_enabled else None
+        legacy["bot"]["hsl"] = policy
+        # The authored unified search has one shared HSL domain.
+        bounds = legacy["optimize"]["bounds"]
+        bounds["hsl"] = bounds["long"].pop("hsl")
+        bounds["short"].pop("hsl", None)
+    cfg.clear()
+    cfg.update(legacy)
     return cfg
 
 

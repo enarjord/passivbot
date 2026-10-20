@@ -41,17 +41,20 @@ def _write_day(root, exchange, symbol, day, rows):
     np.save(symbol_dir / f"{day}.npy", np.array(rows, dtype=LEGACY_DTYPE))
 
 
-def _minimal_bot_config():
+def _minimal_bot_config(approved_coins):
     return {
+        "global": {
+            "strategy_kind": "trailing_martingale",
+            "universe": {"minimum_coin_age_days": 0.0},
+            "warmup": {"ratio": 0.0, "max_minutes": 0.0},
+        },
         "long": {
-            "n_positions": 1,
-            "total_wallet_exposure_limit": 1.0,
-            "wallet_exposure_limit": 1.0,
+            "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
+            "universe": {"approved_coins": approved_coins["long"], "ignored_coins": []},
         },
         "short": {
-            "n_positions": 0,
-            "total_wallet_exposure_limit": 0.0,
-            "wallet_exposure_limit": 0.0,
+            "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+            "universe": {"approved_coins": approved_coins["short"], "ignored_coins": []},
         },
     }
 
@@ -2183,13 +2186,7 @@ async def test_try_prepare_hlcvs_v2_local_uses_explicitly_imported_cache(monkeyp
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -2225,12 +2222,7 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2291,12 +2283,7 @@ async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2339,12 +2326,7 @@ async def test_prepare_hlcvs_mss_rejects_outer_v2_miss_without_legacy_fallback(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2387,12 +2369,7 @@ async def test_prepare_hlcvs_mss_strict_reraises_outer_v2_exception(monkeypatch,
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2436,12 +2413,7 @@ async def test_prepare_hlcvs_mss_does_not_fallback_after_outer_v2_exception(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2480,12 +2452,7 @@ async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_p
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2529,12 +2496,7 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
     prepared = (
         {
@@ -2599,12 +2561,7 @@ async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
     prepared = (
         {
@@ -2667,12 +2624,7 @@ async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boun
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2717,12 +2669,7 @@ async def test_prepare_hlcvs_mss_mixed_stock_without_source_dir_does_not_downgra
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH", "xyz:AAPL"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH", "xyz:AAPL"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2788,13 +2735,7 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
 
     class FakeCm:
@@ -2974,13 +2915,7 @@ async def test_prepare_hlcvs_internal_masks_invalid_direct_fetch_rows(monkeypatc
             return {}
 
     config = {
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     mss, timestamps, aligned = await prepare_hlcvs_internal(
@@ -3018,12 +2953,7 @@ async def test_prepare_hlcvs_prefers_local_v2_before_legacy_prepare(monkeypatch)
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     async def fake_try_prepare(*args, **kwargs):
@@ -3110,13 +3040,7 @@ async def test_try_prepare_hlcvs_v2_local_fetches_missing_remote_range_into_stor
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -3202,13 +3126,7 @@ async def test_try_prepare_hlcvs_v2_local_persists_persistent_cm_gap_after_empty
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
