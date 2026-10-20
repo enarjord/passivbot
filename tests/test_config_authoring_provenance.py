@@ -153,3 +153,149 @@ def test_coin_selection_keeps_simulation_null_inheritance_attributed_to_global_p
         "kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost", "value": True,
     }
     assert report["search"]["status"] == "not_in_bounds"
+
+
+@pytest.mark.parametrize("selected", ["SHIB", "1000SHIB"])
+@pytest.mark.parametrize("form", ["selected", "direct"])
+@pytest.mark.parametrize("origin", ["file", "inline"])
+def test_normalized_coin_alias_retains_its_authored_source(tmp_path, selected, form, origin):
+    source = policy()
+    override = write_json(tmp_path / "alias.json", coin_patch(0.12))
+    source["coin_overrides"] = {"1000SHIB": {"override_config_path": str(override)}
+                                if origin == "file" else coin_patch(0.12)}
+    original = deepcopy(source)
+    report = selected_report(source, selected, form, base=str(tmp_path / "input.json"))
+    assert report["value"] == 0.12
+    assert report["sources"][-1]["kind"] == ("override_file" if origin == "file" else "coin_override")
+    assert report["sources"][-1]["path"] == "coin_overrides.SHIB.bot.long.unstuck.close_pct"
+    if origin == "file":
+        assert report["sources"][-1]["file"] == str(override)
+    assert report["search"]["status"] == "coin_override"
+    assert source == original
+
+
+@pytest.mark.parametrize("form", ["selected", "direct"])
+@pytest.mark.parametrize("scope", ["leaf", "coin", "map"])
+def test_alias_scenario_layer_is_visible_under_the_canonical_coin(tmp_path, form, scope):
+    source = policy()
+    source["coin_overrides"] = {"1000SHIB": coin_patch(0.12)}
+    if scope == "leaf":
+        selector, value = "coin_overrides.1000SHIB.bot.long.unstuck.close_pct", 0.31
+        expected_path = "coin_overrides.SHIB.bot.long.unstuck.close_pct"
+    elif scope == "coin":
+        selector, value = "coin_overrides.1000SHIB", coin_patch(0.31)
+        expected_path = "coin_overrides.SHIB"
+    else:
+        selector, value = "coin_overrides", {"1000SHIB": coin_patch(0.31)}
+        expected_path = selector
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {selector: value}}]
+    original = deepcopy(source)
+    report = selected_report(source, "SHIB", form, base=str(tmp_path / "input.json"), scenario="one")
+    assert report["value"] == 0.31
+    assert report["sources"][-1]["kind"] == "scenario_override"
+    assert report["sources"][-1]["path"] == expected_path
+    assert report["search"]["status"] == "scenario_override"
+    assert report["search"]["shadowed_by"] == [{"kind": "scenario_override", "path": expected_path}]
+    assert not any(event["kind"] == "normalization" for event in report["sources"])
+    assert source == original
+
+
+@pytest.mark.parametrize("authored_coin,selector_coin", [
+    ("1000SHIB", "1000SHIB"), ("1000SHIB", "SHIB"), ("SHIB", "SHIB"),
+])
+def test_explain_preserves_strict_fixed_runtime_alias_selector_authority(tmp_path, authored_coin, selector_coin):
+    source = policy()
+    source["coin_overrides"] = {authored_coin: coin_patch(0.12)}
+    selector = f"coin_overrides.{selector_coin}.bot.long.unstuck.close_pct"
+    source["optimize"]["fixed_runtime_overrides"] = {selector: 0.21}
+    if authored_coin == "1000SHIB":
+        with pytest.raises((KeyError, ValueError), match="Unknown override path"):
+            selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"))
+    else:
+        report = selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"))
+        assert report["value"] == 0.21
+        assert report["sources"][-1]["kind"] == "fixed_runtime_override"
+        assert report["search"]["status"] == "fixed_runtime_override"
+
+
+@pytest.mark.parametrize("authored_coin,canonical_coin", [("BTC", "BTC"), ("1000SHIB", "SHIB")])
+@pytest.mark.parametrize("form", ["selected", "direct"])
+@pytest.mark.parametrize("origin", ["file", "inline"])
+@pytest.mark.parametrize("field", ["close_pct", "ema_span_0"])
+def test_coupling_keeps_untouched_sources_and_identifies_its_generated_span(
+    tmp_path, authored_coin, canonical_coin, form, origin, field,
+):
+    source = policy()
+    patch = {"bot": {"long": {"unstuck": {"close_pct": 0.12, "ema_span_0": 17.5},
+                              "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 321.5}}}}}}
+    override = write_json(tmp_path / "coupled.json", patch)
+    source["coin_overrides"] = {authored_coin: {"override_config_path": str(override)}
+                                if origin == "file" else patch}
+    source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    original = deepcopy(source)
+    original_file = override.read_bytes()
+    report = selected_report(source, canonical_coin, form, base=str(tmp_path / "input.json"), field=field)
+    event = report["sources"][-1]
+    assert event["path"] == f"coin_overrides.{canonical_coin}.bot.long.unstuck.{field}"
+    if field == "ema_span_0":
+        assert report["value"] == 321.5
+        assert event["kind"] == "optimizer_transform"
+        assert event["name"] == "couple_unstuck_ema_spans"
+        assert event["dependencies"] == [{
+            "path": f"coin_overrides.{canonical_coin}.bot.long.strategy.trailing_martingale.entry.ema_span_0",
+            "path_parts": ["coin_overrides", canonical_coin, "bot", "long", "strategy",
+                           "trailing_martingale", "entry", "ema_span_0"],
+        }]
+        assert report["search"]["status"] == "optimizer_transform"
+        assert report["search"]["gene_status"] == "not_in_genome"
+    else:
+        assert report["value"] == 0.12
+        assert event["kind"] == ("override_file" if origin == "file" else "coin_override")
+        if origin == "file":
+            assert event["file"] == str(override)
+        assert report["search"]["status"] == "coin_override"
+    assert source == original
+    assert override.read_bytes() == original_file
+
+
+@pytest.mark.parametrize("scope", ["coin", "map"])
+@pytest.mark.parametrize("replacement", ["inline", "file", "removed"])
+def test_coupling_scenario_replacement_does_not_reuse_an_earlier_file_source(tmp_path, scope, replacement):
+    source = policy()
+    old_file = write_json(tmp_path / "old.json", coin_patch(0.12))
+    new_file = write_json(tmp_path / "new.json", coin_patch(0.31))
+    source["coin_overrides"] = {"1000SHIB": {"override_config_path": str(old_file)}}
+    source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    patch = (coin_patch(0.31) if replacement == "inline" else
+             {"override_config_path": str(new_file)} if replacement == "file" else
+             {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}})
+    selector = "coin_overrides.SHIB" if scope == "coin" else "coin_overrides"
+    value = patch if scope == "coin" else {"SHIB": patch}
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {selector: value}}]
+    original = deepcopy(source)
+    originals = {path: path.read_bytes() for path in (old_file, new_file)}
+    report = selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"), scenario="one")
+    assert report["value"] == (source["bot"]["long"]["unstuck"]["close_pct"]
+                               if replacement == "removed" else 0.31)
+    file_events = [event for event in report["sources"] if event["kind"] == "override_file"]
+    if replacement == "file":
+        assert report["sources"][-1]["kind"] == "override_file"
+        assert [event["file"] for event in file_events] == [str(new_file)]
+    else:
+        assert not file_events
+        assert report["sources"][-1]["kind"] == "scenario_override"
+    assert not any(event["kind"] == "normalization" for event in report["sources"])
+    assert source == original
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
+def test_alias_coupling_scenario_keeps_the_runtime_duplicate_key_rejection(tmp_path):
+    source = policy()
+    override = write_json(tmp_path / "alias.json", coin_patch(0.12))
+    source["coin_overrides"] = {"1000SHIB": {"override_config_path": str(override)}}
+    source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
+        "coin_overrides.1000SHIB": coin_patch(0.31),
+    }}]
+    with pytest.raises(ValueError, match="both normalize to 'SHIB'"):
+        selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"), scenario="one")
