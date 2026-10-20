@@ -17,16 +17,15 @@ def build_pymoo_record_entry(
     build_config_fn,
     overrides_fn,
     overrides_list: Sequence[str] | None = None,
+    prepared_config: dict | None = None,
 ) -> dict:
+    """Build a result entry from a vector or its exact prepared config."""
     if isinstance(vector, np.ndarray):
         vector = vector.tolist()
     metrics = dict(metrics or {})
     suite_metrics = metrics.pop("suite_metrics", None)
-    config = build_config_fn(
-        vector,
-        overrides_fn,
-        list(overrides_list or []),
-        template,
+    config = prepared_config if prepared_config is not None else build_config_fn(
+        vector, overrides_fn, list(overrides_list or []), template,
     )
     anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
@@ -36,7 +35,7 @@ def build_pymoo_record_entry(
         entry["backtest"]["coins"] = deepcopy(config["backtest"]["coins"])
     entry[CONTRACT_KEY] = recorded_evaluation_contract(template)
     if anchor_meta is not None:
-        entry["optimizer_anchor"] = anchor_meta
+        entry["optimizer_anchor"] = deepcopy(anchor_meta)
     if callable(overrides_fn):
         entry = overrides_fn(list(overrides_list or []), entry, None)
     if suite_metrics is not None:

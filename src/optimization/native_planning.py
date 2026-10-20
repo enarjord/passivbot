@@ -103,6 +103,7 @@ class CandidatePlan:
     requests: tuple[BacktestRequest, ...]
     slots: tuple[ResultSlot, ...]
     prefilter_payload: dict | None = None
+    record_config: dict | None = None
 
     def collector(self, scorer):
         return CandidateEvaluation(self.candidate_id, self.vector, self.slots, scorer, stage=self.stage)
@@ -169,7 +170,8 @@ class NativeCandidatePlanner:
                 slots.append(slot)
                 requests.append(BacktestRequest(slot.request_id, slot.dataset_id, MappingProxyType(parameters)))
         key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-        plan = CandidatePlan(candidate_id, tuple(values), key, stage, tuple(requests), tuple(slots))
+        plan = CandidatePlan(candidate_id, tuple(values), key, stage, tuple(requests), tuple(slots),
+                             record_config=config if stage == "full" else None)
         # Validate the selected stage and requested metric surface before device work.
         plan.collector(self.scorer)
         if prefilter_enabled(policy):
@@ -179,7 +181,7 @@ class NativeCandidatePlanner:
                                                  suite=self.scorer.suite,
                                                  scenario_labels=tuple(configs) if self.scorer.suite else ())
                 plan = CandidatePlan(candidate_id, tuple(values), key, stage,
-                                     tuple(requests), tuple(slots), payload)
+                                     tuple(requests), tuple(slots), payload, config)
         return plan
 
 
