@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from setuptools import setup, find_packages
+from setuptools.command.build_py import build_py
 from setuptools_rust import Binding, RustExtension
 
 
@@ -8,6 +9,21 @@ ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
 VERSION_NS = {}
 exec((SRC_DIR / "passivbot_version.py").read_text(encoding="utf-8"), VERSION_NS)
+
+
+class BuildPyWithConfigSchema(build_py):
+    """Ship the checked schema without maintaining a second source copy."""
+
+    def run(self):
+        super().run()
+        destination = Path(self.build_lib) / "tools" / "schemas" / "config-v9.schema.json"
+        self.mkpath(str(destination.parent))
+        self.copy_file(str(ROOT / "schemas" / "config-v9.schema.json"), str(destination))
+
+    def get_outputs(self, include_bytecode=True):
+        return super().get_outputs(include_bytecode) + [
+            str(Path(self.build_lib) / "tools" / "schemas" / "config-v9.schema.json")
+        ]
 
 
 def parse_requirements(filename, seen=None):
@@ -72,5 +88,6 @@ setup(
     setup_requires=["setuptools-rust>=1.9.0", "wheel"],
     entry_points={"console_scripts": ["passivbot=passivbot_cli.main:console_main"]},
     include_package_data=True,
+    cmdclass={"build_py": BuildPyWithConfigSchema},
     zip_safe=False,
 )

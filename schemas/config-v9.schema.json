@@ -21983,26 +21983,7 @@
         },
         {
           "type": "object",
-          "properties": {
-            "backtest": {
-              "$ref": "#/$defs/fixedPatch:backtest"
-            },
-            "bot": {
-              "$ref": "#/$defs/fixedPatch:bot"
-            },
-            "live": {
-              "$ref": "#/$defs/fixedPatch:live"
-            },
-            "logging": {
-              "$ref": "#/$defs/fixedPatch:logging"
-            },
-            "monitor": {
-              "$ref": "#/$defs/fixedPatch:monitor"
-            },
-            "optimize": {
-              "$ref": "#/$defs/fixedPatch:optimize"
-            }
-          },
+          "properties": {},
           "patternProperties": {
             "^coin_overrides\\.[^.]+$": false,
             "^coin_overrides\\.[^.]+\\.live$": false,
@@ -22037,12 +22018,14 @@
           "propertyNames": {
             "not": {
               "enum": [
+                "backtest",
                 "backtest.coin_sources",
                 "backtest.market_settings",
                 "backtest.market_settings.overrides",
                 "backtest.market_settings.overrides_by_exchange",
                 "backtest.market_settings_sources",
                 "backtest.reducer",
+                "bot",
                 "bot.global",
                 "bot.global.execution",
                 "bot.global.forager",
@@ -22083,6 +22066,7 @@
                 "bot.short.strategy.trailing_martingale.entry",
                 "bot.short.universe",
                 "bot.short.unstuck",
+                "live",
                 "live.account",
                 "live.api",
                 "live.candles",
@@ -22092,6 +22076,9 @@
                 "live.recovery",
                 "live.startup",
                 "live.startup.startup_phase_budgets",
+                "logging",
+                "monitor",
+                "optimize",
                 "optimize.gpu",
                 "optimize.gpu.screening",
                 "optimize.prefilter",
@@ -22157,26 +22144,17 @@
         },
         {
           "type": "object",
-          "properties": {
-            "coin_sources": {
-              "$ref": "#/$defs/fixedPatch:backtest.coin_sources"
-            },
-            "market_settings": {
-              "$ref": "#/$defs/fixedPatch:backtest.market_settings"
-            },
-            "market_settings_sources": {
-              "$ref": "#/$defs/fixedPatch:backtest.market_settings_sources"
-            },
-            "reducer": {
-              "$ref": "#/$defs/fixedPatch:backtest.reducer"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "coin_sources",
+                "market_settings",
                 "market_settings.overrides",
-                "market_settings.overrides_by_exchange"
+                "market_settings.overrides_by_exchange",
+                "market_settings_sources",
+                "reducer"
               ]
             }
           }
@@ -22203,16 +22181,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "overrides": {
-              "$ref": "#/$defs/fixedPatch:backtest.market_settings.overrides"
-            },
-            "overrides_by_exchange": {
-              "$ref": "#/$defs/fixedPatch:backtest.market_settings.overrides_by_exchange"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "overrides",
+                "overrides_by_exchange"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22275,21 +22253,12 @@
         },
         {
           "type": "object",
-          "properties": {
-            "global": {
-              "$ref": "#/$defs/fixedPatch:bot.global"
-            },
-            "long": {
-              "$ref": "#/$defs/fixedPatch:bot.long"
-            },
-            "short": {
-              "$ref": "#/$defs/fixedPatch:bot.short"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "global",
                 "global.execution",
                 "global.forager",
                 "global.hsl",
@@ -22297,6 +22266,7 @@
                 "global.universe",
                 "global.unstuck",
                 "global.warmup",
+                "long",
                 "long.entry_cooldown",
                 "long.entry_cooldown.weights_minutes",
                 "long.forager",
@@ -22312,6 +22282,7 @@
                 "long.strategy.trailing_martingale.entry",
                 "long.universe",
                 "long.unstuck",
+                "short",
                 "short.entry_cooldown",
                 "short.entry_cooldown.weights_minutes",
                 "short.forager",
@@ -22340,31 +22311,21 @@
         },
         {
           "type": "object",
-          "properties": {
-            "execution": {
-              "$ref": "#/$defs/fixedPatch:bot.global.execution"
-            },
-            "forager": {
-              "$ref": "#/$defs/fixedPatch:bot.global.forager"
-            },
-            "hsl": {
-              "$ref": "#/$defs/fixedPatch:bot.global.hsl"
-            },
-            "loss_gate": {
-              "$ref": "#/$defs/fixedPatch:bot.global.loss_gate"
-            },
-            "universe": {
-              "$ref": "#/$defs/fixedPatch:bot.global.universe"
-            },
-            "unstuck": {
-              "$ref": "#/$defs/fixedPatch:bot.global.unstuck"
-            },
-            "warmup": {
-              "$ref": "#/$defs/fixedPatch:bot.global.warmup"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "execution",
+                "forager",
+                "hsl",
+                "loss_gate",
+                "universe",
+                "unstuck",
+                "warmup"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22466,41 +22427,26 @@
         },
         {
           "type": "object",
-          "properties": {
-            "entry_cooldown": {
-              "$ref": "#/$defs/fixedPatch:bot.long.entry_cooldown"
-            },
-            "forager": {
-              "$ref": "#/$defs/fixedPatch:bot.long.forager"
-            },
-            "hsl": {
-              "$ref": "#/$defs/fixedPatch:bot.long.hsl"
-            },
-            "risk": {
-              "$ref": "#/$defs/fixedPatch:bot.long.risk"
-            },
-            "strategy": {
-              "$ref": "#/$defs/fixedPatch:bot.long.strategy"
-            },
-            "universe": {
-              "$ref": "#/$defs/fixedPatch:bot.long.universe"
-            },
-            "unstuck": {
-              "$ref": "#/$defs/fixedPatch:bot.long.unstuck"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "entry_cooldown",
                 "entry_cooldown.weights_minutes",
+                "forager",
                 "forager.score_weights",
+                "hsl",
+                "risk",
                 "risk.position_exposure_enforcer",
                 "risk.total_exposure_enforcer",
+                "strategy",
                 "strategy.ema_anchor",
                 "strategy.trailing_martingale",
                 "strategy.trailing_martingale.close",
-                "strategy.trailing_martingale.entry"
+                "strategy.trailing_martingale.entry",
+                "universe",
+                "unstuck"
               ]
             }
           }
@@ -22514,13 +22460,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "weights_minutes": {
-              "$ref": "#/$defs/fixedPatch:bot.long.entry_cooldown.weights_minutes"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "weights_minutes"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22544,13 +22492,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "score_weights": {
-              "$ref": "#/$defs/fixedPatch:bot.long.forager.score_weights"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "score_weights"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22587,16 +22537,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "position_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:bot.long.risk.position_exposure_enforcer"
-            },
-            "total_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:bot.long.risk.total_exposure_enforcer"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "position_exposure_enforcer",
+                "total_exposure_enforcer"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22633,18 +22583,13 @@
         },
         {
           "type": "object",
-          "properties": {
-            "ema_anchor": {
-              "$ref": "#/$defs/fixedPatch:bot.long.strategy.ema_anchor"
-            },
-            "trailing_martingale": {
-              "$ref": "#/$defs/fixedPatch:bot.long.strategy.trailing_martingale"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "ema_anchor",
+                "trailing_martingale",
                 "trailing_martingale.close",
                 "trailing_martingale.entry"
               ]
@@ -22673,16 +22618,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "close": {
-              "$ref": "#/$defs/fixedPatch:bot.long.strategy.trailing_martingale.close"
-            },
-            "entry": {
-              "$ref": "#/$defs/fixedPatch:bot.long.strategy.trailing_martingale.entry"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "close",
+                "entry"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22745,41 +22690,26 @@
         },
         {
           "type": "object",
-          "properties": {
-            "entry_cooldown": {
-              "$ref": "#/$defs/fixedPatch:bot.short.entry_cooldown"
-            },
-            "forager": {
-              "$ref": "#/$defs/fixedPatch:bot.short.forager"
-            },
-            "hsl": {
-              "$ref": "#/$defs/fixedPatch:bot.short.hsl"
-            },
-            "risk": {
-              "$ref": "#/$defs/fixedPatch:bot.short.risk"
-            },
-            "strategy": {
-              "$ref": "#/$defs/fixedPatch:bot.short.strategy"
-            },
-            "universe": {
-              "$ref": "#/$defs/fixedPatch:bot.short.universe"
-            },
-            "unstuck": {
-              "$ref": "#/$defs/fixedPatch:bot.short.unstuck"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "entry_cooldown",
                 "entry_cooldown.weights_minutes",
+                "forager",
                 "forager.score_weights",
+                "hsl",
+                "risk",
                 "risk.position_exposure_enforcer",
                 "risk.total_exposure_enforcer",
+                "strategy",
                 "strategy.ema_anchor",
                 "strategy.trailing_martingale",
                 "strategy.trailing_martingale.close",
-                "strategy.trailing_martingale.entry"
+                "strategy.trailing_martingale.entry",
+                "universe",
+                "unstuck"
               ]
             }
           }
@@ -22793,13 +22723,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "weights_minutes": {
-              "$ref": "#/$defs/fixedPatch:bot.short.entry_cooldown.weights_minutes"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "weights_minutes"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22823,13 +22755,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "score_weights": {
-              "$ref": "#/$defs/fixedPatch:bot.short.forager.score_weights"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "score_weights"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22866,16 +22800,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "position_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:bot.short.risk.position_exposure_enforcer"
-            },
-            "total_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:bot.short.risk.total_exposure_enforcer"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "position_exposure_enforcer",
+                "total_exposure_enforcer"
+              ]
+            }
+          }
         }
       ]
     },
@@ -22912,18 +22846,13 @@
         },
         {
           "type": "object",
-          "properties": {
-            "ema_anchor": {
-              "$ref": "#/$defs/fixedPatch:bot.short.strategy.ema_anchor"
-            },
-            "trailing_martingale": {
-              "$ref": "#/$defs/fixedPatch:bot.short.strategy.trailing_martingale"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "ema_anchor",
+                "trailing_martingale",
                 "trailing_martingale.close",
                 "trailing_martingale.entry"
               ]
@@ -22952,16 +22881,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "close": {
-              "$ref": "#/$defs/fixedPatch:bot.short.strategy.trailing_martingale.close"
-            },
-            "entry": {
-              "$ref": "#/$defs/fixedPatch:bot.short.strategy.trailing_martingale.entry"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "close",
+                "entry"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23024,36 +22953,19 @@
         },
         {
           "type": "object",
-          "properties": {
-            "account": {
-              "$ref": "#/$defs/fixedPatch:live.account"
-            },
-            "api": {
-              "$ref": "#/$defs/fixedPatch:live.api"
-            },
-            "candles": {
-              "$ref": "#/$defs/fixedPatch:live.candles"
-            },
-            "execution": {
-              "$ref": "#/$defs/fixedPatch:live.execution"
-            },
-            "fills": {
-              "$ref": "#/$defs/fixedPatch:live.fills"
-            },
-            "modes": {
-              "$ref": "#/$defs/fixedPatch:live.modes"
-            },
-            "recovery": {
-              "$ref": "#/$defs/fixedPatch:live.recovery"
-            },
-            "startup": {
-              "$ref": "#/$defs/fixedPatch:live.startup"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "account",
+                "api",
+                "candles",
+                "execution",
+                "fills",
+                "modes",
+                "recovery",
+                "startup",
                 "startup.startup_phase_budgets"
               ]
             }
@@ -23159,13 +23071,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "startup_phase_budgets": {
-              "$ref": "#/$defs/fixedPatch:live.startup.startup_phase_budgets"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "startup_phase_budgets"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23215,21 +23129,12 @@
         },
         {
           "type": "object",
-          "properties": {
-            "gpu": {
-              "$ref": "#/$defs/fixedPatch:optimize.gpu"
-            },
-            "pymoo": {
-              "$ref": "#/$defs/fixedPatch:optimize.pymoo"
-            },
-            "bounds": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "gpu",
                 "gpu.screening",
                 "prefilter",
                 "prefilter.adverse_directionality",
@@ -23239,11 +23144,13 @@
                 "prefilter.penalty_weight",
                 "prefilter.volatility_ema_1h",
                 "prefilter.volatility_ema_1m",
+                "pymoo",
                 "pymoo.algorithms",
                 "pymoo.algorithms.nsga2",
                 "pymoo.algorithms.nsga3",
                 "pymoo.algorithms.nsga3.ref_dirs",
                 "pymoo.shared",
+                "bounds",
                 "bounds.global",
                 "bounds.global.loss_gate",
                 "bounds.global.unstuck",
@@ -23291,13 +23198,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "screening": {
-              "$ref": "#/$defs/fixedPatch:optimize.gpu.screening"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "screening"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23346,21 +23255,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "algorithms": {
-              "$ref": "#/$defs/fixedPatch:optimize.pymoo.algorithms"
-            },
-            "shared": {
-              "$ref": "#/$defs/fixedPatch:optimize.pymoo.shared"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "algorithms",
                 "algorithms.nsga2",
                 "algorithms.nsga3",
-                "algorithms.nsga3.ref_dirs"
+                "algorithms.nsga3.ref_dirs",
+                "shared"
               ]
             }
           }
@@ -23374,18 +23278,13 @@
         },
         {
           "type": "object",
-          "properties": {
-            "nsga2": {
-              "$ref": "#/$defs/fixedPatch:optimize.pymoo.algorithms.nsga2"
-            },
-            "nsga3": {
-              "$ref": "#/$defs/fixedPatch:optimize.pymoo.algorithms.nsga3"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "nsga2",
+                "nsga3",
                 "nsga3.ref_dirs"
               ]
             }
@@ -23413,13 +23312,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "ref_dirs": {
-              "$ref": "#/$defs/fixedPatch:optimize.pymoo.algorithms.nsga3.ref_dirs"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "ref_dirs"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23456,24 +23357,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "global": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.global"
-            },
-            "long": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long"
-            },
-            "short": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "global",
                 "global.loss_gate",
                 "global.unstuck",
                 "global.hsl",
+                "long",
                 "long.risk",
                 "long.risk.position_exposure_enforcer",
                 "long.risk.total_exposure_enforcer",
@@ -23488,6 +23381,7 @@
                 "long.strategy.trailing_martingale.entry",
                 "long.strategy.trailing_martingale.close",
                 "long.strategy.ema_anchor",
+                "short",
                 "short.risk",
                 "short.risk.position_exposure_enforcer",
                 "short.risk.total_exposure_enforcer",
@@ -23515,19 +23409,17 @@
         },
         {
           "type": "object",
-          "properties": {
-            "loss_gate": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.global.loss_gate"
-            },
-            "unstuck": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.global.unstuck"
-            },
-            "hsl": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.global.hsl"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "loss_gate",
+                "unstuck",
+                "hsl"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23577,34 +23469,21 @@
         },
         {
           "type": "object",
-          "properties": {
-            "risk": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.risk"
-            },
-            "forager": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.forager"
-            },
-            "hsl": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.hsl"
-            },
-            "entry_cooldown": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.entry_cooldown"
-            },
-            "unstuck": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.unstuck"
-            },
-            "strategy": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.strategy"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "risk",
                 "risk.position_exposure_enforcer",
                 "risk.total_exposure_enforcer",
+                "forager",
                 "forager.score_weights",
+                "hsl",
+                "entry_cooldown",
                 "entry_cooldown.weights_minutes",
+                "unstuck",
+                "strategy",
                 "strategy.trailing_martingale",
                 "strategy.trailing_martingale.entry",
                 "strategy.trailing_martingale.close",
@@ -23622,16 +23501,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "position_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.risk.position_exposure_enforcer"
-            },
-            "total_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.risk.total_exposure_enforcer"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "position_exposure_enforcer",
+                "total_exposure_enforcer"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23668,13 +23547,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "score_weights": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.forager.score_weights"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "score_weights"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23711,13 +23592,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "weights_minutes": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.entry_cooldown.weights_minutes"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "weights_minutes"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23754,20 +23637,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "trailing_martingale": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.strategy.trailing_martingale"
-            },
-            "ema_anchor": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.strategy.ema_anchor"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "trailing_martingale",
                 "trailing_martingale.entry",
-                "trailing_martingale.close"
+                "trailing_martingale.close",
+                "ema_anchor"
               ]
             }
           }
@@ -23781,16 +23659,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "entry": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.strategy.trailing_martingale.entry"
-            },
-            "close": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.strategy.trailing_martingale.close"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "entry",
+                "close"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23840,34 +23718,21 @@
         },
         {
           "type": "object",
-          "properties": {
-            "risk": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.risk"
-            },
-            "forager": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.forager"
-            },
-            "hsl": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.hsl"
-            },
-            "entry_cooldown": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.entry_cooldown"
-            },
-            "unstuck": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.unstuck"
-            },
-            "strategy": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.strategy"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "risk",
                 "risk.position_exposure_enforcer",
                 "risk.total_exposure_enforcer",
+                "forager",
                 "forager.score_weights",
+                "hsl",
+                "entry_cooldown",
                 "entry_cooldown.weights_minutes",
+                "unstuck",
+                "strategy",
                 "strategy.trailing_martingale",
                 "strategy.trailing_martingale.entry",
                 "strategy.trailing_martingale.close",
@@ -23885,16 +23750,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "position_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.risk.position_exposure_enforcer"
-            },
-            "total_exposure_enforcer": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.risk.total_exposure_enforcer"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "position_exposure_enforcer",
+                "total_exposure_enforcer"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23931,13 +23796,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "score_weights": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.forager.score_weights"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "score_weights"
+              ]
+            }
+          }
         }
       ]
     },
@@ -23974,13 +23841,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "weights_minutes": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.entry_cooldown.weights_minutes"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "weights_minutes"
+              ]
+            }
+          }
         }
       ]
     },
@@ -24017,20 +23886,15 @@
         },
         {
           "type": "object",
-          "properties": {
-            "trailing_martingale": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.strategy.trailing_martingale"
-            },
-            "ema_anchor": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.strategy.ema_anchor"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {
             "not": {
               "enum": [
+                "trailing_martingale",
                 "trailing_martingale.entry",
-                "trailing_martingale.close"
+                "trailing_martingale.close",
+                "ema_anchor"
               ]
             }
           }
@@ -24044,16 +23908,16 @@
         },
         {
           "type": "object",
-          "properties": {
-            "entry": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.strategy.trailing_martingale.entry"
-            },
-            "close": {
-              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.strategy.trailing_martingale.close"
-            }
-          },
+          "properties": {},
           "patternProperties": {},
-          "propertyNames": {}
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "entry",
+                "close"
+              ]
+            }
+          }
         }
       ]
     },

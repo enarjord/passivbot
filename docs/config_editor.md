@@ -3,7 +3,8 @@
 The checked [v9 JSON Schema](../schemas/config-v9.schema.json) describes canonical authored JSON.
 It offers field completion, declared numeric types, nullability, known value choices and closed
 objects. It also describes dynamic scenario/limit/scoring records, nested optimizer bounds,
-literal dotted or nested overrides, and the existing narrow coin-patch permissions.
+literal dotted or nested scenario overrides, dotted leaf fixed-runtime pins, and the existing
+narrow coin-patch permissions.
 
 The schema is generated from the [field registry](ai/generated/config_fields.md). Shared optimizer
 bindings and coin permissions reuse the existing path/permission maps. Rust metadata owns strategy
@@ -43,7 +44,7 @@ without changing the document's field contract.
 
 ```bash
 passivbot tool config-schema                         # print the schema
-passivbot tool config-schema --check                 # check the repository artifact, read-only
+passivbot tool config-schema --check                 # check the source or packaged artifact, read-only
 passivbot tool config-schema --output schema.json     # export to an explicit destination
 passivbot tool config-schema --field bot.long.hsl.drawdown_ratio_threshold
 PYTHONPATH=src python src/tools/generate_config_field_reference.py --check
@@ -53,6 +54,8 @@ PYTHONPATH=src python src/tools/generate_config_field_reference.py --check
 consumers, unit/denominator, domain, optimizer binding/recommendation and coin-override permission.
 Unknown metadata is null. A declared default is a schema default, not proof that an effective
 value came from that default; config explanation supplies execution-context provenance separately.
+Installed wheels, including the live container, carry the checked schema as a package resource;
+printing, checking and exporting it require no source checkout or network access.
 
 To regenerate the checked schema after a field-contract change:
 

@@ -212,7 +212,7 @@ def _patch_schemas(root, definitions, mode, registry):
                 continue
             relative = path[len(prefix):]
             name = ".".join(relative)
-            if mode == "fixed" and "properties" in child and len(relative) > 1:
+            if mode == "fixed" and "properties" in child:
                 forbidden.append(name)
                 continue  # Fixed runtime pins must target leaf settings.
             if path == ("coin_overrides",):
@@ -258,7 +258,7 @@ def _patch_schemas(root, definitions, mode, registry):
         if mode == "fixed":
             patch["propertyNames"] = {"not": {"enum": forbidden}} if forbidden else {}
             # Share all canonical path/type definitions. This overlay only
-            # narrows fixed-pin structure and reuses the same nested overlay.
+            # narrows fixed pins to literal dotted leaf keys.
             patch = {"allOf": [{"$ref": "#/$defs/" + _patch_name("scenario", prefix)}, patch]}
         else:
             patch["additionalProperties"] = False

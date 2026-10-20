@@ -1,13 +1,22 @@
 """Print or generate the canonical authored-config JSON Schema and field metadata."""
 
 import argparse
+from importlib.resources import files
 import json
 from pathlib import Path
 
 from config.json_schema import generate_schema
 
 
-DEFAULT_OUTPUT = Path(__file__).resolve().parents[2] / "schemas" / "config-v9.schema.json"
+def default_schema_resource():
+    """Use the checked source artifact or its wheel-packaged counterpart."""
+    source_root = Path(__file__).resolve().parents[2]
+    if (source_root / "pyproject.toml").is_file():
+        return source_root / "schemas" / "config-v9.schema.json"
+    return files("tools").joinpath("schemas", "config-v9.schema.json")
+
+
+DEFAULT_OUTPUT = default_schema_resource()
 
 
 def render_schema():
@@ -17,7 +26,7 @@ def render_schema():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="write schema to this path instead of stdout")
-    parser.add_argument("--check", action="store_true", help="check the generated file without writing")
+    parser.add_argument("--check", action="store_true", help="check the source or packaged schema without writing")
     parser.add_argument("--field", metavar="PATH", help="print a field metadata report for editor/explain use")
     args = parser.parse_args(argv)
     if args.field:
@@ -33,7 +42,7 @@ def main(argv=None):
     rendered = render_schema()
     output = args.output or DEFAULT_OUTPUT
     if args.check:
-        if not output.exists() or output.read_text(encoding="utf-8") != rendered:
+        if not output.is_file() or output.read_text(encoding="utf-8") != rendered:
             print(f"stale generated configuration schema: {output}")
             return 1
         print(f"generated configuration schema is current: {output}")
