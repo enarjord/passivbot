@@ -28,7 +28,7 @@ def test_canonical_defaults_and_sparse_defaults_load():
     assert complete["bot"]["global"]["hsl"] == {"scope": "coin"}
     assert sparse["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
     assert sparse["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
-    assert complete["live"]["disapproved_position_mode"] == "graceful_stop"
+    assert complete["live"]["modes"]["disapproved_position"] == "graceful_stop"
 
 
 @pytest.mark.parametrize("path", [
@@ -67,7 +67,8 @@ def test_conflicting_json_members_are_rejected_before_mapping_overwrite(tmp_path
 def test_nested_and_dotted_patch_conflict_is_rejected():
     config = get_template_config()
     config["optimize"]["fixed_runtime_overrides"] = {
-        "live": {"leverage": 1}, "live.leverage": 2,
+        "live": {"account": {"leverage": 1}},
+        "live.account.leverage": 2,
     }
     with pytest.raises(ValueError, match="defined more than once"):
         prepare_config(config, verbose=False)

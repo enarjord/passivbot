@@ -988,8 +988,10 @@ def test_zero_ohlcv_budget_disables_forager_ws_network_path():
     bot = SimpleNamespace(
         config={
             "live": {
-                "enable_forager_ws_candles": True,
-                "max_ohlcv_fetches_per_minute": 0,
+                "candles": {
+                    "enable_forager_ws_candles": True,
+                    "max_ohlcv_fetches_per_minute": 0,
+                }
             }
         },
         ws_enabled=True,
@@ -1014,8 +1016,10 @@ def test_ws_disabled_or_unsupported_preserves_rest_only_mode(
     bot = SimpleNamespace(
         config={
             "live": {
-                "enable_forager_ws_candles": feature_enabled,
-                "max_ohlcv_fetches_per_minute": 30,
+                "candles": {
+                    "enable_forager_ws_candles": feature_enabled,
+                    "max_ohlcv_fetches_per_minute": 30,
+                }
             }
         },
         ws_enabled=ws_enabled,
@@ -1089,7 +1093,7 @@ async def test_ws_failures_identify_stage_and_preserve_rest_fallback_cooldown(
 async def test_dynamic_subscriptions_follow_flat_forager_universe():
     ccp = _BlockingCCP()
     bot = SimpleNamespace(
-        config={"live": {"enable_forager_ws_candles": True}},
+        config={"live": {"candles": {"enable_forager_ws_candles": True}}},
         ws_enabled=True,
         ccp=ccp,
         cm=SimpleNamespace(ingest_live_ws_ohlcv=lambda *_args: 0),
@@ -1237,7 +1241,7 @@ async def test_reconcile_cancellation_keeps_removed_watcher_owned():
     watcher = asyncio.create_task(asyncio.Event().wait())
     tasks = {symbol: watcher}
     bot = SimpleNamespace(
-        config={"live": {"enable_forager_ws_candles": True}},
+        config={"live": {"candles": {"enable_forager_ws_candles": True}}},
         ws_enabled=True,
         ccp=_BlockingBulkCCP(),
         cm=SimpleNamespace(clear_live_ws_ohlcv_state=lambda _symbol: None),
@@ -1507,7 +1511,7 @@ async def test_reconcile_retires_removed_watchers_in_one_bulk_unsubscribe():
 
     ccp = _BulkWakeupCCP()
     bot = SimpleNamespace(
-        config={"live": {"enable_forager_ws_candles": True}},
+        config={"live": {"candles": {"enable_forager_ws_candles": True}}},
         ws_enabled=True,
         ccp=ccp,
         cm=SimpleNamespace(
@@ -1541,8 +1545,10 @@ async def test_ws_maintainer_starts_before_forager_mode_becomes_active():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {
         "live": {
-            "enable_forager_ws_candles": True,
-            "max_ohlcv_fetches_per_minute": 30,
+            "candles": {
+                "enable_forager_ws_candles": True,
+                "max_ohlcv_fetches_per_minute": 30,
+            }
         }
     }
     bot.ws_enabled = True
@@ -1572,7 +1578,7 @@ async def test_ws_maintainer_starts_before_forager_mode_becomes_active():
 
 def test_ws_tail_rest_audit_is_periodic_and_one_minute_only():
     bot = SimpleNamespace(
-        config={"live": {"forager_ws_candle_rest_audit_minutes": 30}}
+        config={"live": {"candles": {"forager_ws_candle_rest_audit_minutes": 30}}}
     )
     now_ms = 100 * ONE_MIN_MS
     health = {
@@ -1642,9 +1648,11 @@ async def test_forager_due_ws_audit_forces_rest_overlap(monkeypatch):
     class _AuditBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_refresh_seconds": 0,
-                "forager_ws_candle_rest_audit_minutes": 30,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_refresh_seconds": 0,
+                    "forager_ws_candle_rest_audit_minutes": 30,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}

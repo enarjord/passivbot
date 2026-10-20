@@ -10,6 +10,9 @@ since the latest release tag; these features may already be available when insta
   `ema_distance_fraction`, and HSL's aggregate side scope `position_side`. Preserve
   existing units, values and native engine identifiers through explicit adapters;
   released-v8 migration converts fields, bounds, overrides and fixed selectors.
+- Group operational live configuration by account, API, candles, startup, fills, execution,
+  recovery and modes. Canonical consumers, CLI flags, coin patches and diagnostics use the
+  nested paths; the explicit released-v8 converter reports every relocation.
 
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently

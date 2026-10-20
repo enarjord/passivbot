@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from config.field_registry import LIVE_OPERATIONAL_PATHS, live_field_path
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
 from config.risk_memory import (
     normalize_memory_ema_span_minutes, normalize_risk_bootstrap_max_lookback_minutes,
@@ -50,18 +51,40 @@ FORAGER_LIVE_KEYS = (
     "max_forager_candle_staleness_minutes",
 )
 DIFF_SETTING_PATHS = (
-    ("identity", "live.user", ("live", "user")),
+    ("identity", "live.account.user", ("live", "account", "user")),
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
     ("hsl", "bot.global.hsl.scope", ("bot", "global", "hsl", "scope")),
     ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
     ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
-    ("forager", "bot.long.risk.max_positions", ("bot", "long", "risk", "max_positions")),
-    ("forager", "bot.short.risk.max_positions", ("bot", "short", "risk", "max_positions")),
-    *(("forager", f"live.{key}", ("live", key)) for key in FORAGER_LIVE_KEYS),
-    *(("cache", f"live.{key}", ("live", key)) for key in CACHE_LIVE_KEYS),
-    ("forager", "bot.global.forager.score_hysteresis_pct", ("bot", "global", "forager", "score_hysteresis_pct")),
-    ("cache", "bot.global.warmup.max_minutes", ("bot", "global", "warmup", "max_minutes")),
+    (
+        "forager",
+        "bot.long.risk.max_positions",
+        ("bot", "long", "risk", "max_positions"),
+    ),
+    (
+        "forager",
+        "bot.short.risk.max_positions",
+        ("bot", "short", "risk", "max_positions"),
+    ),
+    *(
+        ("forager", live_field_path(key), LIVE_OPERATIONAL_PATHS[key])
+        for key in FORAGER_LIVE_KEYS
+    ),
+    *(
+        ("cache", live_field_path(key), LIVE_OPERATIONAL_PATHS[key])
+        for key in CACHE_LIVE_KEYS
+    ),
+    (
+        "forager",
+        "bot.global.forager.score_hysteresis_pct",
+        ("bot", "global", "forager", "score_hysteresis_pct"),
+    ),
+    (
+        "cache",
+        "bot.global.warmup.max_minutes",
+        ("bot", "global", "warmup", "max_minutes"),
+    ),
     ("cache", "bot.global.warmup.ratio", ("bot", "global", "warmup", "ratio")),
 )
 
@@ -121,6 +144,21 @@ def _setting_value(section: dict[str, Any], key: str) -> Any:
 
 def _setting_display(section: dict[str, Any], key: str) -> dict[str, Any]:
     return _display_value(_setting_value(section, key))
+
+
+def _live_setting_value(live: dict[str, Any], field_id: str) -> Any:
+    return _path_value({"live": live}, LIVE_OPERATIONAL_PATHS[field_id])
+
+
+def _live_setting_display(live: dict[str, Any], field_id: str) -> dict[str, Any]:
+    return _display_value(_live_setting_value(live, field_id))
+
+
+def _selected_live_values(
+    live: dict[str, Any], field_ids: tuple[str, ...]
+) -> dict[str, Any]:
+    values = {field: _live_setting_value(live, field) for field in field_ids}
+    return {field: value for field, value in values.items() if value is not _MISSING}
 
 
 def _path_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
@@ -298,7 +336,7 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _identity_report(config: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    user = live.get("user")
+    user = live.get("account", {}).get("user")
     exchange = live.get("exchange")
     user_exchange_hint = None
     if isinstance(user, str) and "_" in user:
@@ -380,11 +418,15 @@ def _balance_override_report(
     *,
     override_value: Any = _MISSING,
 ) -> dict[str, Any]:
-    source = "argument" if override_value is not _MISSING else "live.balance_override"
+    source = (
+        "argument"
+        if override_value is not _MISSING
+        else "live.account.balance_override"
+    )
     raw_value = (
         override_value
         if override_value is not _MISSING
-        else live.get("balance_override", _MISSING)
+        else live.get("account", {}).get("balance_override", _MISSING)
     )
     if raw_value is _MISSING:
         return {"active": False, "source": "none", "present": False}
@@ -435,7 +477,7 @@ def _balance_hysteresis_report(
     live: dict[str, Any],
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    raw_value = live.get("balance_hysteresis_snap_pct", _MISSING)
+    raw_value = live.get("account", {}).get("balance_hysteresis_snap_pct", _MISSING)
     report: dict[str, Any] = {
         "present": raw_value is not _MISSING,
         "default_value": 0.02,
@@ -456,8 +498,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid_bool",
-                "live.balance_hysteresis_snap_pct should be a non-negative number, not a boolean",
-                path="live.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_pct should be a non-negative number, not a boolean",
+                path="live.account.balance_hysteresis_snap_pct",
             )
         )
         return report
@@ -470,8 +512,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_pct should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_pct",
             )
         )
         return report
@@ -482,8 +524,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_pct should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_pct",
             )
         )
         return report
@@ -494,11 +536,9 @@ def _balance_hysteresis_report(
                 "warning",
                 "balance_hysteresis_snap_pct_high",
                 (
-                    "live.balance_hysteresis_snap_pct is above 5%; snapped-balance "
-                    "entry sizing/gating may diverge noticeably from raw-balance "
-                    "exposure repair near risk boundaries"
+                    "live.account.balance_hysteresis_snap_pct is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
                 ),
-                path="live.balance_hysteresis_snap_pct",
+                path="live.account.balance_hysteresis_snap_pct",
             )
         )
     else:
@@ -529,7 +569,7 @@ def _cache_root_hints(identity: dict[str, Any]) -> dict[str, Any]:
             "path": f"caches/fill_events/{exchange}/{user}",
         }
     else:
-        fill_root["reason"] = "live.user or exchange hint unavailable"
+        fill_root["reason"] = "live.account.user or exchange hint unavailable"
     return {
         "default_cache_root": "caches",
         "candle_v2_root": "caches/ohlcvs",
@@ -546,51 +586,51 @@ def _cache_readiness_report(
     hsl_sides: dict[str, dict[str, Any]],
     balance_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    checks = {key: _setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
+    checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
     warmup = config.get("bot", {}).get("global", {}).get("warmup", {})
     checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "ratio")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
 
-    if live.get("force_cold_startup") is True:
+    if live.get("startup", {}).get("force_cold_startup") is True:
         _append_attention(
             candles,
             "force_cold_startup_enabled",
-            "live.force_cold_startup=true disables warm-cache startup reuse",
+            "live.startup.force_cold_startup=true disables warm-cache startup reuse",
         )
-    force_status = _bool_status(_setting_value(live, "force_cold_startup"))
+    force_status = _bool_status(_live_setting_value(live, "force_cold_startup"))
     if force_status == "missing":
         _append_attention(
             candles,
             "force_cold_startup_missing",
-            "live.force_cold_startup is missing; startup cache intent is implicit",
+            "live.startup.force_cold_startup is missing; startup cache intent is implicit",
         )
     elif force_status == "invalid":
         _append_attention(
             candles,
             "force_cold_startup_invalid",
-            "live.force_cold_startup should be boolean when present",
+            "live.startup.force_cold_startup should be boolean when present",
         )
 
-    defer_status = _bool_status(_setting_value(live, "defer_broad_candle_warmup"))
+    defer_status = _bool_status(_live_setting_value(live, "defer_broad_candle_warmup"))
     if defer_status == "missing":
         _append_attention(
             candles,
             "defer_broad_candle_warmup_missing",
-            "live.defer_broad_candle_warmup is missing; broad warmup behavior is implicit",
+            "live.startup.defer_broad_candle_warmup is missing; broad warmup behavior is implicit",
         )
     elif defer_status == "invalid":
         _append_attention(
             candles,
             "defer_broad_candle_warmup_invalid",
-            "live.defer_broad_candle_warmup should be boolean when present",
+            "live.startup.defer_broad_candle_warmup should be boolean when present",
         )
-    elif live.get("defer_broad_candle_warmup") is False:
+    elif live.get("startup", {}).get("defer_broad_candle_warmup") is False:
         _append_attention(
             candles,
             "broad_candle_warmup_blocking",
-            "live.defer_broad_candle_warmup=false keeps broad candle warmup on the startup path",
+            "live.startup.defer_broad_candle_warmup=false keeps broad candle warmup on the startup path",
         )
 
     for key in (
@@ -598,20 +638,18 @@ def _cache_readiness_report(
         "max_disk_candles_per_symbol_per_tf",
         "max_memory_candles_per_symbol",
     ):
-        status = _numeric_status(
-            _setting_value(live, key)
-        )
+        status = _numeric_status(_live_setting_value(live, key))
         if status == "missing":
             _append_attention(
                 candles,
                 f"{key}_missing",
-                f"live.{key} is missing; candle cache sizing/readiness intent is implicit",
+                f"{live_field_path(key)} is missing; candle cache sizing/readiness intent is implicit",
             )
         elif status != "present":
             _append_attention(
                 candles,
                 f"{key}_{status}",
-                f"live.{key} is {status}; candle cache readiness may be degraded",
+                f"{live_field_path(key)} is {status}; candle cache readiness may be degraded",
             )
 
     max_minutes_status = _numeric_status(_setting_value(warmup, "max_minutes"), allow_zero=True)
@@ -632,14 +670,15 @@ def _cache_readiness_report(
             f"bot.global.warmup.ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
         )
 
-    archive_status = _bool_status(_setting_value(live, "enable_archive_candle_fetch"))
+    archive_status = _bool_status(
+        _live_setting_value(live, "enable_archive_candle_fetch")
+    )
     if archive_status == "missing":
         candles["evidence"].append(
             {
                 "code": "archive_candle_fetch_default",
                 "message": (
-                    "live.enable_archive_candle_fetch is missing; archive fetch "
-                    "remains defaulted by runtime"
+                    "live.candles.enable_archive_candle_fetch is missing; archive fetch remains defaulted by runtime"
                 ),
             }
         )
@@ -647,13 +686,15 @@ def _cache_readiness_report(
         _append_attention(
             candles,
             "enable_archive_candle_fetch_invalid",
-            "live.enable_archive_candle_fetch should be boolean when present",
+            "live.candles.enable_archive_candle_fetch should be boolean when present",
         )
     else:
         candles["evidence"].append(
             {
                 "code": "archive_candle_fetch_configured",
-                "value": bool(live.get("enable_archive_candle_fetch")),
+                "value": bool(
+                    live.get("candles", {}).get("enable_archive_candle_fetch")
+                ),
             }
         )
     _append_not_proven(
@@ -664,9 +705,21 @@ def _cache_readiness_report(
 
     lookback_status = "present"
     for key, path, validator in (
-        ("unstuck_memory_ema_span_minutes", ("bot", "global", "unstuck", "memory_ema_span_minutes"), normalize_memory_ema_span_minutes),
-        ("loss_gate_memory_ema_span_minutes", ("bot", "global", "loss_gate", "memory_ema_span_minutes"), normalize_memory_ema_span_minutes),
-        ("risk_bootstrap_max_lookback_minutes", ("live", "risk_bootstrap_max_lookback_minutes"), normalize_risk_bootstrap_max_lookback_minutes),
+        (
+            "unstuck_memory_ema_span_minutes",
+            ("bot", "global", "unstuck", "memory_ema_span_minutes"),
+            normalize_memory_ema_span_minutes,
+        ),
+        (
+            "loss_gate_memory_ema_span_minutes",
+            ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
+            normalize_memory_ema_span_minutes,
+        ),
+        (
+            "risk_bootstrap_max_lookback_minutes",
+            ("live", "startup", "risk_bootstrap_max_lookback_minutes"),
+            normalize_risk_bootstrap_max_lookback_minutes,
+        ),
     ):
         try:
             value = validator(_path_value(config, path))
@@ -685,18 +738,18 @@ def _cache_readiness_report(
             fills["evidence"].append({"code": "risk_bootstrap_horizon",
                                       "minutes": horizon, "target_truncated": truncated})
     for key in ("fills_recent_overlap_minutes", "fills_confirmation_overlap_minutes"):
-        status = _numeric_status(_setting_value(live, key), allow_zero=True)
+        status = _numeric_status(_live_setting_value(live, key), allow_zero=True)
         if status == "missing":
             _append_attention(
                 fills,
                 f"{key}_missing",
-                f"live.{key} is missing; fill-cache overlap intent is implicit",
+                f"{live_field_path(key)} is missing; fill-cache overlap intent is implicit",
             )
         elif status != "present":
             _append_attention(
                 fills,
                 f"{key}_{status}",
-                f"live.{key} is {status}; fill-cache overlap setting is suspicious",
+                f"{live_field_path(key)} is {status}; fill-cache overlap setting is suspicious",
             )
     _append_not_proven(
         fills,
@@ -1082,8 +1135,14 @@ def build_live_config_preflight_report(
             # missing capability facts remain explicit readiness attention.
             pass
         except (ValueError, TypeError) as error:
-            issues.append(_issue("error", "hsl_bootstrap_capability_invalid", str(error),
-                                 path="live.risk_bootstrap_max_lookback_minutes"))
+            issues.append(
+                _issue(
+                    "error",
+                    "hsl_bootstrap_capability_invalid",
+                    str(error),
+                    path="live.startup.risk_bootstrap_max_lookback_minutes",
+                )
+            )
     balance_override_report = _balance_override_report(
         live, override_value=balance_override
     )
@@ -1098,7 +1157,7 @@ def build_live_config_preflight_report(
                 path=(
                     "argument.balance_override"
                     if balance_override_report.get("source") == "argument"
-                    else "live.balance_override"
+                    else "live.account.balance_override"
                 ),
             )
         )
@@ -1120,7 +1179,7 @@ def build_live_config_preflight_report(
                 path=(
                     "argument.balance_override"
                     if balance_override_report.get("source") == "argument"
-                    else "live.balance_override"
+                    else "live.account.balance_override"
                 ),
             )
         )
@@ -1147,8 +1206,10 @@ def build_live_config_preflight_report(
             "ignored_coins": ignored,
         },
         "forager": {
-            "live_settings": _selected_values(live, FORAGER_LIVE_KEYS),
-            "bot_settings": _selected_values(bot.get("global", {}).get("forager", {}), ("score_hysteresis_pct",)),
+            "live_settings": _selected_live_values(live, FORAGER_LIVE_KEYS),
+            "bot_settings": _selected_values(
+                bot.get("global", {}).get("forager", {}), ("score_hysteresis_pct",)
+            ),
             "sides": forager_by_side,
             "total_configured_max_positions": sum(
                 float(value) for value in n_positions_values
@@ -1158,8 +1219,10 @@ def build_live_config_preflight_report(
             "balance_hysteresis_snap_pct": balance_hysteresis_report,
         },
         "cache": {
-            "live_settings": _selected_values(live, CACHE_LIVE_KEYS),
-            "bot_settings": _selected_values(bot.get("global", {}).get("warmup", {}), ("max_minutes", "ratio")),
+            "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
+            "bot_settings": _selected_values(
+                bot.get("global", {}).get("warmup", {}), ("max_minutes", "ratio")
+            ),
             "readiness": _cache_readiness_report(
                 live,
                 config=parsed,

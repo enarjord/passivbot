@@ -244,7 +244,7 @@ def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
     assert order["position_side"] == position_side
 
     ccxt_bot = CCXTBot.__new__(CCXTBot)
-    ccxt_bot.config = {"live": {"time_in_force": "post_only"}}
+    ccxt_bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
 
     params = ccxt_bot._build_order_params(order)
 

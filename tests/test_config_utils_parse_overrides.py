@@ -6,7 +6,9 @@ import config_utils
 
 def _base_config_with_override(coin_key, override_value):
     config = config_utils.get_template_config()
-    config['live'].update(user='tester')
+    config["live"].update(
+        {"account": {**config["live"].get("account", {}), "user": "tester"}}
+    )
     set_side_universe_sources(config, 'approved_coins', [])
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config["coin_overrides"] = {coin_key: override_value}
@@ -72,7 +74,7 @@ def test_parse_overrides_keeps_nested_strategy_mods(monkeypatch):
 @pytest.mark.parametrize("identifier", ["1000ABCUSDT", "1000ABC/USDT:USDT"])
 def test_parse_overrides_preserves_exact_market_identifier(identifier, monkeypatch):
     cfg = _base_config_with_override(
-        identifier, {"live": {"forced_mode_long": "manual"}}
+        identifier, {"live": {"modes": {"long": "manual"}}}
     )
     monkeypatch.setattr(config_utils, "symbol_to_coin", lambda _value: "ABC")
     monkeypatch.setattr(config_utils, "load_override_config", lambda c, coin: {})
@@ -86,7 +88,7 @@ def test_parse_overrides_preserves_exact_market_identifier(identifier, monkeypat
 
 def test_normal_loading_rejects_retired_coin_flags(monkeypatch):
     from config import prepare_config
-    cfg = _base_config_with_override("BTC", {"live": {"forced_mode_long": "manual"}})
+    cfg = _base_config_with_override("BTC", {"live": {"modes": {"long": "manual"}}})
     cfg["live"]["coin_flags"] = None
     with pytest.raises(ValueError, match="coin_flags.*unknown"):
         prepare_config(cfg, verbose=False)

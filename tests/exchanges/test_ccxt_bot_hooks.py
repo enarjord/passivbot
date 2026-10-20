@@ -1120,7 +1120,7 @@ class TestBuildOrderParams:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        bot.config = {"live": {"time_in_force": "post_only"}}
+        bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
         return bot
 
     def test_build_order_params_sets_position_side(self, bot_with_config):
@@ -1153,7 +1153,7 @@ class TestBuildOrderParams:
     def test_build_order_params_sets_gtc_for_limit(self, bot_with_config):
         """_build_order_params should set GTC for limit orders with non-post_only tif."""
         bot = bot_with_config
-        bot.config = {"live": {"time_in_force": "gtc"}}
+        bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
         order = {"type": "limit"}
 
         result = bot._build_order_params(order)

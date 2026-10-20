@@ -13,7 +13,7 @@ from config.hsl import generated_template
 
 def _parse(overrides, *, mode="coin", loaded=None, configure_source=None):
     source = generated_template(get_template_config(), mode)
-    source["live"]["user"] = "tester"
+    source["live"]["account"]["user"] = "tester"
     source["bot"]["global"]["hsl"]["scope"] = mode
     if configure_source is not None:
         configure_source(source)

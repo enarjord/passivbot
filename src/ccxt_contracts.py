@@ -145,10 +145,9 @@ def build_contract_bot(exchange: str, quote: str = "USDT"):
     bot.config = {
         "bot": {"global": {"hedge_mode": True}},
         "live": {
-            "time_in_force": "gtc",
-            "margin_mode_preference": "cross",
-            "leverage": 3,
-        }
+            "execution": {"time_in_force": "gtc"},
+            "account": {"margin_mode_preference": "cross", "leverage": 3},
+        },
     }
     bot.coin_overrides = {}
     bot.user_info = {"exchange": bot.exchange}
@@ -277,7 +276,7 @@ def diff_snapshots(
 
 def prepare_live_config_for_user(user: str) -> dict:
     config = get_template_config()
-    config["live"]["user"] = user
+    config["live"]["account"]["user"] = user
     return prepare_config(
         config,
         live_only=True,

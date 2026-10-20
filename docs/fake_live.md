@@ -200,7 +200,7 @@ Add one to your local `api-keys.json` when you want a reusable fake user.
 Common issues:
 
 - `Config user resolved to exchange '...' expected 'fake'`
-  Use `--user <fake_user>` or point `live.user` at a fake entry you added to your local
+  Use `--user <fake_user>` or point `live.account.user` at a fake entry you added to your local
   `api-keys.json`.
 - `Fake exchange requires live.fake_scenario_path or api-keys fake_scenario_path`
   Pass a scenario on the command line and make sure the fake user resolves to `exchange: "fake"`.

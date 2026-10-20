@@ -2276,10 +2276,10 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
             for o in bot.open_orders[symbol]
         ), bot.open_orders
         for mode_override in ("panic", "manual"):
-            bot.config["live"]["forced_mode_long"] = mode_override
+            bot.config["live"]["modes"]["long"] = mode_override
             assert not await hsl_live.owner(bot).protect()
             assert "resting-panic" in bot.cca.open_orders
-        bot.config["live"]["forced_mode_long"] = ""
+        bot.config["live"]["modes"]["long"] = ""
         assert await hsl_live.owner(bot).protect()
         assert "resting-panic" not in bot.cca.open_orders
         assert (

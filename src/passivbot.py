@@ -1546,14 +1546,14 @@ class Passivbot:
                 mem_cap_effective = int(float(mem_cap_raw))
         except Exception:
             logging.warning(
-                "Unable to parse live.max_memory_candles_per_symbol=%r, using default %d",
+                "Unable to parse live.candles.max_memory_candles_per_symbol=%r, using default %d",
                 mem_cap_raw,
                 DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL,
             )
             mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
         if mem_cap_effective <= 0:
             logging.warning(
-                "live.max_memory_candles_per_symbol=%r is non-positive; using default %d",
+                "live.candles.max_memory_candles_per_symbol=%r is non-positive; using default %d",
                 mem_cap_raw,
                 DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL,
             )
@@ -1570,7 +1570,7 @@ class Passivbot:
                 cm_kwargs["lock_timeout_seconds"] = float(lock_timeout)
             except Exception:
                 logging.warning(
-                    "Unable to parse live.candle_lock_timeout_seconds=%r; using default",
+                    "Unable to parse live.candles.candle_lock_timeout_seconds=%r; using default",
                     lock_timeout,
                 )
         max_concurrent = get_optional_live_value(
@@ -1581,7 +1581,7 @@ class Passivbot:
                 cm_kwargs["max_concurrent_requests"] = int(max_concurrent)
             except Exception:
                 logging.warning(
-                    "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
+                    "Unable to parse live.api.max_concurrent_api_requests=%r; ignoring",
                     max_concurrent,
                 )
         try:
@@ -1610,7 +1610,7 @@ class Passivbot:
             if page_debug_symbols:
                 cm_kwargs["page_debug_symbols"] = page_debug_symbols
         # Archive fetching: disabled by default for live bots (avoids timeout issues)
-        # Set live.enable_archive_candle_fetch=true to enable if needed
+        # Set live.candles.enable_archive_candle_fetch=true to enable if needed
         archive_enabled = get_optional_live_value(
             config, "enable_archive_candle_fetch", False
         )
@@ -2315,7 +2315,7 @@ class Passivbot:
                     options["recvWindow"] = recv_int
             except (TypeError, ValueError):
                 logging.warning(
-                    "Unable to parse live.recv_window_ms=%r; ignoring", recv_window
+                    "Unable to parse live.api.recv_window_ms=%r; ignoring", recv_window
                 )
         if overrides:
             options.update(overrides)
@@ -3311,19 +3311,8 @@ class Passivbot:
             # Random boot stagger to spread API load when multiple bots start simultaneously.
             # Applies BEFORE init_markets() so even the first API calls are staggered.
             boot_stage = "boot_stagger"
-            boot_stagger = get_optional_live_value(
-                self.config, "boot_stagger_seconds", None
-            )
-            if boot_stagger is None:
-                exchange_lower = (self.exchange or "").lower()
-                if exchange_lower == "hyperliquid":
-                    boot_stagger = 30.0
-                else:
-                    boot_stagger = 0.0
-            try:
-                boot_stagger = float(boot_stagger)
-            except Exception:
-                boot_stagger = 0.0
+            exchange_lower = (self.exchange or "").lower()
+            boot_stagger = 30.0 if exchange_lower == "hyperliquid" else 0.0
             if boot_stagger > 0:
                 delay = random.uniform(0, boot_stagger)
                 logging.info(
@@ -5716,15 +5705,7 @@ class Passivbot:
             synthetic_count = 0
             unhealthy_details = []
             unhealthy_samples = []
-            try:
-                stale_minutes = float(
-                    get_optional_live_value(
-                        self.config, "candle_health_stale_minutes", 10.0
-                    )
-                    or 10.0
-                )
-            except Exception:
-                stale_minutes = 10.0
+            stale_minutes = 10.0
             stale_threshold_ms = int(60_000 * max(0.0, stale_minutes))
             for symbol, symbol_report in symbol_reports.items():
                 for tf, tf_report in (
@@ -5831,15 +5812,7 @@ class Passivbot:
             return False
         if str(timeframe) != "1m" or int(missing) > 1:
             return True
-        try:
-            grace_ms = int(
-                get_optional_live_value(
-                    self.config, "candle_health_trailing_grace_ms", ONE_MIN_MS
-                )
-                or ONE_MIN_MS
-            )
-        except Exception:
-            grace_ms = ONE_MIN_MS
+        grace_ms = ONE_MIN_MS
         last_cached_age_ms = tf_report.get("last_cached_age_ms")
         refresh_age_ms = tf_report.get("refresh_age_ms")
         if last_cached_age_ms is None:
@@ -7884,26 +7857,16 @@ class Passivbot:
         return [symbol for _, symbol in ranked]
 
     def _get_fetch_delay_seconds(self) -> float:
-        """Return configured candle fetch pacing delay in seconds.
+        """Return exchange-specific candle fetch pacing delay in seconds.
 
         The value is wired into CandlestickManager as process-local spacing
         between CCXT OHLCV calls. Existing symbol-level refresh loops also use
         it as a small post-symbol pause for compatibility.
         """
-        fetch_delay_ms = get_optional_live_value(
-            self.config, "warmup_fetch_delay_ms", None
+        exchange_lower = self.exchange.lower() if self.exchange else ""
+        fetch_delay_ms = (
+            200.0 if exchange_lower in ("bybit", "hyperliquid", "kucoin") else 0.0
         )
-        try:
-            fetch_delay_ms = (
-                float(fetch_delay_ms) if fetch_delay_ms is not None else None
-            )
-        except Exception:
-            fetch_delay_ms = None
-        if fetch_delay_ms is None:
-            exchange_lower = self.exchange.lower() if self.exchange else ""
-            fetch_delay_ms = (
-                200.0 if exchange_lower in ("bybit", "hyperliquid", "kucoin") else 0.0
-            )
         return max(0.0, float(fetch_delay_ms) / 1000.0)
 
     def stop_data_maintainers(self, verbose=True):
@@ -10303,7 +10266,7 @@ class Passivbot:
             )
             if runtime_forced:
                 return str(runtime_forced)
-        mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
+        mode = self.config_get(["live", "modes", pside], symbol)
         if mode:
             return expand_PB_mode(mode)
         elif symbol and not self.markets_dict[symbol]["active"]:
@@ -15268,7 +15231,7 @@ class Passivbot:
                 pside, symbol, str(runtime_forced)
             )
 
-        forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
+        forced_mode = self.config_get(["live", "modes", pside], symbol)
         if forced_mode:
             return self._apply_entry_eligibility_mode(
                 pside, symbol, expand_PB_mode(forced_mode)
@@ -18764,10 +18727,6 @@ class Passivbot:
         configured_cap = get_optional_live_value(
             self.config, "max_forager_candle_staleness_minutes", None
         )
-        if configured_cap is None:
-            configured_cap = get_optional_live_value(
-                self.config, "forager_candle_staleness_max_minutes", None
-            )
         try:
             cap_minutes = float(configured_cap) if configured_cap is not None else 0.0
         except Exception:
@@ -20581,10 +20540,7 @@ async def _run_live(startup_context: dict):
 
     startup_context["stage"] = "custom_endpoints"
     custom_endpoints_cli = args.custom_endpoints
-    live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
-    custom_endpoints_cfg = (
-        live_section.get("custom_endpoints_path") if live_section else None
-    )
+    custom_endpoints_cfg = get_optional_live_value(config, "custom_endpoints_path", None)
 
     override_path = None
     autodiscover = True
@@ -20622,14 +20578,14 @@ async def _run_live(startup_context: dict):
             override_path = None
             autodiscover = False
             logging.info(
-                "Custom endpoints disabled via config live.custom_endpoints_path."
+                "Custom endpoints disabled via config live.api.custom_endpoints_path."
             )
         else:
             override_path = cfg_value
             autodiscover = False
             preloaded_override = load_custom_endpoint_config(override_path)
             logging.info(
-                "Using custom endpoints from config live.custom_endpoints_path: %s",
+                "Using custom endpoints from config live.api.custom_endpoints_path: %s",
                 override_path,
             )
     else:

@@ -130,7 +130,7 @@ async def test_early_startup_failure_is_bounded_and_exits_unsuccessfully(
     from unittest.mock import AsyncMock, Mock
 
     config = pb.get_template_config()
-    config["live"]["user"] = "offline_test"
+    config["live"]["account"]["user"] = "offline_test"
     failure = RuntimeError("api_key=EARLY_SECRET https://private.invalid?signature=SIG")
     monkeypatch.setattr(pb.sys, "argv", ["passivbot"])
     monkeypatch.setattr(pb, "configure_logging", lambda **kwargs: None)
@@ -200,7 +200,6 @@ async def test_lifecycle_failure_preserves_phase_and_does_not_report_recovery(
 
     bot = pb.Passivbot.__new__(pb.Passivbot)
     bot.config = pb.get_template_config()
-    bot.config["live"]["boot_stagger_seconds"] = 0
     bot.runtime_identity = SimpleNamespace(to_dict=lambda: {})
     bot._runtime_manifest_written = True
     bot.exchange, bot.user, bot.quote = "fake", "offline_test", "USDT"
@@ -378,7 +377,15 @@ async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch)
     from unittest.mock import AsyncMock, Mock
 
     config = pb.get_template_config()
-    config["live"].update(user="offline_test", max_n_restarts_per_day=1)
+    config["live"].update(
+        {
+            "account": {**config["live"].get("account", {}), "user": "offline_test"},
+            "recovery": {
+                **config["live"].get("recovery", {}),
+                "max_n_restarts_per_day": 1,
+            },
+        }
+    )
     bot = SimpleNamespace(
         config=config, stop_signal_received=False,
         start_bot=AsyncMock(side_effect=RuntimeError("password=RESTART_SECRET")),

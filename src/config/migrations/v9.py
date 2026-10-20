@@ -97,15 +97,33 @@ def require_v9_runtime_config(config, *, additional_inputs=()):
 def reject_retired_v9_fields(config, *, additional_inputs=()):
     """Also protect sparse config exports from silently deleting old authority."""
     from .shared_policy import COIN_SOURCE_FIELDS, LIVE_POLICY_PATHS
+    from config.field_registry import LIVE_OPERATIONAL_PATHS
 
     moved = (*LIVE_POLICY_PATHS, *COIN_SOURCE_FIELDS)
+    moved_pattern = re.compile(
+        r"(?:^|\.)live\.(?:" + "|".join(map(re.escape, moved)) + r")(?:$|\.)"
+    )
+    operational_pattern = re.compile(
+        r"(?:^|\.)live\.(?:"
+        + "|".join(map(re.escape, LIVE_OPERATIONAL_PATHS))
+        + r")(?:$|\.)"
+    )
     def moved_live_path(value):
-        return any(re.search(r"(?:^|\.)live\." + re.escape(field) + r"(?:$|\.)", value)
-                   for field in moved)
+        return moved_pattern.search(value)
 
     for node in (config, *additional_inputs):
         for path, key, value in _walk(node):
             name = str(key)
+            operational = operational_pattern.search(path) or (
+                isinstance(value, str)
+                and "fixed_params" in path
+                and operational_pattern.search(value)
+            )
+            if operational:
+                raise ValueError(
+                    f"{path} uses an ungrouped live field; final canonical {V9_SCHEMA_VERSION} "
+                    f"requires operational groups. Convert versioned v8 with {MIGRATION_COMMAND}"
+                )
             if moved_live_path(path) or (isinstance(value, str) and "fixed_params" in path and moved_live_path(value)):
                 raise ValueError(f"{path} uses retired live-owned bot policy; final canonical {V9_SCHEMA_VERSION} requires bot ownership. Convert versioned v8 with {MIGRATION_COMMAND}")
             leaf = name.split(".")[-1]

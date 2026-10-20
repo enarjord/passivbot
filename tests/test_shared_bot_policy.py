@@ -224,7 +224,7 @@ def test_v8_root_scenario_fixed_sources_and_coin_normal_selection_move_together(
     assert source == original
     assert result["bot"]["long"]["universe"]["approved_coins"] == "coins.json"
     assert result["bot"]["long"]["forager"]["always_include"] == ["BTC"]
-    assert result["coin_overrides"]["BTC"]["live"]["forced_mode_long"] == "normal"
+    assert result["coin_overrides"]["BTC"]["live"]["modes"]["long"] == "normal"
     assert result["optimize"]["fixed_params"] == [
         "bot.*.universe.approved_coins",
         "bot.global.hedge_mode",
@@ -437,8 +437,7 @@ def test_v8_file_normal_selection_obeys_scenario_and_atomic_replacement(
         base_config_path=str(tmp_path / "config.json"),
     )
     assert result.config["coin_overrides"]["BTC"]["live"] == {
-        "forced_mode_long": "normal",
-        "forced_mode_short": "normal",
+        "modes": {"long": "normal", "short": "normal"},
     }
     assert _forced_selection_payload(result.config) == {
         "long": {"BTC"},

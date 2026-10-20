@@ -15,7 +15,7 @@ Allowed fields are intentionally limited:
   every HSL field when the global `bot.global.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
-- **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
+- **Live flags**: `live.modes.long`, `live.modes.short`, `live.account.leverage`.
 
 Not overrideable: approved/ignored coins, exchange settings, and arbitrary new keys. A disallowed or
 unknown inline override is rejected with its full path. A full override config file may contain
@@ -107,7 +107,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.055}}}
         }
       },
-      "live": {"forced_mode_long": "normal"}
+      "live": {"modes": {"long": "normal"}}
     }
   },
   "bot": {
@@ -163,8 +163,8 @@ Main config:
     }
   },
   "live": {
-    "forced_mode_short": "graceful_stop",
-    "leverage": 4
+      "account": {"leverage": 4},
+      "modes": {"short": "graceful_stop"}
   }
 }
 ```
@@ -250,7 +250,7 @@ this selection produces the same patches.
 Selectors use the fine-tune dotted-path matcher: an optional `bot.` prefix, groups or individual
 leaves, full-segment prefix/suffix matching, and `*` as a one-segment wildcard. For example,
 `bot.long.strategy`, `long.strategy.entry.initial_qty_pct` (Trailing Martingale),
-`*.entry_cooldown.base_duration_minutes`, and `live.leverage` are valid selections. A bare leaf such as
+`*.entry_cooldown.base_duration_minutes`, and `live.account.leverage` are valid selections. A bare leaf such as
 `base_duration_minutes` selects both sides. Overlapping selectors are deduplicated. Group selectors
 include only fields allowed by the coin-override policy; `long.risk` does not override global
 exposure or position-count settings. Empty selectors and selectors matching no allowed input

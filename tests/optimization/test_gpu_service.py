@@ -1856,9 +1856,8 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
 def test_coin_override_contract_keeps_backtest_inert_live_values():
     exact_patch = {
         "live": {
-            "forced_mode_long": "graceful_stop",
-            "forced_mode_short": "panic",
-            "leverage": 3,
+            "modes": {"long": "graceful_stop", "short": "panic"},
+            "account": {"leverage": 3},
         }
     }
     config = {"coin_overrides": {"ETH": exact_patch}}
@@ -1933,7 +1932,7 @@ def test_multicoin_coin_overrides_pack_forced_normal_active_slot(
         ],
     )
     _complete_hsl_payload(payload)
-    config = {"coin_overrides": {"ETH": {"live": {"forced_mode_long": "normal"}}}}
+    config = {"coin_overrides": {"ETH": {"live": {"modes": {"long": "normal"}}}}}
 
     matrix, contract = builder(
         config=config,

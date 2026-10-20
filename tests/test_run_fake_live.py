@@ -373,7 +373,7 @@ def test_install_fake_user_override_restores_original_loader():
     import passivbot as passivbot_mod
 
     original = passivbot_mod.load_user_info
-    config = {"live": {"user": "demo"}}
+    config = {"live": {"account": {"user": "demo"}}}
     fake_user, restore = _install_fake_user_override(config, "scenario.hjson", None)
     try:
         payload = passivbot_mod.load_user_info(fake_user)
@@ -398,7 +398,7 @@ def test_extract_hsl_trace_returns_serializable_state():
 @pytest.mark.parametrize("now_ms", [60_000, 2_000_000])
 def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fraction, horizon_ms, now_ms):
     config = get_template_config()
-    config["live"]["risk_bootstrap_max_lookback_minutes"] = 15.0
+    config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 15.0
     config["bot"]["global"]["loss_gate"].update(
         memory_ema_span_minutes=3.0, max_drawdown_ratio=gate_fraction
     )

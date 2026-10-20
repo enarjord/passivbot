@@ -136,8 +136,8 @@ def test_parse_balance_override_accepts_disabled_and_positive_values(
 
 def test_passivbot_init_rejects_boolean_balance_override_before_coercion(monkeypatch):
     config = get_template_config()
-    config["live"]["user"] = "test_user"
-    config["live"]["balance_override"] = True
+    config["live"]["account"]["user"] = "test_user"
+    config["live"]["account"]["balance_override"] = True
     monkeypatch.setattr(
         passivbot_module,
         "load_user_info",
@@ -447,7 +447,9 @@ def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_kucoin():
 def test_market_snapshot_ticker_strategy_respects_explicit_override():
     bot = _unit_bot()
     bot.exchange = "bitget"
-    bot.config = _unit_config({"live": {"market_snapshot_ticker_strategy": "bulk"}})
+    bot.config = _unit_config(
+        {"live": {"api": {"market_snapshot_ticker_strategy": "bulk"}}}
+    )
 
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
@@ -2280,7 +2282,7 @@ def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     bot.exchange = "gateio"
     assert bot._candle_fetch_concurrency(context="history_replay") == 1
 
-    bot.config = _unit_config({"live": {"warmup_concurrency": 7}})
+    bot.config = _unit_config({"live": {"startup": {"warmup_concurrency": 7}}})
     assert bot._candle_fetch_concurrency(context="history_replay") == 7
 
 
@@ -2395,7 +2397,11 @@ async def test_start_bot_reports_and_propagates_programmer_error(monkeypatch, ca
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
     bot.config = _unit_config(
-        {"live": {"boot_stagger_seconds": 0, "execution_delay_seconds": 5.0}}
+        {
+            "live": {
+                "execution": {"execution_delay_seconds": 5.0},
+            }
+        }
     )
     bot.debug_mode = False
     bot.stop_signal_received = False
@@ -3342,11 +3348,7 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_030_000))
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
@@ -3423,11 +3425,7 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_001_000))
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -3557,11 +3555,7 @@ async def test_update_pnls_confirms_only_structural_enrichment(
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -4105,7 +4099,7 @@ def test_active_candle_incomplete_actionable_gap_still_warns(monkeypatch, caplog
 
 def test_candle_health_missing_trailing_1m_gap_is_not_actionable_during_grace():
     bot = _unit_bot()
-    bot.config = _unit_config({"live": {"candle_health_trailing_grace_ms": 60_000}})
+    bot.config = _unit_config({})
 
     assert (
         bot._candle_health_missing_is_actionable(
@@ -4941,11 +4935,7 @@ async def test_update_pnls_shared_memory_uses_incremental_refresh_when_cache_is_
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._pnls_manager = _with_fill_coverage_api(
         _Manager(cached_events, history_scope="all")
@@ -5011,11 +5001,7 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -5167,12 +5153,14 @@ async def test_update_pnls_bootstraps_required_consumer_lookback(
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": memory_minutes,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {"risk_bootstrap_max_lookback_minutes": memory_minutes},
             },
-            "bot": {"long": {"entry_cooldown": {"base_duration_minutes": cooldown_minutes}}},
-        }, memory_span_minutes=memory_minutes / 5.0
+            "bot": {
+                "long": {"entry_cooldown": {"base_duration_minutes": cooldown_minutes}}
+            },
+        },
+        memory_span_minutes=memory_minutes / 5.0,
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
@@ -5243,11 +5231,7 @@ async def test_update_pnls_empty_cache_uses_bounded_recent_fetch_without_history
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -5337,11 +5321,11 @@ async def test_update_pnls_rechecks_hsl_requirement_after_delayed_flat_fill():
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": 43200.0,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {"risk_bootstrap_max_lookback_minutes": 43200.0},
             }
-        }, memory_span_minutes=8640.0
+        },
+        memory_span_minutes=8640.0,
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = manager
@@ -5455,11 +5439,13 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {
+                    "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0
+                },
             }
-        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
+        },
+        memory_span_minutes=lookback_days * 1440.0 / 5.0,
     )
     bot._authoritative_pending_confirmations = {}
     bot._trailing_fill_fetch_generation = 7
@@ -5577,11 +5563,13 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {
+                    "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0
+                },
             }
-        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
+        },
+        memory_span_minutes=lookback_days * 1440.0 / 5.0,
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
@@ -5666,11 +5654,13 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {
+                    "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0
+                },
             }
-        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
+        },
+        memory_span_minutes=lookback_days * 1440.0 / 5.0,
     )
     bot._authoritative_pending_confirmations = {}
     sink = ListEventSink()
@@ -5818,11 +5808,13 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {
+                    "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0
+                },
             }
-        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
+        },
+        memory_span_minutes=lookback_days * 1440.0 / 5.0,
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -5959,11 +5951,13 @@ async def test_update_pnls_ignores_pnl_without_an_active_consumer(
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0,
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {
+                    "risk_bootstrap_max_lookback_minutes": lookback_days * 1440.0
+                },
             }
-        }, memory_span_minutes=lookback_days * 1440.0 / 5.0
+        },
+        memory_span_minutes=lookback_days * 1440.0 / 5.0,
     )
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
@@ -6036,8 +6030,10 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_confirmation_overlap_minutes": 60.0,
-                "fills_recent_overlap_minutes": 10.0,
+                "fills": {
+                    "fills_confirmation_overlap_minutes": 60.0,
+                    "fills_recent_overlap_minutes": 10.0,
+                }
             }
         }
     )
@@ -6101,8 +6097,10 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_confirmation_overlap_minutes": 60.0,
-                "fills_recent_overlap_minutes": 10.0,
+                "fills": {
+                    "fills_confirmation_overlap_minutes": 60.0,
+                    "fills_recent_overlap_minutes": 10.0,
+                }
             }
         }
     )
@@ -6182,8 +6180,10 @@ async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_confirmation_overlap_minutes": 60.0,
-                "fills_recent_overlap_minutes": 10.0,
+                "fills": {
+                    "fills_confirmation_overlap_minutes": 60.0,
+                    "fills_recent_overlap_minutes": 10.0,
+                }
             }
         }
     )
@@ -6267,11 +6267,7 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     sink = ListEventSink()
     bot.exchange = "bybit"
@@ -6395,11 +6391,7 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
@@ -6450,11 +6442,7 @@ async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -6507,11 +6495,7 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
 
     bot.stop_signal_received = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     sink = ListEventSink()
     bot.exchange = "binance"
@@ -6588,11 +6572,7 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -8443,7 +8423,10 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
             get_history_scope=lambda: "window",
         )
     )
-    bot.config = _gate_history_config({"live": { "risk_bootstrap_max_lookback_minutes": 1440.0}}, memory_span_minutes=288.0)
+    bot.config = _gate_history_config(
+        {"live": {"startup": {"risk_bootstrap_max_lookback_minutes": 1440.0}}},
+        memory_span_minutes=288.0,
+    )
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
@@ -8622,7 +8605,7 @@ def test_staged_planner_preconditions_ignore_completed_candle_surface():
 
 def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     bot = _unit_bot()
-    bot.config = _unit_config({"live": {"user": "tester"}})
+    bot.config = _unit_config({"live": {"account": {"user": "tester"}}})
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -8724,7 +8707,9 @@ def _planning_test_snapshot(
 
 def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
     bot = _unit_bot()
-    bot.config = _unit_config({"live": {"max_active_candle_tail_gap_minutes": 2}})
+    bot.config = _unit_config(
+        {"live": {"candles": {"max_active_candle_tail_gap_minutes": 2}}}
+    )
     bot.cm = SimpleNamespace(
         get_completed_candle_health=lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("snapshot summary must not read candles")
@@ -8865,7 +8850,7 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(
         positions=positions,
         open_orders=[],
     )
-    bot.config = _unit_config({"live": {"user": "tester"}})
+    bot.config = _unit_config({"live": {"account": {"user": "tester"}}})
     bot.exchange = "fake"
     bot.coin_overrides = {}
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
@@ -8981,7 +8966,7 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(
 
 def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
     bot = _unit_bot()
-    bot.config = _unit_config({"live": {"user": "tester"}})
+    bot.config = _unit_config({"live": {"account": {"user": "tester"}}})
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -9010,7 +8995,7 @@ def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
 
 def test_build_staged_planning_snapshot_survives_diagnostic_failures():
     bot = _unit_bot()
-    bot.config = _unit_config({"live": {"user": "tester"}})
+    bot.config = _unit_config({"live": {"account": {"user": "tester"}}})
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -9374,7 +9359,7 @@ def _make_pre_create_distance_guard_bot(
 ):
     bot = _unit_bot()
     bot.config = _unit_config(
-        {"live": {"limit_order_create_max_market_dist_pct": threshold}}
+        {"live": {"execution": {"limit_order_create_max_market_dist_pct": threshold}}}
     )
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -12137,11 +12122,7 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(
     bot.stop_signal_received = False
     bot._live_risk_uses_authoritative_pnl = lambda: True
     bot.config = _gate_history_config(
-        {
-            "live": {
-                "fills_recent_overlap_minutes": 10.0,
-            }
-        }
+        {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     if failure == "config_value":
         bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
@@ -12204,12 +12185,12 @@ async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pendi
     bot.config = _gate_history_config(
         {
             "live": {
-                "fills_recent_overlap_minutes": 10.0,
-
-                "risk_bootstrap_max_lookback_minutes": 129600.0,
                 "hsl_signal_mode": "coin",
+                "fills": {"fills_recent_overlap_minutes": 10.0},
+                "startup": {"risk_bootstrap_max_lookback_minutes": 129600.0},
             }
-        }, memory_span_minutes=288.0
+        },
+        memory_span_minutes=288.0,
     )
     bot.config["bot"]["long"]["hsl"].update(
         enabled=True, restart_after_red_policy="always"

@@ -23,7 +23,7 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
         "coin_overrides": {
             "BTC": {
                 "_meta": "do not keep",
-                "live": {"forced_mode_long": "manual"},
+                "live": {"modes": {"long": "manual"}},
             }
         },
         "_transform_log": ["noise"],
@@ -51,8 +51,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert "BTC" in cleaned["coin_overrides"]
     assert "_meta" not in cleaned["coin_overrides"]["BTC"]
     assert (
-        cleaned["coin_overrides"]["BTC"]["live"]["forced_mode_long"]
-        == config["coin_overrides"]["BTC"]["live"]["forced_mode_long"]
+        cleaned["coin_overrides"]["BTC"]["live"]["modes"]["long"]
+        == config["coin_overrides"]["BTC"]["live"]["modes"]["long"]
     )
 
 
@@ -103,7 +103,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     source = generated_template(get_template_config(), mode)
     source['bot']['global']['strategy_kind'] = strategy
     set_side_universe_sources(source, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
-    source["live"]["startup_phase_budgets"] = {"candles": 15.0}
+    source["live"]["startup"]["startup_phase_budgets"] = {"candles": 15.0}
     source["backtest"]["reducer"] = {"adg_strategy_eq": "max"}
     source["backtest"]["market_settings"]["overrides"] = {"BTC": {"min_qty": 0.001}}
     source["backtest"]["scenarios"] = [
@@ -131,7 +131,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert not (_mutable_container_ids(source) & _mutable_container_ids(cleaned))
     assert not (_mutable_container_ids(cleaned) & _mutable_container_ids(repeated))
     assert cleaned["backtest"]["reducer"] == {"adg_strategy_eq": "max", "default": "mean"}
-    assert cleaned["live"]["startup_phase_budgets"] == {"candles": 15.0}
+    assert cleaned["live"]["startup"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
     assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
         "unilateralness"

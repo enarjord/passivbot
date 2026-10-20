@@ -82,7 +82,12 @@ def test_setup_projection_ignores_paths_logging_and_output_settings():
         visible_metrics=["nothing"],
         offline=True,
     )
-    other["live"].update(user="some_account", base_config_path="other.json")
+    other["live"].update(
+        {
+            "base_config_path": "other.json",
+            "account": {**other["live"].get("account", {}), "user": "some_account"},
+        }
+    )
     other["logging"] = {"level": 4}
     other["results_dir"] = "generated/path"
     other["optimize"].update(compress_results_file=False, write_all_results=False)

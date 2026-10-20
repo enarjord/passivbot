@@ -18,15 +18,15 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    is derived as `pnl + fee_paid`.
 5. Fee resolution is best-effort but observable: reported quote fee, reported
    non-quote fee converted by a fresh ticker, reported fee rate, then
-   `live.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
-   against `live.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
+   `live.fills.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
+   against `live.fills.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
    Explicit finite zero fees and fully resolved zero-sum fee lists are authoritative amounts.
    Loading a cached fallback or rate estimate rechecks retained amounts and persists a resolved fee;
    unresolved historical estimates retain their original policy. Same-currency offsetting
    fees need no ticker when their net amount is zero.
    Coalescing preserves missing or malformed fee amounts for fallback resolution.
    A zero non-quote fee needs no ticker and records `fee_conversion_source=zero_amount`.
-   Cached conversion quotes remain subject to `live.fee_conversion_max_age_ms` against the
+   Cached conversion quotes remain subject to `live.fills.fee_conversion_max_age_ms` against the
    current time, fetch time, and each fill timestamp. Failed conversion lookups retry after
    at most one minute, bounded further by that same configured age. A batch reuses an identical
    pair/fill-time lookup, including an unavailable result. A quote rejected only for one fill

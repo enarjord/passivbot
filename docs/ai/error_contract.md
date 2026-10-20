@@ -93,7 +93,7 @@ post-fill coverage; it must not bridge a missing reset boundary or internal minu
 projected rows must be discarded after that read so delayed authoritative highs and lows replace
 them immediately. Forager ranking quote-volume and log-range inputs for current, remote-enabled
 candidates may bridge a later-bounded internal gap when the complete gap length is within
-`live.max_active_candle_tail_gap_minutes`. This is an explicitly approximate ranking-continuity
+`live.candles.max_active_candle_tail_gap_minutes`. This is an explicitly approximate ranking-continuity
 policy, not proof that the missing rows were fetched. The rows remain unresolved and retryable,
 are never persisted, and are replaced by delayed authoritative candles. Cache-only candidates
 remain strict across unresolved internal gaps. Existing known-gap and refresh diagnostics expose
@@ -115,14 +115,14 @@ Malformed configuration and producer output remain fatal at their owning boundar
 ## Forager And Eligibility Inputs
 
 Flat-symbol forager candidates may remain rankable within
-`live.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
+`live.candles.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
 projection. Quote-volume and log-range ranking inputs for current, remote-enabled candidates may
 use flat zero-volume continuity for later-bounded internal gaps within
-`live.max_active_candle_tail_gap_minutes`.
+`live.candles.max_active_candle_tail_gap_minutes`.
 Cache-only ranking inputs instead carry forward their latest known EMA with age/source metadata;
 they do not receive invented zero tails.
 When the forager setting is unset, its budget-derived acceptable age must not be shorter than
-`live.max_active_candle_tail_gap_minutes`; the refresh budget must not silently reduce the active
+`live.candles.max_active_candle_tail_gap_minutes`; the refresh budget must not silently reduce the active
 tail grace period. An explicit positive forager cap is an operator override.
 
 Candidates with no prior feature basis, non-finite carried values, or excessive feature age are
@@ -135,7 +135,7 @@ ranking was required for that side.
 
 Approved and ignored coin state is an entry-eligibility input. Stale or unreadable eligibility
 blocks affected initial entries but not protective management. With
-`live.disapproved_position_mode=graceful_stop`, removal of a held coin is handled as graceful stop.
+`live.modes.disapproved_position=graceful_stop`, removal of a held coin is handled as graceful stop.
 
 ## Fill And PnL Inputs
 
@@ -164,7 +164,7 @@ violate an explicit ownership or safety policy.
 | Exchange fetch methods | Propagate | None in fetch method | Caller policy tests |
 | Required EMA | Unavailable/raise | Previous EMA for the same symbol/span only when explicitly implemented | `[ema]` warning, source/age/count, regression tests |
 | Risk-gating input | Fail closed | None unless explicitly approved | `[risk]` visibility and regression tests |
-| Live fill fee normalization | Best-effort contract | Quote fee → fresh conversion → exchange rate → `live.fee_pct_fallback` | Per-fill metadata, warning summary, policy tests |
+| Live fill fee normalization | Best-effort contract | Quote fee → fresh conversion → exchange rate → `live.fills.fee_pct_fallback` | Per-fill metadata, warning summary, policy tests |
 | Legacy fill-event cache | Repair or rebuild | Safe metadata repair or known exchange repair; otherwise quarantine and exchange rebuild | Backup path, startup migration tests |
 | Other required trading input | Unavailable/raise | Only a documented, approved fallback | Visibility, bounds, regression tests |
 

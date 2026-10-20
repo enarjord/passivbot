@@ -42,7 +42,7 @@ def forced_normal_coins(coin_overrides):
         if not isinstance(live, dict):
             continue
         for side in result:
-            mode = live.get(f"forced_mode_{side}")
+            mode = live.get("modes", {}).get(side)
             if isinstance(mode, str) and mode.strip().lower() in {"normal", "n"}:
                 result[side].append(coin)
     return result
@@ -137,10 +137,11 @@ def _selection_sides(patch):
             continue
         if len(parts) <= 2 or (len(parts) == 3 and parts[2] == "live"):
             sides.update(("long", "short"))
-        elif len(parts) >= 4 and parts[2] == "live":
-            for side in ("long", "short"):
-                if parts[3] == f"forced_mode_{side}":
-                    sides.add(side)
+        elif len(parts) >= 4 and parts[2:4] == ["live", "modes"]:
+            if len(parts) == 4:
+                sides.update(("long", "short"))
+            elif parts[4] in {"long", "short"}:
+                sides.add(parts[4])
     return sides
 
 

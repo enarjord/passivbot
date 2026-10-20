@@ -124,7 +124,11 @@ async def test_capture_contract_snapshot_normalizes_from_single_fetch(monkeypatc
             return None
 
     fake_bot = FakeBot()
-    monkeypatch.setattr(ccxt_contracts, "prepare_live_config_for_user", lambda user: {"live": {"user": user}})
+    monkeypatch.setattr(
+        ccxt_contracts,
+        "prepare_live_config_for_user",
+        lambda user: {"live": {"account": {"user": user}}},
+    )
     monkeypatch.setattr(ccxt_contracts, "setup_bot", lambda config: fake_bot)
 
     snapshot = await capture_contract_snapshot(

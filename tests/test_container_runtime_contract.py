@@ -46,7 +46,7 @@ def test_render_api_keys_script_creates_expected_payload(tmp_path):
 def test_render_config_script_merges_base_config_and_env_overrides(tmp_path):
     base_path = tmp_path / "live.json"
     base_path.write_text(
-        '{"config_version":"v9.0.0","bot":{"long":{"universe":{"approved_coins":["BTC"]}}},"live":{"user":"bybit_01"},"monitor":{"enabled":true}}\n',
+        '{"config_version":"v9.0.0","bot":{"long":{"universe":{"approved_coins":["BTC"]}}},"live":{"account":{"user":"bybit_01"}},"monitor":{"enabled":true}}\n',
         encoding="utf-8",
     )
     target = tmp_path / "config.runtime.json"
@@ -66,7 +66,7 @@ def test_render_config_script_merges_base_config_and_env_overrides(tmp_path):
         env=env,
     )
     payload = json.loads(target.read_text())
-    assert payload["live"]["user"] == "bitget_01"
+    assert payload["live"]["account"]["user"] == "bitget_01"
     assert require_side_universe_sources(payload, 'approved_coins') == {side: ["BTC", "ETH", "SOL"] for side in ("long", "short")}
     assert payload["logging"]["dir"] == "/data/logs"
     assert payload["logging"]["level"] == 2
