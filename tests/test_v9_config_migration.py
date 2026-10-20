@@ -16,6 +16,7 @@ from config.risk_memory import (
 )
 from config.schema import get_template_config
 from tools.migrate_config_v9 import main, migrate
+from released_v8_fixtures import released_v8_policy
 
 
 def current():
@@ -24,36 +25,8 @@ def current():
 
 
 def legacy():
-    """Synthetic released-v8 policy; no unreleased checkpoint layout is accepted."""
-    config = current()
-    config["config_version"] = "v8.6.0"
-    bot, live = config["bot"], config["live"]
-    bot.pop("unstuck")
-    policy = bot.pop("risk")
-    live["hsl_signal_mode"] = policy["hsl"]["scope"]
-    live["max_realized_loss_pct"] = policy["loss_gate"]["max_drawdown_ratio"]
-    live["auto_gs"] = live.pop("disapproved_position_mode") == "graceful_stop"
-    live.pop("risk_bootstrap_max_lookback_minutes")
-    live["pnls_max_lookback_days"] = 30.0
-    backtest = config["backtest"]
-    backtest["liquidation_threshold"] = backtest.pop("equity_floor_ratio")
-    bounds = config["optimize"]["bounds"]
-    bounds.pop("unstuck", None)
-    bounds.pop("risk", None)
-    for side in ("long", "short"):
-        side_bot = bot[side]
-        side_bot["risk"]["n_positions"] = side_bot["risk"].pop("max_positions")
-        side_bot["unstuck"]["threshold"] = side_bot["unstuck"].pop("exposure_trigger_ratio")
-        side_bot["hsl"].pop("memory_ema_span_minutes")
-        side_bot["hsl"]["ema_span_minutes"] = side_bot["hsl"].pop("drawdown_ratio_ema_span_minutes")
-        side_bot["hsl"]["restart_after_red_policy"] = "always"
-        side_bounds = bounds[side]
-        side_bounds["hsl"].pop("memory_ema_span_minutes", None)
-        side_bounds["hsl"]["ema_span_minutes"] = side_bounds["hsl"].pop("drawdown_ratio_ema_span_minutes")
-        side_bounds["risk"]["n_positions"] = side_bounds["risk"].pop("max_positions")
-        if "exposure_trigger_ratio" in side_bounds["unstuck"]:
-            side_bounds["unstuck"]["threshold"] = side_bounds["unstuck"].pop("exposure_trigger_ratio")
-    return config
+    """Released-v8 policy; no evolving v9 defaults or layouts participate."""
+    return released_v8_policy()
 
 
 @pytest.mark.parametrize("version", ["v9.0.0", "v9.1.0"])

@@ -48,7 +48,7 @@ def _audit_authored_patch_conflicts(config, overrides):
 
 
 def _restore_authored_export_inputs(exported, authored):
-    """Keep dynamic dates and reloadable coin sources after effective validation."""
+    """Keep dynamic dates, coin sources and inheritance after effective validation."""
     from config.schema import get_template_config
 
     defaults = get_template_config()["backtest"]
@@ -57,8 +57,11 @@ def _restore_authored_export_inputs(exported, authored):
     for key in ("approved_coins", "ignored_coins"):
         if key in authored.get("live", {}):
             exported["live"][key] = deepcopy(authored["live"][key])
+    if "filter_by_min_effective_cost" in authored.get("backtest", {}):
+        exported["backtest"]["filter_by_min_effective_cost"] = authored["backtest"]["filter_by_min_effective_cost"]
 
     preserved_paths = {("backtest", "start_date"), ("backtest", "end_date"),
+                       ("backtest", "filter_by_min_effective_cost"),
                        ("live", "approved_coins"), ("live", "ignored_coins")}
 
     def restore_patch(target, source, prefix=()):

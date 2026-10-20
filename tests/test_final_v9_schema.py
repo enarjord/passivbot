@@ -12,35 +12,14 @@ from config.risk_memory import risk_bootstrap_horizon_minutes, risk_memory_spans
 from config.schema import get_template_config
 from config.migrations.v9 import migrate_v8_to_v9
 from tools.migrate_config_v9 import main, migrate
+from released_v8_fixtures import released_v8_policy
 
 
 def v8_config():
-    config = get_template_config()
-    config["config_version"] = "v8.6.0"
-    bot, live = config["bot"], config["live"]
-    live["hsl_signal_mode"] = bot.pop("risk")["hsl"]["scope"]
-    live["max_realized_loss_pct"] = 1.0
-    live["auto_gs"] = live.pop("disapproved_position_mode") == "graceful_stop"
-    live["pnls_max_lookback_days"] = 30.0
-    bot.pop("unstuck")
-    backtest = config["backtest"]
-    backtest["liquidation_threshold"] = backtest.pop("equity_floor_ratio")
+    config = released_v8_policy()
     for side in ("long", "short"):
-        policy = bot[side]["hsl"]
-        policy["ema_span_minutes"] = policy.pop("drawdown_ratio_ema_span_minutes")
-        policy.pop("memory_ema_span_minutes")
-        policy["restart_after_red_policy"] = "always"
-        risk = bot[side]["risk"]
-        risk["n_positions"] = risk.pop("max_positions")
-        risk["total_exposure_entry_gate_enabled"] = True
-        local = bot[side]["unstuck"]
-        local["threshold"] = local.pop("exposure_trigger_ratio")
-        bot[side]["forager"]["volume_drop_pct"] = 0.25
-        bounds = config["optimize"]["bounds"][side]
-        bounds["risk"]["n_positions"] = bounds["risk"].pop("max_positions")
-        bounds["unstuck"]["threshold"] = bounds["unstuck"].pop("exposure_trigger_ratio")
-        bounds["hsl"]["ema_span_minutes"] = bounds["hsl"].pop("drawdown_ratio_ema_span_minutes")
-        bounds["forager"]["volume_drop_pct"] = [0.1, 0.5]
+        config["bot"][side]["forager"]["volume_drop_pct"] = 0.25
+        config["optimize"]["bounds"][side]["forager"]["volume_drop_pct"] = [0.1, 0.5]
     return config
 
 
