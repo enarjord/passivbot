@@ -1,4 +1,5 @@
 """Offline simulation must succeed with sockets denied and fail before any download."""
+from config.universe import set_side_universe_sources
 import asyncio
 import json
 import os
@@ -204,9 +205,10 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     config["backtest"].update(offline=True, exchanges=["binance"],
                               start_date=ts_to_date(START), end_date=ts_to_date(START + 9*60000),
                               compress_cache=False, gap_tolerance_ohlcvs_minutes=0)
-    config["live"].update(approved_coins={"long": ["BTC"], "short": []},
-                          ignored_coins={"long": [], "short": []},
-                          minimum_coin_age_days=0, max_warmup_minutes=1)
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    config['bot']['global']['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(tmp_path / "caches/ohlcvs/catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches/ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -285,7 +287,7 @@ async def test_suite_policy_precedes_metadata_preload(tmp_path, monkeypatch, mod
     monkeypatch.chdir(tmp_path)
     config = get_template_config()
     config["backtest"].update(offline=True, exchanges=["binance"])
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     with pytest.raises(OfflineDataError, match="markets.json"):
         await getattr(importlib.import_module(module), function)(
             config, {"scenarios": [{"label": "one"}]}, **extra)
@@ -485,8 +487,9 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
     config = get_template_config()
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
-    config["live"].update(approved_coins={"long": ["ETH", "UNLISTED"], "short": []},
-                          minimum_coin_age_days=0, max_warmup_minutes=1)
+    set_side_universe_sources(config, 'approved_coins', {'long': ['ETH', 'UNLISTED'], 'short': []})
+    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    config['bot']['global']['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
     store = OhlcvStore(cache / "ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -545,7 +548,7 @@ async def test_iterative_preload_uses_stale_markets_offline(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     config = get_template_config()
     config["backtest"].update(exchanges=["binance"], offline=not cli_override)
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config))
     session = IterativeBacktestSession(
@@ -590,11 +593,10 @@ async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeyp
         exchanges=["bybit", "hyperliquid"], start_date=ts_to_date(START),
         end_date=ts_to_date(START + 9 * 60000), compress_cache=False,
     )
-    config["live"].update(
-        approved_coins={"long": ["BTC"], "short": []},
-        ignored_coins={"long": [], "short": []}, minimum_coin_age_days=0,
-        max_warmup_minutes=1,
-    )
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    config['bot']['global']['warmup']['max_minutes'] = 1
     monkeypatch.setattr(backtest, "coin_to_symbol", lambda *args, **kwargs: SYMBOL)
     ts = START + np.arange(10, dtype=np.int64) * 60000
     hlcvs = np.tile([101.0, 99.0, 100.0, 10.0], (10, 1, 1))

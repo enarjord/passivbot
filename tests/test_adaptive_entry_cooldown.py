@@ -1,4 +1,5 @@
 """RMS, dynamic duration, side scoping and disabled-policy regressions."""
+from config.universe import set_side_universe_sources
 
 import copy
 import json
@@ -257,7 +258,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
 
     cfg = get_template_config()
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
-    cfg["live"]["max_warmup_minutes"] = 1
+    cfg['bot']['global']['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
         "adverse_directionality": [0.0, 20.0]
     }
@@ -317,7 +318,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     cfg = get_template_config()
     parsed = prepare_config(cfg, verbose=False)
     original = flatten_optimize_bounds(
-        parsed["optimize"]["bounds"], strategy_kind=parsed["live"]["strategy_kind"]
+        parsed["optimize"]["bounds"], strategy_kind=parsed['bot']['global']['strategy_kind']
     )
     for side in ("long", "short"):
         assert original[f"{side}_forager_score_weights_unilateralness"] == [0.0, 0.0]
@@ -331,7 +332,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [20.0, 80.5]
     cfg = clean_config(prepare_config(cfg, verbose=False))
     bounds = flatten_optimize_bounds(
-        cfg["optimize"]["bounds"], strategy_kind=cfg["live"]["strategy_kind"]
+        cfg["optimize"]["bounds"], strategy_kind=cfg['bot']['global']['strategy_kind']
     )
     assert bounds["long_forager_score_weights_unilateralness"] == [0.0, 1.0]
     assert bounds["long_unilateralness_ema_span_1m"] == [20.0, 80.5]
@@ -361,9 +362,9 @@ def test_cpu_score_only_rms_warmup_blocks_only_required_ranking(ranking_required
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     if ranking_required:
-        cfg["live"]["approved_coins"] = {
+        set_side_universe_sources(cfg, 'approved_coins', {
             side: ["LONGCOIN", "SHORTCOIN"] for side in ("long", "short")
-        }
+        })
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -505,7 +506,7 @@ def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close,
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
     if consumer == "forager":
-        cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"]
+        cfg['bot'][side]['universe']['approved_coins'] = ["LONGCOIN", "SHORTCOIN"]
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:
         cfg["bot"][side]["entry_cooldown"].update(
@@ -607,7 +608,7 @@ def test_cpu_entry_ineligible_rms_policy_is_inert(side, interval, consumer):
     cfg = _ema_anchor_config(True)
     cfg["backtest"]["candle_interval_minutes"] = interval
     # Keep the side globally enabled, but exclude every loaded coin on that side.
-    cfg["live"]["approved_coins"][side] = ["UNLOADEDCOIN"]
+    cfg['bot'][side]['universe']['approved_coins'] = ["UNLOADEDCOIN"]
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
     payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
     assert all(not pair[side]["entry_eligible"] for pair in payload.bot_params_list)
@@ -729,7 +730,7 @@ def test_adverse_rms_warmup_does_not_delay_other_sides_or_coins(side, span, targ
 
     coins = ["LONGCOIN", "SHORTCOIN"]
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["live"]["approved_coins"] = {s: coins[:] for s in ("long", "short")}
+    set_side_universe_sources(cfg, 'approved_coins', {s: coins[:] for s in ("long", "short")})
     cfg["backtest"]["dynamic_wel_by_tradability"] = False
     for s in ("long", "short"):
         cfg["bot"][s]["risk"]["max_positions"] = 2
@@ -789,7 +790,7 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["live"]["warmup_ratio"] = 0.0
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
     # This legacy span would impose a shared delay beyond the entire test.
     cfg["bot"][side]["forager"]["volume_ema_span_1m"] = 5000.0
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
@@ -818,7 +819,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["live"]["warmup_ratio"] = 0.0
+    cfg['bot']['global']['warmup']['ratio'] = 0.0
     cfg["bot"]["long"]["forager"]["volume_ema_span_1m"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -842,7 +843,7 @@ def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interv
     cfg["backtest"].update(candle_interval_minutes=interval, dynamic_wel_by_tradability=dynamic)
     cfg["bot"][side]["risk"]["max_positions"] = slots
     if universe == 2:
-        cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"]
+        cfg['bot'][side]['universe']['approved_coins'] = ["LONGCOIN", "SHORTCOIN"]
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -903,7 +904,7 @@ def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"]
+    cfg['bot'][side]['universe']['approved_coins'] = ["LONGCOIN", "SHORTCOIN"]
     cfg["bot"][side]["forager"].update(unilateralness_ema_span_1m=1.0)
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     cfg = prepare_config(cfg, verbose=False)
@@ -1123,8 +1124,8 @@ def test_late_validity_end_rejects_held_valuation_before_optional_rms_ranking(si
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     coins = ["LONGCOIN", "SHORTCOIN", "THIRDCOIN"]
-    cfg["live"]["approved_coins"] = {"long": [], "short": []}
-    cfg["live"]["approved_coins"][side] = coins
+    set_side_universe_sources(cfg, 'approved_coins', {"long": [], "short": []})
+    cfg['bot'][side]['universe']['approved_coins'] = coins
     cfg["bot"][side]["risk"]["max_positions"] = 3
     cfg["bot"][side]["forager"].update(unilateralness_ema_span_1m=1.0,
         score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
@@ -1443,7 +1444,7 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
     cfg = prepare_config(get_template_config(), verbose=False)
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
-    cfg["live"]["approved_coins"] = {pside: ["BTC", "ETH"] for pside in ("long", "short")}
+    set_side_universe_sources(cfg, 'approved_coins', {pside: ["BTC", "ETH"] for pside in ("long", "short")})
     cfg.pop("_coins_sources", None)
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=0.0, max_duration_minutes=14400.0,
@@ -1495,7 +1496,7 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = (
             14400.0 if pside == side else 5.0
         )
-    cfg["live"]["approved_coins"] = {side: [], other: ["ETH"]}
+    set_side_universe_sources(cfg, 'approved_coins', {side: [], other: ["ETH"]})
     cfg.pop("_coins_sources", None)
     bot.config = compile_runtime_config(cfg, runtime="live")
     if source_kind == "original":
@@ -1522,8 +1523,10 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
     bot.positions = {}
     # Nonempty unresolved selection still retains its conservative default horizon.
-    sources = (bot.config["_coins_sources"] if source_kind == "original" else bot.config["live"])
-    sources["approved_coins"][side] = ["BTC"]
+    if source_kind == "original":
+        bot.config["_coins_sources"]["approved_coins"][side] = ["BTC"]
+    else:
+        bot.config["bot"][side]["universe"]["approved_coins"] = ["BTC"]
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
 
 

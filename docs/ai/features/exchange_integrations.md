@@ -124,7 +124,7 @@ ignores it when the caller supplies a client order ID.
 
 ## Exchange Hedge Mode Versus Strategy Hedge Mode
 
-`live.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
+`bot.global.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
 exchange account into one-way mode. Binance and Bitget connectors keep the exchange account in
 hedge mode. Their private order updates must therefore normalize `position_side` and close-only
 semantics from the exchange's actual mode and explicit `positionSide`/`posSide` fields even when
@@ -231,7 +231,7 @@ Handling:
 
 1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
 2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
-3. The connector keeps the exchange account in hedge mode even when `live.hedge_mode=false`
+3. The connector keeps the exchange account in hedge mode even when `bot.global.hedge_mode=false`
    disables simultaneous strategy exposure. Normalize order updates against that actual exchange
    mode, not the strategy flag.
 4. Never infer a resting order's position side from the current position. Require explicit
@@ -286,7 +286,7 @@ Handling:
 
 1. Treat current same-mode success as success (`code=00000`, `data.posMode=hedge_mode`).
 2. Let unknown `set_position_mode` failures raise unless a verified Bitget no-op code is added with a targeted test.
-3. Normalize against the actual exchange account mode, not `live.hedge_mode`, which only controls
+3. Normalize against the actual exchange account mode, not `bot.global.hedge_mode`, which only controls
    simultaneous strategy exposure.
 4. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
 

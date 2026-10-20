@@ -16,6 +16,8 @@ EMA_ANCHOR_BID_FILL_TYPES = {"entry_ema_anchor_long", "close_ema_anchor_short"}
 EMA_ANCHOR_ASK_FILL_TYPES = {"close_ema_anchor_long", "entry_ema_anchor_short"}
 
 
+from config.access import get_optional_config_value
+
 def _load_json(path: Path) -> Any:
     with open(path) as f:
         return json.load(f)
@@ -30,10 +32,10 @@ def _load_npy(path: Path) -> np.ndarray:
 
 def _ensure_ema_anchor_config(config: dict) -> dict:
     normalized = deepcopy(config)
-    strategy_kind = normalize_strategy_kind(normalized.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(normalized, 'bot.global.strategy_kind'))
     if strategy_kind != EMA_ANCHOR_STRATEGY_KIND:
         raise ValueError(
-            f"ema_anchor analysis helpers require live.strategy_kind = {EMA_ANCHOR_STRATEGY_KIND!r}; got {strategy_kind!r}"
+            f"ema_anchor analysis helpers require bot.global.strategy_kind = {EMA_ANCHOR_STRATEGY_KIND!r}; got {strategy_kind!r}"
         )
     return normalized
 

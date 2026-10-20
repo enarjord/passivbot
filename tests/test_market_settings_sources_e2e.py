@@ -1,6 +1,7 @@
 """
 End-to-end test: Run an actual backtest with market_settings_sources.
 """
+from config.universe import set_side_universe_sources
 
 import asyncio
 import logging
@@ -32,9 +33,9 @@ def get_test_config():
     cfg["backtest"]["market_settings_sources"] = {"ETH": "hyperliquid"}
 
     # Single coin for simplicity
-    cfg["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
-    cfg["live"]["ignored_coins"] = {"long": [], "short": []}
-    cfg["live"]["minimum_coin_age_days"] = 0
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["ETH"], "short": []})
+    set_side_universe_sources(cfg, 'ignored_coins', {"long": [], "short": []})
+    cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0
 
     # Minimal bot params
     cfg["bot"]["long"]["n_positions"] = 1

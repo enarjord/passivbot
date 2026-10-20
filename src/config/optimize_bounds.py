@@ -11,6 +11,8 @@ from .strategy_spec import (
 )
 
 
+from config.access import get_optional_config_value
+
 def _flatten_strategy_bound_items(bounds: dict, prefix: tuple[str, ...] = ()):
     for key, value in bounds.items():
         path = (*prefix, key)
@@ -196,7 +198,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
     source_bounds records authored bounds before template seeding. Bot values
     must already have their canonical defaults and normalized score weights.
     """
-    kind = config["live"]["strategy_kind"]
+    kind = config['bot']['global']['strategy_kind']
     bounds = config["optimize"]["bounds"]
     authored = flatten_optimize_bounds(
         bounds if source_bounds is None else source_bounds, strategy_kind=kind
@@ -270,7 +272,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
 
 def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     """Keep explicit search dimensions without adding them to default searches."""
-    kind = source.get("live", {}).get("strategy_kind", "trailing_martingale")
+    kind = get_optional_config_value(source, 'bot.global.strategy_kind', "trailing_martingale")
     flat = flatten_optimize_bounds(source.get("optimize", {}).get("bounds"), strategy_kind=kind)
     optional = {
         "entry_cooldown_weights_minutes_exposure_ratio",
@@ -372,7 +374,7 @@ def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio
 
 
 def prune_inactive_optimize_strategy_bounds(config: dict, *, tracker: Optional[object] = None) -> None:
-    active_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    active_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     bounds = config.get("optimize", {}).get("bounds")
     if not isinstance(bounds, dict):
         return

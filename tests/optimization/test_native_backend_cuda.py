@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import json
 import math
@@ -37,7 +38,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     if suite and sides != "both":
         # Suites share eligibility across sides; zero exposure disables trading.
         coins = list(config["backtest"]["coins"]["binance"])
-        config["live"]["approved_coins"] = {side: list(coins) for side in ("long", "short")}
+        set_side_universe_sources(config, 'approved_coins', {side: list(coins) for side in ("long", "short")})
     config["optimize"].update(backend="gpu", population_size=4, iters=8, seed=12)
     if prefilter:
         config["optimize"]["prefilter"] = {"checks": [

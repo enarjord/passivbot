@@ -123,7 +123,7 @@ def flatten_shared_bot_side(bot_side: dict | None) -> dict:
         ):
             result[flat_key] = deepcopy(value)
     for key, value in bot_side.items():
-        if key in result or key in BOT_SHARED_GROUPS or key == "strategy":
+        if key in result or key in BOT_SHARED_GROUPS or key in {"strategy", "universe"}:
             continue
         result[key] = deepcopy(value)
     return result

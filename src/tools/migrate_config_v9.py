@@ -17,12 +17,23 @@ from config.risk_memory import normalize_lookback_ema_span_minutes
 from json_utils import json_dumps_streamlined
 
 
+from config.access import get_optional_config_value
+
+def _released_path_context(config):
+    """Resolve v8 selectors under their released active strategy, without aliases in loading."""
+    bot = config.get("bot", {})
+    global_policy = bot.get("global", {})
+    kind = config.get("live", {}).get("strategy_kind", "trailing_martingale")
+    return {**config, "bot": {**bot, "global": {**global_policy, "strategy_kind": kind}}}
+
+
 def _audit_authored_patch_conflicts(config, overrides):
     """Compare released spellings before entry migrations can choose a value."""
     from config.param_paths import resolve_dotted_config_path
     from config.shared_bot import canonical_shared_bot_path_for_flat_key
 
     seen = {}
+    path_context = _released_path_context(config)
 
     def visit(node, prefix=()):
         for key, value in node.items():
@@ -30,7 +41,7 @@ def _audit_authored_patch_conflicts(config, overrides):
             if isinstance(value, dict):
                 visit(value, parts)
                 continue
-            path = resolve_dotted_config_path(config, ".".join(parts))
+            path = resolve_dotted_config_path(path_context, ".".join(parts))
             if path is None:
                 continue
             if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
@@ -54,15 +65,19 @@ def _restore_authored_export_inputs(exported, authored):
     defaults = get_template_config()["backtest"]
     for key in ("start_date", "end_date"):
         exported["backtest"][key] = deepcopy(authored.get("backtest", {}).get(key, defaults[key]))
+    from config.universe import get_side_universe_sources, set_side_universe_sources
     for key in ("approved_coins", "ignored_coins"):
-        if key in authored.get("live", {}):
-            exported["live"][key] = deepcopy(authored["live"][key])
+        sources = get_side_universe_sources(authored, key)
+        if sources is not None:
+            set_side_universe_sources(exported, key, sources)
+
     if "filter_by_min_effective_cost" in authored.get("backtest", {}):
         exported["backtest"]["filter_by_min_effective_cost"] = authored["backtest"]["filter_by_min_effective_cost"]
 
     preserved_paths = {("backtest", "start_date"), ("backtest", "end_date"),
                        ("backtest", "filter_by_min_effective_cost"),
-                       ("live", "approved_coins"), ("live", "ignored_coins")}
+                       *(("bot", side, "universe", key)
+                         for side in ("long", "short") for key in ("approved_coins", "ignored_coins"))}
 
     def restore_patch(target, source, prefix=()):
         for key, value in source.items():
@@ -101,10 +116,11 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
         overrides = context["backtest"]["scenarios"][0]["overrides"]
 
     seen = set()
+    path_context = _released_path_context(config) if authored else config
     for selector, value in normalize_scenario_overrides(overrides).items():
         if scenario and (selector == "optimize" or selector.startswith("optimize.")):
             raise ValueError("scenario/runtime optimizer controls must be top-level optimize settings")
-        path = (resolve_dotted_config_path(config, selector) if authored else
+        path = (resolve_dotted_config_path(path_context, selector) if authored else
                 require_existing_config_path(config, selector))
         if path is None:
             # Raw retired fields must survive until the explicit migration pass.
@@ -118,6 +134,35 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
             if not isinstance(target, dict):
                 raise ValueError(f"override {selector!r} crosses a non-mapping")
         target[path[-1]] = deepcopy(value)
+
+
+def _materialized_coin_patch(overrides, effective):
+    """Resolve files without expanding a leaf replacement to whole-map authority.
+
+    Scenarios run over both the ordinary and optimizer-fixed roots. Replacing
+    their complete coin map with the ordinary effective map would erase fixed
+    modes on unrelated coins. Preserve each authored replacement scope; a
+    changed file reference necessarily replaces its materialized coin document.
+    """
+    roots = ("coin_overrides", "live.coin_flags")
+    result = {
+        key: value for key, value in overrides.items()
+        if not any(key == root or key.startswith(root + ".") for root in roots)
+    }
+    if any(key == "live.coin_flags" or key.startswith("live.coin_flags.") for key in overrides):
+        result["coin_overrides"] = deepcopy(effective["coin_overrides"])
+        return result
+    for key in overrides:
+        parts = key.split(".")
+        if parts[0] != "coin_overrides":
+            continue
+        if "override_config_path" in parts[2:]:
+            parts = parts[:2]
+        value = effective
+        for part in parts:
+            value = value[part]
+        result[".".join(parts)] = deepcopy(value)
+    return result
 
 
 def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
@@ -223,7 +268,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                        for item in file_result.changes)
         patch = _extract_allowed_patch(
             migrated, coin=coin, source=f"coin_overrides.{coin}.override_config_path",
-            strict=False, strategy_kind=result.get("live", {}).get("strategy_kind"),
+            strict=False, strategy_kind=result.get("live", {}).get("strategy_kind", "trailing_martingale"),
             hsl_signal_mode=mode,
         )
         inline = deepcopy(inline)
@@ -287,9 +332,9 @@ def _optimizer_root_enablement(config, enable_overrides, facts):
     from optimizer_overrides import optimizer_overrides
 
     projection = {
-        "live": {"strategy_kind": config.get("live", {}).get("strategy_kind")},
-        "bot": {side: {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}
-                for side in ("long", "short")},
+        "bot": {"global": {"strategy_kind": config.get("live", {}).get("strategy_kind", "trailing_martingale")},
+                **{side: {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}
+                   for side in ("long", "short")}},
     }
     projection = optimizer_overrides(enable_overrides, projection, None)
     resolved = dict(facts)
@@ -398,9 +443,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     ("optimize", "fixed_runtime_overrides", *path): values
                     for path, values in fixed_enablement.items()
                 })
-                fixed = {key: value for key, value in fixed.items()
-                         if not any(key == root or key.startswith(root + ".") for root in roots)}
-                fixed["coin_overrides"] = effective_fixed["coin_overrides"]
+                fixed = _materialized_coin_patch(fixed, effective_fixed)
                 authored["optimize"]["fixed_runtime_overrides"] = fixed
         # Build each effective authored scenario before root flag conversion.
         # Otherwise generated root coin_overrides would hide scenario flags.
@@ -447,11 +490,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                         (*prefix, *path): values
                         for path, values in scenario_enablement.items()
                     })
-                    overrides = {
-                        key: value for key, value in overrides.items()
-                        if not any(key == root or key.startswith(root + ".") for root in roots)
-                    }
-                    overrides["coin_overrides"] = effective["coin_overrides"]
+                    overrides = _materialized_coin_patch(overrides, effective)
                     scenario["overrides"] = overrides
         transformed = migrate_v8_to_v9(
             authored, memory_span_minutes=span, memory_span_choices=memory_span_choices,

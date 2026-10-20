@@ -89,7 +89,7 @@ def validate_gpu_backtest_config(config: dict) -> None:
     """Reject unsupported simulation contracts without importing a device runtime."""
     from config.validate import validate_limit_order_fill_buffer_pct
 
-    strategy = config["live"]["strategy_kind"]
+    strategy = config['bot']['global']['strategy_kind']
     if strategy not in {"ema_anchor", "trailing_martingale"}:
         raise ValueError(
             f"GPU backtests do not support strategy {strategy!r}; use a CPU backend"

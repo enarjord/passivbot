@@ -36,7 +36,7 @@ def _replay(hsl, hedge_mode, monkeypatch):
         options += ["--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
                     "--hsl-cooldown-minutes", "10000", "--hsl-memory-ema-span-minutes", "1440"]
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
-    config["live"]["hedge_mode"] = hedge_mode
+    config['bot']['global']['hedge_mode'] = hedge_mode
     metrics = {
         "adg_strategy_eq", "calmar_ratio_usd", "drawdown_worst_strategy_eq",
         "drawdown_worst_mean_1pct_strategy_eq", "strategy_eq_recovery_days_p95",

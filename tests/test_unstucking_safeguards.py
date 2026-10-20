@@ -359,7 +359,7 @@ def _dummy_config():
 
     cfg = get_template_config()
     cfg["live"]["user"] = "test_user"
-    cfg["live"]["minimum_coin_age_days"] = 0
+    cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"].update(
             loss_allowance_pct=0.01, exposure_trigger_ratio=0.5,
@@ -3167,7 +3167,7 @@ def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_ord
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
-    bot._live_values["forager_score_hysteresis_pct"] = 0.005
+    bot.config["bot"]["global"]["forager"]["score_hysteresis_pct"] = 0.005
     bot.open_orders[symbol] = [
         {
             "symbol": symbol,

@@ -82,6 +82,8 @@ def _make_mode_override_bot(auto_gs=True):
             "short": {"size": 0.0, "price": 0.0},
         }
     }
+    bot.config = {"bot": {side: {"forager": {"always_include": []}}
+                          for side in ("long", "short")}}
     bot.open_orders = {}
     bot.coin_overrides = {}
     bot.approved_coins_minus_ignored_coins = {
@@ -820,12 +822,15 @@ def test_refresh_approved_ignored_coin_lists_labels_live_value_source():
     bot = _make_eligibility_event_bot()
     bot.config = {
         "_coins_sources": {},
-        "live": {
-            "approved_coins": {
-                "long": [f"A{index:02d}" for index in range(14)],
-                "short": ["SHORT"],
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {
+                    "approved_coins": [f"A{index:02d}" for index in range(14)],
+                    "ignored_coins": ["IGNORED"],
+                }
             },
-            "ignored_coins": {"long": ["IGNORED"], "short": []},
+            "short": {"universe": {"approved_coins": ["SHORT"], "ignored_coins": []}},
         },
     }
     structured = ListEventSink()

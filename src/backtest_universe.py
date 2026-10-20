@@ -11,6 +11,8 @@ from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
 POSITION_SIDES = ("long", "short")
 
 
+from config.universe import require_side_universe_sources
+
 def _required_side_value(bot_cfg: dict, pside: str, key: str):
     return require_grouped_bot_value(bot_cfg, pside, key, prefer_flat=True)
 
@@ -53,12 +55,12 @@ def _normalize_coin_list(coins: Any) -> list[str]:
 
 
 def effective_backtest_approved_coins_by_side(config: dict) -> dict[str, list[str]]:
-    approved = require_live_value(config, "approved_coins")
+    approved = require_side_universe_sources(config, 'approved_coins')
     if not isinstance(approved, dict):
-        raise TypeError("live.approved_coins must be a normalized per-side mapping for backtest")
+        raise TypeError("bot.<side>.universe.approved_coins must be normalized for backtest")
     missing = [pside for pside in POSITION_SIDES if pside not in approved]
     if missing:
-        missing_paths = ", ".join(f"live.approved_coins.{pside}" for pside in missing)
+        missing_paths = ", ".join(f"bot.{pside}.universe.approved_coins" for pside in missing)
         raise KeyError(f"missing required {missing_paths}")
     return {
         pside: (
@@ -75,7 +77,7 @@ def effective_backtest_data_coins(config: dict) -> list[str]:
     coins = set().union(*(set(approved_by_side[pside]) for pside in POSITION_SIDES))
     if config["backtest"].get("organillo_csv") is not None:
         from organillo import period_coins
-        approved = require_live_value(config, "approved_coins")
+        approved = require_side_universe_sources(config, 'approved_coins')
         known = set().union(*(_normalize_coin_list(approved[side]) for side in POSITION_SIDES))
         candidates = period_coins(config, known)
         coins &= candidates

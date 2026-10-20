@@ -7244,7 +7244,7 @@ def test_monitor_trailing_section_marks_ema_anchor_diagnostics_not_applicable():
         )
 
         def __init__(self):
-            self.config = {"live": {"strategy_kind": "ema_anchor"}}
+            self.config = {"live": {}, "bot": {"global": {"strategy_kind": "ema_anchor"}}}
             self.positions = {
                 "BTC/USDT:USDT": {
                     "long": {"size": 0.1, "price": 100.0},
@@ -7309,7 +7309,7 @@ async def test_ema_anchor_monitor_snapshot_flush_skips_legacy_trailing_params():
         _monitor_flush_snapshot = pb_mod.Passivbot._monitor_flush_snapshot
 
         def __init__(self):
-            self.config = {"live": {"strategy_kind": "ema_anchor"}}
+            self.config = {"live": {}, "bot": {"global": {"strategy_kind": "ema_anchor"}}}
             self.exchange = "fake"
             self.user = "ema_anchor_monitor_test"
             self.quote = "USDT"
@@ -7473,7 +7473,7 @@ def test_monitor_trailing_section_marks_retired_strategy_unsupported():
 
     # A passive monitor must not fabricate trailing diagnostics for an
     # unsupported strategy name found in an older snapshot.
-    bot = SimpleNamespace(config={"live": {"strategy_kind": "trailing_grid_v7"}})
+    bot = SimpleNamespace(config={"live": {}, "bot": {"global": {"strategy_kind": "trailing_grid_v7"}}})
     payload = pb_mod.Passivbot._build_monitor_trailing_section(
         bot, balance_raw=1000.0, market={"BTC/USDT:USDT": {"last_price": 100.0}}
     )
@@ -7492,7 +7492,7 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
     symbol = "HYPE/USDT:USDT"
 
     class FakeBot:
-        config = {"live": {"strategy_kind": "trailing_martingale"}}
+        config = {"live": {}, "bot": {"global": {"strategy_kind": "trailing_martingale"}}}
         _monitor_runtime_m1_log_range_emas = {
             symbol: {374.0: 0.99, 1323.0: 0.0014553489538740175}
         }

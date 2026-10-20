@@ -27,6 +27,7 @@ from .strategy import (
 from .transform_log import ConfigTransformTracker, record_transform
 from .access import require_config_dict
 from .validate import validate_config
+from .universe import get_side_universe_sources
 
 
 def normalize_config(
@@ -91,8 +92,9 @@ def normalize_config(
     if isinstance(gpu, dict) and "screening" in gpu:
         gpu["screening"] = resolve_gpu_screening(gpu["screening"])
     for key in ("approved_coins", "ignored_coins"):
-        if isinstance(result.get("live"), dict) and key in result["live"]:
-            live_coin_sources_input[key] = deepcopy(result["live"][key])
+        value = get_side_universe_sources(result, key)
+        if value is not None:
+            live_coin_sources_input[key] = deepcopy(value)
     seed_missing_default_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)

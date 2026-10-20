@@ -98,11 +98,11 @@ def _validate_derived_finite(value: Any, path: str = "result") -> None:
 
 
 def _extract_strategy_params(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
-    live = _require_mapping(config.get("live"), "live")
-    strategy_kind = str(live.get("strategy_kind") or STRATEGY_KIND).strip().lower()
+    global_policy = _require_mapping(config.get("bot", {}).get("global"), "bot.global")
+    strategy_kind = str(global_policy.get("strategy_kind") or STRATEGY_KIND).strip().lower()
     if strategy_kind != STRATEGY_KIND:
         raise ValueError(
-            f"config uses live.strategy_kind={strategy_kind!r}; this inspector supports "
+            f"config uses bot.global.strategy_kind={strategy_kind!r}; this inspector supports "
             f"only {STRATEGY_KIND!r}"
         )
     bot = _require_mapping(config.get("bot"), "bot")
@@ -135,8 +135,8 @@ def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str
     defaults = get_strategy_defaults(STRATEGY_KIND)
     return _extract_strategy_params(
         {
-            "live": {"strategy_kind": STRATEGY_KIND},
             "bot": {
+                "global": {"strategy_kind": STRATEGY_KIND},
                 pside: {
                     "strategy": {STRATEGY_KIND: defaults[pside]},
                 }
@@ -235,7 +235,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "hsl_enabled_global": hsl_enabled_global,
         "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
         "hsl_scope": hsl_scope,
-        "hedge_mode": bool(live.get("hedge_mode", False)),
+        "hedge_mode": bool(global_risk.get("hedge_mode", False)),
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
         "loss_gate_max_drawdown_ratio": _finite_float(

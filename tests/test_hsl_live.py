@@ -1,4 +1,5 @@
 """Offline integration of the staged hsl owner with the real bot and Rust."""
+from config.universe import require_side_universe_sources
 
 from hsl_fixture import set_risk_memory_spans
 
@@ -438,7 +439,7 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
         cfg["bot"][side]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 1.0
-    cfg["live"]["approved_coins"]["long"] = ["BTC"]
+    cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
     set_risk_memory_spans(cfg, 288.0)
     policy = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     policy.update(enabled=True, drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.5)
@@ -470,7 +471,7 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
         assert bot.active_symbols, (
             bot.approved_coins,
             bot.approved_coins_minus_ignored_coins,
-            bot.config["live"]["approved_coins"],
+            require_side_universe_sources(bot.config, 'approved_coins'),
         )
         cancels, creates, snapshot, wave = plan
         assert any(not order["reduce_only"] for order in creates)

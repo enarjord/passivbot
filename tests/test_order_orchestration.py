@@ -256,11 +256,10 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.user = "hyperliquid_pf1"
     bot.exchange = "hyperliquid"
-    live_values = {
+    bot.config = {"bot": {"global": {"execution": {
         "market_orders_allowed": True,
         "market_order_near_touch_threshold": 0.001,
-    }
-    bot.live_value = lambda key: live_values.get(key)
+    }}}}
     bot.bot_value = lambda pside, key: {
         ("long", "total_wallet_exposure_limit"): 1.5,
         ("short", "total_wallet_exposure_limit"): 0.0,

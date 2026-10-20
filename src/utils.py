@@ -1586,8 +1586,10 @@ async def _remove_resolved_ignored_markets(
     include_backtest_coin_source_venues=False,
 ) -> None:
     """Subtract ignored aliases resolving to the same venue market."""
-    approved_by_side = config["live"]["approved_coins"]
-    ignored_by_side = config["live"]["ignored_coins"]
+    from config.universe import require_side_universe_sources
+
+    approved_by_side = require_side_universe_sources(config, 'approved_coins')
+    ignored_by_side = require_side_universe_sources(config, 'ignored_coins')
     potentially_overlapping_sides = [
         pside
         for pside in ("long", "short")
@@ -1664,7 +1666,7 @@ async def _remove_resolved_ignored_markets(
                 market = markets_by_exchange[exchange].get(symbol) or {}
                 exact_identifier = str(market.get("id") or symbol)
                 surviving_approved.append(f"{exchange}::{exact_identifier}")
-        approved_by_side[pside] = list(dict.fromkeys(surviving_approved))
+        config["bot"][pside]["universe"]["approved_coins"] = list(dict.fromkeys(surviving_approved))
 
 
 async def _coalesce_resolved_approved_markets(
@@ -1691,7 +1693,7 @@ async def _coalesce_resolved_approved_markets(
     approved_identifiers = [
         identifier
         for pside in ("long", "short")
-        for identifier in config["live"]["approved_coins"][pside]
+        for identifier in config['bot'][pside]['universe']['approved_coins']
     ]
     identifiers_by_canonical = defaultdict(set)
     for identifier in approved_identifiers:
@@ -1751,19 +1753,19 @@ async def _coalesce_resolved_approved_markets(
         for source_identifier, exchange, source_symbol in source_identities
     }
     for pside in ("long", "short"):
-        for identifier in config["live"]["approved_coins"][pside]:
+        for identifier in config['bot'][pside]['universe']['approved_coins']:
             representatives.setdefault(identity(identifier), identifier)
 
     for pside in ("long", "short"):
         seen = set()
         coalesced = []
-        for identifier in config["live"]["approved_coins"][pside]:
+        for identifier in config['bot'][pside]['universe']['approved_coins']:
             market_identity = identity(identifier)
             if market_identity in seen:
                 continue
             seen.add(market_identity)
             coalesced.append(representatives[market_identity])
-        config["live"]["approved_coins"][pside] = coalesced
+        config['bot'][pside]['universe']['approved_coins'] = coalesced
 
 
 async def format_approved_ignored_coins(config, exchanges, quote=None, verbose=True, *,
@@ -1784,15 +1786,17 @@ async def _format_approved_ignored_coins(
     *,
     prefer_backtest_coin_source_keys=False,
 ):
+    from config.universe import get_side_universe_sources, require_side_universe_sources, set_side_universe_sources
+
     if isinstance(exchanges, str):
         exchanges = [exchanges]
-    before_approved = deepcopy(config.get("live", {}).get("approved_coins"))
-    before_ignored = deepcopy(config.get("live", {}).get("ignored_coins"))
+    before_approved = deepcopy(get_side_universe_sources(config, 'approved_coins'))
+    before_ignored = deepcopy(get_side_universe_sources(config, 'ignored_coins'))
     before_sources = deepcopy(config.get("_coins_sources", {}))
     coin_sources = config.setdefault("_coins_sources", {})
-    approved_source = coin_sources.get("approved_coins", config.get("live", {}).get("approved_coins"))
+    approved_source = coin_sources.get("approved_coins", get_side_universe_sources(config, 'approved_coins'))
     if approved_source is None:
-        approved_source = _require_live_value(config, "approved_coins")
+        approved_source = require_side_universe_sources(config, 'approved_coins')
     coin_sources["approved_coins"] = deepcopy(approved_source)
     ac = normalize_coins_source(approved_source, allow_all=True)
     needs_market_expansion = any(
@@ -1825,27 +1829,27 @@ async def _format_approved_ignored_coins(
             )
         approved_coins_sorted = sorted([x for x in approved_coins if x])
 
-    config["live"]["approved_coins"] = {}
+    set_side_universe_sources(config, 'approved_coins', {})
     for pside in ("long", "short"):
         if _coins_source_side_is_all(ac[pside]):
-            config["live"]["approved_coins"][pside] = list(approved_coins_sorted or [])
+            config['bot'][pside]['universe']['approved_coins'] = list(approved_coins_sorted or [])
         else:
-            config["live"]["approved_coins"][pside] = _preserve_market_identifiers(ac[pside])
+            config['bot'][pside]['universe']['approved_coins'] = _preserve_market_identifiers(ac[pside])
 
-    ignored_source = coin_sources.get("ignored_coins", config.get("live", {}).get("ignored_coins"))
+    ignored_source = coin_sources.get("ignored_coins", get_side_universe_sources(config, 'ignored_coins'))
     if ignored_source is None:
-        ignored_source = _require_live_value(config, "ignored_coins")
+        ignored_source = require_side_universe_sources(config, 'ignored_coins')
     coin_sources["ignored_coins"] = deepcopy(ignored_source)
     ic = normalize_coins_source(ignored_source, allow_all=False)
-    config["live"]["ignored_coins"] = {
+    set_side_universe_sources(config, 'ignored_coins', {
         pside: _preserve_market_identifiers(ic[pside]) for pside in ic
-    }
+    })
     await reject_cross_exchange_market_identifier_collisions(
         [
             identifier
             for field in ("approved_coins", "ignored_coins")
             for side in ("long", "short")
-            for identifier in config["live"][field][side]
+            for identifier in config["bot"][side]["universe"][field]
         ],
         exchanges,
         quote=quote,
@@ -1866,8 +1870,8 @@ async def _format_approved_ignored_coins(
         include_backtest_coin_source_venues=prefer_backtest_coin_source_keys,
     )
 
-    approved_diff = _diff_snapshot(before_approved, config["live"]["approved_coins"])
-    ignored_diff = _diff_snapshot(before_ignored, config["live"]["ignored_coins"])
+    approved_diff = _diff_snapshot(before_approved, require_side_universe_sources(config, 'approved_coins'))
+    ignored_diff = _diff_snapshot(before_ignored, require_side_universe_sources(config, 'ignored_coins'))
     sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))
     if approved_diff or ignored_diff or sources_diff:
         from config_transform import record_transform

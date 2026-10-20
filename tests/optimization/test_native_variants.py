@@ -233,7 +233,7 @@ def test_cuda_variants_match_independent_replays_and_reuse_one_market_pack(monke
                 "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
             ]))
             config = deepcopy(base.config)
-            config["live"]["strategy_kind"] = strategy
+            config['bot']['global']['strategy_kind'] = strategy
             for side in ("long", "short"):
                 config["bot"][side]["strategy"] = deepcopy(fixture["bot"][side]["strategy"])
                 config["optimize"]["bounds"][side]["strategy"] = {strategy: {}}

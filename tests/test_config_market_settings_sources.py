@@ -19,16 +19,20 @@ def _base_config():
             "gap_tolerance_ohlcvs_minutes": 120,
         },
         "bot": {
-            "long": {"risk": {"max_positions": 4}},
-            "short": {"risk": {"max_positions": 4}},
+            "long": {
+                "risk": {"max_positions": 4},
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
+            "short": {
+                "risk": {"max_positions": 4},
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
+            "global": {
+                "universe": {"minimum_coin_age_days": 30},
+                "warmup": {"ratio": 0.2, "max_minutes": 0},
+            },
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-            "minimum_coin_age_days": 30,
-            "warmup_ratio": 0.2,
-            "max_warmup_minutes": 0,
-        },
+        "live": {},
         "optimize": {"bounds": {}, "scoring": []},
     }
 

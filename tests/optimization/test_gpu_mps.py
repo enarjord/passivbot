@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import ast
 from functools import lru_cache
 import inspect
@@ -2964,13 +2965,13 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
         "warmup_minutes_requested": 1,
     }
     config = get_template_config()
-    config["live"]["strategy_kind"] = strategy_kind
-    config["live"]["max_warmup_minutes"] = 1
+    config['bot']['global']['strategy_kind'] = strategy_kind
+    config['bot']['global']['warmup']['max_minutes'] = 1
     enabled_sides = ("long", "short") if topology == "fused" else (topology,)
-    config["live"]["approved_coins"] = {
+    set_side_universe_sources(config, 'approved_coins', {
         side: ["BTC"] if side in enabled_sides else [] for side in ("long", "short")
-    }
-    config["live"]["hedge_mode"] = topology == "fused"
+    })
+    config['bot']['global']['hedge_mode'] = topology == "fused"
     config["backtest"]["coins"] = {"bybit": ["BTC", "ETH"]}
     config["backtest"]["exchanges"] = ["bybit"]
     for side in ("long", "short"):
@@ -3152,13 +3153,13 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         "warmup_minutes_requested": 1,
     }
     config = get_template_config()
-    config["live"]["strategy_kind"] = strategy_kind
-    config["live"]["max_warmup_minutes"] = 1
+    config['bot']['global']['strategy_kind'] = strategy_kind
+    config['bot']['global']['warmup']['max_minutes'] = 1
     enabled_sides = ("long", "short") if topology.startswith("fused-") else (topology,)
-    config["live"]["approved_coins"] = {
+    set_side_universe_sources(config, 'approved_coins', {
         side: ["BTC"] if side in enabled_sides else [] for side in ("long", "short")
-    }
-    config["live"]["hedge_mode"] = topology == "fused-hedge"
+    })
+    config['bot']['global']['hedge_mode'] = topology == "fused-hedge"
     config["backtest"]["coins"] = {"bybit": ["BTC", "ETH"]}
     config["backtest"]["exchanges"] = ["bybit"]
     config["backtest"]["dynamic_wel_by_tradability"] = False
@@ -4023,14 +4024,14 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         "warmup_minutes_requested": 1,
     }
     config = get_template_config()
-    config["live"]["strategy_kind"] = strategy_kind
-    config["live"]["max_warmup_minutes"] = 1
+    config['bot']['global']['strategy_kind'] = strategy_kind
+    config['bot']['global']['warmup']['max_minutes'] = 1
     enabled_sides = ("long", "short") if topology == "fused" else (topology,)
-    config["live"]["approved_coins"] = {
+    set_side_universe_sources(config, 'approved_coins', {
         side: ["BTC", "ETH"] if side in enabled_sides else []
         for side in ("long", "short")
-    }
-    config["live"]["hedge_mode"] = topology == "fused"
+    })
+    config['bot']['global']['hedge_mode'] = topology == "fused"
     config["backtest"]["coins"] = {"bybit": ["BTC", "ETH"]}
     config["backtest"]["exchanges"] = ["bybit"]
     config["backtest"]["dynamic_wel_by_tradability"] = True

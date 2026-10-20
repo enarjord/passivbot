@@ -7,6 +7,7 @@ optional diagnostics include bounded fill/state summaries.
 
 from __future__ import annotations
 
+from config.universe import set_side_universe_sources
 import argparse
 from copy import deepcopy
 from contextlib import ExitStack, contextmanager, redirect_stdout
@@ -171,15 +172,13 @@ def fixture_inputs(args):
     # This is a backtest fixture, with no optimizer genes/runtime override policy.
     config["optimize"]["bounds"] = {}
     config["optimize"]["fixed_runtime_overrides"] = {}
-    config["live"].update(
-        strategy_kind=args.fixture,
-        hedge_mode=args.sides == "both",
-        max_warmup_minutes=60,
-        minimum_coin_age_days=0,
-        market_orders_allowed=args.market_orders,
-        approved_coins={side: coins if side in active else [] for side in ("long", "short")},
-        ignored_coins={"long": [], "short": []},
-    )
+    config['bot']['global']['strategy_kind'] = args.fixture
+    config['bot']['global']['hedge_mode'] = args.sides == 'both'
+    config['bot']['global']['warmup']['max_minutes'] = 60
+    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    config['bot']['global']['execution']['market_orders_allowed'] = args.market_orders
+    set_side_universe_sources(config, 'approved_coins', {side: coins if side in active else [] for side in ('long', 'short')})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config["backtest"].update(
         exchanges=[args.exchange], starting_balance=1000.0,
         btc_collateral_cap=0.0, filter_by_min_effective_cost=args.filter_by_min_effective_cost,
@@ -474,7 +473,7 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
     report.update(
         schema_version=1, status=status,
         evaluation_id=identity, bars=int(hlcvs.shape[0]), coins=int(hlcvs.shape[1]),
-        strategy=config["live"]["strategy_kind"],
+        strategy=config['bot']['global']['strategy_kind'],
         gpu_engine=gpu_engine,
         gpu_replay="shared_account",
         rust_source_fingerprint=runtime["expected_source_fingerprint"],

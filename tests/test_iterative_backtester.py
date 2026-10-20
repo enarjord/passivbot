@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -169,7 +170,11 @@ def test_apply_cli_overrides_updates_nested_config_paths():
 def test_apply_cli_overrides_uses_backtest_cli_type_parsing_for_known_fields():
     config = {
         "backtest": {"exchanges": ["binance"], "combine_ohlcvs": True},
-        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"]}},
+            "short": {"universe": {"approved_coins": []}},
+        },
     }
 
     overridden = ib.apply_cli_overrides(
@@ -263,7 +268,8 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                         "offset_volatility_ema_span_1h": 12,
                         "offset": 0.003,
                     }
-                }
+                },
+                "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
                 "strategy": {
@@ -273,16 +279,16 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                         "offset_volatility_ema_span_1h": 12,
                         "offset": 0.003,
                     }
-                }
+                },
+                "universe": {"approved_coins": []},
+            },
+            "global": {
+                "strategy_kind": "ema_anchor",
+                "warmup": {"ratio": 1.0, "max_minutes": 0},
+                "universe": {"minimum_coin_age_days": 365},
             },
         },
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "strategy_kind": "ema_anchor",
-            "warmup_ratio": 1.0,
-            "max_warmup_minutes": 0,
-            "minimum_coin_age_days": 365,
-        },
+        "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
 
@@ -295,39 +301,12 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             "cache_dir": {"combined": "x"},
         },
     }
-    warmup_changed = {
-        **base,
-        "live": {**base["live"], "max_warmup_minutes": 720},
-    }
-    bot_quote_changed = {
-        **base,
-        "bot": {
-            "long": {
-                "strategy": {
-                    "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.01,
-                    }
-                }
-            },
-            "short": {
-                "strategy": {
-                    "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.003,
-                    }
-                }
-            },
-        },
-    }
-    live_changed = {
-        **base,
-        "live": {**base["live"], "approved_coins": {"long": ["BTC", "SOL"], "short": []}},
-    }
+    warmup_changed = deepcopy(base)
+    warmup_changed["bot"]["global"]["warmup"]["max_minutes"] = 720
+    bot_quote_changed = deepcopy(base)
+    bot_quote_changed["bot"]["long"]["strategy"]["ema_anchor"]["offset"] = 0.01
+    universe_changed = deepcopy(base)
+    universe_changed["bot"]["long"]["universe"]["approved_coins"] = ["BTC", "SOL"]
     optimize_changed = {
         **base,
         "optimize": {"scoring": [{"metric": "sharpe_ratio_usd", "goal": "max"}]},
@@ -340,22 +319,31 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(same)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(warmup_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(bot_quote_changed)
-    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(live_changed)
+    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(universe_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(optimize_changed)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(source_dir_changed)
 
 
 def test_run_signature_changes_for_optimize_changes():
     base = {
-        "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["BTC"]}, "cache_dir": {}},
-        "bot": {"long": {"strategy": {"ema_anchor": {"ema_span_0": 48}}}},
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "strategy_kind": "ema_anchor",
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0,
-            "minimum_coin_age_days": 365,
+        "backtest": {
+            "start_date": "2023-01-01",
+            "coins": {"combined": ["BTC"]},
+            "cache_dir": {},
         },
+        "bot": {
+            "long": {
+                "strategy": {"ema_anchor": {"ema_span_0": 48}},
+                "universe": {"approved_coins": ["BTC"]},
+            },
+            "short": {"universe": {"approved_coins": []}},
+            "global": {
+                "strategy_kind": "ema_anchor",
+                "warmup": {"ratio": 0.0, "max_minutes": 0},
+                "universe": {"minimum_coin_age_days": 365},
+            },
+        },
+        "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
     optimize_changed = {

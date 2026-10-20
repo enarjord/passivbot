@@ -29,7 +29,7 @@ def contexts(base, timestamps, *, lazy):
     config = deepcopy(base.config)
     config["backtest"]["coins"]["binance"] = ["COIN00", "COIN02"]
     for side in ("long", "short"):
-        config["live"]["approved_coins"][side] = ["COIN00", "COIN02"]
+        config['bot'][side]['universe']['approved_coins'] = ["COIN00", "COIN02"]
     return [SimpleNamespace(
         label=label, exchanges=["binance"], config=deepcopy(config), msss=base.msss,
         timestamps={"binance": timestamps[32:96] if lazy else timestamps}, overrides={},

@@ -40,15 +40,22 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
 )
 
 
+from config.access import get_optional_config_value
+from config.universe import get_side_universe_sources, require_side_universe_sources, set_side_universe_sources
+
 def reject_backtest_inherited_live_fields(result: dict) -> None:
     backtest = result.setdefault("backtest", {})
     invalid = [key for key in BACKTEST_INHERITED_LIVE_KEYS if key in backtest]
     if invalid:
         joined = ", ".join(f"backtest.{key}" for key in invalid)
-        live_joined = ", ".join(f"live.{key}" for key in invalid)
+        owners = {
+            "market_orders_allowed": "bot.global.execution.market_orders_allowed",
+            "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_threshold",
+        }
+        owner_paths = ", ".join(owners.get(key, f"live.{key}") for key in invalid)
         raise ValueError(
             f"{joined} {'is' if len(invalid) == 1 else 'are'} not supported; "
-            f"set {'the value' if len(invalid) == 1 else 'these values'} under {live_joined} instead"
+            f"set {'the value' if len(invalid) == 1 else 'these values'} under {owner_paths} instead"
         )
 
 
@@ -81,23 +88,16 @@ def seed_missing_default_sections(
             else:
                 seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded
+            result["bot"][pside]["universe"] = {"approved_coins": [], "ignored_coins": []}
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)
-    for key in ("approved_coins", "ignored_coins"):
-        if key not in result["live"]:
-            seeded = {"long": [], "short": []}
-            result["live"][key] = seeded
-            if tracker is not None:
-                tracker.add(["live", key], seeded)
-            continue
-        if isinstance(result["live"][key], dict) and set(result["live"][key]).issubset(
-            {"long", "short"}
-        ):
-            for pside in ("long", "short"):
-                if pside not in result["live"][key]:
-                    result["live"][key][pside] = []
-                    if tracker is not None:
-                        tracker.add(["live", key, pside], [])
+    for pside in ("long", "short"):
+        universe = result["bot"][pside].setdefault("universe", {})
+        for key in ("approved_coins", "ignored_coins"):
+            if key not in universe:
+                universe[key] = []
+                if tracker is not None:
+                    tracker.add(["bot", pside, "universe", key], [])
     if "bounds" not in result["optimize"]:
         seeded_bounds = deepcopy(template["optimize"]["bounds"])
         result["optimize"]["bounds"] = seeded_bounds
@@ -132,7 +132,7 @@ def sync_with_template(
     bounds = result["optimize"]["bounds"]
     for key in list(bounds):
         if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")):
-            set_flat_optimize_bound(bounds, result["live"]["strategy_kind"], key, bounds.pop(key))
+            set_flat_optimize_bound(bounds, result['bot']['global']['strategy_kind'], key, bounds.pop(key))
     preserve_optional_adaptive_bounds(template_with_extras, result)
     # Keep only explicitly supplied HSL portfolio authority and its search bounds.
     for section in (("bot",), ("optimize", "bounds")):
@@ -203,15 +203,15 @@ def preserve_coin_sources(
     result: dict, *, live_sources_input: Optional[Dict[str, Any]] = None
 ) -> None:
     sources = result.setdefault("_coins_sources", {})
-    live = result.get("live", {})
     for key in ("approved_coins", "ignored_coins"):
         if key in sources:
             continue
         if live_sources_input is not None and key in live_sources_input:
             sources[key] = deepcopy(live_sources_input[key])
             continue
-        if key in live:
-            sources[key] = deepcopy(live[key])
+        value = get_side_universe_sources(result, key)
+        if value is not None:
+            sources[key] = deepcopy(value)
 
 
 def apply_non_live_adjustments(
@@ -223,24 +223,20 @@ def apply_non_live_adjustments(
     raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
     for key in ("approved_coins", "ignored_coins"):
-        result["live"][key] = normalize_coins_source(
-            result["live"].get(key, ""),
+        set_side_universe_sources(result, key, normalize_coins_source(
+            require_side_universe_sources(result, key),
             allow_all=(key == "approved_coins"),
-        )
-    for pside in result["live"]["approved_coins"]:
-        result["live"]["approved_coins"][pside] = [
+        ))
+    for pside in require_side_universe_sources(result, 'approved_coins'):
+        result['bot'][pside]['universe']['approved_coins'] = [
             coin
-            for coin in result["live"]["approved_coins"][pside]
-            if coin not in result["live"]["ignored_coins"][pside]
+            for coin in result['bot'][pside]['universe']['approved_coins']
+            if coin not in result['bot'][pside]['universe']['ignored_coins']
         ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     result["backtest"]["coin_sources"] = normalize_backtest_coin_sources(
         result["backtest"].get("coin_sources", {})
     )
-    if result["backtest"].get("filter_by_min_effective_cost") is None:
-        result["backtest"]["filter_by_min_effective_cost"] = bool(
-            result["live"].get("filter_by_min_effective_cost", False)
-        )
 
     normalize_optimizer_settings(
         result,
@@ -300,6 +296,6 @@ def normalize_optimizer_settings(
     result["optimize"]["limits"] = resolved_limits
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
-        strategy_kind=result.get("live", {}).get("strategy_kind"),
+        strategy_kind=get_optional_config_value(result, 'bot.global.strategy_kind'),
         portfolio_hsl=result["bot"]["global"]["hsl"]["scope"] == "portfolio",
     )

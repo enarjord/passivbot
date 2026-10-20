@@ -35,6 +35,9 @@ OUTPUT_ROOTS = ("config_version", "bot", "coin_overrides", "live", "logging", "m
 HYPERLIQUID_MARKET_PREFIXES = ("xyz:", "xyz-", "xyz_")
 
 
+from config.access import get_optional_config_value
+from config.universe import require_side_universe_sources, set_side_universe_sources
+
 @dataclass
 class ConfigSource:
     path: Path
@@ -163,14 +166,12 @@ def discover_config_paths(
 
 
 def _side_coin_lists(config: dict, key: str, *, path: Path) -> dict[str, list[str]]:
-    value = config.get("live", {}).get(key)
-    if not isinstance(value, dict):
-        raise ValueError(f"{path}: live.{key} must be a per-side mapping")
+    value = require_side_universe_sources(config, key)
     result = {}
     for side in POSITION_SIDES:
         coins = value.get(side)
         if not isinstance(coins, list) or not all(isinstance(coin, str) for coin in coins):
-            raise ValueError(f"{path}: live.{key}.{side} must be a list of coin names")
+            raise ValueError(f"{path}: bot.{side}.universe.{key} must be a list of coin names")
         result[side] = coins
     return result
 
@@ -207,19 +208,19 @@ def load_single_coin_config(path: Path) -> SingleCoinConfig:
     coin = next(iter(approved_union))
     if coin.strip().casefold() == "all":
         raise ValueError(
-            f"{path}: live.approved_coins must name one coin; the 'all' sentinel is not valid "
+            f"{path}: bot.<side>.universe.approved_coins must name one coin; the 'all' sentinel is not valid "
             "for a single-coin input"
         )
     approved_sides = frozenset(side for side, coins in approved.items() if coin in coins)
     for side in POSITION_SIDES:
         if coin in ignored[side]:
             raise ValueError(
-                f"{path}: single approved coin {coin} is also present in live.ignored_coins.{side}"
+                f"{path}: single approved coin {coin} is also present in bot.{side}.universe.ignored_coins"
             )
         extra = sorted(set(approved[side]) - {coin})
         if extra:
             raise ValueError(
-                f"{path}: live.approved_coins.{side} contains additional coin(s): "
+                f"{path}: bot.{side}.universe.approved_coins contains additional coin(s): "
                 + ", ".join(extra)
             )
     return SingleCoinConfig(path=path, coin=coin, approved_sides=approved_sides, config=config)
@@ -239,7 +240,7 @@ def _market_resolution_exchanges(configs: list[ConfigSource]) -> tuple[str, ...]
             if normalized and normalized != "fake":
                 exchanges.add(normalized)
         for key in ("approved_coins", "ignored_coins"):
-            for identifiers in item.config.get("live", {}).get(key, {}).values():
+            for identifiers in require_side_universe_sources(item.config, key).values():
                 for identifier in identifiers:
                     qualified_exchange, _unqualified = (
                         split_exchange_qualified_market_identifier(identifier)
@@ -313,13 +314,13 @@ def _validate_market_identifiers(
 ) -> None:
     for item in configs:
         for key in keys:
-            for side, identifiers in item.config.get("live", {}).get(key, {}).items():
+            for side, identifiers in require_side_universe_sources(item.config, key).items():
                 for identifier in identifiers:
                     try:
                         _market_identity(identifier, exchanges)
                     except ValueError as exc:
                         raise ValueError(
-                            f"{item.path}: live.{key}.{side}: {exc}"
+                            f"{item.path}: bot.{side}.universe.{key}: {exc}"
                         ) from exc
 
 
@@ -385,11 +386,11 @@ def load_single_coin_directory(
 
 def _validate_shared_policies(sources: list[ConfigSource]) -> None:
     strategy_kinds = {
-        str(item.config.get("live", {}).get("strategy_kind")) for item in sources
+        str(get_optional_config_value(item.config, 'bot.global.strategy_kind')) for item in sources
     }
     if len(strategy_kinds) != 1:
         raise ValueError(
-            "master and all single-coin configs must use the same live.strategy_kind; found "
+            "master and all single-coin configs must use the same bot.global.strategy_kind; found "
             + ", ".join(sorted(strategy_kinds))
         )
     signal_modes = {
@@ -627,13 +628,13 @@ def compose_configs(
         side: sorted(item.coin for item in configs if side in item.approved_sides)
         for side in POSITION_SIDES
     }
-    master["live"]["approved_coins"] = approved
+    set_side_universe_sources(master, 'approved_coins', approved)
     resolution_exchanges = _market_resolution_exchanges(sources)
     position_count_changes = {}
     for side in POSITION_SIDES:
-        master["live"]["ignored_coins"][side] = sorted(
+        master['bot'][side]['universe']['ignored_coins'] = sorted(
             ignored
-            for ignored in set(master["live"]["ignored_coins"][side])
+            for ignored in set(master['bot'][side]['universe']['ignored_coins'])
             if not any(
                 _identifiers_refer_to_same_market(ignored, coin, resolution_exchanges)
                 for coin in approved[side]
@@ -653,8 +654,8 @@ def compose_configs(
 
     conflicts: dict[str, list[str]] = {}
     skip_paths = {
-        ("live", "approved_coins", "long"),
-        ("live", "approved_coins", "short"),
+        ("bot", "long", "universe", "approved_coins"),
+        ("bot", "short", "universe", "approved_coins"),
         ("bot", "long", "risk", "max_positions"),
         ("bot", "short", "risk", "max_positions"),
     }

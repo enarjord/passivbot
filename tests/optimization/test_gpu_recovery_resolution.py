@@ -95,7 +95,8 @@ def test_native_recovery_matches_cpu_on_subhour_replay(cuda_runtime, strategy, s
     config, candles, markets, btc, timestamps = _fixture(
         "long" if sides == "both" else sides, coins, "initial",
     )
-    config["live"].update(strategy_kind=strategy, hedge_mode=sides == "both")
+    config['bot']['global']['strategy_kind'] = strategy
+    config['bot']['global']['hedge_mode'] = sides == 'both'
     if sides == "both":
         config["bot"]["short"]["risk"].update(
             n_positions=coins, total_wallet_exposure_limit=float(coins),

@@ -38,7 +38,7 @@ def prefilter_config_for_exchange(config, markets, exchange):
 
 
 def _probe_inputs(config, params, checks):
-    kind = config["live"]["strategy_kind"]
+    kind = config['bot']['global']['strategy_kind']
     if kind != "trailing_martingale":
         raise ValueError(
             "enabled config prefilters currently require trailing_martingale"

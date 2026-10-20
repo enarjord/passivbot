@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import numpy as np
 import pytest
 
@@ -66,10 +67,12 @@ def test_buffer_changes_gpu_checkpoint_identity():
 def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     from config.schema import get_template_config
     cfg = get_template_config()
-    cfg['live'].update(strategy_kind=strategy_kind, max_warmup_minutes=1,
-                       market_orders_allowed=market_orders, market_order_near_touch_threshold=0.01)
+    cfg['bot']['global']['strategy_kind'] = strategy_kind
+    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']['global']['execution']['market_orders_allowed'] = market_orders
+    cfg['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.01
     coins = ['BTC', 'ETH'][:coin_count]
-    cfg['live']['approved_coins'] = {s: coins if s == side else [] for s in ['long', 'short']}
+    set_side_universe_sources(cfg, 'approved_coins', {s: coins if s == side else [] for s in ['long', 'short']})
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
                           starting_balance=1000.0, limit_order_fill_buffer_pct=buffer)
     for s in ['long', 'short']:
@@ -177,7 +180,7 @@ def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
     from optimization.gpu.service import SharedAccountReplay
 
     cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.0, 2)
-    cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ["long", "short"]}
+    set_side_universe_sources(cfg, 'approved_coins', {s: ["BTC", "ETH"] for s in ["long", "short"]})
     cache, proxies = {}, []
     interrupt_check = lambda: None
     for label, buffer in [("zero", 0.0), ("buffered", 0.0015), ("same_buffer", 0.0015)]:

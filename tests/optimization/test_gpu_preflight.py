@@ -51,7 +51,7 @@ def test_suite_overrides_cannot_hide_unsupported_collateral():
 
 def test_unsupported_strategy_has_an_explicit_cpu_option():
     config = get_template_config()
-    config["live"]["strategy_kind"] = "trailing_grid_v7"
+    config['bot']['global']['strategy_kind'] = "trailing_grid_v7"
     with pytest.raises(ValueError, match="strategy.*CPU backend"):
         validate_gpu_backtest_config(config)
 

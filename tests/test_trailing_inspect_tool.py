@@ -181,18 +181,15 @@ def test_non_positive_retracement_reports_passive_mode():
 
 def test_extract_strategy_params_requires_canonical_trailing_martingale():
     config = {
-        "live": {"strategy_kind": "trailing_martingale"},
+        "live": {},
         "bot": {
-            "long": {
-                "strategy": {
-                    "trailing_martingale": _params(),
-                }
-            }
+            "long": {"strategy": {"trailing_martingale": _params()}},
+            "global": {"strategy_kind": "trailing_martingale"},
         },
     }
 
     assert trailing_inspect._extract_strategy_params(config, "long") == _params()
-    config["live"]["strategy_kind"] = "ema_anchor"
+    config['bot']['global']['strategy_kind'] = "ema_anchor"
     with pytest.raises(ValueError, match="supports only"):
         trailing_inspect._extract_strategy_params(config, "long")
 

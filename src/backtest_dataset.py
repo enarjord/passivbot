@@ -10,6 +10,8 @@ from hlcvs_manifest import manifest_has_required_schema
 HLCVS_CACHE_DIR_SEP = "__"
 
 
+from config.universe import get_side_universe_sources
+
 def _resolve_cache_artifact_path(cache_dir: Path, filename_candidates: Sequence[str]) -> str | None:
     for filename in filename_candidates:
         candidate = cache_dir / filename
@@ -29,7 +31,7 @@ def _extract_cache_hash_from_dir(cache_dir: Path | None) -> str | None:
 
 def _runtime_side_membership(config: dict, coins: list[str]) -> dict[str, list[str]] | None:
     bot = config.get("bot")
-    approved = config.get("live", {}).get("approved_coins")
+    approved = get_side_universe_sources(config, 'approved_coins')
     if not isinstance(bot, dict) or not isinstance(approved, dict):
         return None
     for pside in ("long", "short"):

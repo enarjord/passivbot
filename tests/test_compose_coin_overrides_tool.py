@@ -1,4 +1,6 @@
 from __future__ import annotations
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 
 import json
 import os
@@ -21,8 +23,8 @@ from tools.compose_coin_overrides import compose_directory, main
 
 def _single_coin_config(coin: str) -> dict:
     config = get_template_config()
-    config["live"]["approved_coins"] = {"long": [coin], "short": [coin]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": [coin], "short": [coin]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["live"]["user"] = "test_user"
     config["coin_overrides"] = {}
     for side in ("long", "short"):
@@ -83,7 +85,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
         "logging",
         "monitor",
     }
-    assert composed["live"]["approved_coins"] == {
+    assert require_side_universe_sources(composed, 'approved_coins') == {
         "long": ["BTC", "ETH"],
         "short": ["BTC", "ETH"],
     }
@@ -172,7 +174,7 @@ def test_mixed_feature_enablement_omits_inert_dependent_overrides(tmp_path: Path
 def test_rejects_non_single_and_precomposed_inputs(tmp_path: Path):
     valid = _single_coin_config("BTC")
     invalid = _single_coin_config("ETH")
-    invalid["live"]["approved_coins"]["long"].append("XRP")
+    invalid['bot']["long"]['universe']['approved_coins'].append("XRP")
     _write(tmp_path / "a.json", valid)
     _write(tmp_path / "b.json", invalid)
 
@@ -256,7 +258,7 @@ def test_entry_cap_threshold_differences_survive_disabled_total_enforcer(tmp_pat
 def test_rejects_all_as_single_coin(tmp_path: Path):
     _write(tmp_path / "a.json", _single_coin_config("BTC"))
     wildcard = _single_coin_config("ETH")
-    wildcard["live"]["approved_coins"] = {"long": ["all"], "short": ["all"]}
+    set_side_universe_sources(wildcard, 'approved_coins', {"long": ["all"], "short": ["all"]})
     _write(tmp_path / "b.json", wildcard)
 
     with pytest.raises(ValueError, match="'all' sentinel"):
@@ -282,8 +284,8 @@ def test_external_master_supplies_baseline_without_adding_coins(
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     master = _single_coin_config("SOL")
-    master["live"]["approved_coins"]["long"].append("XRP")
-    master["live"]["ignored_coins"]["long"] = ["BTC", "DOGE"]
+    master['bot']["long"]['universe']['approved_coins'].append("XRP")
+    master['bot']["long"]['universe']['ignored_coins'] = ["BTC", "DOGE"]
     master["live"]["leverage"] = 7
     master["bot"]["long"]["forager"]["volume_ema_span_1m"] = 777.0
     master["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 12.0
@@ -309,11 +311,11 @@ def test_external_master_supplies_baseline_without_adding_coins(
     assert report.master_was_selected is True
     assert report.source_paths == [inputs / "a.json", inputs / "b.json"]
     assert report.coins == ["BTC", "ETH"]
-    assert composed["live"]["approved_coins"] == {
+    assert require_side_universe_sources(composed, 'approved_coins') == {
         "long": ["BTC", "ETH"],
         "short": ["BTC", "ETH"],
     }
-    assert composed["live"]["ignored_coins"]["long"] == ["DOGE"]
+    assert composed['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
     assert composed["live"]["leverage"] == 7
     assert composed["bot"]["long"]["forager"]["volume_ema_span_1m"] == 777.0
     assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
@@ -369,9 +371,9 @@ def test_external_master_must_match_input_strategy_and_hsl_mode(
     if key == "hsl_signal_mode":
         master["bot"]["global"]["hsl"]["scope"] = value
     else:
-        master["live"][key] = value
+        master["bot"]["global"][key] = value
     _write(tmp_path / "master.json", master)
-    expected_path = "bot.global.hsl.scope" if key == "hsl_signal_mode" else f"live.{key}"
+    expected_path = "bot.global.hsl.scope" if key == "hsl_signal_mode" else f"bot.global.{key}"
     with pytest.raises(ValueError, match=f"same {expected_path}"):
         compose_directory(inputs, master_config=tmp_path / "master.json")
 
@@ -424,13 +426,13 @@ def test_removes_ignored_alias_of_approved_market(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
     master = _single_coin_config("ETH")
-    master["live"]["ignored_coins"]["long"] = ["BTCUSDT", "DOGE"]
+    master['bot']["long"]['universe']['ignored_coins'] = ["BTCUSDT", "DOGE"]
     _write(tmp_path / "a.json", master)
     _write(tmp_path / "b.json", _single_coin_config("BTC"))
 
     composed, _report = compose_directory(tmp_path)
 
-    assert composed["live"]["ignored_coins"]["long"] == ["DOGE"]
+    assert composed['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
 
 
 @pytest.mark.parametrize("field", ["approved", "ignored"])
@@ -444,12 +446,12 @@ def test_rejects_unresolved_exact_market_identifiers(
     first = _single_coin_config("ETH")
     second = _single_coin_config("BTC")
     if field == "approved":
-        second["live"]["approved_coins"] = {
+        set_side_universe_sources(second, 'approved_coins', {
             "long": ["hyperliquid::12345"],
             "short": ["hyperliquid::12345"],
-        }
+        })
     else:
-        first["live"]["ignored_coins"]["long"] = ["hyperliquid::12345"]
+        first['bot']["long"]['universe']['ignored_coins'] = ["hyperliquid::12345"]
     _write(tmp_path / "a.json", first)
     _write(tmp_path / "b.json", second)
 
@@ -473,7 +475,7 @@ def test_rejects_exact_identifier_resolving_to_different_venue_markets(
     first = _single_coin_config("ETH")
     second = _single_coin_config("12345" if field == "approved" else "BTC")
     if field == "ignored":
-        first["live"]["ignored_coins"]["long"] = ["12345"]
+        first['bot']["long"]['universe']['ignored_coins'] = ["12345"]
     _write(tmp_path / "a.json", first)
     _write(tmp_path / "b.json", second)
 
@@ -513,13 +515,13 @@ def test_qualified_identifier_venue_removes_ignored_alias(tmp_path: Path, monkey
 
     monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
     master = _single_coin_config("ETH")
-    master["live"]["ignored_coins"]["long"] = ["hyperliquid::12345"]
+    master['bot']["long"]['universe']['ignored_coins'] = ["hyperliquid::12345"]
     _write(tmp_path / "a.json", master)
     _write(tmp_path / "b.json", _single_coin_config("xyz:TSLA"))
 
     composed, _report = compose_directory(tmp_path)
 
-    assert composed["live"]["ignored_coins"]["long"] == []
+    assert composed['bot']["long"]['universe']['ignored_coins'] == []
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
@@ -527,7 +529,7 @@ def test_retains_gpu_optimizer_with_coin_overrides(tmp_path: Path, strategy_kind
     master = _single_coin_config("BTC")
     other = _single_coin_config("ETH")
     for config in (master, other):
-        config["live"]["strategy_kind"] = strategy_kind
+        config['bot']['global']['strategy_kind'] = strategy_kind
     master["optimize"]["backend"] = "gpu"
     master["optimize"]["iters"] = 123
     master["backtest"]["start_date"] = "2021-01-01"
@@ -557,7 +559,7 @@ def test_retains_gpu_optimizer_with_coin_overrides(tmp_path: Path, strategy_kind
     assert composed["optimize"]["gpu"] == master["optimize"]["gpu"]
     assert composed["optimize"]["iters"] == 123
     assert composed["backtest"]["start_date"] == "2021-01-01"
-    assert composed["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    assert composed['bot']["long"]['universe']['approved_coins'] == ["BTC", "ETH"]
     assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
     assert composed["coin_overrides"] == {
         "ETH": {"bot": {"long": {"strategy": {strategy_kind: expected_strategy}}}}
@@ -597,7 +599,7 @@ def test_verbose_overrides_survive_master_edits(
     inputs.mkdir()
     for name, coin in (("a.json", "BTC"), ("b.json", "ETH")):
         config = _single_coin_config(coin)
-        config["live"]["strategy_kind"] = strategy_kind
+        config['bot']['global']['strategy_kind'] = strategy_kind
         config["bot"]["global"]["hsl"]["scope"] = hsl_signal_mode
         config["live"]["leverage"] = 3
         config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
@@ -808,14 +810,14 @@ def test_custom_params_pin_selection_and_inherit_global_unstuck(
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     master = _single_coin_config("SOL")
-    master["live"]["strategy_kind"] = strategy_kind
+    master['bot']['global']['strategy_kind'] = strategy_kind
     master["bot"]["long"]["unstuck"].update({"enabled": False, "exposure_trigger_ratio": 0.83})
     master["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
     master_path = tmp_path / "master.json"
     _write(master_path, master)
     for coin, cooldown in (("BTC", 7.0), ("ETH", 9.0)):
         source = deepcopy(master)
-        source["live"]["approved_coins"] = {"long": [coin], "short": [coin]}
+        set_side_universe_sources(source, 'approved_coins', {"long": [coin], "short": [coin]})
         source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = cooldown
         source["bot"]["long"]["unstuck"].update({"enabled": True, "exposure_trigger_ratio": 0.6})
         _write(inputs / f"{coin}.json", source)
@@ -966,7 +968,7 @@ def test_custom_hsl_selection_obeys_signal_mode_and_preserves_inactive_value(
         "bot": {"long": {"hsl": {"red_threshold": 0.123}}}
     }
     for coin in ("BTC", "ETH"):
-        config["live"]["approved_coins"] = {"long": [coin], "short": [coin]}
+        set_side_universe_sources(config, 'approved_coins', {"long": [coin], "short": [coin]})
         config["bot"]["global"]["hsl"]["scope"] = "portfolio"
         _write(tmp_path / f"{coin}.json", config)
     with pytest.raises(ValueError, match="matches no overridable input fields"):

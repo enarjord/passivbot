@@ -91,7 +91,7 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
     Static coin patches belong to the registered dataset's override arrays. Callers
     preparing global candidate values must supply a payload without those patches.
     """
-    kind = config["live"]["strategy_kind"]
+    kind = config['bot']['global']['strategy_kind']
     keys = {"ema_anchor": EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
             "trailing_martingale": TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS}[kind]
     mode = config["bot"]["global"]["hsl"]["scope"]

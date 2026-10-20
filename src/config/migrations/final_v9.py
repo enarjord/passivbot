@@ -370,6 +370,10 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     """Translate public fields without guessing independent optimizer ranges."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
+    from .shared_policy import (COIN_SOURCE_FIELDS,
+                                move_shared_policy, preserve_forced_normal_selection,
+                                preserve_forced_selection_overrides, shared_policy_selector)
+
     result = deepcopy(source)
     if not sparse:
         retire_deap_policy(result, acknowledge=acknowledge_search_backend_change, changes=changes,
@@ -452,7 +456,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
         ):
             path = path.replace(old, new)
-        return path
+        return shared_policy_selector(path)
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides
@@ -473,6 +477,18 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                         raise ValueError(f"{path}.{key} conflicts with {dotted}")
                     converted[dotted] = deepcopy(value)
                 record(f"{path}.{key}", value, converted, "split shared slow memory into independent spans")
+                continue
+            if key in {f"live.{field}" for field in COIN_SOURCE_FIELDS}:
+                field = key.split(".")[-1]
+                sources = value if isinstance(value, dict) else {side: value for side in ("long", "short")}
+                if set(sources) - {"long", "short"}:
+                    raise ValueError(f"{path}.{key} must use only long/short source keys")
+                for side, source in sources.items():
+                    target = f"bot.{side}.universe.{field}"
+                    if target in converted and converted[target] != source:
+                        raise ValueError(f"{path}.{key} conflicts with {target}")
+                    converted[target] = deepcopy(source)
+                record(f"{path}.{key}", value, converted, "side-owned universe source paths")
                 continue
             new = selector(key)
             if key == "live.auto_gs":
@@ -574,6 +590,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
         migrate_entry_cooldown_tree(result)
         migrate_entry_ema_tree(result)
+        move_shared_policy(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
         return result
@@ -597,8 +614,10 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     apply_migrations(result, verbose=False)
     apply_backward_compatibility_renames(result, verbose=False)
     migrate_entry_cooldown(result)
+    move_shared_policy(result, record=record)
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
+    preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
         canonicalize_shared_bot_side(result.get("bot", {}).get(side))
 
@@ -615,6 +634,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     # Nested authored coin patches are converted here, before final strict
     # validation. Ordinary loading never resolves their released flat aliases.
     canonicalize_coin_patches(result)
+    preserve_forced_selection_overrides(result, record=record)
     sync_canonical_strategy_config(result)
     from config.limits import normalize_limit_entries
     from config.scoring import normalize_scoring_config
@@ -642,7 +662,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         old = bounds.pop("hsl")
         put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
     from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
-    kind = result.get("live", {}).get("strategy_kind", "trailing_martingale")
+    kind = result.get("bot", {}).get("global", {}).get("strategy_kind", "trailing_martingale")
     for side in ("long", "short"):
         forager = bounds.get(side, {}).get("forager", {})
         nested = forager.get("score_weights", {})

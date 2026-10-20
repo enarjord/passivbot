@@ -132,11 +132,15 @@ def test_conversion_preserves_reloadable_coin_sources_and_idempotence(tmp_path, 
     before = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5)
     for key, value in values.items():
-        assert result.config["live"][key] == value
-    assert result.config["backtest"]["scenarios"] == before["backtest"]["scenarios"]
+        for side in ("long", "short"):
+            assert result.config["bot"][side]["universe"][key] == (value.get(side, []) if isinstance(value, dict) else value)
+    patch = result.config["backtest"]["scenarios"][0]["overrides"]
+    for side in ("long", "short"):
+        assert patch[f"bot.{side}.universe.approved_coins"] == str(approved)
+        assert patch[f"bot.{side}.universe.ignored_coins"] == str(ignored)
     approved.write_text(json.dumps(["SOL"]))
     assert migrate(result.config).config == result.config
-    assert prepare_config(result.config, verbose=False)["live"]["approved_coins"]["long"] == (["SOL"] if source_shape != "list" else ["BTC"])
+    assert prepare_config(result.config, verbose=False)["bot"]["long"]["universe"]["approved_coins"] == (["SOL"] if source_shape != "list" else ["BTC"])
     assert source == before
 
 
@@ -244,7 +248,10 @@ def test_v8_equal_released_section_aliases_preserve_authored_value(section, old,
     source = legacy()
     source[section].update({old: value, new: value})
     result = migrate(source, memory_span_minutes=123.5)
-    assert result.config[section][new] == value
+    if new == "minimum_coin_age_days":
+        assert result.config["bot"]["global"]["universe"][new] == value
+    else:
+        assert result.config[section][new] == value
     assert old not in result.config[section]
 
 
@@ -1152,7 +1159,7 @@ def test_legacy_coin_flag_files_are_materialized_with_flags_and_authorization(
         assert not any("coin_flags" in key for key in scenario_patch)
         output = deepcopy(output)
         _set_patch(output, scenario_patch, scenario=True)
-        assert output["live"]["minimum_coin_age_days"] == 7.0
+        assert output["bot"]["global"]["universe"]["minimum_coin_age_days"] == 7.0
     patch = output["coin_overrides"]["AAA"]
     assert "override_config_path" not in patch
     assert patch["live"]["forced_mode_long"] == "graceful_stop"

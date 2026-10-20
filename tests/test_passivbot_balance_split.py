@@ -7777,7 +7777,7 @@ def test_unstuck_allowance_uses_raw_not_snapped_balance():
 
 def test_effective_min_cost_filter_uses_snapped_balance():
     bot = _unit_bot()
-    bot.config["live"]["strategy_kind"] = "ema_anchor"
+    bot.config['bot']['global']['strategy_kind'] = "ema_anchor"
     bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
     bot.balance = 100.0
     bot.balance_raw = 10.0
@@ -7801,7 +7801,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
     bot.balance = 100.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.config = _unit_config(
-        {"live": {"strategy_kind": "ema_anchor"}, "bot": {"long": {}}}
+        {"live": {}, "bot": {"long": {}, "global": {"strategy_kind": "ema_anchor"}}}
     )
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
@@ -7907,7 +7907,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
         active_symbols = []
         _config_hedge_mode = True
         hedge_mode = True
-        config = _unit_config({"live": {"strategy_kind": "trailing_martingale"}})
+        config = _unit_config({"live": {}, "bot": {"global": {"strategy_kind": "trailing_martingale"}}})
         coin_overrides = {}
         markets_dict = {symbol: {"active": True, "maker": 0.0002, "taker": 0.0004}}
         qty_steps = {symbol: 0.001}

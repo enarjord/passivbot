@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import logging
 
 import numpy as np
@@ -135,7 +136,7 @@ def test_prep_backtest_args_passes_market_order_slippage_pct():
 
 def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live():
     config = _base_config()
-    config["live"]["market_order_near_touch_threshold"] = 0.0017
+    config['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.0017
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_near_touch_threshold"] == 0.0017
@@ -143,7 +144,7 @@ def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live()
 
 def test_prep_backtest_args_uses_market_orders_allowed_from_live():
     config = _base_config()
-    config["live"]["market_orders_allowed"] = True
+    config['bot']['global']['execution']['market_orders_allowed'] = True
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_orders_allowed"] is True
@@ -208,10 +209,10 @@ def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coi
 def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
     config = _base_config()
     config["backtest"]["coins"] = {"binance": ["1000ABCUSDT", "ABCUSDT"]}
-    config["live"]["approved_coins"] = {
+    set_side_universe_sources(config, 'approved_coins', {
         "long": ["1000ABCUSDT"],
         "short": ["ABCUSDT"],
-    }
+    })
     config["bot"]["short"]["risk"]["max_positions"] = 1
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
     market_settings = {
@@ -319,7 +320,7 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(
     utils.create_coin_symbol_map_cache("binance", markets, verbose=False)
     config = _base_config()
     config["backtest"]["coins"] = {"binance": ["BTC"]}
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     config["coin_overrides"] = {
         "BTCUSDT": {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
     }
@@ -359,7 +360,7 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
 
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     config = _base_config()
-    config["live"]["strategy_kind"] = "ema_anchor"
+    config['bot']['global']['strategy_kind'] = "ema_anchor"
     config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 3.0
     config["bot"]["long"]["strategy"]["ema_anchor"] = {
         "base_qty_pct": 0.02,
@@ -466,7 +467,7 @@ def _native_strategy_payload(strategy_kind):
 
     verify_loaded_runtime_extension()
     config = _base_config()
-    config["live"]["strategy_kind"] = strategy_kind
+    config['bot']['global']['strategy_kind'] = strategy_kind
     config["backtest"]["candle_interval_minutes"] = 1
     mss = _base_mss()
     hlcvs = np.array(

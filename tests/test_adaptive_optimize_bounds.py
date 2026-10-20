@@ -32,7 +32,7 @@ def omit_cooldown_bounds(config):
 
 def flat_bounds(config):
     return flatten_optimize_bounds(
-        config["optimize"]["bounds"], strategy_kind=config["live"]["strategy_kind"]
+        config["optimize"]["bounds"], strategy_kind=config['bot']['global']['strategy_kind']
     )
 
 

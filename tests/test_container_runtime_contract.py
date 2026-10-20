@@ -1,10 +1,13 @@
 from __future__ import annotations
+from config.universe import require_side_universe_sources
 
 import json
 import os
 import stat
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 
@@ -43,7 +46,7 @@ def test_render_api_keys_script_creates_expected_payload(tmp_path):
 def test_render_config_script_merges_base_config_and_env_overrides(tmp_path):
     base_path = tmp_path / "live.json"
     base_path.write_text(
-        '{"live": {"approved_coins": ["BTC"], "user": "bybit_01"}, "monitor": {"enabled": true}}\n',
+        '{"config_version":"v9.0.0","bot":{"long":{"universe":{"approved_coins":["BTC"]}}},"live":{"user":"bybit_01"},"monitor":{"enabled":true}}\n',
         encoding="utf-8",
     )
     target = tmp_path / "config.runtime.json"
@@ -64,7 +67,7 @@ def test_render_config_script_merges_base_config_and_env_overrides(tmp_path):
     )
     payload = json.loads(target.read_text())
     assert payload["live"]["user"] == "bitget_01"
-    assert payload["live"]["approved_coins"] == ["BTC", "ETH", "SOL"]
+    assert require_side_universe_sources(payload, 'approved_coins') == {side: ["BTC", "ETH", "SOL"] for side in ("long", "short")}
     assert payload["logging"]["dir"] == "/data/logs"
     assert payload["logging"]["level"] == 2
     assert payload["logging"]["persist_to_file"] is True
@@ -187,3 +190,17 @@ def test_entrypoint_preserves_mounted_config_path_and_uses_canonical_logging_ove
         str(logs_root),
     ]
     assert not (runtime_root / "config.runtime.json").exists()
+
+
+@pytest.mark.parametrize("version", [None, "v8.6.0", "v9.1.0"])
+def test_render_config_rejects_unversioned_legacy_and_future_input(tmp_path, version):
+    target = tmp_path / "config.runtime.json"
+    source = {"bot": {}, "live": {"user": "test_user"}}
+    if version is not None:
+        source["config_version"] = version
+    env = os.environ | {"PB_USER": "test_user", "PB_CONFIG_INLINE": json.dumps(source)}
+    result = subprocess.run([sys.executable, str(RENDER_CONFIG), str(target)],
+                            cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "config.config_version" in result.stderr
+    assert not target.exists()

@@ -31,8 +31,10 @@ from optimizer_overrides import (
 )
 
 
+from config.access import get_optional_config_value
+
 def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
 
 
@@ -50,7 +52,7 @@ def _flatten_required_optimize_bounds(config: dict) -> dict:
 
 
 def _strategy_path_map(config: dict) -> dict[str, Tuple[str, ...]]:
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     return strategy_optimize_key_path_map(strategy_kind)
 
 
@@ -238,7 +240,7 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     bot_config = config.get("bot")
     if bot_config is None:
         bot_config = get_template_config()["bot"]
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     strategy_path_map = _strategy_path_map(config)
     optimize_bounds = _flatten_required_optimize_bounds(config)
     validate_optimize_bounds_against_bot_config(config, config["optimize"]["bounds"])

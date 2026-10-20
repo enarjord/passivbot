@@ -4,6 +4,7 @@ from copy import deepcopy
 import platform
 
 from config.overrides import parse_overrides
+from config.policy import effective_minimum_cost_filter
 from config.param_paths import resolve_optimizer_key_path
 from config_utils import clean_config
 from optimization.config_adapter import _flatten_bounds_for_config
@@ -13,26 +14,10 @@ from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
-CONTRACT_VERSION = 5
+CONTRACT_VERSION = 6
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
-# Live-owned settings consumed by backtest preparation, execution, or risk.
-# Account I/O, polling, logging, and machine-local settings are intentionally absent.
-BACKTEST_LIVE_KEYS = frozenset(
-    {
-        "approved_coins",
-        "ignored_coins",
-        "strategy_kind",
-        "hedge_mode",
-        "market_orders_allowed",
-        "market_order_near_touch_threshold",
-        "forager_score_hysteresis_pct",
-        "minimum_coin_age_days",
-        "warmup_ratio",
-        "max_warmup_minutes",
-    }
-)
 
 
 def _remove_path(config, path):
@@ -126,11 +111,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),
         "bot": effective.get("bot", {}),
-        "live": {
-            key: effective["live"][key]
-            for key in sorted(BACKTEST_LIVE_KEYS)
-            if key in effective.get("live", {})
-        },
+        "backtest_policy": {"filter_by_min_effective_cost": effective_minimum_cost_filter(effective)},
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }

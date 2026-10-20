@@ -1721,7 +1721,7 @@ def check_keys(dict0, dict1):
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     data_coins = effective_backtest_data_coins(config)
-    minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
+    minimum_coin_age = require_config_value(config, 'bot.global.universe.minimum_coin_age_days')
     coin_sources = config.get("backtest", {}).get("coin_sources") or {}
     coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
     market_settings_sources = (
@@ -2497,21 +2497,17 @@ def get_backtest_execution_settings(
     )
     if market_order_slippage_pct < 0.0:
         raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
-    market_orders_allowed_raw = get_optional_live_value(
-        config, "market_orders_allowed", False
-    )
+    market_orders_allowed_raw = get_optional_config_value(config, 'bot.global.execution.market_orders_allowed', False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
-        field_name="live.market_orders_allowed",
+        field_name='bot.global.execution.market_orders_allowed',
     )
-    market_order_near_touch_threshold_raw = get_optional_live_value(
-        config, "market_order_near_touch_threshold", 0.001
-    )
+    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.global.execution.market_order_near_touch_threshold', 0.001)
     market_order_near_touch_threshold = float(
         market_order_near_touch_threshold_raw or 0.0
     )
     if market_order_near_touch_threshold < 0.0:
-        raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
+        raise ValueError("bot.global.execution.market_order_near_touch_threshold must be >= 0.0")
     unstuck_memory_span = normalize_memory_ema_span_minutes(
         require_config_value(config, "bot.global.unstuck.memory_ema_span_minutes"),
         field="bot.global.unstuck.memory_ema_span_minutes",
@@ -2614,6 +2610,8 @@ def prep_backtest_args(
 ):
     from config.hsl import engine
     from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
+    from config.policy import effective_minimum_cost_filter
+    from config.universe import always_include_matches
 
     ew_half_life_days = validate_ew_half_life_days(
         config.get("backtest", {}).get("ew_half_life_days")
@@ -2628,7 +2626,7 @@ def prep_backtest_args(
         execution_settings = get_backtest_execution_settings(
             config, is_runtime_compiled=True
         )
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     approved_by_side = {
         pside: set(side_coins)
@@ -2667,6 +2665,11 @@ def prep_backtest_args(
             coin_specific_bot_params[pside]["is_forced_active"] = (
                 coin_override.get("live", {}).get(f"forced_mode_{pside}", "")
                 == "normal"
+                or always_include_matches(
+                    config, pside, coin,
+                    exchange=mss.get(coin, {}).get("exchange") or exchange,
+                    market_symbol=mss.get(coin, {}).get("symbol"),
+                )
             )
         coin_key = normalize_backtest_coin(coin)
         coin_canonical = heuristic_symbol_to_coin(coin_key)
@@ -2790,13 +2793,11 @@ def prep_backtest_args(
                 config, "backtest.hsl_detailed_report"
             ),
             "skip_btc_analysis": False,
-            "filter_by_min_effective_cost": bool(
-                require_config_value(config, "backtest.filter_by_min_effective_cost")
-            ),
+            "filter_by_min_effective_cost": effective_minimum_cost_filter(config),
             "dynamic_wel_by_tradability": bool(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
-            "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
+            "hedge_mode": bool(require_config_value(config, 'bot.global.hedge_mode')),
             "max_realized_loss_pct": float(
                 require_config_value(config, "bot.global.loss_gate.max_drawdown_ratio")
             ),
@@ -2808,7 +2809,7 @@ def prep_backtest_args(
             "market_orders_allowed": execution_settings.market_orders_allowed,
             "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
             "forager_score_hysteresis_pct": float(
-                get_optional_live_value(config, "forager_score_hysteresis_pct", 0.02)
+                get_optional_config_value(config, 'bot.global.forager.score_hysteresis_pct', 0.02)
                 or 0.0
             ),
             "liquidation_threshold": liquidation_threshold,

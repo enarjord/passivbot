@@ -96,9 +96,18 @@ def require_v9_runtime_config(config, *, additional_inputs=()):
 
 def reject_retired_v9_fields(config, *, additional_inputs=()):
     """Also protect sparse config exports from silently deleting old authority."""
+    from .shared_policy import COIN_SOURCE_FIELDS, LIVE_POLICY_PATHS
+
+    moved = (*LIVE_POLICY_PATHS, *COIN_SOURCE_FIELDS)
+    def moved_live_path(value):
+        return any(re.search(r"(?:^|\.)live\." + re.escape(field) + r"(?:$|\.)", value)
+                   for field in moved)
+
     for node in (config, *additional_inputs):
         for path, key, value in _walk(node):
             name = str(key)
+            if moved_live_path(path) or (isinstance(value, str) and "fixed_params" in path and moved_live_path(value)):
+                raise ValueError(f"{path} uses retired live-owned bot policy; final canonical {V9_SCHEMA_VERSION} requires bot ownership. Convert versioned v8 with {MIGRATION_COMMAND}")
             leaf = name.split(".")[-1]
             if (leaf in {"hsl_signal_mode", "max_realized_loss_pct", "lookback_ema_span_minutes", "auto_gs", "liquidation_threshold", "n_positions", "total_exposure_entry_gate_enabled", "risk_twel_entry_gate_enabled", "forager_volume_drop_pct", "filter_volume_drop_pct"}
                     or (leaf == "ema_span_minutes" and "hsl" in path)

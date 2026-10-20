@@ -1,4 +1,5 @@
 """HSL through public backtest and CPU optimizer entry points."""
+from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 import json
@@ -36,9 +37,9 @@ def deny_network(monkeypatch):
 
 def runtime_inputs(mode):
     cfg, markets, candles = inputs(mode)
-    cfg["live"].update(
-        warmup_ratio=1.0, max_warmup_minutes=1, minimum_coin_age_days=0.0
-    )
+    cfg['bot']['global']['warmup']['ratio'] = 1.0
+    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0.0
     cfg["backtest"].update(start_date="2024-01-01", end_date="2024-01-01T02:40:00")
     timestamps = 1704067200000 + np.arange(len(candles), dtype=np.int64) * 60000
     return cfg, markets, candles, timestamps
@@ -153,7 +154,7 @@ def offline_cli_config(tmp_path, monkeypatch, mode):
     monkeypatch.chdir(tmp_path)
     cfg, _, candles, timestamps = runtime_inputs(mode)
     del cfg["backtest"]["coins"]
-    cfg["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC"], "short": []})
     cfg["backtest"].update(
         offline=True,
         exchanges=["binance"],
@@ -237,7 +238,7 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
     from config.param_paths import resolve_optimizer_key_path
 
     fixed_bounds = {}
-    kind = cfg["live"]["strategy_kind"]
+    kind = cfg['bot']['global']['strategy_kind']
     for key in flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind=kind):
         value = cfg
         for part in resolve_optimizer_key_path(cfg, key):

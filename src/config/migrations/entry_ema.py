@@ -84,6 +84,15 @@ def migrate_entry_ema_spans(config, *, tracker=None):
     from ..param_paths import resolve_dotted_config_path
     from ..scenario_overrides import normalize_scenario_overrides
 
+    # This explicit converter also audits released documents before ownership
+    # moves. Supply their active kind to the canonical resolver as private state.
+    path_context = config
+    if "strategy_kind" in config.get("live", {}):
+        bot = config.get("bot", {})
+        path_context = {**config, "bot": {**bot, "global": {
+            **bot.get("global", {}), "strategy_kind": config["live"]["strategy_kind"],
+        }}}
+
     for scenario in config.get("backtest", {}).get("scenarios", []):
         if not isinstance(scenario, dict) or not isinstance(
             scenario.get("overrides"), dict
@@ -94,7 +103,7 @@ def migrate_entry_ema_spans(config, *, tracker=None):
         # Canonical keys win independently of input insertion order.
         items = []
         for key, value in overrides.items():
-            resolved = resolve_dotted_config_path(config, key)
+            resolved = resolve_dotted_config_path(path_context, key)
             canonical = (
                 ".".join(resolved)
                 if resolved[-3:] in [(KIND, "entry", span) for span in SPANS]

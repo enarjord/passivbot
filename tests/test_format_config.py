@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import copy
 import logging
 import pytest
@@ -144,9 +146,9 @@ def test_format_config_restores_missing_trailing_martingale_weight_defaults():
 def test_format_config_preserves_approved_coins_dict():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["live"]["approved_coins"] = {"long": ["BTC"], "short": ["BTC"]}
+    set_side_universe_sources(current, 'approved_coins', {"long": ["BTC"], "short": ["BTC"]})
     out = format_config(current, verbose=False)
-    assert out["live"]["approved_coins"] == {"long": ["BTC"], "short": ["BTC"]}
+    assert require_side_universe_sources(out, 'approved_coins') == {"long": ["BTC"], "short": ["BTC"]}
 
 
 @pytest.mark.parametrize("path", [("live", "unexpected"), ("bot", "long", "foo"),

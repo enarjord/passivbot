@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from collections import Counter
 
 import numpy as np
@@ -17,15 +18,11 @@ def require_real_passivbot_rust_module():
 
 def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dict:
     config = load_config("configs/examples/ema_anchor.json", verbose=False)
-    config["live"].update(
-        {
-            "approved_coins": {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]},
-            "ignored_coins": {"long": [], "short": []},
-            "hedge_mode": hedge_mode,
-            "warmup_ratio": 1.0,
-            "max_warmup_minutes": 10,
-        }
-    )
+    set_side_universe_sources(config, 'approved_coins', {'long': ['LONGCOIN'], 'short': ['SHORTCOIN']})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    config['bot']['global']['hedge_mode'] = hedge_mode
+    config['bot']['global']['warmup']['ratio'] = 1.0
+    config['bot']['global']['warmup']['max_minutes'] = 10
     config["backtest"].update(
         {
             "exchanges": ["binance"],

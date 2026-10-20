@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -29,7 +30,7 @@ def require_real_passivbot_rust_module():
 def config():
     result = get_template_config()
     result["backtest"]["coins"] = {"binance": ["TEST"]}
-    result["live"]["approved_coins"] = {"long": ["TEST"], "short": []}
+    set_side_universe_sources(result, 'approved_coins', {"long": ["TEST"], "short": []})
     side = result["bot"]["long"]
     side["risk"].update(
         max_positions=1, total_wallet_exposure_limit=1.0, we_excess_allowance_pct=0.0
@@ -181,8 +182,8 @@ def test_trailing_grid_completes_on_both_sides(
 ):
     candidate = config()
     candidate["bot"][side] = deepcopy(candidate["bot"]["long"])
-    candidate["live"]["approved_coins"] = {"long": [], "short": []}
-    candidate["live"]["approved_coins"][side] = ["TEST"]
+    set_side_universe_sources(candidate, 'approved_coins', {"long": [], "short": []})
+    candidate['bot'][side]['universe']['approved_coins'] = ["TEST"]
     entry = candidate["bot"][side]["strategy"]["trailing_martingale"]["entry"]
     entry.update(threshold_base_pct=0.03, threshold_we_weight=0, initial_ema_dist=0)
     params = policy("grid_span", min=100)
@@ -255,7 +256,7 @@ def test_denomination_alias_preserves_its_resolved_override(
 ):
     candidate = config()
     candidate["backtest"]["coins"] = {"binance": ["1000ABC"]}
-    candidate["live"]["approved_coins"]["long"] = ["ABC"]
+    candidate['bot']["long"]['universe']['approved_coins'] = ["ABC"]
     candidate["coin_overrides"] = {
         "1000ABC": {
             "bot": {
@@ -340,7 +341,7 @@ def test_ambiguous_dynamic_multicoin_wel_fails_instead_of_guessing(
     candidate = config()
     candidate["bot"]["long"]["risk"]["max_positions"] = 4
     candidate["backtest"]["coins"]["binance"].append("OTHER")
-    candidate["live"]["approved_coins"]["long"].append("OTHER")
+    candidate['bot']["long"]['universe']['approved_coins'].append("OTHER")
     assert config_prefilter(candidate, None) == 0
     with pytest.raises(ValueError, match="data-dependent dynamic WEL"):
         config_prefilter(candidate, policy(max=0.2))

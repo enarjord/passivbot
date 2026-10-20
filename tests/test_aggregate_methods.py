@@ -219,9 +219,10 @@ class TestApplyScenarioBaseCoins:
             "cache_dir": {},
             "exchanges": ["binance"],
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": [], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
         },
     }
 
@@ -281,7 +282,7 @@ class TestApplyScenarioBaseCoins:
             available_coins={"BTC", "XRP", "DOGE", "SHIB"},
             base_ignored=base_ignored,
         )
-        ignored_long = cfg["live"]["ignored_coins"]["long"]
+        ignored_long = cfg['bot']["long"]['universe']['ignored_coins']
         assert "XRP" in ignored_long
         assert "DOGE" not in ignored_long
 

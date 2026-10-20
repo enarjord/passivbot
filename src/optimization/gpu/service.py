@@ -80,6 +80,8 @@ from optimization.gpu.model import (
     validate_hsl_signal_topology,
 )
 
+from config.access import get_optional_config_value
+
 def _noop_interrupt_check():
     return None
 
@@ -1509,7 +1511,7 @@ class SharedAccountReplay:
                 f"got {coin_count}"
             )
         self.strategy_kind = (
-            str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+            str(get_optional_config_value(config, 'bot.global.strategy_kind', "")).strip().lower()
         )
         if self.strategy_kind not in {"ema_anchor", "trailing_martingale"}:
             raise ValueError(
@@ -1617,7 +1619,7 @@ class SharedAccountReplay:
         ):
             raise ValueError(
                 "MPS multicoin proxy requires a finite non-negative "
-                "live.forager_score_hysteresis_pct"
+                "bot.global.forager.score_hysteresis_pct"
             )
         _require_supported_multicoin_valid_tails(
             values,

@@ -14,7 +14,7 @@ def test_group_resolution_matches_single_keys_with_one_metadata_projection(
     monkeypatch, kind, mode, nested
 ):
     config = get_template_config()
-    config["live"]["strategy_kind"] = kind
+    config['bot']['global']['strategy_kind'] = kind
     config["bot"]["global"]["hsl"]["scope"] = mode
     if not nested:
         config["bot"]["long"] = {"risk": {"max_positions": 3.0}}
@@ -42,10 +42,10 @@ def test_group_resolution_matches_single_keys_with_one_metadata_projection(
 
 def test_later_group_observes_current_strategy_mode_and_bot_shape():
     config = get_template_config()
-    config["live"]["strategy_kind"] = "trailing_martingale"
+    config['bot']['global']['strategy_kind'] = "trailing_martingale"
     keys = ["long_ema_span_0", "long_n_positions", "hsl_red_threshold"]
     first = dict(param_paths.iter_optimizer_key_paths(config, keys))
-    config["live"]["strategy_kind"] = "ema_anchor"
+    config['bot']['global']['strategy_kind'] = "ema_anchor"
     config["bot"]["global"]["hsl"]["scope"] = "portfolio"
     config["bot"]["long"] = {"risk": {"max_positions": 2.0}}
     second = dict(param_paths.iter_optimizer_key_paths(config, keys))

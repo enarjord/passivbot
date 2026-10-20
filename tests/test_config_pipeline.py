@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import json
 import logging
@@ -46,7 +48,7 @@ def _flatten_strategy_bound_items(bounds, prefix=()):
 
 def _strategy_side(config, pside, kind=None):
     if kind is None:
-        kind = config["live"]["strategy_kind"]
+        kind = config['bot']['global']['strategy_kind']
     return config["bot"][pside]["strategy"][kind]
 
 
@@ -58,14 +60,14 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     compiled = compile_runtime_config(config, runtime="backtest")
 
     assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
-    assert config["live"]["strategy_kind"] == "ema_anchor"
+    assert config['bot']['global']['strategy_kind'] == "ema_anchor"
     assert config["live"]["user"] == "example"
     # This explicit demonstration span is not a converted rolling-window policy.
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
     assert config["live"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
     assert config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == 1.0
     assert config["bot"]["global"]["hsl"]["scope"] == "coin"
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
     }
     for key, expected in {
@@ -168,7 +170,7 @@ def test_authored_coin_sources_preserve_supported_shapes_without_resolving_files
     from config.authored import validate_authored_config
 
     config = get_template_config()
-    config["live"][field] = source
+    set_side_universe_sources(config, field, source)
     before = deepcopy(config)
     validate_authored_config(config, get_template_config())
     assert config == before
@@ -179,8 +181,8 @@ def test_authored_coin_sources_reject_unknown_shapes(source):
     from config.authored import validate_authored_config
 
     config = get_template_config()
-    config["live"]["approved_coins"] = source
     with pytest.raises((TypeError, ValueError), match="approved_coins"):
+        set_side_universe_sources(config, 'approved_coins', source)
         validate_authored_config(config, get_template_config())
 
 
@@ -294,7 +296,7 @@ def test_startup_phase_budgets_reject_invalid_values(budgets, error_type, error_
 @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
 def test_rust_strategy_spec_matches_python_template_defaults(strategy_kind):
     source = get_template_config()
-    source["live"]["strategy_kind"] = strategy_kind
+    source['bot']['global']['strategy_kind'] = strategy_kind
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     expected = _nested_strategy_values_from_spec(
         pbr.get_strategy_spec(strategy_kind), "default"
@@ -437,7 +439,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
     assert "long_filter_volume_ema_span_1m" not in prepared["optimize"]["bounds"]
     assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
-    assert prepared["live"]["strategy_kind"] == "trailing_martingale"
+    assert prepared['bot']['global']['strategy_kind'] == "trailing_martingale"
     assert "ema_span_0" not in get_template_config()["bot"]["long"]
     assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
     assert (
@@ -450,7 +452,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
 
 def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_martingale():
     source = get_template_config()
-    source["live"]["strategy_kind"] = "trailing_martingale"
+    source['bot']['global']['strategy_kind'] = "trailing_martingale"
     source["bot"]["long"]["entry_grid_spacing_pct"] = 0.01
     source["bot"]["long"]["entry_trailing_grid_ratio"] = -0.5
     source["bot"]["long"]["close_grid_markup_start"] = 0.01
@@ -468,7 +470,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_k
     flat_key,
 ):
     source = get_template_config()
-    source["live"]["strategy_kind"] = strategy_kind
+    source['bot']['global']['strategy_kind'] = strategy_kind
     source["bot"]["long"][flat_key] = 0.5
 
     with pytest.raises(
@@ -480,7 +482,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_k
 
 def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
     source = get_template_config()
-    source["live"]["strategy_kind"] = "trailing_martingale"
+    source['bot']['global']['strategy_kind'] = "trailing_martingale"
     source["bot"]["long"]["entry_grid_spacing_weight"] = 0.5
     source["bot"]["long"]["entry_grid_spacing_log_weight"] = 0.6
     source["bot"]["long"]["entry_grid_spacing_log_span_hours"] = 12.0
@@ -499,7 +501,7 @@ def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
 )
 def test_parse_overrides_rejects_v7_flat_strategy_override_keys(flat_key):
     source = get_template_config()
-    source["live"]["strategy_kind"] = "trailing_martingale"
+    source['bot']['global']['strategy_kind'] = "trailing_martingale"
     source["coin_overrides"] = {
         "BTC": {
             "bot": {
@@ -596,7 +598,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["strategy_kind"] == "trailing_martingale"
+    assert prepared['bot']['global']['strategy_kind'] == "trailing_martingale"
     assert _strategy_side(prepared, "long")["entry"]["ema_span_0"] == pytest.approx(
         321.0
     )
@@ -607,7 +609,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 
 def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     source = get_template_config()
-    source["live"]["strategy_kind"] = "ema_anchor"
+    source['bot']['global']['strategy_kind'] = "ema_anchor"
     source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.5
     source["bot"]["long"]["strategy"]["ema_anchor"] = {
         "base_qty_pct": 0.02,
@@ -629,7 +631,7 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     compiled = compile_runtime_config(prepared, runtime="backtest")
 
-    assert prepared["live"]["strategy_kind"] == "ema_anchor"
+    assert prepared['bot']['global']['strategy_kind'] == "ema_anchor"
     assert prepared["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
     assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.02)
     assert _strategy_side(prepared, "long")[
@@ -646,13 +648,13 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
 
 def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missing():
     source = get_template_config()
-    source["live"]["strategy_kind"] = "ema_anchor"
+    source['bot']['global']['strategy_kind'] = "ema_anchor"
     source["bot"]["long"]["strategy"] = {}
     source["bot"]["short"]["strategy"] = {}
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["strategy_kind"] == "ema_anchor"
+    assert prepared['bot']['global']['strategy_kind'] == "ema_anchor"
     assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.01)
     assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(200.0)
     assert _strategy_side(prepared, "long")[
@@ -808,7 +810,7 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
     tmp_path,
 ):
     source = get_template_config()
-    source["live"]["strategy_kind"] = "ema_anchor"
+    source['bot']['global']['strategy_kind'] = "ema_anchor"
     rounded = {
         "volume": 0.323,
         "ema_readiness": 0.434,
@@ -1024,21 +1026,31 @@ def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_overri
     source = {
         "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
-        "bot": {"long": {}, "short": {}},
+        "bot": {
+            "long": {},
+            "short": {},
+            "global": {
+                "execution": {
+                    "market_orders_allowed": True
+                }
+            }
+        },
         "coin_overrides": {},
-        "live": {"market_orders_allowed": True},
-        "optimize": {"bounds": {}},
+        "live": {},
+        "optimize": {
+            "bounds": {}
+        }
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["market_orders_allowed"] is True
+    assert prepared['bot']['global']['execution']['market_orders_allowed'] is True
     assert "market_orders_allowed" not in prepared["backtest"]
 
 
 def test_template_config_defaults_market_orders_disabled():
     template = get_template_config()
-    assert template["live"]["market_orders_allowed"] is False
+    assert template['bot']['global']['execution']['market_orders_allowed'] is False
 
 
 def test_prepare_config_rejects_cancellations_not_greater_than_creations():
@@ -1123,7 +1135,11 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
 )
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):
     source = get_template_config()
-    source["live"][field] = value
+    if field == "forager_score_hysteresis_pct":
+        source["bot"]["global"]["forager"]["score_hysteresis_pct"] = value
+        match = r"bot\.global\.forager\.score_hysteresis_pct.*finite"
+    else:
+        source["live"][field] = value
 
     with pytest.raises((TypeError, ValueError), match=match):
         prepare_config(source, verbose=False, target="canonical", runtime=None)

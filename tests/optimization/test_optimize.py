@@ -4,6 +4,9 @@ Characterization tests for src/optimize.py
 These tests capture the current behavior of optimize.py functions and classes
 to enable safe refactoring. They document how the code actually works today.
 """
+from config.access import get_optional_config_value
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 
 import logging
 import math
@@ -92,7 +95,7 @@ def _flat_bounds(config):
 
     return flatten_optimize_bounds(
         config["optimize"]["bounds"],
-        strategy_kind=config.get("live", {}).get("strategy_kind", "trailing_martingale"),
+        strategy_kind=get_optional_config_value(config, 'bot.global.strategy_kind', "trailing_martingale"),
     )
 
 
@@ -302,7 +305,7 @@ class TestApplyConfigOverrides:
 
     def test_strategy_override_uses_canonical_active_strategy_path(self):
         config = get_template_config()
-        config["live"]["strategy_kind"] = "trailing_martingale"
+        config['bot']['global']['strategy_kind'] = "trailing_martingale"
         with pytest.raises(KeyError, match="missing"):
             _apply_config_overrides(config, {"bot.long.entry_threshold_base_pct": 0.25})
         _apply_config_overrides(config, {
@@ -846,7 +849,7 @@ def test_materialize_suite_run_contract_updates_cpu_config():
 def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "pymoo"
-    config["live"]["strategy_kind"] = "trailing_grid_v7"
+    config['bot']['global']['strategy_kind'] = "trailing_grid_v7"
     config["backtest"]["btc_collateral_cap"] = 1.0
 
     original_import = builtins.__import__
@@ -920,17 +923,17 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
 def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
-    source_strategy = config["live"]["strategy_kind"]
+    source_strategy = config['bot']['global']['strategy_kind']
     target_strategy = (
         "trailing_martingale" if source_strategy == "ema_anchor" else "ema_anchor"
     )
     config["optimize"]["fixed_runtime_overrides"] = {
-        "live.strategy_kind": target_strategy,
+        'bot.global.strategy_kind': target_strategy,
     }
 
     with pytest.raises(
         ValueError,
-        match=r"fixed_runtime_overrides may not change live\.strategy_kind",
+        match=r"fixed_runtime_overrides may not change bot\.global\.strategy_kind",
     ):
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
@@ -1540,7 +1543,7 @@ class TestIndividualToConfig:
             0.19,
         ]
         template = {
-            "live": {"strategy_kind": "ema_anchor"},
+            "live": {},
             "bot": {
                 "long": {
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.55},
@@ -1564,11 +1567,15 @@ class TestIndividualToConfig:
                             "ema_span_1": 432.0,
                             "offset": 0.009,
                             "offset_psize_weight": 0.4,
-                        },
+                        }
                     },
                 },
                 "short": {
-                    "forager_score_weights": {"volume": 0.9, "ema_readiness": 0.05, "volatility": 0.05},
+                    "forager_score_weights": {
+                        "volume": 0.9,
+                        "ema_readiness": 0.05,
+                        "volatility": 0.05,
+                    },
                     "risk": {"max_positions": 3, "total_wallet_exposure_limit": 0.25},
                     "forager": {
                         "volume_ema_span_1m": 360,
@@ -1590,9 +1597,10 @@ class TestIndividualToConfig:
                             "ema_span_1": 288.0,
                             "offset": 0.02,
                             "offset_psize_weight": 0.2,
-                        },
+                        }
                     },
                 },
+                "global": {"strategy_kind": "ema_anchor"},
             },
             "optimize": {
                 "enable_overrides": ["mirror_short_from_long"],
@@ -1606,7 +1614,7 @@ class TestIndividualToConfig:
                                 "ema_span_1": [288, 720, 1],
                                 "offset": [0.006, 0.02, 0.0005],
                                 "offset_psize_weight": [0.2, 0.8, 0.01],
-                            },
+                            }
                         },
                     },
                     "short": {
@@ -1618,7 +1626,7 @@ class TestIndividualToConfig:
                                 "ema_span_1": [288, 720, 1],
                                 "offset": [0.007, 0.02, 0.0005],
                                 "offset_psize_weight": [0.2, 0.8, 0.01],
-                            },
+                            }
                         },
                     },
                 },
@@ -1660,7 +1668,7 @@ class TestIndividualToConfig:
 
     def test_mirror_short_from_long_override_supports_trailing_martingale(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "bot": {
                 "long": {
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.9},
@@ -1694,6 +1702,7 @@ class TestIndividualToConfig:
                         "ema_anchor": {"ema_span_0": 123.0},
                     },
                 },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -1738,7 +1747,7 @@ class TestIndividualToConfig:
     ):
         template = {
             "config_version": optimize.get_template_config()["config_version"],
-            "live": {"strategy_kind": strategy_kind},
+            "live": {},
             "bot": {
                 "long": {
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
@@ -1748,8 +1757,11 @@ class TestIndividualToConfig:
                     "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
                     "strategy": {strategy_kind: {}},
                 },
+                "global": {"strategy_kind": strategy_kind},
             },
-            "optimize": {"bounds": _bounds_from_flat({bound_key: [new_value, new_value]}, strategy_kind)},
+            "optimize": {
+                "bounds": _bounds_from_flat({bound_key: [new_value, new_value]}, strategy_kind)
+            },
         }
         prepared = prepare_config(
             template, verbose=False, target="canonical", runtime=None
@@ -1932,18 +1944,23 @@ class TestIndividualToConfig:
 
     def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
         template = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_pct": 0.1, "threshold_we_weight": 0.2}},
-                    },
+                        "trailing_martingale": {
+                            "entry": {"initial_qty_pct": 0.1, "threshold_we_weight": 0.2}
+                        }
+                    }
                 },
                 "short": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_pct": 0.3, "threshold_we_weight": 0.4}},
-                    },
+                        "trailing_martingale": {
+                            "entry": {"initial_qty_pct": 0.3, "threshold_we_weight": 0.4}
+                        }
+                    }
                 },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
             "backtest": {"start_date": "2024-01-01"},
             "optimize": {
@@ -1955,8 +1972,8 @@ class TestIndividualToConfig:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
-                ),
+                    }
+                )
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -1966,16 +1983,22 @@ class TestIndividualToConfig:
                             "long": {
                                 "strategy": {
                                     "trailing_martingale": {
-                                        "entry": {"initial_qty_pct": 0.11, "threshold_we_weight": 0.22},
-                                    },
-                                },
+                                        "entry": {
+                                            "initial_qty_pct": 0.11,
+                                            "threshold_we_weight": 0.22,
+                                        }
+                                    }
+                                }
                             },
                             "short": {
                                 "strategy": {
                                     "trailing_martingale": {
-                                        "entry": {"initial_qty_pct": 0.33, "threshold_we_weight": 0.44},
-                                    },
-                                },
+                                        "entry": {
+                                            "initial_qty_pct": 0.33,
+                                            "threshold_we_weight": 0.44,
+                                        }
+                                    }
+                                }
                             },
                         },
                         "fixed_values": [
@@ -1990,7 +2013,7 @@ class TestIndividualToConfig:
                                     "threshold_we_weight",
                                 ],
                                 "value": 0.22,
-                            },
+                            }
                         ],
                     },
                     {
@@ -1999,16 +2022,22 @@ class TestIndividualToConfig:
                             "long": {
                                 "strategy": {
                                     "trailing_martingale": {
-                                        "entry": {"initial_qty_pct": 0.55, "threshold_we_weight": 0.66},
-                                    },
-                                },
+                                        "entry": {
+                                            "initial_qty_pct": 0.55,
+                                            "threshold_we_weight": 0.66,
+                                        }
+                                    }
+                                }
                             },
                             "short": {
                                 "strategy": {
                                     "trailing_martingale": {
-                                        "entry": {"initial_qty_pct": 0.77, "threshold_we_weight": 0.88},
-                                    },
-                                },
+                                        "entry": {
+                                            "initial_qty_pct": 0.77,
+                                            "threshold_we_weight": 0.88,
+                                        }
+                                    }
+                                }
                             },
                         },
                         "fixed_values": [
@@ -2023,12 +2052,21 @@ class TestIndividualToConfig:
                                     "threshold_we_weight",
                                 ],
                                 "value": 0.66,
-                            },
+                            }
                         ],
                     },
                 ],
                 "fixed_keys": ["long_entry_threshold_we_weight"],
-                "key_paths": [["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_pct"]],
+                "key_paths": [
+                    [
+                        "bot",
+                        "long",
+                        "strategy",
+                        "trailing_martingale",
+                        "entry",
+                        "initial_qty_pct",
+                    ]
+                ],
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
@@ -2495,7 +2533,7 @@ class TestValidateArray:
                 "start_date": "2024-01-01",
             },
             "bot": deepcopy(original_bot),
-            "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+            "live": {},
         }
         cache_dir = Path("/prepared/dataset")
 
@@ -2520,7 +2558,7 @@ class TestValidateArray:
             )
 
         assert (
-            config["live"]["approved_coins"]
+            require_side_universe_sources(config, 'approved_coins')
             == override_meta["effective_side_membership"]
         )
         assert config["backtest"]["start_date"] == "2025-01-02T00:00:00"
@@ -2529,7 +2567,9 @@ class TestValidateArray:
         assert config["backtest"]["coins"]["binance"] == ["BTC", "ETH"]
         assert config["_hlcvs_dataset_override_meta"] == override_meta
         assert config["_hlcvs_dataset_override_meta"] is not override_meta
-        assert config["bot"] == original_bot
+        assert {side: config["bot"][side]["risk"] for side in ("long", "short")} == {
+            side: original_bot[side]["risk"] for side in ("long", "short")
+        }
 
 
 class TestApplyPolishBounds:
@@ -2537,7 +2577,7 @@ class TestApplyPolishBounds:
 
     def test_nested_bounds_center_on_current_config_values(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
@@ -2558,7 +2598,8 @@ class TestApplyPolishBounds:
                             "close": {"threshold_we_weight": -0.0796},
                         }
                     }
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2576,12 +2617,14 @@ class TestApplyPolishBounds:
 
     def test_canonical_bounds_keep_shape_and_positive_step(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({
-                    "long_entry_threshold_base_pct": [0.01, 0.1, 0.001],
-                    "long_close_threshold_we_weight": [-1.0, 1.0],
-                })
+                "bounds": _bounds_from_flat(
+                    {
+                        "long_entry_threshold_base_pct": [0.01, 0.1, 0.001],
+                        "long_close_threshold_we_weight": [-1.0, 1.0],
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -2591,7 +2634,8 @@ class TestApplyPolishBounds:
                             "close": {"threshold_we_weight": -0.0796},
                         }
                     }
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2606,12 +2650,14 @@ class TestApplyPolishBounds:
 
     def test_fixed_bounds_stay_fixed(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({
-                    "long_entry_threshold_base_pct": 0.05,
-                    "long_close_threshold_we_weight": [-0.07, -0.07],
-                })
+                "bounds": _bounds_from_flat(
+                    {
+                        "long_entry_threshold_base_pct": 0.05,
+                        "long_close_threshold_we_weight": [-0.07, -0.07],
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -2621,7 +2667,8 @@ class TestApplyPolishBounds:
                             "close": {"threshold_we_weight": -0.07},
                         }
                     }
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2635,16 +2682,15 @@ class TestApplyPolishBounds:
 
     def test_polish_bounds_stay_inside_existing_domain(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
-            "optimize": {"bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})},
+            "live": {},
+            "optimize": {
+                "bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})
+            },
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 1.0},
-                        }
-                    }
-                }
+                    "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 1.0}}}
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2656,16 +2702,15 @@ class TestApplyPolishBounds:
 
     def test_override_tunable_allows_tunable_bounds_outside_existing_domain(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
-            "optimize": {"bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})},
+            "live": {},
+            "optimize": {
+                "bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})
+            },
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.09},
-                        }
-                    }
-                }
+                    "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.09}}}
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2677,16 +2722,15 @@ class TestApplyPolishBounds:
 
     def test_override_tunable_uses_current_value_outside_existing_domain(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
-            "optimize": {"bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})},
+            "live": {},
+            "optimize": {
+                "bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})
+            },
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 1.0},
-                        }
-                    }
-                }
+                    "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 1.0}}}
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2698,12 +2742,14 @@ class TestApplyPolishBounds:
 
     def test_override_tunable_keeps_fixed_bounds_fixed(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({
-                    "long_entry_threshold_base_pct": 0.05,
-                    "long_close_threshold_we_weight": [-0.07, -0.07],
-                })
+                "bounds": _bounds_from_flat(
+                    {
+                        "long_entry_threshold_base_pct": 0.05,
+                        "long_close_threshold_we_weight": [-0.07, -0.07],
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -2713,7 +2759,8 @@ class TestApplyPolishBounds:
                             "close": {"threshold_we_weight": -0.07},
                         }
                     }
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2727,12 +2774,14 @@ class TestApplyPolishBounds:
 
     def test_override_all_expands_fixed_bounds(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({
-                    "long_entry_threshold_base_pct": 0.05,
-                    "long_close_threshold_we_weight": [-0.07, -0.07],
-                })
+                "bounds": _bounds_from_flat(
+                    {
+                        "long_entry_threshold_base_pct": 0.05,
+                        "long_close_threshold_we_weight": [-0.07, -0.07],
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -2742,7 +2791,8 @@ class TestApplyPolishBounds:
                             "close": {"threshold_we_weight": -0.07},
                         }
                     }
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2757,7 +2807,7 @@ class TestApplyPolishBounds:
 
     def test_fixed_params_collapse_after_override_all_polish(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
@@ -2779,16 +2829,12 @@ class TestApplyPolishBounds:
             },
             "bot": {
                 "long": {
-                    "risk": {
-                        "max_positions": 3,
-                        "total_wallet_exposure_limit": 1.5,
-                    },
+                    "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.5},
                     "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.05},
-                        }
+                        "trailing_martingale": {"entry": {"threshold_base_pct": 0.05}}
                     },
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2804,20 +2850,17 @@ class TestApplyPolishBounds:
 
     def test_step_dropped_when_polished_range_cannot_support_it(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({
-                    "long_entry_threshold_base_pct": [0.01, 0.1, 0.05],
-                })
+                "bounds": _bounds_from_flat(
+                    {"long_entry_threshold_base_pct": [0.01, 0.1, 0.05]}
+                )
             },
             "bot": {
                 "long": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.05},
-                        }
-                    }
-                }
+                    "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.05}}}
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2884,19 +2927,22 @@ class TestApplyFineTuneBounds:
 
     def test_fine_tune_params_accept_dotted_path_selectors(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_pct": [0.0, 1.0]},
-                                "close": {"qty_pct": [0.0, 1.0], "threshold_base_pct": [0.0, 1.0]},
-                            },
+                                "close": {
+                                    "qty_pct": [0.0, 1.0],
+                                    "threshold_base_pct": [0.0, 1.0],
+                                },
+                            }
                         },
                         "unstuck": {"exposure_trigger_ratio": [0.0, 1.0]},
-                    },
-                },
+                    }
+                }
             },
             "bot": {
                 "long": {
@@ -2904,10 +2950,11 @@ class TestApplyFineTuneBounds:
                         "trailing_martingale": {
                             "entry": {"threshold_base_pct": 0.33},
                             "close": {"qty_pct": 0.22, "threshold_base_pct": 0.11},
-                        },
+                        }
                     },
                     "unstuck": {"exposure_trigger_ratio": 0.44},
                 },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2994,13 +3041,11 @@ class TestApplyFineTuneBounds:
 
     def test_nested_bounds_fix_non_tuned_params(self):
         config = {
-            "live": {"strategy_kind": "ema_anchor"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
-                        "risk": {
-                            "total_wallet_exposure_limit": [0.35, 0.8, 0.01],
-                        },
+                        "risk": {"total_wallet_exposure_limit": [0.35, 0.8, 0.01]},
                         "strategy": {
                             "ema_anchor": {
                                 "base_qty_pct": [0.006, 0.03, 0.0005],
@@ -3013,10 +3058,9 @@ class TestApplyFineTuneBounds:
             "bot": {
                 "long": {
                     "risk": {"total_wallet_exposure_limit": 0.55},
-                    "strategy": {
-                        "ema_anchor": {"base_qty_pct": 0.012, "offset": 0.009}
-                    },
-                }
+                    "strategy": {"ema_anchor": {"base_qty_pct": 0.012, "offset": 0.009}},
+                },
+                "global": {"strategy_kind": "ema_anchor"},
             },
         }
 
@@ -3111,7 +3155,7 @@ class TestApplyFineTuneBounds:
     def test_config_fixed_params_accept_dotted_path_prefix_selectors(self, caplog):
         caplog.set_level(logging.INFO)
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
@@ -3125,9 +3169,7 @@ class TestApplyFineTuneBounds:
                     },
                     "short": {
                         "strategy": {
-                            "trailing_martingale": {
-                                "entry": {"threshold_base_pct": [0.0, 1.0]},
-                            }
+                            "trailing_martingale": {"entry": {"threshold_base_pct": [0.0, 1.0]}}
                         }
                     },
                 },
@@ -3144,12 +3186,9 @@ class TestApplyFineTuneBounds:
                     "unstuck": {"close_pct": 0.4},
                 },
                 "short": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.5},
-                        }
-                    }
+                    "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.5}}}
                 },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3265,7 +3304,7 @@ class TestApplyFineTuneBounds:
 
     def test_fixed_params_support_side_wildcard_path_segment(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
@@ -3278,9 +3317,7 @@ class TestApplyFineTuneBounds:
                     },
                     "short": {
                         "strategy": {
-                            "trailing_martingale": {
-                                "entry": {"threshold_base_pct": [0.0, 1.0]},
-                            }
+                            "trailing_martingale": {"entry": {"threshold_base_pct": [0.0, 1.0]}}
                         }
                     },
                 },
@@ -3293,15 +3330,12 @@ class TestApplyFineTuneBounds:
                             "entry": {"threshold_base_pct": 0.1},
                             "close": {"qty_pct": 0.3},
                         }
-                    },
-                },
-                "short": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.5},
-                        }
                     }
                 },
+                "short": {
+                    "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.5}}}
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3320,7 +3354,7 @@ class TestApplyFineTuneBounds:
     def test_dotted_selector_does_not_match_by_substring(self, caplog):
         caplog.set_level(logging.WARNING)
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": {
                     "long": {
@@ -3340,10 +3374,11 @@ class TestApplyFineTuneBounds:
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "close": {"qty_pct": 0.3, "threshold_base_pct": 0.1},
+                            "close": {"qty_pct": 0.3, "threshold_base_pct": 0.1}
                         }
                     }
-                }
+                },
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3392,7 +3427,7 @@ class TestApplyFineTuneBounds:
     def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path, caplog):
         config = {
             "config_version": optimize.get_template_config()["config_version"],
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
@@ -3403,7 +3438,7 @@ class TestApplyFineTuneBounds:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
+                    }
                 ),
                 "fixed_params": ["long.strategy.trailing_martingale.close.qty_pct"],
             },
@@ -3414,17 +3449,38 @@ class TestApplyFineTuneBounds:
                         "trailing_martingale": {
                             "entry": {"initial_qty_pct": 0.1, "threshold_we_weight": 0.2},
                             "close": {"qty_pct": 0.3},
-                        },
+                        }
                     },
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
         anchors_dir = tmp_path / "anchors"
         anchors_dir.mkdir()
         for idx, values in enumerate(((0.11, 8.0, 0.33), (0.44, 9.0, 0.66))):
-            (anchors_dir / f'anchor_{idx}.json').write_text(json.dumps({"config_version": config["config_version"], "live": {"strategy_kind": "trailing_martingale"}, "bot": {"long": {"hsl": {"enabled": False}, "strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": values[0], "threshold_we_weight": values[1]}, "close": {"qty_pct": values[2]}}}, "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0}}, "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}}}}))
+            (anchors_dir / f'anchor_{idx}.json').write_text(json.dumps({
+                "config_version": config["config_version"],
+                "live": {},
+                "bot": {
+                    "long": {
+                        "hsl": {"enabled": False},
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {
+                                    "initial_qty_pct": values[0],
+                                    "threshold_we_weight": values[1],
+                                },
+                                "close": {"qty_pct": values[2]},
+                            }
+                        },
+                        "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
+                    },
+                    "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                    "global": {"strategy_kind": "trailing_martingale"},
+                },
+            }))
 
         caplog.set_level(logging.DEBUG)
         install_anchored_fine_tune_plan(config, ["long.strategy.trailing_martingale.entry.initial_qty_pct", "long.strategy.trailing_martingale.close.qty_pct"], str(anchors_dir))
@@ -3449,7 +3505,7 @@ class TestApplyFineTuneBounds:
     def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
         config = {
             "config_version": optimize.get_template_config()["config_version"],
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
@@ -3459,24 +3515,27 @@ class TestApplyFineTuneBounds:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
-                ),
+                    }
+                )
             },
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_pct": 0.1, "threshold_we_weight": 0.2}},
+                        "trailing_martingale": {
+                            "entry": {"initial_qty_pct": 0.1, "threshold_we_weight": 0.2}
+                        }
                     },
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
         anchors_dir = tmp_path / "anchors"
         anchors_dir.mkdir()
         for idx, strategy_kind in enumerate(("trailing_martingale", "ema_anchor", "trailing_martingale")):
             anchor = deepcopy(config)
-            anchor["live"]["strategy_kind"] = strategy_kind
+            anchor['bot']['global']['strategy_kind'] = strategy_kind
             anchor["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.1 + idx * 0.1
             (anchors_dir / f'anchor_{idx}.json').write_text(json.dumps(anchor), encoding="utf-8")
         install_anchored_fine_tune_plan(config, ["long.strategy.trailing_martingale.entry.initial_qty_pct"], str(anchors_dir))
@@ -3494,7 +3553,7 @@ class TestApplyFineTuneBounds:
 
     def test_anchored_seed_stream_preserves_anchor_ids_after_failed_seed(self, caplog):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
@@ -3503,7 +3562,7 @@ class TestApplyFineTuneBounds:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
+                    }
                 ),
                 "round_to_n_significant_digits": 6,
             },
@@ -3513,6 +3572,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -3521,7 +3581,16 @@ class TestApplyFineTuneBounds:
                     {"source": "anchor_2.json", "fixed_values": []},
                 ],
                 "fixed_keys": [],
-                "key_paths": [["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_pct"]],
+                "key_paths": [
+                    [
+                        "bot",
+                        "long",
+                        "strategy",
+                        "trailing_martingale",
+                        "entry",
+                        "initial_qty_pct",
+                    ]
+                ],
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
@@ -3553,7 +3622,7 @@ class TestApplyFineTuneBounds:
 
     def test_anchored_seed_stream_preserves_persisted_result_anchor_id(self):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
@@ -3562,8 +3631,8 @@ class TestApplyFineTuneBounds:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
-                ),
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -3571,6 +3640,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -3578,7 +3648,16 @@ class TestApplyFineTuneBounds:
                     {"source": "anchor_1.json", "fixed_values": []},
                 ],
                 "fixed_keys": [],
-                "key_paths": [["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_pct"]],
+                "key_paths": [
+                    [
+                        "bot",
+                        "long",
+                        "strategy",
+                        "trailing_martingale",
+                        "entry",
+                        "initial_qty_pct",
+                    ]
+                ],
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
@@ -3606,7 +3685,7 @@ class TestApplyFineTuneBounds:
         self, caplog, anchor_id
     ):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
@@ -3615,8 +3694,8 @@ class TestApplyFineTuneBounds:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
-                ),
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -3624,6 +3703,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -3631,7 +3711,16 @@ class TestApplyFineTuneBounds:
                     {"source": "anchor_1.json", "fixed_values": []},
                 ],
                 "fixed_keys": [],
-                "key_paths": [["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_pct"]],
+                "key_paths": [
+                    [
+                        "bot",
+                        "long",
+                        "strategy",
+                        "trailing_martingale",
+                        "entry",
+                        "initial_qty_pct",
+                    ]
+                ],
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
@@ -3654,7 +3743,7 @@ class TestApplyFineTuneBounds:
 
     def test_starting_seed_values_are_clamped_to_base_bounds_with_logging(self, caplog):
         config = {
-            "live": {"strategy_kind": "trailing_martingale"},
+            "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
@@ -3663,8 +3752,8 @@ class TestApplyFineTuneBounds:
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
-                    },
-                ),
+                    }
+                )
             },
             "bot": {
                 "long": {
@@ -3672,6 +3761,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
+                "global": {"strategy_kind": "trailing_martingale"},
             },
         }
         seed = deepcopy(config)
@@ -3969,7 +4059,7 @@ class TestResultRecorder:
             overrides_fn=optimize.optimizer_overrides,
             overrides_list=["mirror_short_from_long"],
         )
-        strategy_kind = entry["live"]["strategy_kind"]
+        strategy_kind = entry['bot']['global']['strategy_kind']
 
         assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
         assert entry["bot"]["long"]["forager"] == entry["bot"]["short"]["forager"]
@@ -4024,7 +4114,7 @@ class TestResultRecorder:
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
             assert saved["metrics"]["effective_start_date"] == "2024-01-02T00:00:00Z"
-            strategy_kind = saved["live"]["strategy_kind"]
+            strategy_kind = saved['bot']['global']['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
             assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
@@ -4073,7 +4163,7 @@ class TestResultRecorder:
             pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
-            strategy_kind = saved["live"]["strategy_kind"]
+            strategy_kind = saved['bot']['global']['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
             assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
@@ -4544,8 +4634,8 @@ class TestEvaluator:
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
-        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
-        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+        set_side_universe_sources(mock_config, 'approved_coins', {"long": ["BTC"], "short": []})
+        set_side_universe_sources(mock_config, 'ignored_coins', {"long": [], "short": []})
 
         base = Evaluator(
             hlcvs_specs={},
@@ -4913,8 +5003,8 @@ class TestEvaluator:
             "binance": ["BTC/USDT:USDT"],
             "bybit": ["BTC/USDT:USDT"],
         }
-        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
-        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+        set_side_universe_sources(mock_config, 'approved_coins', {"long": ["BTC"], "short": []})
+        set_side_universe_sources(mock_config, 'ignored_coins', {"long": [], "short": []})
 
         base = Evaluator(
             hlcvs_specs={},
@@ -4999,8 +5089,8 @@ class TestEvaluator:
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
-        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
-        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+        set_side_universe_sources(mock_config, 'approved_coins', {"long": ["BTC"], "short": []})
+        set_side_universe_sources(mock_config, 'ignored_coins', {"long": [], "short": []})
 
         base = Evaluator(
             hlcvs_specs={},
@@ -5071,8 +5161,8 @@ class TestEvaluator:
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
-        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
-        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+        set_side_universe_sources(mock_config, 'approved_coins', {"long": ["BTC"], "short": []})
+        set_side_universe_sources(mock_config, 'ignored_coins', {"long": [], "short": []})
 
         base = Evaluator(
             hlcvs_specs={},
@@ -5083,7 +5173,7 @@ class TestEvaluator:
         ctx_config = deepcopy(mock_config)
         ctx_config["backtest"]["start_date"] = "2023-01-03"
         ctx_config["backtest"]["coins"] = {"combined": ["ETH/USDT:USDT"]}
-        ctx_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        set_side_universe_sources(ctx_config, 'approved_coins', {"long": ["ETH"], "short": []})
         ctx = ScenarioEvalContext(
             label="test",
             config=ctx_config,
@@ -5104,14 +5194,14 @@ class TestEvaluator:
 
         assert scenario_config["backtest"]["start_date"] == "2023-01-03"
         assert scenario_config["backtest"]["coins"] == {"combined": ["ETH/USDT:USDT"]}
-        assert scenario_config["live"]["approved_coins"] == {
+        assert require_side_universe_sources(scenario_config, 'approved_coins') == {
             "long": ["ETH"],
             "short": [],
         }
         assert scenario_config["bot"]["long"]["risk"]["max_positions"] == 7
         assert mock_config["bot"]["long"]["risk"]["max_positions"] == 2
         assert mock_config["backtest"]["start_date"] == "2023-01-01"
-        assert mock_config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+        assert require_side_universe_sources(mock_config, 'approved_coins') == {"long": ["BTC"], "short": []}
 
     def test_suite_scenario_nested_overrides_preserve_candidate_config_sections(self):
         from optimize import Evaluator, SuiteEvaluator
@@ -5120,17 +5210,18 @@ class TestEvaluator:
 
         candidate_config = get_template_config()
         candidate_config["bot"]["long"]["risk"]["max_positions"] = 7
-        candidate_config["live"]["approved_coins"] = {"long": ["ETH"], "short": ["ETH"]}
-        candidate_config["live"]["ignored_coins"] = {"long": [], "short": []}
+        set_side_universe_sources(candidate_config, 'approved_coins', {"long": ["ETH"], "short": ["ETH"]})
+        set_side_universe_sources(candidate_config, 'ignored_coins', {"long": [], "short": []})
         scenario = build_scenarios(
             {
                 "scenarios": [
                     {
                         "label": "nested",
                         "overrides": {
-                            "live": {"hedge_mode": True},
+                            "live": {},
                             "bot": {
-                                "short": {"risk": {"total_wallet_exposure_limit": 0.0}}
+                                "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
+                                "global": {"hedge_mode": True},
                             },
                         },
                     }
@@ -5163,11 +5254,11 @@ class TestEvaluator:
             candidate_config, ctx
         )
 
-        assert scenario_config["live"]["approved_coins"] == {
+        assert require_side_universe_sources(scenario_config, 'approved_coins') == {
             "long": ["ETH"],
             "short": ["ETH"],
         }
-        assert scenario_config["live"]["hedge_mode"] is True
+        assert scenario_config['bot']['global']['hedge_mode'] is True
         assert scenario_config["bot"]["long"]["risk"]["max_positions"] == 7
         assert (
             scenario_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"]
@@ -5242,15 +5333,19 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
             "start_date": "2024-01-01",
             "end_date": "2024-01-10",
             "exchanges": ["binance"],
-            "scenarios": [
-                {"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}
-            ],
+            "scenarios": [{"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}],
         },
-        "bot": {"long": {"enabled": True}, "short": {"enabled": False}},
-        "live": {
-            "approved_coins": {"long": ["XMR"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "bot": {
+            "long": {
+                "enabled": True,
+                "universe": {"approved_coins": ["XMR"], "ignored_coins": []},
+            },
+            "short": {
+                "enabled": False,
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
         },
+        "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
@@ -5298,12 +5393,10 @@ def test_resume_config_mismatches_rejects_changed_suite_scenarios():
             "start_date": "2024-01-01",
             "end_date": "2024-01-10",
             "exchanges": ["binance"],
-            "scenarios": [
-                {"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}
-            ],
+            "scenarios": [{"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}],
         },
         "bot": {},
-        "live": {"approved_coins": {}, "ignored_coins": {}},
+        "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
@@ -5324,7 +5417,7 @@ def test_resume_config_mismatches_plain_result_still_rejects_coin_change():
             "coins": {"binance": ["XMR"]},
         },
         "bot": {},
-        "live": {"approved_coins": {}, "ignored_coins": {}},
+        "live": {},
         "optimize": {},
     }
     config = deepcopy(entry)
@@ -5343,11 +5436,17 @@ def _resume_validation_entry():
             "exchanges": ["binance"],
             "coins": {"binance": ["XMR"]},
         },
-        "bot": {"long": {"enabled": True}, "short": {"enabled": False}},
-        "live": {
-            "approved_coins": {"long": ["XMR"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
+        "bot": {
+            "long": {
+                "enabled": True,
+                "universe": {"approved_coins": ["XMR"], "ignored_coins": []},
+            },
+            "short": {
+                "enabled": False,
+                "universe": {"approved_coins": [], "ignored_coins": []},
+            },
         },
+        "live": {},
         "optimize": {
             "backend": "pymoo",
             "bounds": _bounds_from_flat({"long_entry_initial_qty_pct": [0.001, 0.01]}),
@@ -5652,8 +5751,9 @@ def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path, backe
     with open(checkpoint_path, "wb") as file:
         pickle.dump({"anchor_plan": anchor_plan}, file)
     config = {
-        "live": {"strategy_kind": "trailing_martingale"},
+        "live": {},
         "optimize": {"backend": backend},
+        "bot": {"global": {"strategy_kind": "trailing_martingale"}},
     }
 
     assert optimize._restore_gpu_resume_anchor_plan(config, str(checkpoint_path))

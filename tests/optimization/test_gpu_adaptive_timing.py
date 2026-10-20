@@ -1,4 +1,5 @@
 """GPU finite RMS, timing-policy and exact-Rust parity regressions."""
+from config.universe import set_side_universe_sources
 
 from pathlib import Path
 from functools import lru_cache
@@ -122,7 +123,7 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
     from test_gpu_entry_sizing_parity import _fixture, _evaluate
 
     cfg, _, mss, _, _ = _fixture(side, coin_count, "reentry")
-    cfg["live"]["strategy_kind"] = strategy
+    cfg['bot']['global']['strategy_kind'] = strategy
     for s in ("long", "short"):
         cfg["bot"][s]["strategy"]["ema_anchor"].update(
             base_qty_pct=0.1,
@@ -174,7 +175,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
     from test_gpu_entry_sizing_parity import _fixture, _evaluate
 
     cfg, _, mss, _, _ = _fixture(side, 2, "initial")
-    cfg["live"]["strategy_kind"] = strategy
+    cfg['bot']['global']['strategy_kind'] = strategy
     count = 101
     t = np.arange(count)
     candles = np.zeros((count, 2, 4))
@@ -293,7 +294,7 @@ def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
     )
 
     cfg, candles, mss, btc, ts = _fixture("long", 2, "initial")
-    cfg["live"]["strategy_kind"] = strategy
+    cfg['bot']['global']['strategy_kind'] = strategy
     cfg["bot"]["long"]["entry_cooldown"].update(
         min_duration_minutes=1, max_duration_minutes=30
     )
@@ -412,9 +413,9 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         monkeypatch.setattr(MpsTrailingMartingaleMulticoinRunner, "__init__", bounded_init)
 
     cfg, _, mss, _, _ = _fixture(side, 2, "initial")
-    cfg["live"]["strategy_kind"] = strategy
+    cfg['bot']['global']['strategy_kind'] = strategy
     coins = ["BTC", "ETH", "SOL"]
-    cfg["live"]["approved_coins"] = {s: coins for s in ("long", "short")}
+    set_side_universe_sources(cfg, 'approved_coins', {s: coins for s in ("long", "short")})
     cfg["backtest"]["coins"] = {"bybit": coins}
     mss["SOL"] = dict(mss["ETH"])
     cfg["backtest"]["dynamic_wel_by_tradability"] = False
@@ -461,7 +462,7 @@ def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
     from test_gpu_entry_sizing_parity import _fixture, _evaluate
 
     cfg, candles, mss, btc, ts = _fixture(side, 2, "initial")
-    cfg["live"]["strategy_kind"] = strategy
+    cfg['bot']['global']['strategy_kind'] = strategy
     cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=5)
     ts = (ts[0] // 300000) * 300000 + np.arange(len(ts), dtype=np.int64) * 300000
     for s in ("long", "short"):
@@ -543,7 +544,7 @@ def test_constant_coin_cooldown_accepts_aggregated_candles_with_exact_parity(str
     from test_gpu_entry_sizing_parity import _fixture, _evaluate
 
     cfg, candles, mss, btc, ts = _fixture(side, 2, "reentry")
-    cfg["live"]["strategy_kind"] = strategy
+    cfg['bot']['global']['strategy_kind'] = strategy
     cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=5)
     ts = (ts[0] // 300000) * 300000 + np.arange(len(ts), dtype=np.int64) * 300000
     # Supply enough trading history for both strategy families after activation.

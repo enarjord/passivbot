@@ -424,7 +424,7 @@ def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl
     config, candles, markets, btc, timestamps = gpu_parity.fixture_inputs(options)
     assert candles.shape == (128, 2, 4)
     assert config["backtest"]["coins"]["binance"] == ["COIN00", "COIN01"]
-    assert config["live"]["strategy_kind"] == strategy
+    assert config['bot']['global']['strategy_kind'] == strategy
     from utils import date_to_ts
     assert date_to_ts(config["backtest"]["start_date"]) == timestamps[0]
     assert date_to_ts(config["backtest"]["end_date"]) == timestamps[-1] + 60_000

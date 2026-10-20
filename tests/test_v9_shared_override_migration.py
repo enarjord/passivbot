@@ -218,7 +218,7 @@ def test_released_atomic_shared_selectors_preserve_actual_final_bound_targets(
     converted = result.config
     assert converted["optimize"]["fixed_params"] == [expected]
     bounds = flatten_optimize_bounds(
-        converted["optimize"]["bounds"], strategy_kind=converted["live"]["strategy_kind"],
+        converted["optimize"]["bounds"], strategy_kind=converted["bot"]["global"]["strategy_kind"],
     )
     selected = resolve_bound_selectors(converted, converted["optimize"]["fixed_params"], bounds)
     assert set(selected) == {f"{side}_{family}" for side in sides}
@@ -244,7 +244,7 @@ def test_unmatched_shared_selectors_do_not_gain_authority(selector):
     converted = migrate(source, memory_span_minutes=123.5).config
     assert converted["optimize"]["fixed_params"] == [selector]
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
-                                     strategy_kind=converted["live"]["strategy_kind"])
+                                     strategy_kind=converted["bot"]["global"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [selector], bounds) == {}
 
 
@@ -276,7 +276,7 @@ def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(sele
     converted = migrate(source, memory_span_minutes=123.5).config
     assert converted["optimize"]["fixed_params"] == [expected]
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
-                                     strategy_kind=converted["live"]["strategy_kind"])
+                                     strategy_kind=converted["bot"]["global"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [expected], bounds) == {
         "hsl_drawdown_ratio_ema_span_minutes": ("bot", "global", "hsl", "drawdown_ratio_ema_span_minutes")
     }

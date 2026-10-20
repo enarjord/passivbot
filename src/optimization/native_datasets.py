@@ -28,7 +28,7 @@ def _worker_config(config):
     for name in ("_coins_sources", "_raw", "_raw_effective", "_transform_log"):
         result.pop(name, None)
     if unstuck_ema_spans_coupled(config):
-        kind = config["live"]["strategy_kind"]
+        kind = config['bot']['global']['strategy_kind']
         for patch in result.get("coin_overrides", {}).values():
             for side in ("long", "short"):
                 side_patch = patch.get("bot", {}).get(side, {})

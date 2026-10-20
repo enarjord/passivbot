@@ -16,6 +16,11 @@ since the latest release tag; these features may already be available when insta
   `risk.position_exposure_enforcer` and `risk.total_exposure_enforcer`, with matching
   optimizer-bound paths and explicit released-v8 conversion, preserving inline coin-policy
   precedence over referenced files. Native trading values are unchanged.
+- Move shared strategy, universe, execution, Forager selection and warmup policy into
+  `bot.global` and directional `bot.<side>` scopes. Keep side-specific coin-list sources
+  reloadable, add `forager.always_include`, and preserve nullable simulation minimum-cost
+  inheritance. Released-v8 conversion preserves forced selections through scenario and fixed
+  mode replacements. Update canonical CLI paths, cleanup/preflight tools and public examples.
 
 - Organize shared bot policy under `bot.global`, alongside `bot.long` and `bot.short`,
   and mirror bot parameter paths exactly in optimizer bounds, including nested forager
