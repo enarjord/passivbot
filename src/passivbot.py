@@ -15035,7 +15035,7 @@ class Passivbot:
                 if key == "risk_twel_enforcer_policy":
                     out[out_key] = normalize_twel_enforcer_policy(
                         val,
-                        path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+                        path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
                     )
             else:
                 out[out_key] = float(val or 0.0)

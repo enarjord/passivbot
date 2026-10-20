@@ -242,15 +242,36 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             values = inline.get("bot", {}).get(side)
             if not isinstance(values, dict):
                 continue
-            for flat, (group, leaf) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+            for flat, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
                 if flat in values:
                     changes.append(dict(
                         path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{flat}",
                         old=deepcopy(values[flat]),
-                        new={f"{group}.{leaf}": deepcopy(values[flat])},
+                        new={".".join(path): deepcopy(values[flat])},
                         reason="explicit released-v8 shared field conversion before file/inline merge",
                     ))
             canonicalize_shared_bot_side(values)
+            risk = values.get("risk", {})
+            for owner, leaf in (
+                ("position_exposure_enforcer", "enabled"),
+                ("position_exposure_enforcer", "threshold"),
+                ("total_exposure_enforcer", "enabled"),
+                ("total_exposure_enforcer", "threshold"),
+                ("total_exposure_enforcer", "policy"),
+            ):
+                old = f"{owner}_{leaf}"
+                if old not in risk:
+                    continue
+                value = risk.pop(old)
+                block = risk.setdefault(owner, {})
+                if not isinstance(block, dict) or (leaf in block and block[leaf] != value):
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{leaf}")
+                block[leaf] = deepcopy(value)
+                changes.append(dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{old}",
+                    old=deepcopy(value), new={f"{owner}.{leaf}": deepcopy(value)},
+                    reason="explicit released-v8 enforcer conversion before file/inline merge",
+                ))
         result["coin_overrides"][coin] = nested_update(patch, inline)
     return result
 

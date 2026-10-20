@@ -47,13 +47,7 @@ def _legacy_replay_config():
     )
     for side in ("long", "short"):
         b = c["bot"][side]
-        b["risk"].update(
-            max_positions=2,
-            total_wallet_exposure_limit=1.0 if side == "long" else 0.0,
-            we_excess_allowance_pct=0,
-            position_exposure_enforcer_enabled=False,
-            total_exposure_enforcer_enabled=False,
-        )
+        b['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0 if side == 'long' else 0.0, 'we_excess_allowance_pct': 0, 'position_exposure_enforcer': {**b['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**b['risk']['total_exposure_enforcer'], 'enabled': False}})
         b["entry_cooldown"]["base_duration_minutes"] = 0
         b["hsl"]["enabled"] = False
         b["forager"].update(volume_ema_span_1m=10, volatility_ema_span_1m=10)

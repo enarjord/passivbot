@@ -46,13 +46,17 @@ def _get_shared_bot_defaults():
             },
             "risk": {
                 "max_positions": 7.0,
-                "position_exposure_enforcer_enabled": False,
-                "position_exposure_enforcer_threshold": 1.0,
-                "total_exposure_enforcer_enabled": False,
-                "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 1.0,
                 "total_wallet_exposure_limit": 1.5,
                 "we_excess_allowance_pct": 0.37,
+                "position_exposure_enforcer": {
+                    "enabled": False,
+                    "threshold": 1.0,
+                },
+                "total_exposure_enforcer": {
+                    "enabled": False,
+                    "policy": "reduce_overweight",
+                    "threshold": 1.0,
+                },
             },
             "unstuck": {
                 "close_pct": 0.041,
@@ -94,13 +98,17 @@ def _get_shared_bot_defaults():
             },
             "risk": {
                 "max_positions": 1.0,
-                "position_exposure_enforcer_enabled": True,
-                "position_exposure_enforcer_threshold": 0.8,
-                "total_exposure_enforcer_enabled": True,
-                "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 0.8,
                 "total_wallet_exposure_limit": 0.0,
                 "we_excess_allowance_pct": 0.0,
+                "position_exposure_enforcer": {
+                    "enabled": True,
+                    "threshold": 0.8,
+                },
+                "total_exposure_enforcer": {
+                    "enabled": True,
+                    "policy": "reduce_overweight",
+                    "threshold": 0.8,
+                },
             },
             "unstuck": {
                 "close_pct": 0.01,

@@ -8,7 +8,7 @@ from backtest_universe import backtest_side_enabled
 from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path
-from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side, get_grouped_path
 from optimizer_overrides import optimizer_overrides, materialize_coupled_scenario_spans
 from optimization.bounds import Bound, enforce_bounds
 from optimization.config_adapter import (
@@ -150,9 +150,9 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         side_cfg = config.get("bot", {}).get(pside)
         if not isinstance(side_cfg, dict):
             continue
-        for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
-            group_cfg = side_cfg.get(group_name)
-            if isinstance(group_cfg, dict) and local_key in group_cfg:
+        missing = object()
+        for flat_key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+            if get_grouped_path(side_cfg, path, default=missing) is not missing:
                 side_cfg.pop(flat_key, None)
         canonicalize_shared_bot_side(side_cfg, path_prefix=("bot", pside))
     config.pop(ANCHOR_PLAN_KEY, None)

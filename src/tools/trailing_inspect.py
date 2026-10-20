@@ -242,21 +242,21 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             loss_gate["max_drawdown_ratio"], "bot.global.loss_gate.max_drawdown_ratio"
         ),
         "position_exposure_enforcer_enabled": bool(
-            risk.get("position_exposure_enforcer_enabled", False)
+            risk.get('position_exposure_enforcer', {}).get('enabled', False)
         ),
         "position_exposure_enforcer_threshold": _finite_float(
-            risk.get("position_exposure_enforcer_threshold", 0.0),
-            f"bot.{pside}.risk.position_exposure_enforcer_threshold",
+            risk.get('position_exposure_enforcer', {}).get('threshold', 0.0),
+            f"bot.{pside}.risk.position_exposure_enforcer.threshold",
         ),
         "total_exposure_enforcer_enabled": bool(
-            risk.get("total_exposure_enforcer_enabled", False)
+            risk.get('total_exposure_enforcer', {}).get('enabled', False)
         ),
         "total_exposure_enforcer_threshold": _finite_float(
-            risk.get("total_exposure_enforcer_threshold", 0.0),
-            f"bot.{pside}.risk.total_exposure_enforcer_threshold",
+            risk.get('total_exposure_enforcer', {}).get('threshold', 0.0),
+            f"bot.{pside}.risk.total_exposure_enforcer.threshold",
         ),
         "total_exposure_enforcer_policy": str(
-            risk.get("total_exposure_enforcer_policy", "unknown")
+            risk.get('total_exposure_enforcer', {}).get('policy', 'unknown')
         ),
         "unstuck_enabled": bool(unstuck.get("enabled", False)),
         "unstuck_close_pct": _finite_float(

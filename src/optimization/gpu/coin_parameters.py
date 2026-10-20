@@ -100,11 +100,11 @@ def build_coin_override_parameters(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0,
             )
         if strategy_kind == "trailing_martingale":
-            if "position_exposure_enforcer_enabled" in risk_patch:
+            if "enabled" in risk_patch.get("position_exposure_enforcer", {}):
                 matrix[row, column("WEL_ENFORCER_ENABLED_COLUMN")] = float(
                     bool(effective_bot.get("risk_wel_enforcer_enabled", False)),
                 )
-            if "position_exposure_enforcer_threshold" in risk_patch:
+            if "threshold" in risk_patch.get("position_exposure_enforcer", {}):
                 matrix[row, column("WEL_ENFORCER_THRESHOLD_COLUMN")] = float(
                     effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0,
                 )

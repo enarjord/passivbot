@@ -88,10 +88,14 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
             "max_positions": [7, 7, 1],
-            "position_exposure_enforcer_threshold": [1, 1, 0.001],
-            "total_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
-            "we_excess_allowance_pct": [0, 0.4, 0.01]
+            "we_excess_allowance_pct": [0, 0.4, 0.01],
+            "position_exposure_enforcer": {
+                "threshold": [1, 1, 0.001],
+            },
+            "total_exposure_enforcer": {
+                "threshold": [1, 1, 0.001],
+            },
         },
         "unstuck": {
             "close_pct": [0.01, 0.12, 0.001],
@@ -120,10 +124,14 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
             "max_positions": [5, 5, 1],
-            "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
-            "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
             "total_wallet_exposure_limit": [0, 0],
-            "we_excess_allowance_pct": [0, 0.5, 0.01]
+            "we_excess_allowance_pct": [0, 0.5, 0.01],
+            "position_exposure_enforcer": {
+                "threshold": [0.8, 1.01, 0.001],
+            },
+            "total_exposure_enforcer": {
+                "threshold": [0.8, 1.01, 0.001],
+            },
         },
         "unstuck": {
             "close_pct": [0.01, 0.12, 0.001],
@@ -295,6 +303,10 @@ def _shared_bound_local_path(group: str, local_key: str) -> tuple[str, ...]:
     for owner, prefix in (("entry_cooldown", "weights_minutes"), ("forager", "score_weights")):
         if group == owner and local_key.startswith(prefix + "_"):
             return (prefix, local_key.removeprefix(prefix + "_"))
+    if group == "risk":
+        for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+            if local_key.startswith(owner + "_"):
+                return (owner, local_key.removeprefix(owner + "_"))
     return (local_key,)
 
 

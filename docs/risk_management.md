@@ -120,13 +120,13 @@ See the [v9 risk model](v9_risk_model.md) for the exact allowance and sampling r
 While exposure limits prevent *new* orders, it is still possible for existing positions to swell beyond their limits (e.g., the account holds BTC as collateral and the BTC/USD price drops, the user withdraws funds while positions are maxed out, or the account realizes significant losses). To handle this, Passivbot provides three parameters that control how aggressively to cap and trim exposure.
 
 These parameters function on top of the base limits:
-* `position_exposure_enforcer_threshold` (The Position Trimmer)
+* `position_exposure_enforcer.threshold` (The Position Trimmer)
 * `risk_we_excess_allowance_pct` (The Buffer)
-* `total_exposure_enforcer_threshold` (The Portfolio Trimmer)
+* `total_exposure_enforcer.threshold` (The Portfolio Trimmer)
 
-#### Position Exposure Enforcer (`position_exposure_enforcer_threshold`)
+#### Position Exposure Enforcer (`position_exposure_enforcer.threshold`)
 This controls **per-position** trimming. If a single position's exposure exceeds:
-`effective_limit * position_exposure_enforcer_threshold`
+`effective_limit * position_exposure_enforcer.threshold`
 The bot issues a reduce-only order to trim it back down.
 
 Examples:
@@ -134,7 +134,7 @@ Examples:
 * `1.0`: **Strict limit.** Trims immediately if the position exceeds the allowance.
 * `1.05`: **Buffer zone.** Trims only if the position becomes greater than 5% of its allowance.
 
-Set `position_exposure_enforcer_enabled = false` to disable this control. The
+Set `position_exposure_enforcer.enabled = false` to disable this control. The
 threshold must be finite and greater than zero when enabled.
 
 This enforcer can also be used deliberately as an aggressive strategy mechanism:
@@ -205,11 +205,11 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
     * Since `1.05 > 1.0` (the TWEL), the bot will gate any new bot-generated entries for that 7th position under the unconditional entry cap, effectively blocking the "excess" allowance for the last few positions.
 
-#### Total Exposure Enforcer (`total_exposure_enforcer_threshold`)
+#### Total Exposure Enforcer (`total_exposure_enforcer.threshold`)
 This controls **total portfolio** trimming. It monitors the sum of all same-side long or short
 exchange exposure, including manual and panic positions. If the raw-balance total exceeds:
-`total_wallet_exposure_limit * total_exposure_enforcer_threshold`
-The bot reduces positions according to `total_exposure_enforcer_policy`.
+`total_wallet_exposure_limit * total_exposure_enforcer.threshold`
+The bot reduces positions according to `total_exposure_enforcer.policy`.
 
 * `0.95`: Trims the portfolio when it reaches 95% of the total limit.
 * `1.0`: Strictly enforces the total limit.
@@ -218,9 +218,9 @@ The bot reduces positions according to `total_exposure_enforcer_policy`.
 The unconditional entry cap is separate from auto-reduce. Bot-generated
 entries are blocked or cropped before projected snapped-balance TWE, including existing same-side
 exchange positions, can exceed
-`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`.
+`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold)`.
 
-Set `total_exposure_enforcer_enabled = false` to disable TWEL auto-reduce. The threshold must be
+Set `total_exposure_enforcer.enabled = false` to disable TWEL auto-reduce. The threshold must be
 finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.
 
 This portfolio trimming mechanism pairs well with the excess allowance. When same-side raw-balance

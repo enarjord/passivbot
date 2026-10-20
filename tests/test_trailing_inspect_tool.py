@@ -339,11 +339,15 @@ def test_extract_side_context_includes_global_and_risk_paths():
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
                     "max_positions": 1,
-                    "position_exposure_enforcer_enabled": True,
-                    "position_exposure_enforcer_threshold": 0.8,
-                    "total_exposure_enforcer_enabled": True,
-                    "total_exposure_enforcer_threshold": 0.9,
-                    "total_exposure_enforcer_policy": "reduce_portfolio",
+                    "position_exposure_enforcer": {
+                        "enabled": True,
+                        "threshold": 0.8,
+                    },
+                    "total_exposure_enforcer": {
+                        "enabled": True,
+                        "threshold": 0.9,
+                        "policy": "reduce_portfolio",
+                    },
                 },
                 "unstuck": {
                     "enabled": True,

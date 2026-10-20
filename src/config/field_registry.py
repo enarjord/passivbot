@@ -134,17 +134,17 @@ _SHARED_SIDE_FIELDS = {
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
-        risk.position_exposure_enforcer_threshold risk.total_exposure_enforcer_threshold
+        risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
         risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
         unstuck.close_pct unstuck.ema_dist unstuck.ema_span_0 unstuck.ema_span_1
         unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
         hsl.enabled hsl.scale_budget_with_excess_allowance
-        risk.position_exposure_enforcer_enabled risk.total_exposure_enforcer_enabled
+        risk.position_exposure_enforcer.enabled risk.total_exposure_enforcer.enabled
         unstuck.ema_gating_enabled unstuck.enabled
     """,
-    FieldType.STRING: "hsl.panic_close_order_type risk.total_exposure_enforcer_policy",
+    FieldType.STRING: "hsl.panic_close_order_type risk.total_exposure_enforcer.policy",
 }
 
 

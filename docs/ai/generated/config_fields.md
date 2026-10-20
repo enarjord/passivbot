@@ -103,11 +103,11 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.hsl.red_threshold` | float | `0.15` | python |
 | `bot.long.hsl.scale_budget_with_excess_allowance` | boolean | `false` | python |
 | `bot.long.risk.max_positions` | integer | `7` | python |
-| `bot.long.risk.position_exposure_enforcer_enabled` | boolean | `false` | python |
-| `bot.long.risk.position_exposure_enforcer_threshold` | float | `1.0` | python |
-| `bot.long.risk.total_exposure_enforcer_enabled` | boolean | `false` | python |
-| `bot.long.risk.total_exposure_enforcer_policy` | string | `"reduce_overweight"` | python |
-| `bot.long.risk.total_exposure_enforcer_threshold` | float | `1.0` | python |
+| `bot.long.risk.position_exposure_enforcer.enabled` | boolean | `false` | python |
+| `bot.long.risk.position_exposure_enforcer.threshold` | float | `1.0` | python |
+| `bot.long.risk.total_exposure_enforcer.enabled` | boolean | `false` | python |
+| `bot.long.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | python |
+| `bot.long.risk.total_exposure_enforcer.threshold` | float | `1.0` | python |
 | `bot.long.risk.total_wallet_exposure_limit` | float | `1.5` | python |
 | `bot.long.risk.we_excess_allowance_pct` | float | `0.37` | python |
 | `bot.long.strategy.ema_anchor.base_qty_pct` | float | `0.01` | rust strategy metadata |
@@ -172,11 +172,11 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.hsl.red_threshold` | float | `0.01` | python |
 | `bot.short.hsl.scale_budget_with_excess_allowance` | boolean | `false` | python |
 | `bot.short.risk.max_positions` | integer | `1` | python |
-| `bot.short.risk.position_exposure_enforcer_enabled` | boolean | `true` | python |
-| `bot.short.risk.position_exposure_enforcer_threshold` | float | `0.8` | python |
-| `bot.short.risk.total_exposure_enforcer_enabled` | boolean | `true` | python |
-| `bot.short.risk.total_exposure_enforcer_policy` | string | `"reduce_overweight"` | python |
-| `bot.short.risk.total_exposure_enforcer_threshold` | float | `0.8` | python |
+| `bot.short.risk.position_exposure_enforcer.enabled` | boolean | `true` | python |
+| `bot.short.risk.position_exposure_enforcer.threshold` | float | `0.8` | python |
+| `bot.short.risk.total_exposure_enforcer.enabled` | boolean | `true` | python |
+| `bot.short.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | python |
+| `bot.short.risk.total_exposure_enforcer.threshold` | float | `0.8` | python |
 | `bot.short.risk.total_wallet_exposure_limit` | float | `0.0` | python |
 | `bot.short.risk.we_excess_allowance_pct` | float | `0.0` | python |
 | `bot.short.strategy.ema_anchor.base_qty_pct` | float | `0.01` | rust strategy metadata |

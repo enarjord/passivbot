@@ -22,29 +22,23 @@ def _single_coin_exposure_params(
         "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
         "twel_entry_gate_enabled": 1.0,
         "twel_enforcer_threshold": float(
-            risk.get("total_exposure_enforcer_threshold", 1.0) or 0.0
+            risk.get('total_exposure_enforcer', {}).get('threshold', 1.0) or 0.0
         ),
     }
 
 
 def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, float]:
     enabled = bool(
-        risk.get(
-            "position_exposure_enforcer_enabled",
-            risk.get("risk_wel_enforcer_enabled", False),
-        )
+        risk.get('position_exposure_enforcer', {}).get('enabled', risk.get('risk_wel_enforcer_enabled', False))
     )
     threshold = float(
-        risk.get(
-            "position_exposure_enforcer_threshold",
-            risk.get("risk_wel_enforcer_threshold", 0.0),
-        )
+        risk.get('position_exposure_enforcer', {}).get('threshold', risk.get('risk_wel_enforcer_threshold', 0.0))
         or 0.0
     )
     if enabled and (not np.isfinite(threshold) or threshold <= 0.0):
         raise ValueError(
             "MPS proxy requires a finite positive "
-            f"bot.{side}.risk.position_exposure_enforcer_threshold when the "
+            f"bot.{side}.risk.position_exposure_enforcer.threshold when the "
             "position exposure enforcer is enabled"
         )
     return {
@@ -55,19 +49,19 @@ def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, fl
 
 def _total_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, float]:
     policy = (
-        str(risk.get("total_exposure_enforcer_policy", "reduce_overweight"))
+        str(risk.get('total_exposure_enforcer', {}).get('policy', 'reduce_overweight'))
         .strip()
         .lower()
     )
     if policy not in {"reduce_overweight", "reduce_portfolio"}:
         raise ValueError(
             "MPS proxy requires "
-            f"bot.{side}.risk.total_exposure_enforcer_policy to be "
+            f"bot.{side}.risk.total_exposure_enforcer.policy to be "
             f"reduce_overweight or reduce_portfolio, got {policy!r}"
         )
     return {
         "twel_enforcer_enabled": float(
-            bool(risk.get("total_exposure_enforcer_enabled", False))
+            bool(risk.get('total_exposure_enforcer', {}).get('enabled', False))
         ),
         "twel_enforcer_reduce_portfolio": float(policy == "reduce_portfolio"),
     }

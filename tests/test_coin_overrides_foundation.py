@@ -145,8 +145,10 @@ def test_effective_config_cross_field_validation_fails_with_coin_context():
                     "bot": {
                         "long": {
                             "risk": {
-                                "position_exposure_enforcer_enabled": True,
-                                "position_exposure_enforcer_threshold": 0.0,
+                                "position_exposure_enforcer": {
+                                    "enabled": True,
+                                    "threshold": 0.0,
+                                },
                             }
                         }
                     }
@@ -393,15 +395,11 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                         },
                         "entry_cooldown": deepcopy(side["entry_cooldown"]),
                         "risk": {
-                            "position_exposure_enforcer_enabled": side["risk"][
-                                "position_exposure_enforcer_enabled"
-                            ],
-                            "position_exposure_enforcer_threshold": side["risk"][
-                                "position_exposure_enforcer_threshold"
-                            ],
-                            "we_excess_allowance_pct": side["risk"][
-                                "we_excess_allowance_pct"
-                            ],
+                            "we_excess_allowance_pct": side['risk']['we_excess_allowance_pct'],
+                            "position_exposure_enforcer": {
+                                "enabled": side['risk']['position_exposure_enforcer']['enabled'],
+                                "threshold": side['risk']['position_exposure_enforcer']['threshold'],
+                            },
                         },
                         "unstuck": {
                             "close_pct": side["unstuck"]["close_pct"],

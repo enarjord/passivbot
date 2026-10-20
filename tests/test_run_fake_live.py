@@ -542,7 +542,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
 
     stub = _Stub()
     stub.values["risk_twel_enforcer_policy"] = "invalid_policy"
-    with pytest.raises(ValueError, match="total_exposure_enforcer_policy"):
+    with pytest.raises(ValueError, match=r"risk\.total_exposure_enforcer\.policy"):
         Passivbot._bot_params_to_rust_dict(stub, "long", None)
 
 

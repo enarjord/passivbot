@@ -103,10 +103,10 @@ def validate_gpu_backtest_config(config: dict) -> None:
             risks = [config["bot"][side]["risk"]]
             risks.extend(patch.get("bot", {}).get(side, {}).get("risk", {})
                          for patch in (config.get("coin_overrides") or {}).values())
-            if any(risk.get("position_exposure_enforcer_enabled", False) for risk in risks):
+            if any(risk.get('position_exposure_enforcer', {}).get('enabled', False) for risk in risks):
                 raise ValueError(
                     f"GPU EMA Anchor does not support bot.{side}.risk."
-                    "position_exposure_enforcer_enabled; disable it or use a CPU backend"
+                    "position_exposure_enforcer.enabled; disable it or use a CPU backend"
                 )
     backtest = config["backtest"]
     collateral = float(backtest["btc_collateral_cap"])

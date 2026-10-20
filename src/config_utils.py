@@ -1730,15 +1730,15 @@ for _pside in ("long", "short"):
                 "Allowed values: limit or market. market uses "
                 "backtest.market_order_slippage_pct and taker fees in backtests."
             ),
-            f"bot.{_pside}.risk.total_exposure_enforcer_enabled": (
+            f"bot.{_pside}.risk.total_exposure_enforcer.enabled": (
                 f"Enable {_pside} TWEL auto-reduce repair for already-over-target "
                 "same-side exposure."
             ),
-            f"bot.{_pside}.risk.total_exposure_enforcer_policy": (
+            f"bot.{_pside}.risk.total_exposure_enforcer.policy": (
                 "Allowed values: reduce_overweight or reduce_portfolio. Controls "
                 f"which managed {_pside} positions TWEL auto-reduce may trim."
             ),
-            f"bot.{_pside}.risk.total_exposure_enforcer_threshold": (
+            f"bot.{_pside}.risk.total_exposure_enforcer.threshold": (
                 f"Fraction of {_pside} TWEL used by entry gating and TWEL "
                 "auto-reduce repair."
             ),

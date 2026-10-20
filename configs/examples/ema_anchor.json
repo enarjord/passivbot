@@ -87,13 +87,14 @@
             },
             "risk": {
                 "max_positions": 1,
-                "position_exposure_enforcer_enabled": false,
-                "position_exposure_enforcer_threshold": 1.0,
-                "total_exposure_enforcer_enabled": true,
-                "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 1.0,
                 "total_wallet_exposure_limit": 2.5,
-                "we_excess_allowance_pct": 0.0
+                "we_excess_allowance_pct": 0.0,
+                "position_exposure_enforcer": {"enabled": false, "threshold": 1.0},
+                "total_exposure_enforcer": {
+                    "enabled": true,
+                    "threshold": 1.0,
+                    "policy": "reduce_overweight"
+                }
             },
             "strategy": {
                 "ema_anchor": {
@@ -149,13 +150,14 @@
             },
             "risk": {
                 "max_positions": 1,
-                "position_exposure_enforcer_enabled": false,
-                "position_exposure_enforcer_threshold": 1.0,
-                "total_exposure_enforcer_enabled": true,
-                "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 1.0,
                 "total_wallet_exposure_limit": 2.5,
-                "we_excess_allowance_pct": 0.0
+                "we_excess_allowance_pct": 0.0,
+                "position_exposure_enforcer": {"enabled": false, "threshold": 1.0},
+                "total_exposure_enforcer": {
+                    "enabled": true,
+                    "threshold": 1.0,
+                    "policy": "reduce_overweight"
+                }
             },
             "strategy": {
                 "ema_anchor": {
@@ -307,10 +309,10 @@
                 },
                 "risk": {
                     "max_positions": [1, 1, 1],
-                    "position_exposure_enforcer_threshold": [1, 1, 0.001],
-                    "total_exposure_enforcer_threshold": [1, 1, 0.001],
                     "total_wallet_exposure_limit": [0.5, 3.0, 0.01],
-                    "we_excess_allowance_pct": [0, 0, 0.01]
+                    "we_excess_allowance_pct": [0, 0, 0.01],
+                    "position_exposure_enforcer": {"threshold": [1, 1, 0.001]},
+                    "total_exposure_enforcer": {"threshold": [1, 1, 0.001]}
                 },
                 "strategy": {
                     "ema_anchor": {
@@ -363,10 +365,10 @@
                 },
                 "risk": {
                     "max_positions": [1, 1, 1],
-                    "position_exposure_enforcer_threshold": [1, 1, 0.001],
-                    "total_exposure_enforcer_threshold": [1, 1, 0.001],
                     "total_wallet_exposure_limit": [0.5, 3.0, 0.01],
-                    "we_excess_allowance_pct": [0, 0, 0.01]
+                    "we_excess_allowance_pct": [0, 0, 0.01],
+                    "position_exposure_enforcer": {"threshold": [1, 1, 0.001]},
+                    "total_exposure_enforcer": {"threshold": [1, 1, 0.001]}
                 },
                 "strategy": {
                     "ema_anchor": {

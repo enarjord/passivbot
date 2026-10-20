@@ -11,6 +11,7 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .shared_bot import (
     BOT_POSITION_SIDES,
     FLAT_BOT_KEY_TO_GROUP_PATH,
+    set_grouped_bot_value,
     canonicalize_shared_bot_side,
     flatten_shared_bot_side,
     get_bot_group,
@@ -121,26 +122,26 @@ def validate_bot_config(result: dict) -> None:
             threshold_value=get_grouped_bot_value(
                 bot_side, "risk_wel_enforcer_threshold"
             ),
-            enabled_path=f"bot.{pside}.risk.position_exposure_enforcer_enabled",
-            threshold_path=f"bot.{pside}.risk.position_exposure_enforcer_threshold",
+            enabled_path=f"bot.{pside}.risk.position_exposure_enforcer.enabled",
+            threshold_path=f"bot.{pside}.risk.position_exposure_enforcer.threshold",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
                 bot_side, "risk_twel_enforcer_threshold"
             ),
-            enabled_path=f"bot.{pside}.risk.total_exposure_enforcer_enabled",
-            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
+            enabled_path=f"bot.{pside}.risk.total_exposure_enforcer.enabled",
+            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=True,
             threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
             enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit",
-            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
+            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold",
         )
         normalize_twel_enforcer_policy(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
-            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+            path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
         twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
         raw_n_positions = get_grouped_bot_value(bot_side, "n_positions")
@@ -368,16 +369,7 @@ def _set_grouped_bot_value(
     value,
     tracker: Optional[object],
 ) -> None:
-    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
-    if group_path is None:
-        result["bot"][pside][flat_key] = value
-        return
-    group_name, local_key = group_path
-    group_cfg = get_bot_group(result["bot"][pside], group_name)
-    if group_cfg:
-        group_cfg[local_key] = value
-    else:
-        result["bot"][pside][flat_key] = value
+    set_grouped_bot_value(result["bot"][pside], flat_key, value)
 
 
 def _normalize_minimum_span(
@@ -498,17 +490,7 @@ def normalize_cliff_edge_thresholds(
                     tracker.update(["bot", pside, *group_path], raw_value, normalized)
                 else:
                     tracker.update(["bot", pside, key], raw_value, normalized)
-            if group_path is not None:
-                group_name, local_key = group_path
-                group_cfg = get_bot_group(result["bot"][pside], group_name)
-                if group_cfg:
-                    group_cfg[local_key] = normalized
-                else:
-                    result["bot"][pside][key] = normalized
-            elif risk_cfg:
-                risk_cfg[key.removeprefix("risk_")] = normalized
-            else:
-                result["bot"][pside][key] = normalized
+            set_grouped_bot_value(result["bot"][pside], key, normalized)
 
 
 def ensure_required_bot_params_present(result: dict) -> None:
@@ -720,18 +702,18 @@ def normalize_position_counts(
 def normalize_risk_config(result: dict, *, tracker: Optional[object] = None) -> None:
     for pside in BOT_POSITION_SIDES:
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
-        current_policy = risk_cfg.get("total_exposure_enforcer_policy")
+        current_policy = risk_cfg.get('total_exposure_enforcer', {}).get('policy')
         normalized_policy = normalize_twel_enforcer_policy(
             current_policy,
-            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+            path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
         if tracker is not None and current_policy != normalized_policy:
             tracker.update(
-                ["bot", pside, "risk", "total_exposure_enforcer_policy"],
+                ["bot", pside, "risk", "total_exposure_enforcer", "policy"],
                 current_policy,
                 normalized_policy,
             )
-        risk_cfg["total_exposure_enforcer_policy"] = normalized_policy
+        risk_cfg['total_exposure_enforcer']['policy'] = normalized_policy
 
 
 def _parse_entry_grid_inflation_flag(raw_value, *, path: str) -> bool:

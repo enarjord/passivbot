@@ -142,8 +142,7 @@ def test_reachable_ema_side_cannot_silently_enable_unsupported_enforcer(monkeypa
                 key: [config["bot"][side]["risk"][key]] * 2
                 for key in ("max_positions", "total_wallet_exposure_limit")
             }}
-        config["bot"]["short"]["risk"].update(total_wallet_exposure_limit=0,
-                                                 position_exposure_enforcer_enabled=True)
+        config['bot']['short']['risk'].update({'total_wallet_exposure_limit': 0, 'position_exposure_enforcer': {**config['bot']['short']['risk']['position_exposure_enforcer'], 'enabled': True}})
         config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [0, 1]
         base = optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                                   config, timestamps=original.timestamps)
@@ -151,7 +150,7 @@ def test_reachable_ema_side_cannot_silently_enable_unsupported_enforcer(monkeypa
         def forbidden_service(**kwargs):
             pytest.fail("reachable unsupported EMA side reached GPU construction")
         monkeypatch.setattr(native, "NativeBacktestService", forbidden_service)
-        with pytest.raises(ValueError, match="bot.short.risk.position_exposure_enforcer_enabled"):
+        with pytest.raises(ValueError, match="bot.short.risk.position_exposure_enforcer.enabled"):
             execute(base, SimpleNamespace(record=lambda _: pytest.fail("unexpected result")),
                     tmp_path / "checkpoint.pkl")
 
