@@ -9,6 +9,7 @@ current task.
 |---|---|
 | Trading-critical failure, fallback, readiness, or data availability | `error_contract.md` |
 | Component ownership, live/backtest/optimizer flow | `architecture.md` |
+| Configuration field types and defaults | `generated/config_fields.md` |
 | Validation selection or code review | `validation.md` |
 | Logging levels, redaction, sinks, console behavior | `logging_policy.md` |
 | Active architectural rationale | `decisions.md` |
@@ -55,7 +56,9 @@ Run documentation checks with:
 ```bash
 PYTHONPATH=src python src/tools/check_ai_docs.py
 PYTHONPATH=src python src/tools/generate_live_event_registry.py --check
+PYTHONPATH=src python src/tools/generate_config_field_reference.py --check
 pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
+pytest tests/test_config_field_registry.py
 ```
 
 The mandatory-context ceiling is 1,500 words and is warning-only. Missing routed files and stale

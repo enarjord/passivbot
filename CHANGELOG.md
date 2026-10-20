@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Declare configuration field types explicitly and publish a generated field reference.
+  Config exports use float spelling for balances and fractional durations independently
+  of template spelling, while preserving values, sparse overrides, and integer counts.
+
 - Pin released-v8 migration defaults independently of the current schema, distinguish omitted
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.
 
