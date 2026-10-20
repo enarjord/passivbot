@@ -71,7 +71,7 @@ vectors; it never regenerates candidates. The report records selected entry IDs.
 corners, retaining random candidates. `--bounds-config` reads only `optimize.bounds`
 from a canonical local config. Derived bounds and candidates remain private inputs.
 Default bounds follow the workload's HSL scope: portfolio workloads use shared
-`bot.global.hsl` parameters, while coin/pside workloads retain side HSL parameters.
+`bot.global.hsl` parameters, while coin/position_side workloads retain side HSL parameters.
 Explicit `--bounds-config` inputs are validated as supplied; inactive side HSL bounds
 in portfolio mode remain errors.
 
@@ -96,7 +96,7 @@ retracement separately. There is no duplicate passive feature case.
 |---|---|
 | Strategy and sides | TM, EMA Anchor, CPU v7; long, short, both; hedge and one-way |
 | Universe | One coin, fixed multicoin, competing forager slots |
-| HSL | Off, coin, pside, portfolio, market/limit panic, zero/finite cooldown, slow memory, budget scaling |
+| HSL | Off, coin, position_side, portfolio, market/limit panic, zero/finite cooldown, slow memory, budget scaling |
 | Unstuck | Off/on, EMA gating off/on |
 | Cooldown | Zero, constant, exposure/directionality weighted and clamped |
 | Exposure | Position/total enforcers, both total-reduction policies, entry gate, excess allowance |

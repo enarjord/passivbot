@@ -163,8 +163,8 @@ The field may be overridden for an individual coin+side through `coin_overrides`
 `bot.<side>.unstuck.ema_span_0` and `ema_span_1` are positive floating-point EMA spans in
 minutes, independent of the active strategy spans. The band contains these two close-price EMAs
 and the EMA at their geometric-mean span. Long unstucking requires price at or above the upper
-band times `1 + ema_dist` (rounded up to the price tick); short unstucking requires price at or
-below the lower band times `1 - ema_dist` (rounded down). These are eligibility gates; the other
+band times `1 + ema_distance_fraction` (rounded up to the price tick); short unstucking requires price at or
+below the lower band times `1 - ema_distance_fraction` (rounded down). These are eligibility gates; the other
 unstuck conditions and account-wide candidate selection still apply.
 
 Both spans support coin overrides and optimizer bounds under
@@ -252,9 +252,9 @@ When multiple positions are eligible, auto-unstuck chooses the least stuck
 position first, defined as the lowest pside-aware relative distance between
 position price and market price. TWEL enforcer uses the same selector.
 
-`unstuck_ema_dist` must keep the EMA-derived trigger price positive:
-- `bot.long.unstuck.ema_dist > -1.0`
-- `bot.short.unstuck.ema_dist < 1.0`
+`unstuck.ema_distance_fraction` must keep the EMA-derived trigger price positive:
+- `bot.long.unstuck.ema_distance_fraction > -1.0`
+- `bot.short.unstuck.ema_distance_fraction < 1.0`
 
 Configs that cross those boundaries now hard-fail during validation instead of silently
 disabling auto-unstuck. For near-always-on EMA triggering on either side, use a value like

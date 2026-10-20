@@ -45,7 +45,7 @@ def runtime_inputs(mode):
     return cfg, markets, candles, timestamps
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_public_payload_runs_red_panic_and_cooldown(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     original = deepcopy(cfg)
@@ -54,7 +54,7 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     )
     fills, equities, analysis = execute_backtest(prepared, cfg)
     report = prepared.hard_stop_plot_data["hsl"]
-    assert report["mode"] == mode
+    assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert analysis["hard_stop_triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert report["detailed"] is False
@@ -66,7 +66,7 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     assert cfg == original
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     fixed_side_bounds(cfg)
@@ -75,7 +75,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"] = {"red_threshold": [0.01, 0.9]}
+    target["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["hard_stop_triggers"]
     cfg["optimize"]["limits"] = []
     manager = SharedArrayManager()
@@ -110,9 +110,9 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         )
         # Exercise effective scenario overrides through the complete suite evaluator.
         path = (
-            "bot.global.hsl.red_threshold"
+            "bot.global.hsl.drawdown_ratio_threshold"
             if mode == "portfolio"
-            else "bot.long.hsl.red_threshold"
+            else "bot.long.hsl.drawdown_ratio_threshold"
         )
         contexts = [
             ScenarioEvalContext(
@@ -183,7 +183,7 @@ def offline_cli_config(tmp_path, monkeypatch, mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("detailed", [False, True])
 async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
     tmp_path, monkeypatch, mode, detailed
@@ -202,7 +202,8 @@ async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
     await main()
     (artifact,) = (tmp_path / "results").rglob("hsl_report.json")
     report = json.loads(artifact.read_text())
-    assert report["engine"] == "hsl" and report["mode"] == mode
+    assert report["engine"] == "hsl"
+    assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert report["summary"]["panic_close_fills"] > 0
     assert report["detailed"] is detailed
     assert bool(report["samples"]) is detailed
@@ -245,7 +246,7 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
             value = value[part]
         set_flat_optimize_bound(fixed_bounds, kind, key, [value, value])
     cfg["optimize"]["bounds"] = fixed_bounds
-    cfg["optimize"]["bounds"]["global"]["hsl"] = {"red_threshold": [0.01, 0.1]}
+    cfg["optimize"]["bounds"]["global"]["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.1]}
     # Spawned workers and the manager also deny IP networking; local Unix IPC
     # remains available for the real multiprocessing backend.
     guard = tmp_path / "guard"

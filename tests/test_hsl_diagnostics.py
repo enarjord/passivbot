@@ -47,7 +47,7 @@ def observed(monkeypatch):
     return build
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_monitor_topology_is_native_scope_and_numeric_evidence(observed, mode):
     bot, owner, wave, events = observed(mode)
     payload = _monitor_hsl_section(bot, now_ms=NOW)
@@ -570,7 +570,7 @@ def test_account_freshness_recovery_emits_once_without_numeric_churn(observed):
     assert len(events) == 3
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside"])
+@pytest.mark.parametrize("mode", ["coin", "position_side"])
 def test_unused_disabled_position_quote_does_not_expire_evaluated_scopes(
     observed, mode
 ):

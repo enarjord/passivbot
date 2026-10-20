@@ -21,7 +21,7 @@ FIELDS = frozenset(
     {
         "enabled",
         "scale_budget_with_excess_allowance",
-        "red_threshold",
+        "drawdown_ratio_threshold",
         "drawdown_ratio_ema_span_minutes",
         "memory_ema_span_minutes",
         "panic_close_order_type",
@@ -121,10 +121,10 @@ def _mode(config):
     value = config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")
     if not isinstance(value, str) or value.strip().lower() not in {
         "coin",
-        "pside",
+        "position_side",
         "portfolio",
     }:
-        raise ValueError("bot.global.hsl.scope must be coin, pside or portfolio")
+        raise ValueError("bot.global.hsl.scope must be coin, position_side or portfolio")
     return value.strip().lower()
 
 
@@ -217,9 +217,9 @@ def normalize_block(
         block[field] = normalize_memory_ema_span_minutes(
             block[field], field=f"{path}.{field}"
         )
-    block["red_threshold"] = _number(
-        block["red_threshold"],
-        f"{path}.red_threshold",
+    block["drawdown_ratio_threshold"] = _number(
+        block["drawdown_ratio_threshold"],
+        f"{path}.drawdown_ratio_threshold",
         minimum=0,
         maximum=1,
         strict=True,
@@ -339,7 +339,7 @@ def normalize_hsl(config, template, *, verbose=True):
     mode = _mode(config)
     bot["global"]["hsl"]["scope"] = mode
     if mode != "portfolio" and set(bot["global"]["hsl"]) - {"scope"}:
-        raise ValueError("bot.global.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/pside scope")
+        raise ValueError("bot.global.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/position_side scope")
     validate_hsl_paths(config)
     enabled = False
     for side in ("long", "short"):
@@ -469,7 +469,7 @@ def require_live_balance_support(config, override=None):
     )
     if enabled and value not in (None, ""):
         raise ValueError(
-            "enabled portfolio/pside HSL does not support live.balance_override; remove the override, select coin mode, or disable HSL"
+            "enabled portfolio/position_side HSL does not support live.balance_override; remove the override, select coin mode, or disable HSL"
         )
 
 
@@ -558,3 +558,18 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
                 raise ValueError(
                     f"{metric} has no enabled controller in this HSL scenario"
                 )
+
+
+def native_hsl_policy(policy):
+    """Transport the public ratio name to the stable native HSL ABI."""
+    result = deepcopy(policy)
+    result["red_threshold"] = result.pop("drawdown_ratio_threshold")
+    return result
+
+
+def native_hsl_mode(mode):
+    """Translate a validated public scope to the native engine's mode token."""
+    from .coerce import normalize_hsl_signal_mode
+
+    mode = normalize_hsl_signal_mode(mode)
+    return "pside" if mode == "position_side" else mode

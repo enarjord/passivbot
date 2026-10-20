@@ -45,7 +45,7 @@ def _sample_config() -> dict:
                 "hsl": {
                     "scope": "portfolio",
                     "enabled": True,
-                    "red_threshold": 0.05,
+                    "drawdown_ratio_threshold": 0.05,
                     "cooldown_minutes_after_red": 60.0,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
@@ -72,7 +72,7 @@ def _sample_config() -> dict:
                 },
                 "hsl": {
                     "enabled": True,
-                    "red_threshold": 0.05,
+                    "drawdown_ratio_threshold": 0.05,
                     "cooldown_minutes_after_red": 60,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
@@ -94,7 +94,7 @@ def _sample_config() -> dict:
                 },
                 "hsl": {
                     "enabled": False,
-                    "red_threshold": 0.04,
+                    "drawdown_ratio_threshold": 0.04,
                     "cooldown_minutes_after_red": 30,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
@@ -131,7 +131,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert report["hsl"]["signal_mode"] == "portfolio"
     assert report["hsl"]["sides"]["long"]["enabled"] is True
-    assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["drawdown_ratio_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
     hsl_evidence = report["cache"]["readiness"]["surfaces"]["hsl"]["evidence"]
     assert {item["code"] for item in hsl_evidence} >= {
@@ -456,7 +456,7 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
         "forager": {"volume_ema_span_1m": 120.0},
         "hsl": {
             "enabled": True,
-            "red_threshold": 0.05,
+            "drawdown_ratio_threshold": 0.05,
             "cooldown_minutes_after_red": 60,
             "memory_ema_span_minutes": 43200.0,
             "drawdown_ratio_ema_span_minutes": 120.0,
@@ -471,7 +471,7 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     assert report["ok"] is True
     assert report["hsl"]["sides"]["long"]["present"] is True
     assert report["hsl"]["sides"]["long"]["enabled"] is True
-    assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["drawdown_ratio_threshold"] == 0.05
     assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
     assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True

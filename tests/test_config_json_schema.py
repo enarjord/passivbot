@@ -86,7 +86,7 @@ def test_all_intentional_examples_match_editor_schema(validator):
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_templates_and_canonical_roundtrips_match_schema(validator, strategy, scope):
     payload = generated_template(get_template_config(), scope)
     payload["bot"]["global"]["strategy_kind"] = strategy
@@ -192,7 +192,7 @@ def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
         "unstuck": {"ema_span_0": 15.5},
     }}}})
     validator.validate(payload)
-    for scope in ("pside", "portfolio"):
+    for scope in ("position_side", "portfolio"):
         payload["bot"] = {"global": {"hsl": {"scope": scope}}}
         with pytest.raises(ValidationError):
             validator.validate(payload)
@@ -205,7 +205,7 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
     registry = get_field_registry()
     assert get_special_optimizer_bindings() == OPTIMIZABLE_BOT_KEY_PATHS
     assert "long_unstuck_ema_span_0" not in OPTIMIZABLE_BOT_KEY_PATHS
-    for scope in ("coin", "pside", "portfolio"):
+    for scope in ("coin", "position_side", "portfolio"):
         config = generated_template(get_template_config(), scope)
         for key, path in get_shared_optimizer_bindings().items():
             if key.startswith("hsl_") and scope != "portfolio":
@@ -214,7 +214,7 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
             field = registry.find(path)
             assert field.optimize_key == key
             assert field.optimizable
-    field = registry.find(("bot", "long", "hsl", "red_threshold"))
+    field = registry.find(("bot", "long", "hsl", "drawdown_ratio_threshold"))
     assert field.recommended_bounds == (0.15, 0.15, 0.001)
     assert field.domain.minimum == 0 and field.domain.maximum == 1
     assert field.domain.exclusive_minimum

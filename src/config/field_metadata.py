@@ -44,7 +44,7 @@ def enrich_fields(fields):
                     data["coin_override"] = CoinOverridePolicy.ALLOWED
             if "hsl" in path and key:
                 data["optimize_when"] = ("portfolio HSL scope" if path[1] == "global"
-                                         else "coin or pside HSL scope")
+                                         else "coin or position_side HSL scope")
             elif path[2] == "strategy" and key:
                 data["optimize_when"] = f"{path[3]} is the active strategy"
             data.update(_bot_metadata(path))
@@ -128,7 +128,7 @@ def _bot_metadata(path):
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."
-    elif local == "hsl.red_threshold":
+    elif local == "hsl.drawdown_ratio_threshold":
         data.update(unit="fraction", denominator="scope equity plus remembered drawdown",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_minimum=True, finite=True),
                     description="RED requires both current and smoothed drawdown ratios to exceed this threshold.")
@@ -137,7 +137,7 @@ def _bot_metadata(path):
     elif local == "hsl.panic_close_order_type":
         data["domain"] = FieldDomain(choices=("limit", "market"))
     elif local == "hsl.scope":
-        data["domain"] = FieldDomain(choices=("coin", "pside", "portfolio"))
+        data["domain"] = FieldDomain(choices=("coin", "position_side", "portfolio"))
     elif local == "loss_gate.max_drawdown_ratio":
         data.update(unit="fraction", denominator="raw balance plus loss-gate remembered drawdown",
                     domain=FieldDomain(minimum=0.0, finite=True),
@@ -171,7 +171,7 @@ def _bot_metadata(path):
         data.update(unit="ratio", denominator="effective per-position wallet exposure limit",
                     domain=FieldDomain(finite=True),
                     description="Eligibility requires position wallet exposure / effective WEL strictly above this value.")
-    elif local == "unstuck.ema_dist":
+    elif local == "unstuck.ema_distance_fraction":
         data.update(unit="fraction", denominator="unstuck EMA band reference",
                     domain=FieldDomain(minimum=-1.0, exclusive_minimum=True, finite=True) if path[1] == "long"
                     else FieldDomain(maximum=1.0, exclusive_maximum=True, finite=True))

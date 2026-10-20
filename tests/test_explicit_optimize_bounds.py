@@ -278,7 +278,7 @@ def test_explicit_recommended_preset_supplies_visible_ranges_and_is_offline(tmp_
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(strategy, scope):
     from config.hsl import generated_template
 
@@ -306,6 +306,8 @@ def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missi
     migrated = migrate(source, memory_span_minutes=123.5)
     bounds = flattened(migrated.config)
     assert bounds["long_ema_span_0"] == [100.0, 2880.0, 10.0]
+    assert bounds["long_hsl_red_threshold"] == [0.15, 0.15, 0.001]
+    assert bounds["long_unstuck_ema_dist"] == [-0.2, 0.01, 0.0001]
     assert bounds["long_unilateralness_ema_span_1m"] == [42.5, 42.5]
     assert any("materialized released-v8 inherited search" in item["reason"] for item in migrated.changes)
 

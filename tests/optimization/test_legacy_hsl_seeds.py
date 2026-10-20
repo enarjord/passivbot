@@ -73,10 +73,10 @@ def test_explicitly_migrated_seed_retains_numeric_suggestions_and_discards_old_f
     seed=_build_starting_seed_config(extract_configs(str(path))[0])
     assert seed['config_version']==CONFIG_SCHEMA_VERSION
     assert 'fitness' not in seed
-    scope=('bot','global','hsl','red_threshold') if mode=='unified' else ('bot','long','hsl','red_threshold')
+    scope=('bot','global','hsl','drawdown_ratio_threshold') if mode=='unified' else ('bot','long','hsl','drawdown_ratio_threshold')
     values,count=configs_to_individuals_streaming([seed],[Bound.from_config('threshold',[0.1,0.4])],sig_digits=6,key_paths=[('threshold',scope)])
     assert count==1 and values==[(0.234,)]
-    assert seed['bot']['global']['hsl']['scope']==('portfolio' if mode=='unified' else mode)
+    assert seed['bot']['global']['hsl']['scope']=={'unified':'portfolio','pside':'position_side'}.get(mode,mode)
 
 
 def test_bot_only_old_policy_cannot_bypass_migration():
@@ -93,18 +93,18 @@ def test_current_numeric_seed_clamps_under_the_main_finite_policy(tmp_path):
     from optimize import individual_to_config
     base=prepare_config(generated_template(get_template_config()),verbose=False)
     base['bot']['long']['hsl'].update(enabled=True,cooldown_minutes_after_red=12.5)
-    cfg=deepcopy(base);cfg['bot']['long']['hsl'].update(enabled=False,red_threshold=2.0)
+    cfg=deepcopy(base);cfg['bot']['long']['hsl'].update(enabled=False,drawdown_ratio_threshold=2.0)
     seeds=extract_configs(str(save(tmp_path,cfg,'json')))
-    keys=[('long_hsl_red_threshold',('bot','long','hsl','red_threshold'))]
+    keys=[('long_hsl_red_threshold',('bot','long','hsl','drawdown_ratio_threshold'))]
     values,count=configs_to_individuals_streaming(seeds,[Bound.from_config(keys[0][0],[0.1,0.4])],sig_digits=6,key_paths=keys)
     assert count==1 and values==[(0.4,)]
     result=individual_to_config(values[0],{},[],base,key_paths=keys)
     assert result['bot']['long']['hsl']['enabled'] is True
     assert result['bot']['long']['hsl']['cooldown_minutes_after_red']==12.5
-    assert result['bot']['long']['hsl']['red_threshold']==0.4
+    assert result['bot']['long']['hsl']['drawdown_ratio_threshold']==0.4
 
 
-@pytest.mark.parametrize('field',['red_threshold','memory_ema_span_minutes','drawdown_ratio_ema_span_minutes','cooldown_minutes_after_red'])
+@pytest.mark.parametrize('field',['drawdown_ratio_threshold','memory_ema_span_minutes','drawdown_ratio_ema_span_minutes','cooldown_minutes_after_red'])
 @pytest.mark.parametrize('value',[float('nan'),float('inf'),float('-inf'),'NaN'])
 @pytest.mark.parametrize('artifact',['json','pareto'])
 def test_nonfinite_current_numeric_seed_is_skipped(field,value,artifact,tmp_path,caplog):
@@ -153,7 +153,7 @@ def test_anchored_fine_tune_retains_tunable_live_slow_span_suggestions(tmp_path)
     config = prepare_config(get_template_config(), verbose=False)
     config['optimize']['bounds'] = {
         'global': {'unstuck': {'memory_ema_span_minutes': [1000.0, 50000.0]}},
-        'long': {'hsl': {'red_threshold': [0.1, 0.4]}},
+        'long': {'hsl': {'drawdown_ratio_threshold': [0.1, 0.4]}},
     }
     for side in ('long', 'short'):
         for field in ('max_positions', 'total_wallet_exposure_limit'):

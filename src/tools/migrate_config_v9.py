@@ -204,7 +204,7 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             reason="materialized legacy flags; canonical coin_overrides take precedence",
         ))
     mode = result.get("live", {}).get("hsl_signal_mode", "coin")
-    mode = "portfolio" if mode == "unified" else mode
+    mode = {"unified": "portfolio", "pside": "position_side"}.get(mode, mode)
     for coin, inline in result.get("coin_overrides", {}).items():
         if not isinstance(inline, dict):
             raise ValueError(f"coin_overrides.{coin} must be a mapping")
@@ -296,6 +296,22 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                         reason="explicit released-v8 shared field conversion before file/inline merge",
                     ))
             canonicalize_shared_bot_side(values)
+            for group, old, new in (
+                ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+                ("unstuck", "ema_dist", "ema_distance_fraction"),
+            ):
+                block = values.get(group, {})
+                if old not in block:
+                    continue
+                value = block.pop(old)
+                if new in block and block[new] != value:
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.{group}.{old} conflicts with {new}")
+                block[new] = value
+                changes.append(dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{group}.{old}",
+                    old=deepcopy(value), new={new: deepcopy(value)},
+                    reason="explicit released-v8 quantity rename before file/inline merge",
+                ))
         result["coin_overrides"][coin] = nested_update(patch, inline)
     return result
 

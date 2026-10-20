@@ -85,7 +85,7 @@ def generate_schema():
         "if": {"required": ["bot"], "properties": {"bot": {
             "required": ["global"], "properties": {"global": {
                 "required": ["hsl"], "properties": {"hsl": {
-                    "required": ["scope"], "properties": {"scope": {"enum": ["pside", "portfolio"]}}
+                    "required": ["scope"], "properties": {"scope": {"enum": ["position_side", "portfolio"]}}
                 }}
             }}
         }}},

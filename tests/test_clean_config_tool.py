@@ -456,7 +456,7 @@ def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field
 
 @pytest.mark.parametrize("mode", ["full", "optimize"])
 @pytest.mark.parametrize("field", [
-    "red_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
+    "drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
     "cooldown_minutes_after_red",
 ])
 def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
@@ -496,7 +496,7 @@ def test_export_numeric_normalization_rejects_lossy_float_conversion(value):
 
 
 @pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
-@pytest.mark.parametrize("hsl_mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("hsl_mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize(
     "strategy", ["trailing_martingale", "ema_anchor"]
 )

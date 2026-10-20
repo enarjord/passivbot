@@ -28,9 +28,8 @@ def get_shared_optimizer_bindings():
         for group, keys in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.items():
             for local, flat in keys.items():
                 paths[f"{side}_{flat}"] = ("bot", side, group, *_shared_bound_local_path(group, local))
-    for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
-                 "memory_ema_span_minutes", "cooldown_minutes_after_red"):
-        paths[f"hsl_{name}"] = ("bot", "global", "hsl", name)
+    for local, native in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].items():
+        paths[native] = ("bot", "global", "hsl", local)
     return paths
 
 
@@ -38,7 +37,7 @@ def get_coin_override_paths(hsl_signal_mode="coin"):
     """Registry-led view of the existing shared per-coin permission policy."""
     from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, OVERRIDABLE_SHARED_BOT_PATHS
 
-    if hsl_signal_mode not in {"coin", "pside", "portfolio"}:
+    if hsl_signal_mode not in {"coin", "position_side", "portfolio"}:
         raise ValueError("invalid HSL scope for coin override policy")
     return (OVERRIDABLE_SHARED_BOT_PATHS if hsl_signal_mode == "coin" else
             OVERRIDABLE_SHARED_BOT_PATHS - CONDITIONAL_HSL_OVERRIDE_PATHS)
@@ -203,13 +202,13 @@ _SHARED_SIDE_FIELDS = {
         forager.score_weights.volatility forager.score_weights.volume
         forager.unilateralness_ema_span_1m forager.volatility_ema_span_1m
         forager.volume_ema_span_1m hsl.memory_ema_span_minutes
-        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.red_threshold
+        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
         risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
-        unstuck.close_pct unstuck.ema_dist unstuck.ema_span_0 unstuck.ema_span_1
+        unstuck.close_pct unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
         unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
@@ -287,7 +286,7 @@ def get_field_registry() -> FieldRegistry:
     for name in ("enabled", "scale_budget_with_excess_allowance"):
         add(f"bot.global.hsl.{name}", FieldType.BOOLEAN)
     add("bot.global.hsl.panic_close_order_type", FieldType.STRING)
-    for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
+    for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_minutes_after_red"):
         add(f"bot.global.hsl.{name}", FieldType.FLOAT)
 

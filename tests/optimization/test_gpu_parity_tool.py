@@ -19,7 +19,7 @@ def args(*options):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mode):
     base = ["--fixture", strategy, "--bars", "128", "--sides", "both", "--hsl", mode]
     original = gpu_parity.fixture_inputs(args(*base))
@@ -35,7 +35,7 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
     assert config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 7200.5
     for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
             [config["bot"]["global"]["hsl"]] if mode == "portfolio" else []):
-        assert policy["red_threshold"] == .002
+        assert policy["drawdown_ratio_threshold"] == .002
         assert policy["drawdown_ratio_ema_span_minutes"] == 2.5
         assert policy["memory_ema_span_minutes"] == 3600.0
         assert policy["cooldown_minutes_after_red"] == 10000
@@ -102,7 +102,7 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
         validate_gpu_metric_names=lambda names, **_: names,
     ))
     def comparison(inputs, *a, **kw):
-        assert inputs[0]["bot"]["global"]["hsl"]["red_threshold"] == .002
+        assert inputs[0]["bot"]["global"]["hsl"]["drawdown_ratio_threshold"] == .002
         return {"passed": False}
     monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
     assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "portfolio",
@@ -418,7 +418,7 @@ def test_prepared_inputs_reject_explicit_fixture_options_before_loading(option):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "portfolio"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin", "position_side", "portfolio"])
 def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl):
     options = args("--fixture", strategy, "--bars", "128", "--sides", "both", "--hsl", hsl)
     config, candles, markets, btc, timestamps = gpu_parity.fixture_inputs(options)
@@ -428,7 +428,7 @@ def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl
     from utils import date_to_ts
     assert date_to_ts(config["backtest"]["start_date"]) == timestamps[0]
     assert date_to_ts(config["backtest"]["end_date"]) == timestamps[-1] + 60_000
-    assert config["bot"]["long"]["hsl"]["enabled"] == (hsl in {"coin", "pside"})
+    assert config["bot"]["long"]["hsl"]["enabled"] == (hsl in {"coin", "position_side"})
     again = gpu_parity.fixture_inputs(options)
     assert gpu_parity._identity(config, (candles, btc, timestamps), markets, "binance") == (
         gpu_parity._identity(again[0], (again[1], again[3], again[4]), again[2], "binance")

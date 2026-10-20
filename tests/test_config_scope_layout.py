@@ -14,7 +14,7 @@ from tools.migrate_config_v9 import migrate
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_canonical_bounds_mirror_their_bot_parameter_paths(strategy, scope):
     source = generated_template(get_template_config(), scope)
     source["bot"]["global"]["strategy_kind"] = strategy

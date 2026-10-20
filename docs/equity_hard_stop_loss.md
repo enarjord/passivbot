@@ -11,7 +11,7 @@ supported GPU execution and live fact reconstruction. See the exact
 | `bot.global.hsl.scope` | Scope and RED closes | Current base budget | Policy |
 |---|---|---|---|
 | `coin` | One symbol/position-side pair | Raw balance / that side's applicable slot count | `bot.long.hsl`, `bot.short.hsl`; coin patches allowed |
-| `pside` | Every position on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
+| `position_side` | Every position on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
 | `portfolio` | All positions | Raw balance | Explicit `bot.global.hsl` |
 
 Portfolio protection includes existing exposure on disabled entry sides. A hedged scope is
@@ -30,7 +30,12 @@ budget = raw balance / applicable slots * (1 + allowance)
 
 A nonpositive base WEL grants no headroom. The switch may vary per coin; coin-specific
 WEL/excess values apply. It uses configured headroom rather than current utilization.
-The option is rejected in pside/portfolio modes.
+The option is rejected in position_side/portfolio modes.
+
+The configured `drawdown_ratio_threshold` is a fraction: `0.05` means 5%.
+The native replay payload, reports and optimizer parameter IDs retain their
+existing `red_threshold`, `pside` and `hsl_red_threshold` names. Configuration
+adapters translate the public names without rescaling their values.
 
 ## Drawdown and ratio smoothing
 
@@ -46,7 +51,7 @@ D = max(0, (1 - alpha_slow) * D_previous + loss) # first event of a new minute
 E = current_budget + current_UPNL
 R = D / (E + D)
 M = (1 - alpha_fast) * M_previous_minute + alpha_fast * R
-RED = min(R, M) > red_threshold
+RED = min(R, M) > drawdown_ratio_threshold
 ```
 
 Currency D and dimensionless R/M are different quantities. Historical ratios retain their
@@ -114,7 +119,7 @@ See the [failure contract](ai/error_contract.md).
 
 ## Migration, reporting and qualification
 
-V9 configs use `config_version="v9.0.0"`, coin/pside/portfolio modes, and no restart field.
+V9 configs use `config_version="v9.0.0"`, coin/position_side/portfolio modes, and no restart field.
 The explicit migration tool accepts released v8 and final canonical v9 and requires acknowledgment
 of an active old realized-loss gate's memory change. V8 also needs a slow-memory choice and
 acknowledgement of any removed Never policy. It retains original configs for version-matched

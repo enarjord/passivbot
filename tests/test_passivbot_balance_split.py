@@ -12011,7 +12011,7 @@ async def test_hyperliquid_normal_partial_fill_self_echo_invalidates_account(
     )
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_missing_history_does_not_block_current_hsl_protection(mode):
     from test_hsl_runtime import bot as make_bot, run
 
@@ -12055,7 +12055,7 @@ def test_finite_nonpositive_balance_is_valid_direct_red_not_current_fact_outage(
 
     bot = make_bot()
     bot.get_raw_balance = lambda: balance
-    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, red_threshold=0.99)
+    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_ratio_threshold=0.99)
     decisions, unavailable = run(bot)
     assert not unavailable
     assert decisions[0].action == "panic"

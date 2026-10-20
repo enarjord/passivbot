@@ -1118,13 +1118,16 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         hs = bp["equity_hard_stop_loss"]
         assert hs["mode"] == "coin"
         assert hs["portfolio"] is None
-        assert hs["sides"] == [config["bot"][s]["hsl"] for s in ("long", "short")]
+        expected = [deepcopy(config["bot"][s]["hsl"]) for s in ("long", "short")]
+        for policy in expected:
+            policy["red_threshold"] = policy.pop("drawdown_ratio_threshold")
+        assert hs["sides"] == expected
         assert not any(s["enabled"] for s in hs["sides"])
 
     def test_custom_passthrough(self):
         policy = dict(
             enabled=True,
-            red_threshold=0.3,
+            drawdown_ratio_threshold=0.3,
             drawdown_ratio_ema_span_minutes=45.5,
             memory_ema_span_minutes=123.5,
             cooldown_minutes_after_red=30.0,
@@ -1132,15 +1135,15 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         )
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
-        assert bp["equity_hard_stop_loss"]["sides"][0] == {
-            **policy, "scale_budget_with_excess_allowance": False
-        }
+        expected = {**policy, "scale_budget_with_excess_allowance": False}
+        expected["red_threshold"] = expected.pop("drawdown_ratio_threshold")
+        assert bp["equity_hard_stop_loss"]["sides"][0] == expected
 
     @pytest.mark.parametrize(
         "policy,field",
         [
             ({"cooldown_minutes_after_red": -1.0}, "cooldown_minutes_after_red"),
-            ({"red_threshold": 0.0}, "red_threshold"),
+            ({"drawdown_ratio_threshold": 0.0}, "drawdown_ratio_threshold"),
             ({"drawdown_ratio_ema_span_minutes": 0.5}, "drawdown_ratio_ema_span_minutes"),
             ({"memory_ema_span_minutes": 0.5}, "memory_ema_span_minutes"),
             ({"restart_after_red_policy": "threshold"}, "restart_after_red_policy"),

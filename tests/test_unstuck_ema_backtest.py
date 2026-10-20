@@ -79,7 +79,7 @@ def _legacy_replay_config():
             enabled=True,
             ema_gating_enabled=True,
             close_pct=0.1,
-            ema_dist=-0.005,
+            ema_distance_fraction=-0.005,
             loss_allowance_pct=0.02,
             exposure_trigger_ratio=0.3,
         )
@@ -209,7 +209,7 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
     })
     raw["bot"][active_side]["hsl"].update(
         enabled=hsl_enabled,
-        drawdown_ratio_ema_span_minutes=1.0, red_threshold=0.001,
+        drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.001,
         cooldown_minutes_after_red=7.0,
     )
     config = parse_overrides(prepare_config(raw, verbose=False), verbose=False)

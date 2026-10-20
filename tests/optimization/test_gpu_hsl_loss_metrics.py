@@ -18,7 +18,7 @@ def test_native_hsl_halt_loss_matches_cpu_report(strategy, sides):
     ]))
     for side in ("long", "short"):
         inputs[0]["bot"][side]["hsl"].update(
-            red_threshold=0.002, ema_span_minutes=2.5,
+            drawdown_ratio_threshold=0.002, ema_span_minutes=2.5,
             cooldown_minutes_after_red=5,
         )
     inputs[1][1500:, 0, :3] *= 0.7

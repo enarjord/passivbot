@@ -163,7 +163,7 @@ def test_ema_shared_decay_gate_close_boundary_matches_rust():
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_ema_loss_gate_memory_reuse_specialization_and_scratch(side, mode):
     proxy, _ = loss_gate_proxy((side,), hsl_mode=mode)
     candidates = [{}, {f"{side}_base_qty_pct": 0.3}, {}]

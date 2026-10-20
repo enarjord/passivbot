@@ -34,7 +34,7 @@ def validate_hsl_signal_topology(
 
     if signal_mode not in HSL_SIGNAL_MODES:
         raise ValueError(
-            "GPU HSL requires bot.global.hsl.scope to be coin, pside, or "
+            "GPU HSL requires bot.global.hsl.scope to be coin, position_side, or "
             f"portfolio; got {signal_mode!r}"
         )
     if coin_count > 1:
@@ -44,7 +44,7 @@ def validate_hsl_signal_topology(
             and not shared_account_controller
         ):
             raise ValueError(
-                "GPU dual-side multi-coin HSL currently supports only pside "
+                "GPU dual-side multi-coin HSL currently supports only position_side "
                 "signal mode; coin requires a shared-balance denominator and "
                 "portfolio requires one cross-side episode controller"
             )
@@ -145,7 +145,7 @@ HSL_PARAM_KEYS = (
 
 HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_enabled", ("enabled",)),
-    ("hsl_red_threshold", ("red_threshold",)),
+    ("hsl_red_threshold", ("drawdown_ratio_threshold",)),
     ("hsl_drawdown_ratio_ema_span_minutes", ("drawdown_ratio_ema_span_minutes",)),
     ("hsl_cooldown_ms_lo", ("cooldown_minutes_after_red",)),
     ("hsl_cooldown_ms_hi", ("cooldown_minutes_after_red",)),

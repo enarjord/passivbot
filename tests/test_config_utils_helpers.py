@@ -1203,7 +1203,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["hsl_red_threshold"]
-        == config["bot"]["long"]["hsl"]["red_threshold"]
+        == config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
     )
     assert (
         compiled["bot"]["long"]["filter_volume_ema_span_1m"]

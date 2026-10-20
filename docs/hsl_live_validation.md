@@ -10,7 +10,7 @@ launch command and intervention scope.
    complete effective HSL policy. Preserve the previous reviewed release, its source-verified native extension, launch command
    and compatible configuration separately for rollback. Keep account identifiers, credentials and operational artifacts
    outside the public repository.
-2. Validate configuration through the canonical loader. Coin/pside policies belong under
+2. Validate configuration through the canonical loader. Coin/position_side policies belong under
    `bot.long.hsl` and `bot.short.hsl`; portfolio requires an explicitly supplied `bot.hsl` block.
    Confirm the chosen slow/fast EMA spans, the bounded bootstrap horizon, the independent
    rolling loss-gate window and raw balance/coin-slot budget. There is no Never policy.
