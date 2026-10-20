@@ -566,7 +566,7 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
     )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
-    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+    with pytest.raises(ValueError, match=r"asymmetric bot\.<side>\.universe\.approved_coins"):
         await optimize_suite.prepare_suite_contexts(
             config,
             suite_cfg,
