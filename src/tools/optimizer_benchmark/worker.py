@@ -359,6 +359,9 @@ def search_run(entry, arrays, args):
     config["optimize"]["gpu"].update(batch_size=None if args.width == "auto" else int(args.width),
         tuning_mode="refresh" if args.width == "auto" else "off", max_dispatch_candidate_bars=args.dispatch_budget,
         exact_workers=args.workers)
+    # Match optimize.main: construct the immutable recording contract once during
+    # preparation, before creating the evaluator and starting the backend clock.
+    config[optimize.CONTRACT_CACHE_KEY] = optimize.build_evaluation_contract(config)
     seed_rngs(entry["seed"], context="frozen benchmark search")
     manager = SharedArrayManager()
     records = []
@@ -381,12 +384,11 @@ def search_run(entry, arrays, args):
                 with profile_search_host(getattr(args, "host_profile", False)) as host_profile:
                     result = get_backend_runner(backend)(config=config, evaluator=base, evaluator_for_pool=base,
                         recorder=recorder, overrides_list=[], duplicate_counter={"count": 0},
-                        starting_configs_path="frozen-population", constraint_fitness_cls=None,
+                        starting_configs_path="frozen-population",
                         ignore_sigint_in_worker=optimize.ignore_sigint_in_worker,
                         get_starting_configs=lambda _path: entry["configs"],
                         configs_to_individuals=lambda configs, _bounds, _digits, **_kwargs: [[get_path(c, path)
                             for _key, path in base.key_paths] for c in configs],
-                        record_individual_result=optimize._record_individual_result, run_evolution=None,
                         build_config_fn=optimize.individual_to_config, overrides_fn=optimize.optimizer_overrides,
                         checkpoint_path=str(Path(directory) / "checkpoint.pkl"), resume=False,
                         **({"standalone_candle_coins": {exchange: tuple(config["backtest"]["coins"][exchange])}}

@@ -528,6 +528,51 @@ def test_search_transports_continuous_bounds_without_null_step(frozen, monkeypat
     assert not any("step is null" in record.message for record in caplog.records)
 
 
+@pytest.mark.parametrize("engine", ["search-cpu", "search-gpu"])
+def test_search_matches_backend_signature_and_prepares_recording_contract(frozen, monkeypatch, engine):
+    import inspect
+    import optimize
+    from optimization import backends
+    from optimization.backends import gpu_backend, pymoo_backend
+
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    with np.load(directory / entry["data_file"]) as data:
+        arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
+    original_evaluator = optimize.Evaluator
+    prepared = []
+    def evaluator(*args, **kwargs):
+        config = args[3]
+        assert config[optimize.CONTRACT_CACHE_KEY] == optimize.build_evaluation_contract(config)
+        prepared.append(config[optimize.CONTRACT_CACHE_KEY])
+        return original_evaluator(*args, **kwargs)
+    monkeypatch.setattr(optimize, "Evaluator", evaluator)
+    runner = gpu_backend.run_backend if engine == "search-gpu" else pymoo_backend.run_backend
+    class BackendReached(Exception):
+        pass
+    def inspect_call(**kwargs):
+        inspect.signature(runner).bind(**kwargs)
+        assert kwargs["config"][optimize.CONTRACT_CACHE_KEY] is prepared[0]
+        assert not {"constraint_fitness_cls", "record_individual_result", "run_evolution"} & kwargs.keys()
+        raise BackendReached
+    monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_call)
+    args = SimpleNamespace(engine=engine, workers=1, search_iters=8, width="8", dispatch_budget=100000)
+    with pytest.raises(BackendReached):
+        worker.search_run(entry, arrays, args)
+
+
+def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen):
+    directory, manifest = frozen
+    entry = manifest["entries"][0]
+    with np.load(directory / entry["data_file"]) as data:
+        arrays = tuple(data[key] for key in ("hlcvs", "btc", "timestamps"))
+    report = worker.search_run(entry, arrays, SimpleNamespace(
+        engine="search-cpu", workers=1, search_iters=8, width="8", dispatch_budget=100000))
+    assert report["samples"][0]["completed"] == 8
+    assert report["persisted_bytes"] > 0
+    assert report["rust_reference_verification"]["status"] == "passed"
+
+
 @pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
 def test_profiled_timings_cannot_establish_an_acceptance_speedup(profiling):
     from tools.optimizer_benchmark.report import compare

@@ -3,7 +3,10 @@
 `passivbot tool optimizer-benchmark` freezes populations once and measures them in
 two independently built checkouts. It uses synthetic market data, no accounts,
 and no downloads. Benchmark workers reject network connections. Market preparation
-from exchange caches or public downloads is outside its timing scope.
+from exchange caches or public downloads is outside its timing scope. Prepared search
+also builds the recording evaluation contract once before the backend timer, matching
+the production optimizer. Its timer includes backend startup, evolution, scoring,
+checkpointing and result persistence; independent Rust verification follows the timer.
 
 ## Reproducible procedure
 
