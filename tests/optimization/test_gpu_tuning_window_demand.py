@@ -2,8 +2,7 @@
 
 import pytest
 
-from optimization.gpu.autotune import WINDOW
-from optimization.gpu.execution_tuning import ExecutionBatchTuner
+from optimization.gpu.execution_tuning import EVIDENCE_SAMPLES as WINDOW, ExecutionBatchTuner
 
 
 def policy():

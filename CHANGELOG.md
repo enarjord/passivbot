@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Assess native GPU optimizer batch-width trials after six successful warm observations and
+  three seconds of completed work, retaining cold-shape exclusion, prepared work and scratch
+  limits, demand and memory checks, cooldowns and rollback.
+
 - Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.

@@ -82,14 +82,25 @@ class BatchController:
         can_grow=lambda: True,
         can_trial=lambda: True,
         allow_partial_batches=False,
+        window_samples=None,
+        min_seconds=None,
     ):
+        window_samples = WINDOW if window_samples is None else window_samples
+        min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
+        if type(window_samples) is not int or window_samples < 1:
+            raise ValueError("batch evidence samples must be a positive integer")
+        if (isinstance(min_seconds, bool) or not isinstance(min_seconds, (int, float))
+                or not math.isfinite(min_seconds) or min_seconds < 0):
+            raise ValueError("batch evidence duration must be finite and non-negative")
         self.ceiling = max(1, int(ceiling))
         self.width = max(1, min(int(initial), self.ceiling))
         self.save = save
         self.can_grow = can_grow
         self.can_trial = can_trial
         self.allow_partial_batches = allow_partial_batches
-        self.samples = deque(maxlen=WINDOW)
+        self.window_samples = window_samples
+        self.min_seconds = min_seconds
+        self.samples = deque(maxlen=window_samples)
         self.seconds = 0.0
         self.seen = set()
         self.baseline = None
@@ -109,7 +120,7 @@ class BatchController:
             return
         self.samples.append(count / seconds)
         self.seconds += seconds if evidence_seconds is None else evidence_seconds
-        if len(self.samples) < WINDOW or self.seconds < MIN_SECONDS:
+        if len(self.samples) < self.window_samples or self.seconds < self.min_seconds:
             return
         rate = statistics.median(self.samples)
         evidence_seconds = self.seconds
