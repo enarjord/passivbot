@@ -2,8 +2,9 @@
 
 `passivbot tool optimizer-benchmark` freezes populations once and measures them in
 two independently built checkouts. It uses synthetic market data, no accounts,
-and no downloads. Benchmark workers reject network connections while permitting local
-Unix-domain IPC needed by multiprocessing, including forkserver workers. Market preparation
+and no downloads. Benchmark workers and fresh CPU search pool children reject network
+connections while permitting local Unix-domain IPC needed by multiprocessing, including
+forkserver workers. Market preparation
 from exchange caches or public downloads is outside its timing scope. Prepared search
 also builds the recording evaluation contract once before the backend timer, matching
 the production optimizer. Its timer includes backend startup, evolution, scoring,

@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import socket
+import signal
 import tempfile
 from types import SimpleNamespace
 
@@ -72,6 +73,52 @@ def test_worker_preserves_local_unix_ipc_after_repeated_setup(blocked_worker_net
                     connection.settimeout(2)
                     client.sendall(b"ok")
                     assert connection.recv(2) == b"ok"
+
+
+def _optimizer_pool_network_policy():
+    """Probe child policy without attempting any real socket connection."""
+    from optimization import problem
+    statuses = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            socket.socket.connect(SimpleNamespace(family=family), ("localhost", 1))
+        except RuntimeError as error:
+            statuses.append(str(error) == "optimizer benchmark forbids network connections")
+        except TypeError:
+            # An unpatched original descriptor rejects this non-socket safely.
+            statuses.append(False)
+        else:
+            statuses.append(False)
+    return dict(
+        network_families_blocked=statuses,
+        create_connection_blocked=socket.create_connection is worker.deny_network,
+        ignores_sigint=signal.getsignal(signal.SIGINT) == signal.SIG_IGN,
+        evaluator_marker=problem._PYMOO_WORKER_EVALUATOR.marker,
+    )
+
+
+@pytest.mark.parametrize("start_method", ["spawn", "forkserver"])
+def test_optimizer_pool_initializer_blocks_network_in_fresh_children(start_method):
+    if start_method not in multiprocessing.get_all_start_methods():
+        pytest.skip(f"{start_method} multiprocessing unavailable")
+    from optimization.problem import initialize_pymoo_worker
+
+    context = multiprocessing.get_context(start_method)
+    with context.Pool(processes=1, initializer=initialize_pymoo_worker,
+                      initargs=(SimpleNamespace(marker="benchmark"), [], 2, False, 7,
+                                worker.initialize_optimizer_worker)) as pool:
+        policy = pool.apply_async(_optimizer_pool_network_policy).get(timeout=30)
+    assert policy == dict(network_families_blocked=[True, True], create_connection_blocked=True,
+                          ignores_sigint=True, evaluator_marker="benchmark")
+
+
+def test_optimizer_worker_policy_precedes_existing_signal_setup(monkeypatch):
+    import optimize
+    calls = []
+    monkeypatch.setattr(worker, "block_network", lambda: calls.append("network"))
+    monkeypatch.setattr(optimize, "ignore_sigint_in_worker", lambda: calls.append("signal"))
+    worker.initialize_optimizer_worker()
+    assert calls == ["network", "signal"]
 
 
 def test_pairwise_covers_all_pairs_and_states():
@@ -595,6 +642,7 @@ def test_search_matches_backend_signature_and_prepares_recording_contract(frozen
     def inspect_call(**kwargs):
         inspect.signature(runner).bind(**kwargs)
         assert kwargs["config"][optimize.CONTRACT_CACHE_KEY] is prepared[0]
+        assert kwargs["ignore_sigint_in_worker"] is worker.initialize_optimizer_worker
         assert not {"constraint_fitness_cls", "record_individual_result", "run_evolution"} & kwargs.keys()
         raise BackendReached
     monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_call)
@@ -618,7 +666,7 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
         invocation = [sys.executable, "-c", (
             "import multiprocessing, runpy; "
             f"multiprocessing.set_start_method({start_method!r}); "
-            "runpy.run_module('tools.optimizer_benchmark.worker', run_name='__main__')"
+            "runpy.run_module('tools.optimizer_benchmark.worker', run_name='__main__', alter_sys=True)"
         )]
     subprocess.run([*invocation,
                     "--backend", str(root), "--workload", str(directory),

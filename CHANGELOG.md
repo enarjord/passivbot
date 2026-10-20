@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Align prepared optimizer benchmarks with the current CPU backend interface and
   prepare the recording evaluation contract once, matching production search setup.
-  Permit local Unix-domain multiprocessing IPC while retaining network rejection.
+  Permit local Unix-domain multiprocessing IPC while retaining network rejection in
+  the benchmark and its fresh CPU search workers.
 
 - Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can

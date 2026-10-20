@@ -55,6 +55,13 @@ def block_network():
     socket.create_connection = deny_network
 
 
+def initialize_optimizer_worker():
+    """Apply benchmark policy in fresh CPU pool workers before evaluation."""
+    block_network()
+    from optimize import ignore_sigint_in_worker
+    ignore_sigint_in_worker()
+
+
 def strict_json(value):
     """Retain nonfinite evidence in standard JSON, without turning it into zero."""
     if isinstance(value, dict):
@@ -398,7 +405,7 @@ def search_run(entry, arrays, args):
                     result = get_backend_runner(backend)(config=config, evaluator=base, evaluator_for_pool=base,
                         recorder=recorder, overrides_list=[], duplicate_counter={"count": 0},
                         starting_configs_path="frozen-population",
-                        ignore_sigint_in_worker=optimize.ignore_sigint_in_worker,
+                        ignore_sigint_in_worker=initialize_optimizer_worker,
                         get_starting_configs=lambda _path: entry["configs"],
                         configs_to_individuals=lambda configs, _bounds, _digits, **_kwargs: [[get_path(c, path)
                             for _key, path in base.key_paths] for c in configs],
