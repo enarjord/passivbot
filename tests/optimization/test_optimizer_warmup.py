@@ -704,3 +704,71 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
         assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == risk_value
         assert candidate["bot"]["long"]["forager"]["score_weights"] == expected
         assert candidate["bot"]["short"]["forager"]["score_weights"] == (expected if mirror else zero)
+
+
+@pytest.mark.parametrize("authority", ["dormant", "runtime", "anchor"])
+@pytest.mark.parametrize("mirror", [False, True])
+def test_preflight_validates_effective_zero_weight_activation_without_mutating_genes(
+    monkeypatch, authority, mirror,
+):
+    from copy import deepcopy
+
+    from config import prepare_config
+    from optimize import install_anchored_fine_tune_plan
+    from optimization import warmup
+
+    config = get_template_config()
+    config["optimize"]["bounds"] = {}
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"] if mirror else []
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    zero = dict.fromkeys(names, 0.0)
+    for side in ("long", "short"):
+        config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
+        config["bot"][side]["forager"]["score_weights"] = deepcopy(zero)
+    _set_bounds(config, {"long_total_wallet_exposure_limit": [0.0, 1.0]})
+    if authority != "dormant":
+        for name in names:
+            _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
+    if authority == "runtime":
+        config["optimize"]["fixed_runtime_overrides"] = {
+            f"bot.long.forager.score_weights.{name}": 0.0 for name in names
+        }
+    config = prepare_config(config, verbose=False)
+    if authority == "anchor":
+        install_anchored_fine_tune_plan(
+            config, ["long.risk.total_wallet_exposure_limit"], "unused",
+            starting_configs_override=[deepcopy(config)],
+        )
+    before = deepcopy(config)
+    boundary_builder = warmup._build_optimizer_boundary_configs
+    captured = []
+
+    def capture(source):
+        candidates = boundary_builder(source)
+        captured.extend((candidate, deepcopy(candidate)) for candidate in candidates)
+        return candidates
+
+    monkeypatch.setattr(warmup, "_build_optimizer_boundary_configs", capture)
+    validate_optimizer_effective_configs(config)
+    assert config == before
+    assert captured
+    for candidate, original in captured:
+        assert candidate == original
+        assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.0
+        assert candidate["bot"]["long"]["forager"]["score_weights"] == zero
+
+
+@pytest.mark.parametrize("invalid", [-1.0, float("nan"), "invalid"])
+def test_effective_preflight_keeps_forager_normalization_owner_errors(monkeypatch, invalid):
+    from config import prepare_config
+    from optimization import warmup
+
+    config = prepare_config(get_template_config(), verbose=False)
+    candidate = warmup.build_optimizer_max_config(config)
+    candidate["bot"]["long"]["forager"]["score_weights"]["volume"] = invalid
+    monkeypatch.setattr(warmup, "_build_optimizer_boundary_configs", lambda _config: [candidate])
+    with pytest.raises(
+        (TypeError, ValueError),
+        match=r"bot\.long\.forager\.score_weights\.volume.*(numeric|finite and non-negative)",
+    ):
+        validate_optimizer_effective_configs(config)

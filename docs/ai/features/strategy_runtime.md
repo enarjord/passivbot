@@ -366,8 +366,12 @@ Forager normalization may not move an omitted, constant, selector-fixed, runtime
 or anchor-fixed positive weight while siblings vary. Such partial searches fail before
 evaluation; require explicit authority for every participating positive coordinate or
 freeze the entire group. An omitted zero may remain zero only when the reachable all-zero
-fallback does not activate that coordinate. Full-group search retains shared normalization.
-Fixing all weights to zero preserves that disabled group without activating a fallback.
+fallback does not activate that coordinate while siblings vary. Full-group search retains shared normalization.
+Fixing every raw weight to zero preserves those independent genes; it does not disable ranking.
+Rust retains its existing all-zero fallback to EMA-readiness-only ranking. An active canonical
+reload can display `ema_readiness=1.0` while retaining the same authored bounds and pins and
+native economic behavior. Result cleaning preserves raw bot values; validate a detached,
+normalized effective view without rewriting candidate genes or optimizer authority in place.
 Validate root and active scenario pin authority in application order before market/data preparation,
 including scenarios supplied externally. A complete atomic weight-object pin freezes the group;
 an incomplete replacement fails rather than inheriting missing coordinates.
