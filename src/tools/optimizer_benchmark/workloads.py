@@ -132,6 +132,11 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
     if source_bounds is None:
         template = generated_template(get_template_config(), config["bot"]["global"]["hsl"]["scope"])
         source_bounds = template["optimize"]["bounds"]
+        # This generated benchmark profile explicitly searches every positive
+        # score coordinate. An authored bounds_config remains authoritative.
+        for side in ("long", "short"):
+            if config["bot"][side]["forager"]["score_weights"]["unilateralness"] > 0:
+                source_bounds[side]["forager"]["score_weights_unilateralness"] = [0, 1, 0.01]
     search["optimize"]["bounds"] = deepcopy(source_bounds)
     validate_hsl_paths(search)
     flat = _flatten_bounds_for_config(search, search["optimize"]["bounds"])

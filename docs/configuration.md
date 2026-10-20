@@ -555,6 +555,33 @@ Bounds mirror the corresponding bot path exactly: `bot.long.forager.score_weight
 has its bound at `optimize.bounds.long.forager.score_weights.volume`. Both trees use the
 scopes `global`, `long`, and `short`; flattened optimizer identifiers are internal adapters.
 
+Only explicitly listed v9 bounds authorize variation. An omitted parameter, side, `bounds`, or
+`optimize` section fixes every omitted numeric optimizer dimension at its effective configured
+value. Resolved exports show these as `[value, value]`; a null cooldown ceiling remains outside
+the numeric genome unless a finite bound is explicitly provided. Sorting, cleaning, and reloading
+must not add recommended search ranges.
+
+The complete schema template and the no-config optimizer command are explicit starting profiles:
+their visible bounds contain recommended ranges. To replace a config's search space with that
+profile deliberately, write a separate file:
+
+```bash
+passivbot tool optimizer-bounds input.json search.json --preset recommended
+```
+
+This offline authoring command replaces `optimize.bounds`, keeps other configuration policy,
+and refuses to overwrite an existing output. Review its visible ranges before optimizing.
+Released-v8 migration materializes its formerly inherited ranges before adopting v9 omission
+semantics; previously optional adaptive bounds still freeze at configured values.
+
+Forager score weights form one normalized group. A varying weight must not renormalize an omitted,
+constant, runtime-pinned, or `fixed_params` positive weight. Search all participating positive
+weights explicitly or freeze the whole `forager.score_weights` group. Omitted zero weights may
+remain zero, but a reachable all-zero vector also requires authority for the `ema_readiness`
+normalization fallback, or a positive lower bound. These checks also apply to fine-tune selectors
+and anchors. Migration rejects an incompatible legacy group rather than silently widening its
+optional bounds, including in best-effort mode.
+
 **Bounds Formats:**
 
 - `[low, high]` - Continuous optimization between `low` and `high` (current behavior, unchanged)

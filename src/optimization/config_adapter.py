@@ -66,6 +66,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     if not isinstance(optimize_bounds, dict):
         return
     bot_config = config.get("bot") or get_template_config()["bot"]
+    authored_bounds = optimize_bounds
     optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
     strategy_path_map = _strategy_path_map(config)
     cooldown_ranges = {}
@@ -235,6 +236,80 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 )
 
 
+    validate_forager_weight_search(config, authored_bounds)
+
+
+def validate_forager_weight_search(config: dict, optimize_bounds=None, *, tunable_keys=None) -> None:
+    """A normalized group cannot vary while a positive coordinate stays fixed.
+
+    Missing/constant bounds, fixed selectors, runtime pins and anchor-owned
+    coordinates are all fixed authority. Zero fixed weights remain safe unless
+    an all-zero draw would activate the normalization fallback at that coordinate.
+    """
+    from config.param_paths import resolve_bound_selectors
+    from config.scenario_overrides import normalize_scenario_overrides
+
+    raw = config.get("optimize", {}).get("bounds", {}) if optimize_bounds is None else optimize_bounds
+    flat = _flatten_bounds_for_config(config, raw)
+    fixed = set(resolve_bound_selectors(
+        config, config.get("optimize", {}).get("fixed_params", []) or [], flat
+    ))
+    pins = normalize_scenario_overrides(config.get("optimize", {}).get("fixed_runtime_overrides", {}))
+    for side in ("long", "short"):
+        bot = config.get("bot", {}).get(side, {})
+        weights = bot.get("forager", {}).get("score_weights")
+        if not isinstance(weights, dict):
+            continue
+        active = True
+        for field, key in (("max_positions", "n_positions"),
+                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
+            bound_key = f"{side}_{key}"
+            value = bot.get("risk", {}).get(field, 0.0)
+            if bound_key in flat and bound_key not in fixed and (tunable_keys is None or bound_key in tunable_keys):
+                value = Bound.from_config(bound_key, flat[bound_key]).high
+            if float(value) <= 0:
+                active = False
+        if not active:
+            continue
+        varied, fixed_positive, minima, fixed_values = [], [], [], {}
+        for name, configured in weights.items():
+            key = f"{side}_forager_score_weights_{name}"
+            path = ("bot", side, "forager", "score_weights", name)
+            pinned = False
+            for selector, value in pins.items():
+                parts = tuple(selector.split("."))
+                if path[:len(parts)] != parts:
+                    continue
+                for part in path[len(parts):]:
+                    if not isinstance(value, dict) or part not in value:
+                        break
+                    value = value[part]
+                else:
+                    configured, pinned = value, True
+            can_vary = key in flat and key not in fixed and not pinned and (tunable_keys is None or key in tunable_keys)
+            bound = Bound.from_config(key, flat[key]) if key in flat else Bound(float(configured), float(configured))
+            if can_vary and bound.low != bound.high:
+                varied.append(name)
+                minima.append(bound.low)
+            else:
+                value = float(configured) if pinned or key in fixed or (tunable_keys is not None and key not in tunable_keys) else bound.low
+                fixed_values[name] = value
+                minima.append(value)
+                if value > 0:
+                    fixed_positive.append(name)
+        if not varied:
+            continue
+        fallback_fixed = (sum(minima) == 0 and "ema_readiness" in fixed_values)
+        if fixed_positive or fallback_fixed:
+            affected = fixed_positive or ["ema_readiness (all-zero normalization fallback)"]
+            raise ValueError(
+                f"bot.{side}.forager.score_weights: partial normalized-weight search would change "
+                f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
+                "weight or freeze the whole score_weights group; omitted zero weights must "
+                "also remain zero at the all-zero fallback."
+            )
+
+
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
     bot_config = config.get("bot")
@@ -298,8 +373,10 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
     pside_enabled = {}
     for pside in ("long", "short"):
         pside_enabled[pside] = all(
-            Bound.from_config(k, optimize_bounds[k]).high > 0.0
-            for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
+            (Bound.from_config(key, optimize_bounds[key]).high if key in optimize_bounds
+             else float(bot_config[pside]["risk"][field])) > 0.0
+            for key, field in ((f"{pside}_n_positions", "max_positions"),
+                               (f"{pside}_total_wallet_exposure_limit", "total_wallet_exposure_limit"))
         )
 
     for bound_key, path in key_paths:

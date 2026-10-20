@@ -71,16 +71,17 @@ def test_clean_config_fills_missing_values_from_template():
             "trailing_martingale"
         ]
     }
-    assert cleaned["optimize"]["bounds"]["long"]["strategy"] == {
-        "trailing_martingale": template["optimize"]["bounds"]["long"]["strategy"][
-            "trailing_martingale"
-        ]
-    }
-    assert cleaned["optimize"]["bounds"]["short"]["strategy"] == {
-        "trailing_martingale": template["optimize"]["bounds"]["short"]["strategy"][
-            "trailing_martingale"
-        ]
-    }
+    from config.optimize_bounds import flatten_optimize_bounds
+    from config.param_paths import iter_optimizer_key_paths
+    from config import prepare_config
+
+    bounds = flatten_optimize_bounds(cleaned["optimize"]["bounds"], strategy_kind="trailing_martingale")
+    prepared = prepare_config(cleaned, verbose=False)
+    for key, path in iter_optimizer_key_paths(prepared, bounds):
+        effective = prepared
+        for part in path:
+            effective = effective[part]
+        assert bounds[key] == [effective, effective]
 
 
 def _mutable_container_ids(node):
@@ -132,8 +133,8 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert cleaned["backtest"]["reducer"] == {"adg_strategy_eq": "max", "default": "mean"}
     assert cleaned["live"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
-    assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
-        "unilateralness"
+    assert cleaned["optimize"]["bounds"]["long"]["forager"][
+        "score_weights_unilateralness"
     ] == [0.0, 0.5]
     assert set(cleaned["bot"]["long"]["strategy"]) == {strategy}
     if sparse and mode == "portfolio":

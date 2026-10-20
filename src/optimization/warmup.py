@@ -172,8 +172,21 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         forager_cfg = pside_cfg.get("forager") if isinstance(pside_cfg, dict) else None
         if not isinstance(forager_cfg, dict) or "score_weights" not in forager_cfg:
             continue
+        weights = forager_cfg["score_weights"]
+        flat_bounds = flatten_optimize_bounds(
+            config.get("optimize", {}).get("bounds", {}),
+            strategy_kind=config["live"]["strategy_kind"],
+        )
+        # A deliberately fixed all-zero group disables score components. Only
+        # an explicitly searched group may reach the normalization fallback.
+        if not any(weights.values()) and all(
+            (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
+            for name in weights
+            if (key := f"{pside}_forager_score_weights_{name}") in flat_bounds
+        ):
+            continue
         forager_cfg["score_weights"] = normalize_forager_score_weights(
-            forager_cfg["score_weights"],
+            weights,
             path=f"bot.{pside}.forager.score_weights",
         )
     canonicalize_dead_optimizer_params(config)

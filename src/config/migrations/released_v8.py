@@ -1032,3 +1032,54 @@ def resolve_released_v8_defaults(source):
     fill(result, defaults)
     resolve_released_v8_minimum_cost_policy(result)
     return result
+
+
+def materialize_released_v8_optimizer_bounds(config, *, changes):
+    """Preserve released implicit search ranges after explicit structural conversion.
+
+    This stage consumes the converter's canonical paths. Authored and migrated
+    coupled-EMA bounds win over frozen released template ranges. Optional
+    adaptive dimensions are deliberately absent here: canonical hydration fixes
+    them at their configured values, as the released loader did.
+    """
+    from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+
+    kind = config.get("live", {}).get("strategy_kind", _RELEASED_V8_DEFAULTS["live"]["strategy_kind"])
+    # Use only the released default resolver, never the evolving v9 template or
+    # loaded native metadata, for the ranges that v8 supplied implicitly.
+    released = resolve_released_v8_defaults({
+        "config_version": RELEASED_V8_SCHEMA_VERSION, "bot": {},
+        "live": {"strategy_kind": kind},
+    })
+    defaults = released["optimize"]["bounds"]
+    portfolio = config.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope") == "portfolio"
+    for side in ("long", "short"):
+        shared = defaults[side]
+        shared["risk"]["max_positions"] = shared["risk"].pop("n_positions")
+        shared["unstuck"]["exposure_trigger_ratio"] = shared["unstuck"].pop("threshold")
+        shared["forager"].pop("volume_drop_pct", None)
+        if portfolio:
+            shared.pop("hsl", None)
+        else:
+            shared["hsl"]["drawdown_ratio_ema_span_minutes"] = shared["hsl"].pop("ema_span_minutes")
+    original = config.setdefault("optimize", {}).get("bounds", {})
+    authored = flatten_optimize_bounds(original, strategy_kind=kind)
+    flat = flatten_optimize_bounds(defaults, strategy_kind=kind)
+    added = sorted(set(flat) - set(authored))
+    flat.update(authored)
+    # Keep unrecognized root fields for the authored-schema gate below. The
+    # flattening helper only understands grouped bounds and must not turn a
+    # misspelled field into a successful migration by silently discarding it.
+    rebuilt = {
+        key: deepcopy(value) for key, value in original.items()
+        if key not in {"long", "short", "unstuck", "risk"}
+    }
+    for key, value in flat.items():
+        set_flat_optimize_bound(rebuilt, kind, key, value)
+    config["optimize"]["bounds"] = rebuilt
+    if added:
+        changes.append(dict(
+            path="optimize.bounds", old=deepcopy(original), new=deepcopy(rebuilt),
+            reason="materialized released-v8 inherited search ranges before explicit-only v9 bounds",
+            materialized_bound_keys=added,
+        ))

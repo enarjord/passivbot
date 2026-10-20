@@ -349,12 +349,19 @@ not request RMS history, allocate CPU trackers, or restrict candle intervals. Op
 dataset preflight checks finalized per-coin eligibility and overrides across reachable
 boundary configs. Entry-ineligible sides do not restrict intervals or RMS activation.
 
-Canonical loading and cleaning expose missing unilateralness weight/span and
-adaptive cooldown weight/minimum-duration optimizer bounds as fixed ranges at
-the side's configured values (using normalized Forager weights). A missing maximum
-duration bound is hydrated only for a finite ceiling; null remains unbounded.
-Explicit bounds retain their authority. Visibility must not open a search range or
-change optimizer candidate normalization or warmup for unchanged configurations.
+Canonical loading and cleaning expose every omitted numeric optimizer dimension as
+a fixed range at its effective configured value. The complete starting profile has
+explicit recommended domains; sparse authored documents never inherit those ranges.
+A missing maximum-duration bound is hydrated only for a finite ceiling; null remains
+unbounded. Released-v8 conversion materializes its inherited mandatory domains from
+frozen released defaults while retaining previously optional adaptive freezing.
+
+Forager normalization may not move an omitted, constant, selector-fixed, runtime-pinned,
+or anchor-fixed positive weight while siblings vary. Such partial searches fail before
+evaluation; require explicit authority for every participating positive coordinate or
+freeze the entire group. An omitted zero may remain zero only when the reachable all-zero
+fallback does not activate that coordinate. Full-group search retains shared normalization.
+Fixing all weights to zero preserves that disabled group without activating a fallback.
 
 Forager may carry a complete cached observation only within the existing candidate
 age budget, without feeding invented flat returns. Cooldown requires a current
