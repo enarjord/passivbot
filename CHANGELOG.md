@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Declare configuration field types explicitly and publish a generated field reference.
+  Config exports use float spelling for balances and fractional durations independently
+  of template spelling, while preserving values, sparse overrides, and integer counts.
+
 - Rebuild Pareto selection fronts on the active objectives after limits, normalize on that
   front, and report loaded, post-limit, and active-front counts separately. Exclude zero-weight
   metrics from weighted selection and preserve closest-target reference selection on the full pool.

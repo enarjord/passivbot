@@ -733,6 +733,11 @@ CLI replacement rules:
 
 ## Configuration Internals
 
+The [generated field reference](ai/generated/config_fields.md) lists declared serialization
+types and defaults. Numeric export follows each field's type rather than the spelling of its
+template default; fractional values are preserved. Field validators continue to define accepted
+inputs and constraints.
+
 Passivbot stores a few metadata keys alongside the normalized config:
 
 - `_raw` retains the exact user input as it appeared on disk before formatting/normalization. It is
