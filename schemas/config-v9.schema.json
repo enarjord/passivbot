@@ -15623,6 +15623,9 @@
         }
       },
       "patternProperties": {
+        "^coin_overrides\\.[^.]+$": {
+          "$ref": "#/$defs/coinPatch"
+        },
         "^coin_overrides\\.[^.]+\\.live$": {
           "$ref": "#/$defs/coinPatch/properties/live"
         },
@@ -22001,6 +22004,7 @@
             }
           },
           "patternProperties": {
+            "^coin_overrides\\.[^.]+$": false,
             "^coin_overrides\\.[^.]+\\.live$": false,
             "^coin_overrides\\.[^.]+\\.live\\.account$": false,
             "^coin_overrides\\.[^.]+\\.live\\.modes$": false,

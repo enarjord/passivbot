@@ -179,11 +179,35 @@ def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, 
     {"optimize.prefilter.penalty_weight": 1.0},
     {"optimize": {"prefilter": {"penalty_weight": 1.0}}},
     {"coin_overrides": {"BTC": {"live": {"account": {"leverage": 2}}}}},
+    {"coin_overrides.BTC": {"live": {"account": {"leverage": 2}}}},
     {"coin_overrides.BTC.bot.long.unstuck": {"close_pct": 0.1}},
 ])
 def test_fixed_runtime_schema_reuses_paths_but_rejects_object_pins_and_prefilter_policy(validator, patch):
     with pytest.raises(ValidationError):
         validator.validate(source(optimize={"fixed_runtime_overrides": patch}))
+
+
+@pytest.mark.parametrize("coin", ["BTC", "bybit::BTC/USDT:USDT"])
+def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin):
+    from config.load import prepare_config
+
+    payload = source(
+        coin_overrides={coin: {"bot": {"long": {"unstuck": {"close_pct": 0.1}}}}},
+        backtest={"scenarios": [{"label": "atomic", "overrides": {
+            f"coin_overrides.{coin}": {"bot": {"long": {"unstuck": {"ema_span_0": 42.5}}}},
+        }}]},
+    )
+    validator.validate(payload)
+    prepare_config(payload, verbose=False)
+    payload["backtest"]["scenarios"][0]["overrides"][f"coin_overrides.{coin}"] = {
+        "override_config_path": "policy.json",
+    }
+    validator.validate(payload)
+    payload["backtest"]["scenarios"][0]["overrides"][f"coin_overrides.{coin}"] = {
+        "bot": {"long": {"risk": {"max_positions": 2}}},
+    }
+    with pytest.raises(ValidationError):
+        validator.validate(payload)
 
 
 def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):

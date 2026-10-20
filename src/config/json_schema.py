@@ -237,6 +237,9 @@ def _patch_schemas(root, definitions, mode, registry):
                 yield (*path, name), child
                 yield from coin_paths(child, (*path, name))
         if not prefix:
+            patterns[r"^coin_overrides\.[^.]+$"] = (
+                False if mode == "fixed" else {"$ref": "#/$defs/coinPatch"}
+            )
             for path, schema in coin_paths(coin_patch):
                 if path == ("override_config_path",):
                     continue  # File references belong to atomic coin maps only.
