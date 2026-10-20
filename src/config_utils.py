@@ -754,7 +754,9 @@ def clean_config(config: dict) -> dict:
     with dictionaries sorted recursively.
     """
     from config.hsl import FIELDS, normalization_template
-    source = deepcopy(config or {})
+    # Source validation and template preparation are read-only. The projection
+    # below copies retained values, so a full input copy would be redundant.
+    source = config or {}
     from config.migrations.v9 import require_v9_runtime_config, reject_retired_v9_fields
 
     if "config_version" in source:
