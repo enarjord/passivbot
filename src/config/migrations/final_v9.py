@@ -370,13 +370,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     """Translate public fields without guessing independent optimizer ranges."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
-    from .shared_policy import (COIN_SOURCE_FIELDS, forced_normal_coins,
-                                move_shared_policy, preserve_forced_normal_selection, shared_policy_selector)
+    from .shared_policy import (COIN_SOURCE_FIELDS,
+                                move_shared_policy, preserve_forced_normal_selection,
+                                preserve_forced_selection_overrides, shared_policy_selector)
 
     result = deepcopy(source)
-    if not sparse:
-        from .released_v8 import materialize_released_v8_minimum_cost_defaults
-        materialize_released_v8_minimum_cost_defaults(result, changes=changes)
     if not sparse:
         retire_deap_policy(result, acknowledge=acknowledge_search_backend_change, changes=changes,
                            best_effort=best_effort)
@@ -502,15 +500,6 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             converted[new] = deepcopy(value)
             if new != key:
                 record(f"{path}.{key}", values[key], {new: value}, "canonical v9 override path")
-        # A scenario/fixed coin map replaces the root map. Preserve both the
-        # operational normal exemptions and its persistent selection meaning.
-        if "coin_overrides" in values:
-            for side, coins in forced_normal_coins(values["coin_overrides"]).items():
-                target = f"bot.{side}.forager.always_include"
-                if target not in converted:
-                    converted[target] = coins
-                    record(f"{path}.{target}", None, coins,
-                           "preserved released coin-normal forced selection")
         return converted
 
     scope = policy_scope(result, "coin")
@@ -645,6 +634,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     # Nested authored coin patches are converted here, before final strict
     # validation. Ordinary loading never resolves their released flat aliases.
     canonicalize_coin_patches(result)
+    preserve_forced_selection_overrides(result, record=record)
     sync_canonical_strategy_config(result)
     from config.limits import normalize_limit_entries
     from config.scoring import normalize_scoring_config

@@ -478,6 +478,14 @@ def _validate_effective_coin_config(
     # scenarios. The owning config and each raw file keep their full validation.
     effective.setdefault("backtest", {})["scenarios"] = []
     effective["coin_overrides"] = {}
+    # The parent validates fixed coin patches against its complete coin map.
+    # This isolated policy deliberately has no map, so do not reapply those
+    # separately owned patches while validating one merged coin document.
+    fixed = effective.get("optimize", {}).get("fixed_runtime_overrides", {})
+    effective.get("optimize", {})["fixed_runtime_overrides"] = {
+        key: value for key, value in fixed.items()
+        if key != "coin_overrides" and not key.startswith("coin_overrides.")
+    }
     for pside in ("long", "short"):
         canonicalize_shared_bot_side(
             effective.get("bot", {}).get(pside),

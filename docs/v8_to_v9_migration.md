@@ -21,6 +21,12 @@ before backtesting a proposed replacement.
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
 | `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |
 | `live.auto_gs` | `live.disapproved_position_mode`: `graceful_stop` or `manual` |
+| `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.global` |
+| `live.approved_coins`, `live.ignored_coins` | Separate `bot.<side>.universe` sources |
+| Shared minimum-age and minimum-cost filters | `bot.global.universe`; simulation minimum-cost override remains nullable |
+| Shared market-order policy | `bot.global.execution` |
+| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_pct`, `bot.global.warmup` |
+| Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | `forager.volume_drop_pct` | Removed; volume-based ranking remains |
 | Optional total-exposure entry gate | Removed; the entry cap always applies |
 | `trailing_grid_v7`, Defx and Paradex | Removed; select a retained strategy/venue explicitly |
@@ -38,8 +44,15 @@ to their canonical side-owned groups. For example, `bot.long.n_positions` become
 `bot.long.risk.max_positions`, whether authored as a dotted selector or nested maps.
 Supported side shorthand such as `long.n_positions` follows the same conversion;
 `fixed_params` selectors use it as well. Dictionary members, authored values and
-canonical strategy paths remain intact. The converter adds no other override fields.
-Unknown fields and conflicting aliases still fail rather than selecting a value.
+canonical strategy paths remain intact. Unknown fields and conflicting aliases still fail
+rather than selecting a value.
+
+Released coin-specific `normal` modes retain their operational exemptions and their forced
+Forager selection. The converter records generated `always_include` lists, including explicit
+empty lists when a fixed or scenario mode replacement must clear inherited selection. A scenario
+can run over the ordinary root or optimizer-fixed root: its generated list contains only coins
+normal in both effective contexts. Retained operational `normal` flags preserve the remaining
+context-specific selections. These are deterministic conversions, not best-effort choices.
 
 ## Choose semantics explicitly
 

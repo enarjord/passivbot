@@ -172,7 +172,7 @@ def validate_authored_config(config, template, *, policy_context=None):
             # Authored patches carry configuration authority. Selector shorthand
             # belongs only to fixed_params/fine_tune bound matching.
             parts = tuple(selector.split("."))
-            if parts[:1] == ("coin_overrides",) and len(parts) > 2:
+            if parts[:1] == ("coin_overrides",) and len(parts) > 1:
                 from .overrides import _extract_allowed_patch, get_allowed_modifications
 
                 coin, *local_parts = parts[1:]
@@ -182,11 +182,12 @@ def validate_authored_config(config, template, *, policy_context=None):
                     if not isinstance(policy, dict) or part not in policy:
                         raise ValueError(f"{path}.{selector} is not overridable")
                     policy = policy[part]
-                local_patch = {}
-                target = local_patch
-                for part in local_parts[:-1]:
-                    target = target.setdefault(part, {})
-                target[local_parts[-1]] = value
+                local_patch = value if not local_parts else {}
+                if local_parts:
+                    target = local_patch
+                    for part in local_parts[:-1]:
+                        target = target.setdefault(part, {})
+                    target[local_parts[-1]] = value
                 _extract_allowed_patch(
                     local_patch, coin=coin, source=f"{path}.{selector}", strict=True,
                     strategy_kind=get_optional_config_value(policy_context, 'bot.global.strategy_kind', "trailing_martingale"),
