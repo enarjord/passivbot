@@ -194,6 +194,77 @@ def test_population_obeys_bounds_steps_and_side_class(frozen):
         assert config["bot"]["short"]["entry_cooldown"]["base_duration_minutes"] == 0
 
 
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
+def test_frozen_hsl_population_reconstructs_valid_search_bounds(tmp_path, real_runtime, strategy, scope):
+    from config.hsl import validate_hsl_paths
+    from config.optimize_bounds import set_flat_optimize_bound
+    from optimization.shape import build_optimization_shape
+
+    manifest = freeze(tmp_path / "scoped", profile="standard",
+                      patterns=[f"{strategy}/both/forager/hsl_{scope}/*"],
+                      candidates=3, bars=128)
+    entry = manifest["entries"][0]
+    hsl_paths = [tuple(spec["path"]) for spec in entry["bounds"] if "hsl" in spec["path"]]
+    assert hsl_paths
+    if scope == "portfolio":
+        assert all(path[:3] == ("bot", "risk", "hsl") for path in hsl_paths)
+    else:
+        assert {path[:3] for path in hsl_paths} == {("bot", side, "hsl") for side in ("long", "short")}
+    for candidate in entry["configs"]:
+        search = deepcopy(candidate)
+        search["optimize"]["bounds"] = {}
+        for spec in entry["bounds"]:
+            endpoints = [spec["low"], spec["high"]]
+            if spec["step"] is not None:
+                endpoints.append(spec["step"])
+            set_flat_optimize_bound(search["optimize"]["bounds"], strategy, spec["key"], endpoints)
+        validate_hsl_paths(search)
+        shape = build_optimization_shape(search)
+        assert shape.key_paths == tuple((spec["key"], tuple(spec["path"])) for spec in entry["bounds"])
+        if scope == "portfolio":
+            assert all("hsl" not in search["optimize"]["bounds"].get(side, {}) for side in ("long", "short"))
+
+
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("scope", ["coin", "pside"])
+def test_scope_projection_preserves_existing_side_hsl_populations(tmp_path, real_runtime, monkeypatch, strategy, scope):
+    from config import hsl
+
+    options = dict(profile="standard", patterns=[f"{strategy}/both/forager/hsl_{scope}/*"],
+                   candidates=3, bars=128)
+    projected = freeze(tmp_path / "projected", **options)
+    # Retain the previous unprojected default-bound generation as the comparison.
+    # Only the bounds template is replaced; fixture policy and sampling stay intact.
+    original = hsl.generated_template
+    def side_template(template, mode="coin"):
+        config = original(template, mode)
+        config["optimize"]["bounds"] = deepcopy(template["optimize"]["bounds"])
+        return config
+    monkeypatch.setattr(hsl, "generated_template", side_template)
+    unprojected = freeze(tmp_path / "unprojected", **options)
+    assert projected == unprojected
+
+
+def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_rejected(tmp_path, real_runtime):
+    from config.schema import get_template_config
+
+    options = dict(profile="standard", patterns=["ema_anchor/both/forager/hsl_portfolio/*"],
+                   candidates=3, bars=128)
+    explicit = {"risk": {"hsl": {"red_threshold": [0.11, 0.19, 0.01]}}}
+    original = deepcopy(explicit)
+    manifest = freeze(tmp_path / "explicit", bounds_config=explicit, **options)
+    assert explicit == original
+    specs = manifest["entries"][0]["bounds"]
+    assert specs == [dict(key="hsl_red_threshold", path=["bot", "risk", "hsl", "red_threshold"],
+                          low=0.11, high=0.19, step=0.01)]
+    invalid = get_template_config()["optimize"]["bounds"]
+    original = deepcopy(invalid)
+    with pytest.raises(ValueError, match="inactive in portfolio mode"):
+        freeze(tmp_path / "invalid", bounds_config=invalid, **options)
+    assert invalid == original
+
+
 def test_manifest_rejects_tampering_and_nonempty_destination(frozen):
     directory, manifest = frozen
     assert load_manifest(directory) == manifest

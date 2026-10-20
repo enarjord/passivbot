@@ -70,6 +70,10 @@ vectors; it never regenerates candidates. The report records selected entry IDs.
 `--boundary-candidates` replaces the first two vectors with repaired low/high
 corners, retaining random candidates. `--bounds-config` reads only `optimize.bounds`
 from a canonical local config. Derived bounds and candidates remain private inputs.
+Default bounds follow the workload's HSL scope: portfolio workloads use shared
+`bot.risk.hsl` parameters, while coin/pside workloads retain side HSL parameters.
+Explicit `--bounds-config` inputs are validated as supplied; inactive side HSL bounds
+in portfolio mode remain errors.
 
 Numeric genes use production `Bound.random_on_grid` and `enforce_bounds`, including
 significant-digit repair. Both NumPy and Python RNG states are isolated. Cases pin

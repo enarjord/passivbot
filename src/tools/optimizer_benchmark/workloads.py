@@ -129,12 +129,18 @@ def apply_features(config, case, coins, markets, bars):
 
 def sampled_population(config, case, count, seed, bounds_config=None, boundary_candidates=False):
     import numpy as np
+    from config.hsl import generated_template, validate_hsl_paths
     from config.schema import get_template_config
     from optimization.config_adapter import _flatten_bounds_for_config, get_optimization_key_paths
     from optimization.bounds import Bound, enforce_bounds
 
     search = deepcopy(config)
-    search["optimize"]["bounds"] = deepcopy(bounds_config if bounds_config is not None else get_template_config()["optimize"]["bounds"])
+    source_bounds = bounds_config
+    if source_bounds is None:
+        template = generated_template(get_template_config(), config["bot"]["risk"]["hsl"]["scope"])
+        source_bounds = template["optimize"]["bounds"]
+    search["optimize"]["bounds"] = deepcopy(source_bounds)
+    validate_hsl_paths(search)
     flat = _flatten_bounds_for_config(search, search["optimize"]["bounds"])
     paths = get_optimization_key_paths(search)
     flags = set(case.features)
