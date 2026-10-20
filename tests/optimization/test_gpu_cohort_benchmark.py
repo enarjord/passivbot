@@ -257,8 +257,7 @@ def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypat
 
 
 def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
-    from optimization.gpu.autotune import WINDOW
-    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+    from optimization.gpu.execution_tuning import EVIDENCE_SAMPLES as WINDOW, ExecutionBatchTuner
 
     policy = ExecutionBatchTuner(initial=2)
     policy.constrain("cohort", 2)
@@ -292,8 +291,7 @@ def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
 
 
 def test_tuning_report_counts_warm_partial_shapes_and_their_consumed_window():
-    from optimization.gpu.autotune import WINDOW
-    from optimization.gpu.execution_tuning import ExecutionBatchTuner
+    from optimization.gpu.execution_tuning import EVIDENCE_SAMPLES as WINDOW, ExecutionBatchTuner
 
     policy = ExecutionBatchTuner(initial=64)
     policy.constrain("cohort", 128)

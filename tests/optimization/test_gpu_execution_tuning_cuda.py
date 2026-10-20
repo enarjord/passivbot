@@ -14,15 +14,15 @@ def test_underfilled_cuda_cohorts_learn_without_repeating_or_changing_results(mo
     from rust_utils import verify_loaded_runtime_extension
     verify_loaded_runtime_extension()
     import backtest
-    from optimization.gpu import autotune, execution_tuning
+    from optimization.gpu import execution_tuning
     from optimization.gpu.datasets import PreparedGpuDataset
     from optimization.gpu.executor import BacktestRequest
     from optimization.gpu.native import CudaBacktestService
     from shared_arrays import SharedArrayManager
     from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
 
-    monkeypatch.setattr(autotune, "WINDOW", 2)
-    monkeypatch.setattr(autotune, "MIN_SECONDS", 0)
+    monkeypatch.setattr(execution_tuning, "EVIDENCE_SAMPLES", 2)
+    monkeypatch.setattr(execution_tuning, "EVIDENCE_SECONDS", 0)
     observations = []
     original = execution_tuning.ExecutionBatchTuner
     class ObservedTuner(original):
@@ -89,7 +89,7 @@ def test_adaptive_cuda_service_changes_width_without_changing_or_repeating_work(
     if not torch.cuda.is_available():
         pytest.skip("CUDA device required")
     import backtest
-    from optimization.gpu import autotune, execution_tuning
+    from optimization.gpu import execution_tuning
     from optimization.gpu.datasets import PreparedGpuDataset
     from optimization.gpu.executor import BacktestRequest
     from optimization.gpu.native import CudaBacktestService
@@ -98,8 +98,8 @@ def test_adaptive_cuda_service_changes_width_without_changing_or_repeating_work(
 
     # Accelerate policy evidence windows only; execute the real CUDA kernels,
     # admission, shared-input preparation, reductions and host results.
-    monkeypatch.setattr(autotune, "WINDOW", 2)
-    monkeypatch.setattr(autotune, "MIN_SECONDS", 0)
+    monkeypatch.setattr(execution_tuning, "EVIDENCE_SAMPLES", 2)
+    monkeypatch.setattr(execution_tuning, "EVIDENCE_SECONDS", 0)
     samples = []
     original = execution_tuning.ExecutionBatchTuner
     class ObservedTuner(original):

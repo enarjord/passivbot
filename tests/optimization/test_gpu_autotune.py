@@ -28,6 +28,8 @@ def proxy():
 
 def test_waits_for_full_window_and_minimum_duration():
     controller = tune.BatchController(1024, 128)
+    assert controller.window_samples == 24
+    assert controller.min_seconds == 30.0
     for _ in range(100):
         controller.observe(127, 5.0)  # partial tails never count
     assert not controller.samples
@@ -36,6 +38,31 @@ def test_waits_for_full_window_and_minimum_duration():
     assert len(controller.samples) == tune.WINDOW
     controller.observe(128, 30.0)
     assert controller.width == 256
+
+
+def test_custom_evidence_window_does_not_change_other_controller_defaults():
+    controller = tune.BatchController(16, 4, window_samples=3, min_seconds=2.0)
+    controller.observe(4, 1000)  # First allocation is not evidence at either policy.
+    for _ in range(3):
+        controller.observe(4, 0.5)
+    assert controller.width == 4 and controller.seconds == 1.5
+    assert len(controller.samples) == controller.samples.maxlen == 3
+    controller.observe(4, 0.5)
+    assert controller.width == 8
+    assert controller.baseline == (4, 8.0)
+    ordinary = tune.BatchController(16, 4)
+    assert ordinary.window_samples == tune.WINDOW
+    assert ordinary.min_seconds == tune.MIN_SECONDS
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"window_samples": 0}, {"window_samples": True}, {"window_samples": 1.5},
+    {"window_samples": "6"}, {"min_seconds": -1}, {"min_seconds": float("nan")},
+    {"min_seconds": float("inf")}, {"min_seconds": True}, {"min_seconds": "3"},
+])
+def test_invalid_evidence_requirements_are_rejected(kwargs):
+    with pytest.raises(ValueError, match="batch evidence"):
+        tune.BatchController(16, 4, **kwargs)
 
 
 def test_noise_does_not_trigger_early_and_failed_trial_rolls_back():

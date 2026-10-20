@@ -10,6 +10,10 @@ import math
 from optimization.gpu.autotune import BatchController
 
 
+EVIDENCE_SAMPLES = 6
+EVIDENCE_SECONDS = 3.0
+
+
 class ExecutionBatchTuner:
     def __init__(self, *, initial=64, headroom=lambda: True, enabled=True):
         self.initial = initial
@@ -43,6 +47,8 @@ class ExecutionBatchTuner:
             controller = BatchController(
                 limit, min(self.initial, limit),
                 allow_partial_batches=True,
+                window_samples=EVIDENCE_SAMPLES,
+                min_seconds=EVIDENCE_SECONDS,
                 can_grow=lambda: (
                     self._demand[dataset_id] >= min(controller.ceiling, controller.width * 2)
                     and self.headroom()

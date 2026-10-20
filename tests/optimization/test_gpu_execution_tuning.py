@@ -1,7 +1,6 @@
 import pytest
 
-from optimization.gpu import autotune
-from optimization.gpu.execution_tuning import ExecutionBatchTuner
+from optimization.gpu.execution_tuning import EVIDENCE_SAMPLES, ExecutionBatchTuner
 from optimization.gpu.native import CudaBacktestService
 
 
@@ -15,8 +14,44 @@ def prepared_policy(**kwargs):
 def evidence(policy, dataset="a", *, seconds=2, backlog=64, closing=False):
     width = policy.width(dataset, 16)
     controller = policy.controllers[dataset]
-    for _ in range(autotune.WINDOW + (width not in controller.seen)):
+    for _ in range(EVIDENCE_SAMPLES + (width not in controller.seen)):
         policy.observe(dataset, width, seconds, backlog=backlog, closing=closing)
+
+
+def test_execution_window_needs_six_warm_samples_even_after_three_seconds():
+    policy = prepared_policy(initial=4)
+    policy.width("a", 16)
+    controller = policy.controllers["a"]
+    assert controller.window_samples == 6 and controller.min_seconds == 3.0
+    policy.observe("a", 4, 1000, backlog=64, closing=False)
+    assert not controller.samples and controller.seconds == 0
+    for _ in range(5):
+        policy.observe("a", 4, 1, backlog=64, closing=False)
+    assert controller.width == 4 and controller.seconds == 5
+    policy.observe("a", 4, 1, backlog=64, closing=False)
+    assert controller.width == 8 and controller.baseline == (4, 4.0)
+
+
+def test_execution_window_waits_for_three_seconds_after_six_samples():
+    policy = prepared_policy(initial=4)
+    policy.width("a", 16)
+    controller = policy.controllers["a"]
+    policy.observe("a", 4, 1000, backlog=64, closing=False)
+    for _ in range(11):
+        policy.observe("a", 4, .25, backlog=64, closing=False)
+    assert controller.width == 4 and controller.seconds == 2.75
+    assert len(controller.samples) == 6
+    policy.observe("a", 4, .25, backlog=64, closing=False)
+    assert controller.width == 8 and controller.baseline == (4, 16.0)
+
+
+def test_execution_short_window_keeps_median_smoothing_for_an_isolated_stall():
+    policy = prepared_policy(initial=4)
+    policy.width("a", 16)
+    policy.observe("a", 4, 1000, backlog=64, closing=False)
+    for seconds in (1, 1, 20, 1, 1, 1):
+        policy.observe("a", 4, seconds, backlog=64, closing=False)
+    assert policy.controllers["a"].baseline == (4, 4.0)
 
 
 def test_growth_uses_demand_and_headroom_then_rolls_back_slow_trial():
@@ -35,7 +70,7 @@ def test_warm_partial_work_is_actual_count_evidence_and_dataset_owned():
     policy = prepared_policy(initial=4)
     policy.width("a", 16)
     policy.width("b", 16)
-    for _ in range(autotune.WINDOW + 1):
+    for _ in range(EVIDENCE_SAMPLES + 1):
         policy.observe("a", 3, 5, backlog=100, closing=False)
     assert policy.controllers["a"].baseline == (4, 3 / 5)
     assert not policy.controllers["b"].samples
@@ -49,14 +84,14 @@ def test_underfilled_cohort_can_probe_smaller_then_reject_a_slow_trial():
     policy = ExecutionBatchTuner(initial=64, headroom=no_growth_query)
     policy.constrain("scenario", 128)
     assert policy.width("scenario", 128) == 64
-    for _ in range(autotune.WINDOW + 1):
+    for _ in range(EVIDENCE_SAMPLES + 1):
         policy.observe("scenario", 63, 2, backlog=0, closing=False)
     controller = policy.controllers["scenario"]
     assert controller.baseline == (64, 63 / 2)
     assert controller.width == 32
     # Distinct allocation shapes get distinct cold-use rejection. All warm
     # trial work is slower per actual candidate, so the old width is restored.
-    for _ in range(autotune.WINDOW + 1):
+    for _ in range(EVIDENCE_SAMPLES + 1):
         policy.observe("scenario", 31, 2, backlog=0, closing=False)
     assert controller.width == 64
     assert controller.baseline is None
@@ -84,7 +119,7 @@ def test_partial_shapes_reject_cold_use_and_invalid_or_oversized_observations():
 def test_underfilled_shutdown_records_evidence_without_probing():
     policy = prepared_policy(initial=4)
     policy.width("a", 16)
-    for _ in range(autotune.WINDOW + 1):
+    for _ in range(EVIDENCE_SAMPLES + 1):
         policy.observe("a", 3, 2, backlog=0, closing=True)
     assert policy.controllers["a"].seconds == 0  # The complete warm window was consumed.
     assert policy.width("a", 16) == 4

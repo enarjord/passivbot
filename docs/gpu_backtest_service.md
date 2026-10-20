@@ -269,11 +269,12 @@ switching datasets can release their tensors and mutable scratch.
 Automatic widths start at the smaller of 64 and the prepared ceiling. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
 counts, including partial request cohorts. Failed work and each actual count's first cold
-use do not contribute to throughput trials. The existing
-24-sample/30-second evidence window, median smoothing, growth threshold, smaller-plateau
-preference, cooldown and rollback apply. Growth also requires observed request demand and
-device memory headroom. When growth is blocked, the service can probe a smaller width
-using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
+use do not contribute to throughput trials. A window requires at least six successful warm
+observations and three seconds of completed work, so ordinary finite searches can assess
+width trials without waiting for a 24-sample/30-second window. Median smoothing, the growth
+threshold, smaller-plateau preference, cooldown and rollback apply. Growth also requires
+observed request demand and device memory headroom. When growth is blocked, the service
+can probe a smaller width using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
 screening or a bounded producer from indefinitely starving the tuner of evidence or
 smaller-width experiments. Tuning submits no extra simulations and never changes precision
 or search policy. Measurements are run-local; `auto` and `refresh` currently both start
