@@ -1418,7 +1418,7 @@ def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, cap):
         value.config["bot"][side]["hsl"]["enabled"] = False
     if mode == "portfolio":
         value.config["bot"]["global"]["hsl"]["enabled"] = False
-    value.config["live"]["risk_bootstrap_max_lookback_minutes"] = cap
+    value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = cap
     # These are not needed by HSL when it has no enabled scope. The ordinary
     # owner still validates its account receipt before any connector write.
     del value._pnls_manager, value.c_mults, value._ensure_freshness_ledger
@@ -1434,7 +1434,7 @@ def test_flat_unselected_coin_override_still_requires_hsl_history_window():
     value.coin_overrides["OTHER/USDT:USDT"] = {
         "bot": {"short": {"hsl": {"enabled": True}}}
     }
-    value.config["live"]["risk_bootstrap_max_lookback_minutes"] = 0
+    value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 0
     assert enabled(value)
     with pytest.raises(ValueError, match="bootstrap"):
         run(value)
@@ -1529,7 +1529,7 @@ def test_aggregate_live_override_rejected_before_history_or_account_capture(
 ):
     value = bot(mode)
     if source == "config":
-        value.config["live"]["balance_override"] = 1000.0
+        value.config["live"]["account"]["balance_override"] = 1000.0
     else:
         value.balance_override = 1000.0
 
@@ -1541,14 +1541,16 @@ def test_aggregate_live_override_rejected_before_history_or_account_capture(
     value._ensure_freshness_ledger = forbidden
     value.get_raw_balance = forbidden
     value._pnls_manager.get_events = forbidden
-    with pytest.raises(ValueError, match="does not support live.balance_override"):
+    with pytest.raises(
+        ValueError, match="does not support live.account.balance_override"
+    ):
         run(value)
 
 
 @pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
     value = bot(mode)
-    value.config["live"]["balance_override"] = 1000.0
+    value.config["live"]["account"]["balance_override"] = 1000.0
     if mode == "portfolio":
         value.config["bot"]["global"]["hsl"]["enabled"] = False
     else:

@@ -58,8 +58,8 @@ def _ccxt_exchange() -> ccxt.weex:
 
 def _bot(*, time_in_force: str = "gtc") -> WeexBot:
     bot = build_contract_bot("weex")
-    bot.config["live"]["time_in_force"] = time_in_force
-    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 6.0
+    bot.config["live"]["execution"]["time_in_force"] = time_in_force
+    bot.config["live"]["recovery"]["exchange_symbol_unavailable_cooldown_hours"] = 6.0
     bot.broker_code = "WEEX111164"
     bot.custom_id_max_length = 36
     return bot
@@ -204,7 +204,7 @@ def test_weex_symbol_unavailable_cooldown_is_ram_only_scoped_and_expires(caplog)
 
 def test_weex_symbol_unavailable_cooldown_can_be_disabled():
     bot = _bot()
-    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
+    bot.config["live"]["recovery"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
     error = ccxt.PermissionDenied(
         'weex {"code":-1058,"msg":"The trading pair is not supported via the API"}'
     )
@@ -217,7 +217,7 @@ def test_weex_symbol_unavailable_cooldown_can_be_disabled():
 
 def test_weex_symbol_unavailable_cooldown_rejects_unsafe_runtime_value(caplog):
     bot = _bot()
-    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 1e308
+    bot.config["live"]["recovery"]["exchange_symbol_unavailable_cooldown_hours"] = 1e308
 
     with caplog.at_level("ERROR"):
         activated = bot._activate_exchange_symbol_unavailable_cooldown(
@@ -883,7 +883,7 @@ def test_build_fetcher_for_weex():
 def test_setup_bot_weex_uses_weex_adapter():
     from passivbot import setup_bot
 
-    config = {"live": {"user": "weex_01"}}
+    config = {"live": {"account": {"user": "weex_01"}}}
     with patch("passivbot.load_user_info", return_value={"exchange": "weex"}):
         with patch("exchanges.weex.WeexBot") as mock_cls:
             mock_bot = MagicMock()

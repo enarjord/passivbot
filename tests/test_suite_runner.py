@@ -94,7 +94,9 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
                             "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
                             "global": {"hedge_mode": True},
                         },
-                        "coin_overrides": {"ETH": {"live": {"forced_mode_long": "normal"}}},
+                        "coin_overrides": {
+                            "ETH": {"live": {"modes": {"long": "normal"}}}
+                        },
                     },
                 }
             ]
@@ -103,9 +105,9 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
     )
 
     assert scenarios[0].overrides == {
-        'bot.global.hedge_mode': True,
+        "bot.global.hedge_mode": True,
         "bot.short.risk.total_wallet_exposure_limit": 0.0,
-        "coin_overrides": {"ETH": {"live": {"forced_mode_long": "normal"}}},
+        "coin_overrides": {"ETH": {"live": {"modes": {"long": "normal"}}}},
     }
 
 

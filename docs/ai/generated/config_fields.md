@@ -258,55 +258,55 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Source |
 | --- | --- | --- | --- |
-| `live.balance_hysteresis_snap_pct` | float | `0.01` | python |
-| `live.balance_override` | float \| null | `null` | python |
-| `live.candle_lock_timeout_seconds` | float | `10.0` | python |
-| `live.custom_endpoints_path` | string \| null | `null` | python |
-| `live.defer_broad_candle_warmup` | boolean | `true` | python |
-| `live.disapproved_position_mode` | string | `"graceful_stop"` | python |
-| `live.enable_archive_candle_fetch` | boolean | `false` | python |
-| `live.enable_forager_ws_candles` | boolean | `true` | python |
-| `live.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | python |
-| `live.execution_delay_seconds` | float | `2.0` | python |
-| `live.fee_conversion_max_age_ms` | integer | `86400000` | python |
-| `live.fee_pct_fallback` | float | `0.0002` | python |
-| `live.fee_pct_sanity_abs_max` | float | `0.001` | python |
-| `live.fills_confirmation_overlap_minutes` | float | `60.0` | python |
-| `live.fills_recent_overlap_minutes` | float | `10.0` | python |
-| `live.forager_ws_candle_rest_audit_minutes` | float | `30.0` | python |
-| `live.force_cold_startup` | boolean | `false` | python |
-| `live.forced_mode_long` | string | `""` | python |
-| `live.forced_mode_short` | string | `""` | python |
-| `live.inactive_coin_candle_ttl_minutes` | float | `10.0` | python |
-| `live.leverage` | integer | `10` | python |
-| `live.limit_order_create_max_market_dist_pct` | float | `0.8` | python |
-| `live.margin_mode_preference` | string | `"cross"` | python |
-| `live.market_snapshot_ticker_strategy` | string | `"auto"` | python |
-| `live.max_active_candle_tail_gap_minutes` | float | `10.0` | python |
-| `live.max_concurrent_api_requests` | integer \| null | `null` | python |
-| `live.max_disk_candles_per_symbol_per_tf` | integer | `2000000` | python |
-| `live.max_forager_candle_refresh_seconds` | float | `45.0` | python |
-| `live.max_forager_candle_staleness_minutes` | float \| null | `null` | python |
-| `live.max_memory_candles_per_symbol` | integer | `200000` | python |
-| `live.max_n_cancellations_per_batch` | integer | `5` | python |
-| `live.max_n_creations_per_batch` | integer | `3` | python |
-| `live.max_n_restarts_per_day` | integer | `10` | python |
-| `live.max_ohlcv_fetches_per_minute` | integer | `30` | python |
-| `live.order_match_tolerance_pct` | float | `0.0002` | python |
-| `live.order_replacement_churn_gate_activation_count` | integer | `10` | python |
-| `live.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | python |
-| `live.order_replacement_churn_gate_stability_minutes` | float | `2.0` | python |
-| `live.order_replacement_churn_gate_window_minutes` | float | `10.0` | python |
-| `live.recv_window_ms` | integer | `5000` | python |
-| `live.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | python |
-| `live.startup_phase_budgets` | object | `{}` | python |
-| `live.startup_phase_budgets.*` | object | Not declared | python |
-| `live.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | python |
-| `live.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | python |
-| `live.time_in_force` | string | `"good_till_cancelled"` | python |
-| `live.user` | string | `"bybit_01"` | python |
-| `live.warmup_concurrency` | integer | `0` | python |
-| `live.warmup_jitter_seconds` | float | `30.0` | python |
+| `live.account.balance_hysteresis_snap_pct` | float | `0.01` | python |
+| `live.account.balance_override` | float \| null | `null` | python |
+| `live.account.leverage` | integer | `10` | python |
+| `live.account.margin_mode_preference` | string | `"cross"` | python |
+| `live.account.user` | string | `"bybit_01"` | python |
+| `live.api.custom_endpoints_path` | string \| null | `null` | python |
+| `live.api.market_snapshot_ticker_strategy` | string | `"auto"` | python |
+| `live.api.max_concurrent_api_requests` | integer \| null | `null` | python |
+| `live.api.recv_window_ms` | integer | `5000` | python |
+| `live.candles.candle_lock_timeout_seconds` | float | `10.0` | python |
+| `live.candles.enable_archive_candle_fetch` | boolean | `false` | python |
+| `live.candles.enable_forager_ws_candles` | boolean | `true` | python |
+| `live.candles.forager_ws_candle_rest_audit_minutes` | float | `30.0` | python |
+| `live.candles.inactive_coin_candle_ttl_minutes` | float | `10.0` | python |
+| `live.candles.max_active_candle_tail_gap_minutes` | float | `10.0` | python |
+| `live.candles.max_disk_candles_per_symbol_per_tf` | integer | `2000000` | python |
+| `live.candles.max_forager_candle_refresh_seconds` | float | `45.0` | python |
+| `live.candles.max_forager_candle_staleness_minutes` | float \| null | `null` | python |
+| `live.candles.max_memory_candles_per_symbol` | integer | `200000` | python |
+| `live.candles.max_ohlcv_fetches_per_minute` | integer | `30` | python |
+| `live.execution.execution_delay_seconds` | float | `2.0` | python |
+| `live.execution.limit_order_create_max_market_dist_pct` | float | `0.8` | python |
+| `live.execution.max_n_cancellations_per_batch` | integer | `5` | python |
+| `live.execution.max_n_creations_per_batch` | integer | `3` | python |
+| `live.execution.order_match_tolerance_pct` | float | `0.0002` | python |
+| `live.execution.order_replacement_churn_gate_activation_count` | integer | `10` | python |
+| `live.execution.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | python |
+| `live.execution.order_replacement_churn_gate_stability_minutes` | float | `2.0` | python |
+| `live.execution.order_replacement_churn_gate_window_minutes` | float | `10.0` | python |
+| `live.execution.time_in_force` | string | `"good_till_cancelled"` | python |
+| `live.fills.fee_conversion_max_age_ms` | integer | `86400000` | python |
+| `live.fills.fee_pct_fallback` | float | `0.0002` | python |
+| `live.fills.fee_pct_sanity_abs_max` | float | `0.001` | python |
+| `live.fills.fills_confirmation_overlap_minutes` | float | `60.0` | python |
+| `live.fills.fills_recent_overlap_minutes` | float | `10.0` | python |
+| `live.modes.disapproved_position` | string | `"graceful_stop"` | python |
+| `live.modes.long` | string | `""` | python |
+| `live.modes.short` | string | `""` | python |
+| `live.recovery.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | python |
+| `live.recovery.max_n_restarts_per_day` | integer | `10` | python |
+| `live.startup.defer_broad_candle_warmup` | boolean | `true` | python |
+| `live.startup.force_cold_startup` | boolean | `false` | python |
+| `live.startup.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | python |
+| `live.startup.startup_phase_budgets` | object | `{}` | python |
+| `live.startup.startup_phase_budgets.*` | object | Not declared | python |
+| `live.startup.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | python |
+| `live.startup.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | python |
+| `live.startup.warmup_concurrency` | integer | `0` | python |
+| `live.startup.warmup_jitter_seconds` | float | `30.0` | python |
 
 ## logging
 

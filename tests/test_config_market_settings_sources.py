@@ -51,31 +51,31 @@ def test_format_config_preserves_market_settings_sources():
 def test_enable_archive_candle_fetch_in_template():
     """enable_archive_candle_fetch should be present in live template."""
     template = get_template_config()
-    assert "enable_archive_candle_fetch" in template["live"]
-    assert template["live"]["enable_archive_candle_fetch"] is False
+    assert "enable_archive_candle_fetch" in template["live"].get("candles", {})
+    assert template["live"]["candles"]["enable_archive_candle_fetch"] is False
 
 
 def test_enable_archive_candle_fetch_preserved():
     """enable_archive_candle_fetch should be preserved during format_config."""
     cfg = _base_config()
-    cfg["live"]["enable_archive_candle_fetch"] = True
+    cfg["live"]["candles"]["enable_archive_candle_fetch"] = True
     out = format_config(copy.deepcopy(cfg), verbose=False)
-    assert out["live"]["enable_archive_candle_fetch"] is True
+    assert out["live"]["candles"]["enable_archive_candle_fetch"] is True
 
 
 def test_forager_ws_candle_defaults_in_template():
     template = get_template_config()
-    assert template["live"]["enable_forager_ws_candles"] is True
-    assert template["live"]["forager_ws_candle_rest_audit_minutes"] == 30
+    assert template["live"]["candles"]["enable_forager_ws_candles"] is True
+    assert template["live"]["candles"]["forager_ws_candle_rest_audit_minutes"] == 30
 
 
 def test_margin_mode_preference_in_template():
     template = get_template_config()
-    assert template["live"]["margin_mode_preference"] == "cross"
+    assert template["live"]["account"]["margin_mode_preference"] == "cross"
 
 
 def test_margin_mode_preference_preserved():
     cfg = _base_config()
-    cfg["live"]["margin_mode_preference"] = "cross"
+    cfg["live"]["account"]["margin_mode_preference"] = "cross"
     out = format_config(copy.deepcopy(cfg), verbose=False)
-    assert out["live"]["margin_mode_preference"] == "cross"
+    assert out["live"]["account"]["margin_mode_preference"] == "cross"

@@ -8,12 +8,12 @@ from config_utils import format_config, get_template_config
     "overrides",
     [
         {
-            "DOGEUSDT": {"live": {"forced_mode_long": "manual"}},
-            "SOLUSDT": {"live": {"forced_mode_short": "manual"}},
+            "DOGEUSDT": {"live": {"modes": {"long": "manual"}}},
+            "SOLUSDT": {"live": {"modes": {"short": "manual"}}},
         },
         {
             "DOGEUSDT": {
-                "live": {"forced_mode_long": "manual"},
+                "live": {"modes": {"long": "manual"}},
                 "bot": {"long": {"wallet_exposure_limit": 0.25}},
             },
         },
@@ -26,7 +26,7 @@ from config_utils import format_config, get_template_config
 )
 def test_coin_overrides_not_pruned(overrides):
     cfg = get_template_config()
-    cfg["live"]["user"] = "tester"
+    cfg["live"]["account"]["user"] = "tester"
     cfg["coin_overrides"] = overrides
 
     formatted = format_config(cfg, live_only=True, verbose=False)

@@ -53,7 +53,7 @@ The canonical shortlist logic now lives in Rust and is shared by live selection 
 
 Live refreshes of broad candidate candles are best-effort and budgeted. The live bot should refresh
 the stalest eligible candidates first and spread remote candle calls over time, but stale candles
-within `live.max_forager_candle_staleness_minutes` do not by themselves remove a flat candidate
+within `live.candles.max_forager_candle_staleness_minutes` do not by themselves remove a flat candidate
 from ranking. This prevents the shortlist from being chosen from a random subset of candidates
 that happened to have the freshest candles.
 
@@ -175,10 +175,10 @@ same freshness contract as candles for held symbols or symbols about to receive 
 forager ranking:
 
 - The candidate universe should be refreshed oldest-first in the background.
-- Candidates inside `live.max_forager_candle_staleness_minutes` remain rankable even if their
+- Candidates inside `live.candles.max_forager_candle_staleness_minutes` remain rankable even if their
   latest completed candle is stale.
 - When that setting is `null`, the budget-derived window is never shorter than
-  `live.max_active_candle_tail_gap_minutes` (10 minutes by default). An explicit positive forager
+  `live.candles.max_active_candle_tail_gap_minutes` (10 minutes by default). An explicit positive forager
   staleness cap may intentionally shorten the window.
 - Close EMA readiness may use bounded flat-close/no-trade projection for the stale tail.
 - Quote-volume and log-range EMA inputs should use the latest known EMA value without appending

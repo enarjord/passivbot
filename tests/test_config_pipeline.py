@@ -61,10 +61,10 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
 
     assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
     assert config['bot']['global']['strategy_kind'] == "ema_anchor"
-    assert config["live"]["user"] == "example"
+    assert config["live"]["account"]["user"] == "example"
     # This explicit demonstration span is not a converted rolling-window policy.
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-    assert config["live"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
+    assert config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
     assert config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == 1.0
     assert config["bot"]["global"]["hsl"]["scope"] == "coin"
     assert require_side_universe_sources(config, 'approved_coins') == {
@@ -100,8 +100,8 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
 
 def test_startup_phase_budgets_validate_and_roundtrip():
     source = get_template_config()
-    assert source["live"]["startup_phase_budgets"] == {}
-    source["live"]["startup_phase_budgets"] = {
+    assert source["live"]["startup"]["startup_phase_budgets"] == {}
+    source["live"]["startup"]["startup_phase_budgets"] = {
         "account": {"elapsed_ms": 120_000, "since_previous_ms": 60_000},
         "full-warmup": {"elapsed_ms": 900_000},
     }
@@ -109,8 +109,8 @@ def test_startup_phase_budgets_validate_and_roundtrip():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert (
-        prepared["live"]["startup_phase_budgets"]
-        == source["live"]["startup_phase_budgets"]
+        prepared["live"]["startup"]["startup_phase_budgets"]
+        == source["live"]["startup"]["startup_phase_budgets"]
     )
 
 
@@ -187,11 +187,17 @@ def test_authored_coin_sources_reject_unknown_shapes(source):
 
 
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
-@pytest.mark.parametrize("path,value", [("bot.long.unstuck.ema_span_0", 12.5), ("live.leverage", 3)])
+@pytest.mark.parametrize(
+    "path,value", [("bot.long.unstuck.ema_span_0", 12.5), ("live.account.leverage", 3)]
+)
 def test_authored_patches_accept_sparse_local_coin_paths(location, path, value):
     source = get_template_config()
-    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
-                                         "live": {"leverage": 3}}}
+    source["coin_overrides"] = {
+        "BTC": {
+            "bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
+            "live": {"account": {"leverage": 3}},
+        }
+    }
     patch = {f"coin_overrides.BTC.{path}": value}
     if location == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = patch
@@ -223,8 +229,10 @@ def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
     config["bot"]["global"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
     override = 100.0 if location == "runtime" else None
     if location == "config":
-        config["live"]["balance_override"] = 100.0
-    with pytest.raises(ValueError, match="does not support live.balance_override"):
+        config["live"]["account"]["balance_override"] = 100.0
+    with pytest.raises(
+        ValueError, match="does not support live.account.balance_override"
+    ):
         require_live_balance_support(config, override)
 
 
@@ -287,7 +295,7 @@ def test_prepare_config_rejects_invalid_fixed_runtime_overrides(
 )
 def test_startup_phase_budgets_reject_invalid_values(budgets, error_type, error_match):
     source = get_template_config()
-    source["live"]["startup_phase_budgets"] = budgets
+    source["live"]["startup"]["startup_phase_budgets"] = budgets
 
     with pytest.raises(error_type, match=error_match):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -391,8 +399,8 @@ def test_project_config_keeps_only_target_sections_and_metadata(
     target, expected_sections
 ):
     cfg = get_template_config()
-    cfg["_raw"] = {"live": {"user": "raw_user"}}
-    cfg["_raw_effective"] = {"live": {"user": "effective_user"}}
+    cfg["_raw"] = {"live": {"account": {"user": "raw_user"}}}
+    cfg["_raw_effective"] = {"live": {"account": {"user": "effective_user"}}}
     cfg["_transform_log"] = [{"step": "seed"}]
     cfg["_coins_sources"] = {"approved_coins": "configs/approved_coins.json"}
 
@@ -750,7 +758,7 @@ def test_prepare_config_rejects_invalid_coin_override_we_excess_allowance_mode()
 
 def test_prepare_config_target_and_runtime_preserve_raw_metadata_and_record_steps():
     source = get_template_config()
-    source["live"]["user"] = "override_user"
+    source["live"]["account"]["user"] = "override_user"
     raw_snapshot = deepcopy(get_template_config())
 
     prepared = prepare_config(
@@ -762,8 +770,11 @@ def test_prepare_config_target_and_runtime_preserve_raw_metadata_and_record_step
         effective_snapshot=deepcopy(source),
     )
 
-    assert prepared["_raw"]["live"]["user"] == raw_snapshot["live"]["user"]
-    assert prepared["_raw_effective"]["live"]["user"] == "override_user"
+    assert (
+        prepared["_raw"]["live"]["account"]["user"]
+        == raw_snapshot["live"]["account"]["user"]
+    )
+    assert prepared["_raw_effective"]["live"]["account"]["user"] == "override_user"
     steps = [entry["step"] for entry in prepared["_transform_log"]]
     assert "normalize_config" in steps
     assert "project_config" in steps
@@ -1055,14 +1066,13 @@ def test_template_config_defaults_market_orders_disabled():
 
 def test_prepare_config_rejects_cancellations_not_greater_than_creations():
     source = get_template_config()
-    source["live"]["max_n_creations_per_batch"] = 3
-    source["live"]["max_n_cancellations_per_batch"] = 3
+    source["live"]["execution"]["max_n_creations_per_batch"] = 3
+    source["live"]["execution"]["max_n_cancellations_per_batch"] = 3
 
     with pytest.raises(
         ValueError,
         match=(
-            "config\\.live\\.max_n_cancellations_per_batch must be greater than "
-            "config\\.live\\.max_n_creations_per_batch"
+            "config\\.live\\.execution\\.max_n_cancellations_per_batch must be greater than config\\.live\\.execution\\.max_n_creations_per_batch"
         ),
     ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1074,7 +1084,7 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
         (
             "market_snapshot_ticker_strategy",
             "fast",
-            "config\\.live\\.market_snapshot_ticker_strategy must be one of",
+            "config\\.live\\.api\\.market_snapshot_ticker_strategy must be one of",
         ),
         (
             "forager_score_hysteresis_pct",
@@ -1084,52 +1094,52 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
         (
             "max_active_candle_tail_gap_minutes",
             0,
-            "config\\.live\\.max_active_candle_tail_gap_minutes must be finite and > 0\\.0",
+            "config\\.live\\.candles\\.max_active_candle_tail_gap_minutes must be finite and > 0\\.0",
         ),
         (
             "max_forager_candle_refresh_seconds",
             -1,
-            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+            "config\\.live\\.candles\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
         ),
         (
             "max_forager_candle_refresh_seconds",
             0,
-            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+            "config\\.live\\.candles\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
         ),
         (
             "max_forager_candle_refresh_seconds",
             float("inf"),
-            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+            "config\\.live\\.candles\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
         ),
         (
             "max_forager_candle_refresh_seconds",
             float("nan"),
-            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+            "config\\.live\\.candles\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
         ),
         (
             "max_forager_candle_refresh_seconds",
             "not-a-number",
-            "config\\.live\\.max_forager_candle_refresh_seconds must be numeric",
+            "config\\.live\\.candles\\.max_forager_candle_refresh_seconds must be numeric",
         ),
         (
             "forager_ws_candle_rest_audit_minutes",
             0,
-            "config\\.live\\.forager_ws_candle_rest_audit_minutes must be finite",
+            "config\\.live\\.candles\\.forager_ws_candle_rest_audit_minutes must be finite",
         ),
         (
             "forager_ws_candle_rest_audit_minutes",
             61,
-            "config\\.live\\.forager_ws_candle_rest_audit_minutes must be finite",
+            "config\\.live\\.candles\\.forager_ws_candle_rest_audit_minutes must be finite",
         ),
         (
             "forager_ws_candle_rest_audit_minutes",
             "not-a-number",
-            "config\\.live\\.forager_ws_candle_rest_audit_minutes must be numeric",
+            "config\\.live\\.candles\\.forager_ws_candle_rest_audit_minutes must be numeric",
         ),
         (
             "enable_forager_ws_candles",
             "false",
-            "config\\.live\\.enable_forager_ws_candles must be a boolean",
+            "config\\.live\\.candles\\.enable_forager_ws_candles must be a boolean",
         ),
     ],
 )
@@ -1139,7 +1149,10 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
         source["bot"]["global"]["forager"]["score_hysteresis_pct"] = value
         match = r"bot\.global\.forager\.score_hysteresis_pct.*finite"
     else:
-        source["live"][field] = value
+        from config.field_registry import LIVE_OPERATIONAL_PATHS
+
+        _, group, leaf = LIVE_OPERATIONAL_PATHS[field]
+        source["live"][group][leaf] = value
 
     with pytest.raises((TypeError, ValueError), match=match):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1205,35 +1218,42 @@ def test_prepare_config_rejects_invalid_hsl_risk_unstuck_numerics(
 
 def test_prepare_config_preserves_live_candle_budget_controls():
     source = get_template_config()
-    source["live"]["defer_broad_candle_warmup"] = False
-    source["live"]["force_cold_startup"] = True
-    source["live"]["max_forager_candle_staleness_minutes"] = 7.5
+    source["live"]["startup"]["defer_broad_candle_warmup"] = False
+    source["live"]["startup"]["force_cold_startup"] = True
+    source["live"]["candles"]["max_forager_candle_staleness_minutes"] = 7.5
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["defer_broad_candle_warmup"] is False
-    assert prepared["live"]["force_cold_startup"] is True
-    assert prepared["live"]["max_forager_candle_staleness_minutes"] == 7.5
+    assert prepared["live"]["startup"]["defer_broad_candle_warmup"] is False
+    assert prepared["live"]["startup"]["force_cold_startup"] is True
+    assert prepared["live"]["candles"]["max_forager_candle_staleness_minutes"] == 7.5
 
 
 def test_prepare_config_preserves_live_fill_refresh_economy_controls():
     source = get_template_config()
-    source["live"]["fills_recent_overlap_minutes"] = 3.5
-    source["live"]["fills_confirmation_overlap_minutes"] = 45.0
+    source["live"]["fills"]["fills_recent_overlap_minutes"] = 3.5
+    source["live"]["fills"]["fills_confirmation_overlap_minutes"] = 45.0
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["fills_recent_overlap_minutes"] == pytest.approx(3.5)
-    assert prepared["live"]["fills_confirmation_overlap_minutes"] == pytest.approx(45.0)
+    assert prepared["live"]["fills"]["fills_recent_overlap_minutes"] == pytest.approx(
+        3.5
+    )
+    assert prepared["live"]["fills"][
+        "fills_confirmation_overlap_minutes"
+    ] == pytest.approx(45.0)
 
 
 def test_prepare_config_preserves_live_custom_endpoints_path():
     source = get_template_config()
-    source["live"]["custom_endpoints_path"] = "configs/custom_endpoints.json"
+    source["live"]["api"]["custom_endpoints_path"] = "configs/custom_endpoints.json"
 
     prepared = prepare_config(source, verbose=False, target="live", runtime="live")
 
-    assert prepared["live"]["custom_endpoints_path"] == "configs/custom_endpoints.json"
+    assert (
+        prepared["live"]["api"]["custom_endpoints_path"]
+        == "configs/custom_endpoints.json"
+    )
 
 
 @pytest.mark.parametrize(

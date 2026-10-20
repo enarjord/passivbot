@@ -53,15 +53,26 @@ def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
     assert registry.find(("bot", "long", "unstuck", "ema_span_0")).numeric_type is float
 
 
-@pytest.mark.parametrize("path", [
-    "backtest.starting_balance", "backtest.gap_tolerance_ohlcvs_minutes",
-    "bot.global.universe.minimum_coin_age_days", "bot.global.warmup.max_minutes", "live.candle_lock_timeout_seconds",
-    "live.execution_delay_seconds", "live.fills_confirmation_overlap_minutes",
-    "live.fills_recent_overlap_minutes", "live.forager_ws_candle_rest_audit_minutes",
-    "live.inactive_coin_candle_ttl_minutes", "live.max_active_candle_tail_gap_minutes",
-    "live.max_forager_candle_refresh_seconds", "live.warmup_jitter_seconds",
-    "logging.memory_snapshot_interval_minutes", "logging.volume_refresh_info_threshold_seconds",
-])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "backtest.starting_balance",
+        "backtest.gap_tolerance_ohlcvs_minutes",
+        "bot.global.universe.minimum_coin_age_days",
+        "bot.global.warmup.max_minutes",
+        "live.candles.candle_lock_timeout_seconds",
+        "live.execution.execution_delay_seconds",
+        "live.fills.fills_confirmation_overlap_minutes",
+        "live.fills.fills_recent_overlap_minutes",
+        "live.candles.forager_ws_candle_rest_audit_minutes",
+        "live.candles.inactive_coin_candle_ttl_minutes",
+        "live.candles.max_active_candle_tail_gap_minutes",
+        "live.candles.max_forager_candle_refresh_seconds",
+        "live.startup.warmup_jitter_seconds",
+        "logging.memory_snapshot_interval_minutes",
+        "logging.volume_refresh_info_threshold_seconds",
+    ],
+)
 def test_fractional_consumer_fields_are_declared_as_float(path):
     parts = tuple(path.split("."))
     field = get_field_registry().find(parts)
@@ -80,16 +91,19 @@ def test_fractional_consumer_fields_are_declared_as_float(path):
         assert target == value
 
 
-@pytest.mark.parametrize("path,numeric_type", [
-    ("live.balance_override", float),
-    ("live.max_forager_candle_staleness_minutes", float),
-    ("live.max_concurrent_api_requests", int),
-    ("optimize.seed", int),
-    ("optimize.population_size", int),
-    ("optimize.gpu.batch_size", int),
-    ("backtest.ew_half_life_days", float),
-    ("bot.long.entry_cooldown.max_duration_minutes", float),
-])
+@pytest.mark.parametrize(
+    "path,numeric_type",
+    [
+        ("live.account.balance_override", float),
+        ("live.candles.max_forager_candle_staleness_minutes", float),
+        ("live.api.max_concurrent_api_requests", int),
+        ("optimize.seed", int),
+        ("optimize.population_size", int),
+        ("optimize.gpu.batch_size", int),
+        ("backtest.ew_half_life_days", float),
+        ("bot.long.entry_cooldown.max_duration_minutes", float),
+    ],
+)
 def test_nullable_fields_retain_declared_numeric_types(path, numeric_type):
     field = get_field_registry().find(tuple(path.split(".")))
     assert field.numeric_type is numeric_type
@@ -181,29 +195,33 @@ def test_coin_only_wallet_exposure_type_does_not_create_a_root_setting():
 
 
 def test_serialization_metadata_does_not_round_or_validate_integer_inputs():
-    source = {"live": {"max_n_creations_per_batch": 2.25, "warmup_ratio": None}}
+    source = {
+        "live": {"warmup_ratio": None, "execution": {"max_n_creations_per_batch": 2.25}}
+    }
     assert normalize_export_numbers(source) == source
 
 
 def test_exporter_uses_registry_types_instead_of_template_numeric_values(monkeypatch):
     import config.field_registry
 
-    registry = FieldRegistry([
-        FieldSpec(("live", "leverage"), (FieldType.FLOAT,)),
-        FieldSpec(("live", "warmup_ratio"), (FieldType.INTEGER,)),
-    ])
+    registry = FieldRegistry(
+        [
+            FieldSpec(("live", "account", "leverage"), (FieldType.FLOAT,)),
+            FieldSpec(("live", "warmup_ratio"), (FieldType.INTEGER,)),
+        ]
+    )
     monkeypatch.setattr(config.field_registry, "get_field_registry", lambda: registry)
-    payload = {"live": {"leverage": 3, "warmup_ratio": 1.0, "unknown": 2}}
+    payload = {"live": {"warmup_ratio": 1.0, "unknown": 2, "account": {"leverage": 3}}}
     original = deepcopy(payload)
     exported = normalize_export_numbers(payload)
     assert payload == original
-    assert type(exported["live"]["leverage"]) is float
+    assert type(exported["live"]["account"]["leverage"]) is float
     assert type(exported["live"]["warmup_ratio"]) is int
     assert type(exported["live"]["unknown"]) is int
 
 
 def test_registry_rejects_duplicate_or_ambiguous_declarations():
-    field = FieldSpec(("live", "leverage"), (FieldType.INTEGER,))
+    field = FieldSpec(("live", "account", "leverage"), (FieldType.INTEGER,))
     with pytest.raises(ValueError, match="duplicate field path"):
         FieldRegistry([field, field])
     with pytest.raises(TypeError, match="explicitly declared"):

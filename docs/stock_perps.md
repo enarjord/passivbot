@@ -229,7 +229,7 @@ For a $100 balance trading TSLA at $400:
 - At TWEL 1.0 with 2x leverage: max exposure = $200, max qty = 0.5 TSLA
 - Practical grid depth: ~5-8 entries before hitting minimums
 
-Consider setting `filter_by_min_effective_cost: false` if you want to trade with smaller balances and accept that some grid levels may be skipped.
+Consider setting `bot.global.universe.filter_by_min_effective_cost: false` if you want to trade with smaller balances and accept that some grid levels may be skipped.
 
 ### Example Config
 
@@ -237,36 +237,58 @@ Minimal test config for stock perps:
 
 ```json
 {
-  "live": {
-    "user": "hyperliquid_01",
-    "approved_coins": ["TSLA"],
-    "leverage": 2,
-    "filter_by_min_effective_cost": false,
-    "hedge_mode": false,
-    "minimum_coin_age_days": 0
-  },
-  "bot": {
-    "long": {
-      "n_positions": 2,
-      "total_wallet_exposure_limit": 1.0,
-      "entry_initial_qty_pct": 0.4
+    "config_version": "v9.0.0",
+    "bot": {
+        "global": {
+            "strategy_kind": "trailing_martingale",
+            "hedge_mode": false,
+            "universe": {
+                "filter_by_min_effective_cost": false,
+                "minimum_coin_age_days": 0.0
+            }
+        },
+        "long": {
+            "universe": {
+                "approved_coins": [
+                    "TSLA"
+                ]
+            },
+            "risk": {
+                "max_positions": 2,
+                "total_wallet_exposure_limit": 1.0
+            },
+            "strategy": {
+                "trailing_martingale": {
+                    "entry": {
+                        "initial_qty_pct": 0.4
+                    }
+                }
+            }
+        },
+        "short": {
+            "risk": {
+                "max_positions": 0,
+                "total_wallet_exposure_limit": 0.0
+            }
+        }
     },
-    "short": {
-      "n_positions": 0,
-      "total_wallet_exposure_limit": 0
+    "live": {
+        "account": {
+            "user": "hyperliquid_01",
+            "leverage": 2
+        }
+    },
+    "logging": {
+        "level": 2
     }
-  },
-  "logging": {
-    "level": 2
-  }
 }
 ```
 
 Key settings explained:
-- `leverage: 2` - Safe starting point, meets isolated margin requirements
-- `filter_by_min_effective_cost: false` - Allow trading even if balance is low
-- `minimum_coin_age_days: 0` - Stock perps are new, don't filter by age
-- `entry_initial_qty_pct: 0.4` - Larger initial entries (fewer grid levels with small balance)
+- `live.account.leverage: 2` - Safe starting point, meets isolated margin requirements
+- `bot.global.universe.filter_by_min_effective_cost: false` - Allow trading even if balance is low
+- `bot.global.universe.minimum_coin_age_days: 0.0` - Stock perps are new, don't filter by age
+- `bot.long.strategy.trailing_martingale.entry.initial_qty_pct: 0.4` - Larger initial entries (fewer grid levels with small balance)
 
 ## Oracle Pricing Behavior
 

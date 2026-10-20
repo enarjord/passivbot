@@ -377,6 +377,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from .shared_policy import (COIN_SOURCE_FIELDS,
                                 move_shared_policy, preserve_forced_normal_selection,
                                 preserve_forced_selection_overrides, shared_policy_selector)
+    from .operational_live import move_operational_live, operational_live_selector
 
     result = deepcopy(source)
     if not sparse:
@@ -466,7 +467,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
         ):
             path = path.replace(old, new)
-        return shared_policy_selector(path)
+        return operational_live_selector(shared_policy_selector(path))
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides
@@ -478,6 +479,14 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         for key, value in values.items():
             authored_value = deepcopy(value)
             reject_retired_gpu_selector(key, value, context=path)
+            if key.endswith(".live") and isinstance(value, dict):
+                # A dotted object is replacement authority, not a flattened
+                # list of fields. Convert its sparse contents in place.
+                move_operational_live(
+                    {"live": value},
+                    record=record,
+                    path=f"{path}.{key}".removesuffix(".live"),
+                )
             if key.endswith((".forager.volume_drop_pct", ".risk.total_exposure_entry_gate_enabled")):
                 record(f"{path}.{key}", value, None, "retired policy control")
                 continue
@@ -610,6 +619,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         migrate_entry_cooldown_tree(result)
         migrate_entry_ema_tree(result)
         move_shared_policy(result, record=record)
+        move_operational_live(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
         return result
@@ -636,6 +646,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     move_shared_policy(result, record=record)
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
+    move_operational_live(result, record=record)
     preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
         canonicalize_shared_bot_side(result.get("bot", {}).get(side))

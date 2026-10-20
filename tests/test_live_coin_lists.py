@@ -125,9 +125,9 @@ def test_disapproved_coin_retained_flat_position_gets_graceful_stop_override():
 )
 def test_ignored_coin_preserves_entry_blocking_forced_modes(forced_mode):
     bot, disapproved_symbol, _approved_symbol = _make_mode_override_bot()
-    bot.config_get = (
-        lambda path, symbol=None: forced_mode
-        if path == ["live", "forced_mode_long"] and symbol == disapproved_symbol
+    bot.config_get = lambda path, symbol=None: (
+        forced_mode
+        if path == ["live", "modes", "long"] and symbol == disapproved_symbol
         else ""
     )
 
@@ -136,9 +136,9 @@ def test_ignored_coin_preserves_entry_blocking_forced_modes(forced_mode):
 
 def test_ignored_coin_overrides_forced_normal_to_graceful_stop():
     bot, disapproved_symbol, _approved_symbol = _make_mode_override_bot()
-    bot.config_get = (
-        lambda path, symbol=None: "normal"
-        if path == ["live", "forced_mode_long"] and symbol == disapproved_symbol
+    bot.config_get = lambda path, symbol=None: (
+        "normal"
+        if path == ["live", "modes", "long"] and symbol == disapproved_symbol
         else ""
     )
 

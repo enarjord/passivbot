@@ -228,7 +228,7 @@ fingerprint identifies the Rust input used to produce it.
 
 ## Startup Timing Budgets
 
-`live.startup_phase_budgets` may define optional diagnostic budgets for the canonical
+`live.startup.startup_phase_budgets` may define optional diagnostic budgets for the canonical
 `bot.startup_timing` phases `account`, `active-candle`, `full-warmup`, `hsl`, `market`, and
 `startup`. Each phase may carry `elapsed_ms`, measured from process startup, and
 `since_previous_ms`, measured from the preceding startup timing mark. Configured values are copied

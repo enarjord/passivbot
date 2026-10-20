@@ -217,12 +217,10 @@ def test_adverse_force_mode_is_directional():
 
     scenarios = {item["label"]: item for item in payload["backtest"]["scenarios"]}
     assert scenarios["crash_test"]["overrides"]["coin_overrides"]["TEST"]["live"] == {
-        "forced_mode_long": "normal",
-        "forced_mode_short": "manual",
+        "modes": {"long": "normal", "short": "manual"}
     }
     assert scenarios["pump_test"]["overrides"]["coin_overrides"]["TEST"]["live"] == {
-        "forced_mode_long": "manual",
-        "forced_mode_short": "normal",
+        "modes": {"long": "manual", "short": "normal"}
     }
 
 
@@ -829,8 +827,7 @@ def test_clusters_csv_fast_path_copies_source_scan_artifacts(tmp_path):
     assert scenario["start_date"] == "2025-03-30"
     assert scenario["end_date"] == "2025-06-12"
     assert scenario["overrides"]["coin_overrides"]["OM"]["live"] == {
-        "forced_mode_long": "normal",
-        "forced_mode_short": "normal",
+        "modes": {"long": "normal", "short": "normal"}
     }
 
 

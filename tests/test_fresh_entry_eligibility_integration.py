@@ -481,7 +481,9 @@ async def test_pre_create_market_filter_records_exact_existing_gate_reasons():
     order = _initial("BTC/USDT:USDT", price=1.0)
 
     class MarketBot:
-        config = {"live": {"limit_order_create_max_market_dist_pct": 0.1}}
+        config = {
+            "live": {"execution": {"limit_order_create_max_market_dist_pct": 0.1}}
+        }
 
         def __init__(self, invalid=None, snapshot_error=None):
             self._fresh_entry_eligibility_trace = FreshEntryEligibilityTrace()
@@ -569,7 +571,9 @@ async def test_pre_create_market_filter_records_exact_existing_gate_reasons():
 
 def test_disabled_generic_distance_guard_still_annotates_churn_distance():
     class Bot:
-        config = {"live": {"limit_order_create_max_market_dist_pct": 0.0}}
+        config = {
+            "live": {"execution": {"limit_order_create_max_market_dist_pct": 0.0}}
+        }
 
     order = _initial("BTC/USDT:USDT", price=99.0)
     snapshot = MarketSnapshot(

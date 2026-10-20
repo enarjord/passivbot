@@ -17,9 +17,7 @@ def _write_config(path, config):
 def _sample_config() -> dict:
     return {
         "config_version": "v9.0.0",
-        "live": {
-            "user": "binance_01",
-        },
+        "live": {"account": {"user": "binance_01"}},
         "bot": {
             "global": {
                 "hsl": {

@@ -41,7 +41,7 @@ def normalize_memory_ema_span_minutes(value, *, field="memory_ema_span_minutes")
 
 
 def normalize_risk_bootstrap_max_lookback_minutes(value):
-    field = "live.risk_bootstrap_max_lookback_minutes"
+    field = "live.startup.risk_bootstrap_max_lookback_minutes"
     cap = _finite_number(value, field)
     if not 1.0 <= cap <= MAX_RISK_BOOTSTRAP_LOOKBACK_MINUTES:
         raise ValueError(
@@ -86,7 +86,7 @@ def risk_bootstrap_horizon_minutes(config):
     """Return (effective horizon, truncated) without deciding history readiness."""
     span = max(risk_memory_spans(config), default=1.0)
     cap = normalize_risk_bootstrap_max_lookback_minutes(
-        config["live"]["risk_bootstrap_max_lookback_minutes"]
+        config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"]
     )
     requested = 5.0 * span
     return min(requested, cap), requested > cap
@@ -105,9 +105,9 @@ def normalize_risk_memory_config(config):
     if ratio < 0:
         raise ValueError("bot.global.loss_gate.max_drawdown_ratio must be >= 0")
     gate["max_drawdown_ratio"] = ratio
-    live["risk_bootstrap_max_lookback_minutes"] = (
+    live["startup"]["risk_bootstrap_max_lookback_minutes"] = (
         normalize_risk_bootstrap_max_lookback_minutes(
-            live["risk_bootstrap_max_lookback_minutes"]
+            live["startup"]["risk_bootstrap_max_lookback_minutes"]
         )
     )
 

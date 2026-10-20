@@ -498,7 +498,7 @@ def test_bitget_uta_custom_id_respects_v3_client_oid_contract():
 
 def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
     bot = BitgetBot.__new__(BitgetBot)
-    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
     bot.is_uta = True
     order = {
         "position_side": "short",
@@ -514,7 +514,7 @@ def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
     assert "reduceOnly" not in post_only_params
     assert post_only_params["clientOid"] == "0x0007abcdef"
 
-    bot.config = {"live": {"time_in_force": "gtc"}}
+    bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
     gtc_params = bot._build_order_params(order)
 
     assert gtc_params["timeInForce"] == "gtc"
@@ -525,7 +525,7 @@ def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
 
 def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
     bot = BitgetBot.__new__(BitgetBot)
-    bot.config = {"live": {"time_in_force": "gtc"}}
+    bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
     bot.is_uta = True
     params = bot._build_order_params(
         {
@@ -565,7 +565,7 @@ def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
 
 def test_bitget_classic_order_params_keep_reduce_only_contract():
     bot = BitgetBot.__new__(BitgetBot)
-    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
     bot.is_uta = False
 
     params = bot._build_order_params(
@@ -903,7 +903,7 @@ def test_gateio_order_side_contract_depends_on_reduce_only_flag():
 
 def test_gateio_order_params_use_client_order_id_for_ccxt_text_prefix():
     bot = GateIOBot.__new__(GateIOBot)
-    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
     params = bot._build_order_params(
         {
             "type": "limit",

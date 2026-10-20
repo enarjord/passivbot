@@ -17,7 +17,7 @@ def _write_config(path, cfg):
 
 def test_override_path_resolves_relative_to_base_config(tmp_path):
     base_cfg = config_utils.get_template_config()
-    base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["account"]["user"] = "tester"
     base_path = tmp_path / "base.json"
     base_cfg["live"]["base_config_path"] = str(base_path)
     base_cfg["coin_overrides"] = {
@@ -39,7 +39,7 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
     }
 
     override_cfg = config_utils.get_template_config()
-    override_cfg["live"]["user"] = "tester"
+    override_cfg["live"]["account"]["user"] = "tester"
     override_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_pct"
     ] = 0.99
@@ -73,7 +73,7 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
 
 def test_override_file_not_found_fails_closed(tmp_path):
     base_cfg = config_utils.get_template_config()
-    base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["account"]["user"] = "tester"
     base_cfg["live"]["base_config_path"] = str(tmp_path / "base.json")
     base_cfg["coin_overrides"] = {
         "DOGE": {"override_config_path": "overrides/missing.json"}
@@ -91,7 +91,7 @@ def test_override_file_not_found_fails_closed(tmp_path):
 
 def test_malformed_override_file_fails_closed(tmp_path):
     base_cfg = config_utils.get_template_config()
-    base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["account"]["user"] = "tester"
     base_path = tmp_path / "base.json"
     override_path = tmp_path / "broken.json"
     override_path.write_text('{"bot": ', encoding="utf-8")
@@ -109,7 +109,7 @@ def test_malformed_override_file_fails_closed(tmp_path):
 
 def test_structurally_invalid_override_file_fails_closed(tmp_path):
     base_cfg = config_utils.get_template_config()
-    base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["account"]["user"] = "tester"
     base_path = tmp_path / "base.json"
     override_path = tmp_path / "invalid.json"
     override_path.write_text("[]", encoding="utf-8")
@@ -155,7 +155,7 @@ def test_referenced_retired_policy_error_identifies_coin_and_file(tmp_path):
 
 def _config_with_file(tmp_path, document, *, scope="coin"):
     config = config_utils.get_template_config()
-    config["live"]["user"] = "tester"
+    config["live"]["account"]["user"] = "tester"
     config["bot"]["global"]["hsl"]["scope"] = scope
     if scope == "portfolio":
         config["bot"]["global"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
@@ -218,7 +218,7 @@ def test_stored_scenario_file_is_not_a_cycle_in_effective_coin_validation(tmp_pa
 
 
 def test_effective_coin_validation_preserves_outer_scenario_semantic_errors(tmp_path):
-    config, path = _config_with_file(tmp_path, {"live": {"leverage": 2.0}})
+    config, path = _config_with_file(tmp_path, {"live": {"account": {"leverage": 2.0}}})
     config["backtest"]["scenarios"] = [{"label": "invalid-ew", "overrides": {
         "coin_overrides": {"BTC": {"override_config_path": str(path)}},
         "backtest.ew_half_life_days": 10.0,
@@ -283,8 +283,8 @@ def test_full_file_rejects_invalid_source_before_filtering(tmp_path, invalid):
         document["bot"]["long"]["strategy"]["ema_anchor"]["unknown_gene"] = 1.0
         match = "ema_anchor.unknown_gene.*unknown configuration field"
     else:
-        document["live"]["disapproved_position_mode"] = "invalid-mode"
-        match = "disapproved_position_mode"
+        document["live"]["modes"]["disapproved_position"] = "invalid-mode"
+        match = "modes.disapproved_position"
     config, _ = _config_with_file(tmp_path, document)
     with pytest.raises((ValueError, TypeError), match=match):
         _prepare_file_config(config)
@@ -306,8 +306,10 @@ def test_file_cycles_fail_and_validation_context_unwinds(tmp_path, indirect):
     assert "override.json" in str(error.value)
     if indirect:
         assert "second.json" in str(error.value)
-    _write_config(path, {"live": {"leverage": 2.0}})
-    assert _prepare_file_config(config)["coin_overrides"]["BTC"] == {"live": {"leverage": 2.0}}
+    _write_config(path, {"live": {"account": {"leverage": 2.0}}})
+    assert _prepare_file_config(config)["coin_overrides"]["BTC"] == {
+        "live": {"account": {"leverage": 2.0}}
+    }
 
 
 def test_nested_file_configuration_is_validated_without_becoming_parent_pins(tmp_path):
@@ -316,13 +318,18 @@ def test_nested_file_configuration_is_validated_without_becoming_parent_pins(tmp
     nested_path = tmp_path / "nested.json"
     document["coin_overrides"] = {"ETH": {"override_config_path": str(nested_path)}}
     _write_config(path, document)
-    _write_config(nested_path, {"live": {"disapproved_position_mode": "invalid-mode"}})
-    with pytest.raises(ValueError, match="nested.json.*disapproved_position_mode"):
+    _write_config(
+        nested_path, {"live": {"modes": {"disapproved_position": "invalid-mode"}}}
+    )
+    with pytest.raises(ValueError, match="nested.json.*modes.disapproved_position"):
         _prepare_file_config(config)
-    _write_config(nested_path, {"live": {"leverage": 2.0}})
+    _write_config(nested_path, {"live": {"account": {"leverage": 2.0}}})
     parsed = _prepare_file_config(config)
     assert "coin_overrides" not in parsed["coin_overrides"]["BTC"]
-    assert parsed["coin_overrides"]["BTC"]["live"]["leverage"] == document["live"]["leverage"]
+    assert (
+        parsed["coin_overrides"]["BTC"]["live"]["account"]["leverage"]
+        == document["live"]["account"]["leverage"]
+    )
 
 
 def test_nested_relative_references_use_the_resolved_override_file_directory(tmp_path):
@@ -334,7 +341,7 @@ def test_nested_relative_references_use_the_resolved_override_file_directory(tmp
     directory = tmp_path / "sub"
     directory.mkdir()
     _write_config(directory / "override.json", document)
-    _write_config(directory / "nested.json", {"live": {"leverage": 2.0}})
+    _write_config(directory / "nested.json", {"live": {"account": {"leverage": 2.0}}})
     _write_config(main_path, base)
     parsed = config_utils.parse_overrides(config_utils.load_config(str(main_path), verbose=False), verbose=False)
     assert "coin_overrides" not in parsed["coin_overrides"]["BTC"]

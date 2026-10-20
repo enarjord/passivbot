@@ -244,7 +244,7 @@ def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
     assert order["position_side"] == position_side
 
     ccxt_bot = CCXTBot.__new__(CCXTBot)
-    ccxt_bot.config = {"live": {"time_in_force": "post_only"}}
+    ccxt_bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
 
     params = ccxt_bot._build_order_params(order)
 
@@ -260,6 +260,7 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
         "market_orders_allowed": True,
         "market_order_near_touch_threshold": 0.001,
     }
+    bot.config = {"bot": {"global": {"execution": live_values}}}
     bot.live_value = lambda key: live_values.get(key)
     bot.bot_value = lambda pside, key: {
         ("long", "total_wallet_exposure_limit"): 1.5,

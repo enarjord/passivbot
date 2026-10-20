@@ -201,7 +201,7 @@ exposed, report unavailable until a fresh account cohort reconciles the facts. K
 fill facts and boundary, without committing the stale preview.
 
 Target five slow spans of live reconstruction, capped by
-`live.risk_bootstrap_max_lookback_minutes` (default 129600, maximum 90 days). Report actual
+`live.startup.risk_bootstrap_max_lookback_minutes` (default 129600, maximum 90 days). Report actual
 coverage, unknown prefix, missing marks, ambiguous fills and any shortened target. Keep the
 history retention/acquisition horizon distinct from exponential memory.
 The effective HSL acquisition horizon is the larger of this bounded slow-span target
