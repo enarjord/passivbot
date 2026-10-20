@@ -231,24 +231,22 @@ def test_format_config_rejects_invalid_monitor_snapshot_interval():
         format_config(current, verbose=False, live_only=True)
 
 
-def test_format_config_current_with_empty_optimize_adds_bounds():
+def test_format_config_empty_optimize_freezes_configured_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     current["optimize"] = {}
+    current["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["threshold_base_pct"] = 0.006
+    current["bot"]["short"]["strategy"]["trailing_martingale"]["close"]["threshold_base_pct"] = -0.003
 
     out = format_config(current, verbose=False, live_only=True)
 
     assert "bounds" in out["optimize"]
     assert _bound(
         out, "long", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    ) == _bound(
-        tmpl, "long", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    )
+    ) == [0.006, 0.006]
     assert _bound(
         out, "short", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    ) == _bound(
-        tmpl, "short", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    )
+    ) == [-0.003, -0.003]
 
 
 def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
