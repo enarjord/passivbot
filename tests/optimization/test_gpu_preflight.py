@@ -89,7 +89,7 @@ def test_ema_position_enforcers_rejected_before_device_imports(monkeypatch, side
             pytest.fail("unsupported EMA enforcer reached device preparation")
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", guarded)
-    with pytest.raises(ValueError, match=f"bot.{side}.risk.position_exposure_enforcer.enabled.*CPU backend"):
+    with pytest.raises(ValueError, match=rf"bot\.{side}\.risk\.position_exposure_enforcer\.enabled.*CPU backend"):
         if entrypoint == "parameters":
             prepare_candidate_parameters(config, markets, "binance")
         else:

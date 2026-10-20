@@ -58,3 +58,22 @@ def test_released_v8_enforcers_and_override_objects_migrate_explicitly(structure
         assert native["risk_twel_enforcer_policy"] == released["total_exposure_enforcer_policy"]
     assert any("exposure-enforcer object conversion" in item["reason"] for item in migration.changes)
     assert migration.config["backtest"]["scenarios"][0]["overrides"]
+
+
+@pytest.mark.parametrize("owner,native", [("position", "wel"), ("total", "twel")])
+@pytest.mark.parametrize("prefix", ["", "risk.", "long.risk.", "bot.long.risk.", "short.risk."])
+def test_released_fixed_selector_suffixes_keep_their_gene_authority(owner, native, prefix):
+    from config.param_paths import resolve_bound_selectors
+
+    source = released_v8_policy()
+    selector = f"{prefix}{owner}_exposure_enforcer_threshold"
+    source["optimize"]["fixed_params"] = [selector]
+    migrated = migrate(source, memory_span_minutes=123.5)
+    config = migrated.config
+    flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
+    selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
+    sides = {"long"} if "long" in prefix else {"short"} if "short" in prefix else {"long", "short"}
+    assert set(selected) == {f"{side}_risk_{native}_enforcer_threshold" for side in sides}
+    assert config["optimize"]["fixed_params"] == [f"{prefix}{owner}_exposure_enforcer.threshold"]
+    assert any(item["path"] == "optimize.fixed_params" and item["old"] == [selector]
+               and item["new"] == config["optimize"]["fixed_params"] for item in migrated.changes)

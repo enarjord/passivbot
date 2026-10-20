@@ -426,6 +426,15 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         if (len(parts) >= 3 and parts[0] == "bot" and parts[1] in {"long", "short"}
                 and parts[2] in FLAT_BOT_KEY_TO_GROUP_PATH):
             parts[2:3] = FLAT_BOT_KEY_TO_GROUP_PATH[parts[2]]
+        # Released fixed selectors may be suffixes, group-relative, or fully
+        # qualified. Preserve their prefix while converting the feature leaf.
+        parts = [segment for part in parts for segment in (
+            part.rsplit("_", 1) if part in {
+                "position_exposure_enforcer_enabled", "position_exposure_enforcer_threshold",
+                "total_exposure_enforcer_enabled", "total_exposure_enforcer_threshold",
+                "total_exposure_enforcer_policy",
+            } else (part,)
+        )]
         path = ".".join(parts)
         for old, new in (
             ("live.hsl_signal_mode", "bot.global.hsl.scope"),
