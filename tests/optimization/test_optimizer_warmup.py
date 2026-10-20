@@ -160,7 +160,7 @@ def test_optimizer_rejects_invalid_effective_fixed_runtime_value_before_backend(
         "bot.long.forager.score_weights.volatility": -1.0
     }
 
-    with pytest.raises(ValueError, match="score_weights.*non-negative"):
+    with pytest.raises(ValueError, match=r"score_weights\.volatility pin.*nonnegative"):
         validate_optimizer_effective_configs(config)
 
 
@@ -282,6 +282,12 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     cfg["optimize"]["bounds"] = {}
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    if consumer == "forager":
+        # Only the searched coordinate participates in normalization. Its positive
+        # lower bound avoids activating an omitted weight at the all-zero fallback.
+        cfg["bot"][side]["forager"]["score_weights"] = dict(
+            volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=1.0,
+        )
     weight_path = (["forager", "score_weights", "unilateralness"] if consumer == "forager"
                    else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
     weight_key = ("forager_score_weights_unilateralness" if consumer == "forager"
@@ -291,7 +297,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     for pside in ("long", "short"):
         _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
         _set_bounds(cfg, {f"{pside}_total_wallet_exposure_limit": [float(pside == side)]})
-    _set_bounds(cfg, {f"{side}_{weight_key}": [0.0, 1.0]})
+    _set_bounds(cfg, {f"{side}_{weight_key}": [0.1 if consumer == "forager" else 0.0, 1.0]})
     _set_bounds(cfg, {f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0]})
     key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
     path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
@@ -481,7 +487,9 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
     )
     if searched:
         _set_bounds(cfg, {
-            f"{side}_forager_score_weights_unilateralness": [0.0, 1.0],
+            # Keep omitted zero weights zero through normalization, including at
+            # the lower corner, while leaving RMS history fully reachable.
+            f"{side}_forager_score_weights_unilateralness": [0.1, 1.0],
             f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
             f"{side}_n_positions": [slots],
         })
@@ -515,3 +523,252 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     assert compute_backtest_warmup_minutes(cfg) == 0
     cfg["backtest"]["dynamic_wel_by_tradability"] = True
     assert compute_backtest_warmup_minutes(cfg) == 0
+
+
+def _mirrored_weight_config(strategy, short_bounds):
+    from config import prepare_config
+
+    config = get_template_config()
+    config["bot"]["global"]["strategy_kind"] = strategy
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    config["optimize"]["bounds"] = {}
+    for side in ("long", "short"):
+        config["bot"][side]["risk"].update(
+            max_positions=1,
+            total_wallet_exposure_limit=float(side == "long" or short_bounds == "explicit_zero"),
+        )
+        config["bot"][side]["forager"]["score_weights"] = dict(
+            volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0,
+        )
+    for index, name in enumerate(("volume", "volatility", "ema_readiness", "unilateralness")):
+        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, float(index + 1)]})
+        if short_bounds == "explicit_zero":
+            _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
+    return prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("short_bounds", ["omitted", "explicit_zero"])
+@pytest.mark.parametrize("fraction", [0.0, 0.37, 1.0])
+def test_mirrored_candidate_weights_follow_source_normalization_at_every_corner(
+    strategy, short_bounds, fraction,
+):
+    from optimize import individual_to_config
+    from optimization.shape import build_optimization_shape
+    from optimizer_overrides import optimizer_overrides
+
+    config = _mirrored_weight_config(strategy, short_bounds)
+    shape = build_optimization_shape(config)
+    vector = [bound.low + fraction * (bound.high - bound.low) for bound in shape.bounds]
+    candidate = individual_to_config(
+        vector, optimizer_overrides, config["optimize"]["enable_overrides"], config,
+        key_paths=shape.key_paths,
+    )
+    expected = (dict(volume=0.0, volatility=0.0, ema_readiness=1.0, unilateralness=0.0)
+                if fraction == 0.0 else
+                dict(volume=0.1, volatility=0.2, ema_readiness=0.3, unilateralness=0.4))
+    for side in ("long", "short"):
+        assert candidate["bot"][side]["forager"]["score_weights"] == pytest.approx(expected)
+        assert candidate["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.0
+
+
+def test_disabling_mirror_keeps_independent_fixed_zero_weights_zero():
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+
+    config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config(
+        [bound.low for bound in shape.bounds], config, key_paths=shape.key_paths,
+        overrides_list=[],
+    )
+    assert candidate["bot"]["long"]["forager"]["score_weights"]["ema_readiness"] == 1.0
+    assert candidate["bot"]["short"]["forager"]["score_weights"] == dict(
+        volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0,
+    )
+
+
+def test_mirrored_fixed_zero_source_group_does_not_enable_fallback():
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+
+    config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
+    for name in ("volume", "volatility", "ema_readiness", "unilateralness"):
+        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0]})
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config(
+        [bound.low for bound in shape.bounds], config, key_paths=shape.key_paths,
+    )
+    for side in ("long", "short"):
+        assert candidate["bot"][side]["forager"]["score_weights"] == dict(
+            volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0,
+        )
+
+
+@pytest.mark.parametrize("pin_side", ["long", "short"])
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("fraction", [0.0, 1.0])
+def test_runtime_zero_weight_pins_keep_effective_source_authority(pin_side, mirror, fraction):
+    from config import prepare_config
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+
+    config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    config["optimize"]["fixed_runtime_overrides"] = {
+        f"bot.{pin_side}.forager.score_weights.{name}": 0.0 for name in names
+    }
+    config = prepare_config(config, verbose=False)
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config(
+        [bound.low + fraction * (bound.high - bound.low) for bound in shape.bounds],
+        config, key_paths=shape.key_paths,
+        overrides_list=["mirror_short_from_long"] if mirror else [],
+    )
+    zero = dict.fromkeys(names, 0.0)
+    if pin_side == "long":
+        assert candidate["bot"]["long"]["forager"]["score_weights"] == zero
+        assert candidate["bot"]["short"]["forager"]["score_weights"] == zero
+    elif mirror:
+        # Short runtime pins precede, and are replaced by, the numeric mirror.
+        assert candidate["bot"]["short"]["forager"]["score_weights"] == (
+            candidate["bot"]["long"]["forager"]["score_weights"]
+        )
+        assert sum(candidate["bot"]["short"]["forager"]["score_weights"].values()) == pytest.approx(1.0)
+    else:
+        assert candidate["bot"]["short"]["forager"]["score_weights"] == zero
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_runtime_zero_weight_object_keeps_leaf_only_permission_boundary(mirror):
+    from config import prepare_config
+
+    config = _mirrored_weight_config("trailing_martingale", "explicit_zero")
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"] if mirror else []
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.forager.score_weights": dict(
+            volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=0.0,
+        ),
+    }
+    with pytest.raises(TypeError, match="must target leaf settings"):
+        prepare_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+@pytest.mark.parametrize("risk_value", [0.0, 1.0])
+@pytest.mark.parametrize("searched_weights", [False, True])
+def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side(
+    mirror, risk_value, searched_weights,
+):
+    from copy import deepcopy
+
+    from config import prepare_config
+    from optimize import install_anchored_fine_tune_plan
+    from optimization.fine_tune_anchors import ANCHOR_GENE_KEY
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+
+    config = get_template_config()
+    config["optimize"]["bounds"] = {}
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    zero = dict.fromkeys(names, 0.0)
+    positive = dict.fromkeys(names, 0.25)
+    for side in ("long", "short"):
+        config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
+        config["bot"][side]["forager"]["score_weights"] = deepcopy(zero)
+    _set_bounds(config, {"long_total_wallet_exposure_limit": [0.0, 1.0]})
+    for name in names:
+        _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
+        _set_bounds(config, {f"short_forager_score_weights_{name}": [0.0]})
+    config = prepare_config(config, verbose=False)
+    anchors = [deepcopy(config), deepcopy(config)]
+    anchors[1]["bot"]["long"]["forager"]["score_weights"] = deepcopy(positive)
+    selectors = ["long.risk.total_wallet_exposure_limit"]
+    if searched_weights:
+        selectors.append("long.forager.score_weights")
+    install_anchored_fine_tune_plan(
+        config, selectors, "unused", starting_configs_override=anchors,
+    )
+    shape = build_optimization_shape(config)
+    for anchor_index, anchor_weights in enumerate((zero, positive)):
+        vector = [float(anchor_index) if key == ANCHOR_GENE_KEY else
+                  risk_value if key == "long_total_wallet_exposure_limit" else bound.low
+                  for (key, _), bound in zip(shape.key_paths, shape.bounds, strict=True)]
+        candidate = build_optimizer_vector_config(
+            vector, config, overrides_list=["mirror_short_from_long"] if mirror else [],
+        )
+        expected = (dict(volume=0.0, volatility=0.0, ema_readiness=1.0, unilateralness=0.0)
+                    if searched_weights else anchor_weights)
+        assert candidate["_optimizer_anchor"]["id"] == anchor_index
+        assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == risk_value
+        assert candidate["bot"]["long"]["forager"]["score_weights"] == expected
+        assert candidate["bot"]["short"]["forager"]["score_weights"] == (expected if mirror else zero)
+
+
+@pytest.mark.parametrize("authority", ["dormant", "runtime", "anchor"])
+@pytest.mark.parametrize("mirror", [False, True])
+def test_preflight_validates_effective_zero_weight_activation_without_mutating_genes(
+    monkeypatch, authority, mirror,
+):
+    from copy import deepcopy
+
+    from config import prepare_config
+    from optimize import install_anchored_fine_tune_plan
+    from optimization import warmup
+
+    config = get_template_config()
+    config["optimize"]["bounds"] = {}
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"] if mirror else []
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    zero = dict.fromkeys(names, 0.0)
+    for side in ("long", "short"):
+        config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=0.0)
+        config["bot"][side]["forager"]["score_weights"] = deepcopy(zero)
+    _set_bounds(config, {"long_total_wallet_exposure_limit": [0.0, 1.0]})
+    if authority != "dormant":
+        for name in names:
+            _set_bounds(config, {f"long_forager_score_weights_{name}": [0.0, 1.0]})
+    if authority == "runtime":
+        config["optimize"]["fixed_runtime_overrides"] = {
+            f"bot.long.forager.score_weights.{name}": 0.0 for name in names
+        }
+    config = prepare_config(config, verbose=False)
+    if authority == "anchor":
+        install_anchored_fine_tune_plan(
+            config, ["long.risk.total_wallet_exposure_limit"], "unused",
+            starting_configs_override=[deepcopy(config)],
+        )
+    before = deepcopy(config)
+    boundary_builder = warmup._build_optimizer_boundary_configs
+    captured = []
+
+    def capture(source):
+        candidates = boundary_builder(source)
+        captured.extend((candidate, deepcopy(candidate)) for candidate in candidates)
+        return candidates
+
+    monkeypatch.setattr(warmup, "_build_optimizer_boundary_configs", capture)
+    validate_optimizer_effective_configs(config)
+    assert config == before
+    assert captured
+    for candidate, original in captured:
+        assert candidate == original
+        assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.0
+        assert candidate["bot"]["long"]["forager"]["score_weights"] == zero
+
+
+@pytest.mark.parametrize("invalid", [-1.0, float("nan"), "invalid"])
+def test_effective_preflight_keeps_forager_normalization_owner_errors(monkeypatch, invalid):
+    from config import prepare_config
+    from optimization import warmup
+
+    config = prepare_config(get_template_config(), verbose=False)
+    candidate = warmup.build_optimizer_max_config(config)
+    candidate["bot"]["long"]["forager"]["score_weights"]["volume"] = invalid
+    monkeypatch.setattr(warmup, "_build_optimizer_boundary_configs", lambda _config: [candidate])
+    with pytest.raises(
+        (TypeError, ValueError),
+        match=r"bot\.long\.forager\.score_weights\.volume.*(numeric|finite and non-negative)",
+    ):
+        validate_optimizer_effective_configs(config)

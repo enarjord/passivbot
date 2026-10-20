@@ -1032,3 +1032,67 @@ def resolve_released_v8_defaults(source):
     fill(result, defaults)
     resolve_released_v8_minimum_cost_policy(result)
     return result
+
+
+def materialize_released_v8_optimizer_bounds(config, *, changes):
+    """Preserve released implicit search ranges after explicit structural conversion.
+
+    This stage consumes the converter's canonical paths. Authored and migrated
+    coupled-EMA bounds win over frozen released template ranges. Optional
+    adaptive dimensions are deliberately absent here: canonical hydration fixes
+    them at their configured values, as the released loader did.
+    """
+    from config.optimize_bounds import flatten_optimize_bounds
+
+    kind = config.get("bot", {}).get("global", {}).get(
+        "strategy_kind", _RELEASED_V8_DEFAULTS["live"]["strategy_kind"]
+    )
+    # Use only the released default resolver, never the evolving v9 template or
+    # loaded native metadata, for the ranges that v8 supplied implicitly.
+    released = resolve_released_v8_defaults({
+        "config_version": RELEASED_V8_SCHEMA_VERSION, "bot": {},
+        "live": {"strategy_kind": kind},
+    })
+    defaults = released["optimize"]["bounds"]
+    portfolio = config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope") == "portfolio"
+    for side in ("long", "short"):
+        shared = defaults[side]
+        shared["strategy"] = {kind: shared["strategy"][kind]}
+        shared["risk"]["max_positions"] = shared["risk"].pop("n_positions")
+        for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+            shared["risk"][owner] = {"threshold": shared["risk"].pop(f"{owner}_threshold")}
+        shared["unstuck"]["exposure_trigger_ratio"] = shared["unstuck"].pop("threshold")
+        shared["forager"].pop("volume_drop_pct", None)
+        shared["forager"]["score_weights"] = {
+            name: shared["forager"].pop(f"score_weights_{name}")
+            for name in ("volume", "volatility", "ema_readiness")
+        }
+        if portfolio:
+            shared.pop("hsl", None)
+        else:
+            shared["hsl"]["drawdown_ratio_ema_span_minutes"] = shared["hsl"].pop("ema_span_minutes")
+    original = config.setdefault("optimize", {}).get("bounds", {})
+    rebuilt = deepcopy(original)
+
+    def overlay_missing(target, template):
+        if not isinstance(target, dict):
+            return
+        for key, value in template.items():
+            if key not in target:
+                target[key] = deepcopy(value)
+            elif isinstance(value, dict):
+                overlay_missing(target[key], value)
+
+    # Preserve every authored field and malformed container for the strict
+    # schema gate. Rebuilding from a flattened projection would erase unknown
+    # nested/global fields and could silently turn invalid input into success.
+    overlay_missing(rebuilt, defaults)
+    config["optimize"]["bounds"] = rebuilt
+    if rebuilt != original:
+        authored = flatten_optimize_bounds(original, strategy_kind=kind)
+        added = sorted(set(flatten_optimize_bounds(defaults, strategy_kind=kind)) - set(authored))
+        changes.append(dict(
+            path="optimize.bounds", old=deepcopy(original), new=deepcopy(rebuilt),
+            reason="materialized released-v8 inherited search ranges before explicit-only v9 bounds",
+            materialized_bound_keys=added,
+        ))

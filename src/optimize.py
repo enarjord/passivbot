@@ -2985,6 +2985,9 @@ def apply_fine_tune_bounds(
         if key not in flat_bounds:
             continue
         _fix_bound_to_current_value(config, key)
+    from optimization.config_adapter import validate_forager_weight_search
+
+    validate_forager_weight_search(config)
 
 
 def install_anchored_fine_tune_plan(
@@ -3088,6 +3091,16 @@ def install_anchored_fine_tune_plan(
             "anchored fine-tune requires at least one valid starting config from "
             f"{starting_configs_path!r}"
         )
+    from optimization.config_adapter import validate_forager_weight_search
+
+    for anchor in anchors:
+        effective = deepcopy(config)
+        for item in anchor["fixed_values"]:
+            target = effective
+            for part in item["path"][:-1]:
+                target = target[part]
+            target[item["path"][-1]] = item["value"]
+        validate_forager_weight_search(effective, tunable_keys=set(tunable_keys))
     key_paths = [path for key, path in base_key_paths if key in tunable_keys]
     config[ANCHOR_PLAN_KEY] = {
         "anchors": anchors,
@@ -3380,6 +3393,9 @@ def _materialize_suite_run_contract(
     for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
         if key in suite_cfg:
             backtest[key] = deepcopy(suite_cfg[key])
+    from optimization.config_adapter import validate_forager_weight_search
+
+    validate_forager_weight_search(config)
 
 
 def _run_gpu_preparation_preflight(
