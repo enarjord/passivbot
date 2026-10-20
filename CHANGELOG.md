@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Avoid a redundant full configuration copy when cleaning optimizer candidates and
+  exported configs, while preserving validation and independent output values.
+
 - Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.

@@ -82,6 +82,130 @@ def test_clean_config_fills_missing_values_from_template():
     }
 
 
+def _mutable_container_ids(node):
+    if isinstance(node, dict):
+        return {id(node)}.union(*(_mutable_container_ids(value) for value in node.values()))
+    if isinstance(node, list):
+        return {id(node)}.union(*(_mutable_container_ids(value) for value in node))
+    return set()
+
+
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("sparse", [False, True])
+def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
+    strategy, mode, sparse
+):
+    from config.hsl import generated_template
+
+    source = generated_template(get_template_config(), mode)
+    source["live"]["strategy_kind"] = strategy
+    source["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    source["live"]["startup_phase_budgets"] = {"candles": 15.0}
+    source["backtest"]["reducer"] = {"adg_strategy_eq": "max"}
+    source["backtest"]["market_settings"]["overrides"] = {"BTC": {"min_qty": 0.001}}
+    source["backtest"]["scenarios"] = [
+        {"label": "stress", "overrides": {"bot.long.risk.max_positions": 2.0}}
+    ]
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"risk": {"max_positions": 1.0}}}, "_note": ["private"]}
+    }
+    source["optimize"]["bounds"]["long"]["forager"]["score_weights"] = {
+        "unilateralness": [0.0, 0.5]
+    }
+    if sparse:
+        source["bot"]["risk"]["hsl"] = {"scope": mode}
+        source["bot"]["long"]["entry_cooldown"] = {"max_duration_minutes": 12.5}
+        source["optimize"]["bounds"] = {
+            "long": {"forager": {"score_weights": {"unilateralness": [0.0, 0.5]}}}
+        }
+    original = deepcopy(source)
+
+    cleaned = clean_config(source)
+    repeated = clean_config(source)
+
+    assert source == original
+    assert cleaned == repeated
+    assert not (_mutable_container_ids(source) & _mutable_container_ids(cleaned))
+    assert not (_mutable_container_ids(cleaned) & _mutable_container_ids(repeated))
+    assert cleaned["backtest"]["reducer"] == {"adg_strategy_eq": "max", "default": "mean"}
+    assert cleaned["live"]["startup_phase_budgets"] == {"candles": 15.0}
+    assert "_note" not in cleaned["coin_overrides"]["BTC"]
+    assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
+        "unilateralness"
+    ] == [0.0, 0.5]
+    assert set(cleaned["bot"]["long"]["strategy"]) == {strategy}
+    if sparse and mode == "portfolio":
+        assert cleaned["bot"]["risk"]["hsl"] == {"scope": "portfolio"}
+
+    saved_output = deepcopy(cleaned)
+    source["live"]["approved_coins"]["long"].append("SOL")
+    source["backtest"]["scenarios"][0]["overrides"]["bot.long.risk.max_positions"] = 3.0
+    assert cleaned == saved_output
+
+    changed_source = deepcopy(source)
+    cleaned["live"]["approved_coins"]["short"].append("SOL")
+    cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
+        "unilateralness"
+    ][0] = 0.1
+    assert source == changed_source
+    assert repeated == saved_output
+
+
+@pytest.mark.parametrize(
+    "path,value,error,match",
+    [
+        (("config_version",), "v99.0.0", ValueError, "newer than supported"),
+        (
+            ("optimize", "fixed_runtime_overrides"),
+            {"live.hsl_engine": "legacy"},
+            ValueError,
+            "removed in v9",
+        ),
+        (
+            ("coin_overrides",),
+            {"BTC": {"bot": {"long": {"n_positions": 1}}}},
+            ValueError,
+            "retired",
+        ),
+        (("bot", "risk", "hsl", "scope"), "unsupported", ValueError, "scope must be"),
+        (
+            ("optimize", "bounds", "risk", "hsl"),
+            [],
+            TypeError,
+            "optimize.bounds.risk.hsl must be a mapping",
+        ),
+        (
+            ("bot", "long", "forager", "score_weights", "volume"),
+            -1.0,
+            ValueError,
+            "score_weights",
+        ),
+        (
+            ("bot", "long", "entry_cooldown", "max_duration_minutes"),
+            float("inf"),
+            ValueError,
+            "must be finite",
+        ),
+        (("live", "strategy_kind"), "unsupported", ValueError, "unsupported strategy kind"),
+    ],
+)
+def test_clean_config_rejects_invalid_inputs_without_mutating_them(path, value, error, match):
+    source = get_template_config()
+    # Exercise validation after sparse adaptive bounds have been hydrated too.
+    source["optimize"]["bounds"] = {}
+    node = source
+    for part in path[:-1]:
+        node = node.setdefault(part, {})
+    node[path[-1]] = value
+    original = deepcopy(source)
+
+    with pytest.raises(error, match=match):
+        clean_config(source)
+
+    assert source == original
+
+
 def test_clean_config_prunes_inactive_strategy_subtrees_for_selected_kind():
     template = get_template_config()
     config = deepcopy(template)
