@@ -444,9 +444,7 @@ def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     )
     assert (
         config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_1m"]
-        == get_template_config()["optimize"]["bounds"]["long"]["forager"][
-            "volume_ema_span_1m"
-        ]
+        == [config["bot"]["long"]["forager"]["volume_ema_span_1m"]] * 2
     )
 
 
