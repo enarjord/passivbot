@@ -152,11 +152,11 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
-    global_risk = _require_mapping(bot.get("risk"), "bot.risk")
-    hsl_policy = _require_mapping(global_risk.get("hsl"), "bot.risk.hsl")
+    global_risk = _require_mapping(bot.get("global"), "bot.global")
+    hsl_policy = _require_mapping(global_risk.get("hsl"), "bot.global.hsl")
     hsl_scope = hsl_policy["scope"]
     hsl = hsl_policy if hsl_scope == "portfolio" else _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
-    loss_gate = _require_mapping(global_risk.get("loss_gate"), "bot.risk.loss_gate")
+    loss_gate = _require_mapping(global_risk.get("loss_gate"), "bot.global.loss_gate")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
     unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
@@ -239,7 +239,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
         "loss_gate_max_drawdown_ratio": _finite_float(
-            loss_gate["max_drawdown_ratio"], "bot.risk.loss_gate.max_drawdown_ratio"
+            loss_gate["max_drawdown_ratio"], "bot.global.loss_gate.max_drawdown_ratio"
         ),
         "position_exposure_enforcer_enabled": bool(
             risk.get("position_exposure_enforcer_enabled", False)

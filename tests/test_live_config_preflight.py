@@ -34,21 +34,36 @@ def _sample_config() -> dict:
             "risk_bootstrap_max_lookback_minutes": 129600.0,
         },
         "bot": {
-            "unstuck": {"memory_ema_span_minutes": 10080.0},
-            "risk": {"loss_gate": {"memory_ema_span_minutes": 20160.0, "max_drawdown_ratio": 0.2}, "hsl": {
-                "scope": "portfolio",
-                "enabled": True,
-                "red_threshold": 0.05,
-                "cooldown_minutes_after_red": 60.0,
-                "memory_ema_span_minutes": 43200.0,
-                "drawdown_ratio_ema_span_minutes": 120.0,
-                "scale_budget_with_excess_allowance": False,
-                "panic_close_order_type": "limit",
-            }},
+            "global": {
+                "unstuck": {
+                    "memory_ema_span_minutes": 10080.0,
+                },
+                "loss_gate": {
+                    "memory_ema_span_minutes": 20160.0,
+                    "max_drawdown_ratio": 0.2,
+                },
+                "hsl": {
+                    "scope": "portfolio",
+                    "enabled": True,
+                    "red_threshold": 0.05,
+                    "cooldown_minutes_after_red": 60.0,
+                    "memory_ema_span_minutes": 43200.0,
+                    "drawdown_ratio_ema_span_minutes": 120.0,
+                    "scale_budget_with_excess_allowance": False,
+                    "panic_close_order_type": "limit",
+                },
+            },
             "long": {
-                "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.0},
-                "unstuck": {"enabled": True},
-                "forager": {"volume_ema_span_1m": 120.0},
+                "risk": {
+                    "max_positions": 3,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "unstuck": {
+                    "enabled": True,
+                },
+                "forager": {
+                    "volume_ema_span_1m": 120.0,
+                },
                 "hsl": {
                     "enabled": True,
                     "red_threshold": 0.05,
@@ -60,8 +75,13 @@ def _sample_config() -> dict:
                 },
             },
             "short": {
-                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.0},
-                "unstuck": {"enabled": False},
+                "risk": {
+                    "max_positions": 1,
+                    "total_wallet_exposure_limit": 0.0,
+                },
+                "unstuck": {
+                    "enabled": False,
+                },
                 "hsl": {
                     "enabled": False,
                     "red_threshold": 0.04,
@@ -361,7 +381,7 @@ def test_live_config_preflight_blocks_invalid_runtime_override_with_account_hsl(
 
 def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     config = _sample_config()
-    config["bot"]["risk"]["hsl"]["scope"] = "coin"
+    config["bot"]["global"]["hsl"]["scope"] = "coin"
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -384,7 +404,7 @@ def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(
     tmp_path,
 ):
     config = _sample_config()
-    del config["bot"]["risk"]["hsl"]["scope"]
+    del config["bot"]["global"]["hsl"]["scope"]
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -449,7 +469,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     target = _sample_config()
     target["live"]["user"] = "okx_01"
     target["backtest"]["exchanges"] = ["okx"]
-    target["bot"]["risk"]["hsl"]["scope"] = "pside"
+    target["bot"]["global"]["hsl"]["scope"] = "pside"
     target["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
     target["live"]["ignored_coins"]["short"] = ["DOGE", "XRP"]
     target["live"]["max_forager_candle_staleness_minutes"] = 20
@@ -479,7 +499,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         "value": "binance_01",
     }
     assert changes["backtest.exchanges"]["after"] == {"present": True, "value": ["okx"]}
-    assert changes["bot.risk.hsl.scope"]["after"] == {
+    assert changes["bot.global.hsl.scope"]["after"] == {
         "present": True,
         "value": "pside",
     }
@@ -731,7 +751,7 @@ def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(
 def test_portfolio_preflight_uses_only_portfolio_policy(tmp_path, portfolio_enabled):
     config = _sample_config()
     config["live"]["balance_override"] = 1000
-    config["bot"]["risk"]["hsl"]["enabled"] = portfolio_enabled
+    config["bot"]["global"]["hsl"]["enabled"] = portfolio_enabled
     for side in ("long", "short"):
         config["bot"][side]["hsl"]["enabled"] = not portfolio_enabled
     path = tmp_path / "config.json"

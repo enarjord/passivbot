@@ -85,11 +85,11 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     )
     assert len(configs) == len(parameters) == 2
     for config in configs:
-        assert config["bot"]["risk"]["hsl"]["scope"] == "portfolio"
-        assert config["bot"]["risk"]["hsl"]["red_threshold"] == .002
-        assert config["bot"]["risk"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 2.5
-        assert config["bot"]["unstuck"]["memory_ema_span_minutes"] == 15.5
-        assert config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == 31.25
+        assert config["bot"]["global"]["hsl"]["scope"] == "portfolio"
+        assert config["bot"]["global"]["hsl"]["red_threshold"] == .002
+        assert config["bot"]["global"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 2.5
+        assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 15.5
+        assert config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 31.25
     assert args.price_shocks == [[0, 64, .7]]
     assert args.unstuck_memory_ema_span_minutes == 15.5
     assert args.loss_gate_memory_ema_span_minutes == 31.25

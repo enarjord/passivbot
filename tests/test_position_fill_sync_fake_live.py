@@ -55,8 +55,8 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
-    cfg["bot"]["unstuck"]["memory_ema_span_minutes"] = 288.0
-    cfg["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 288.0
+    cfg["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 288.0
+    cfg["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 288.0
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})

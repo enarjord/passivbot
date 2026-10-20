@@ -65,8 +65,8 @@ def test_legacy_fixture_requires_explicit_v9_migration():
         prepare_config(source, verbose=False)
     migrated = _prepare_explicitly_migrated(source)
     assert migrated["config_version"] == "v9.0.0"
-    assert migrated["bot"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-    assert migrated["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] == 43200.0
+    assert migrated["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert migrated["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 43200.0
 
 
 @pytest.mark.parametrize(
@@ -566,7 +566,7 @@ def test_legacy_flat_optimizer_bounds_migrate_without_mixing_shapes(explicit, bo
         )
     )
     assert flat["long_unstuck_ema_span_0"] == [expected, expected]
-    assert set(prepared["optimize"]["bounds"]) == {"long", "short", "unstuck", "risk"}
+    assert set(prepared["optimize"]["bounds"]) == {"global", "long", "short"}
     assert (
         prepare_config(prepared, verbose=False)["optimize"]["bounds"]
         == prepared["optimize"]["bounds"]

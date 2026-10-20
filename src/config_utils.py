@@ -334,7 +334,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.risk.loss_gate.max_drawdown_ratio": {
+    "bot.global.loss_gate.max_drawdown_ratio": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -352,7 +352,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.unstuck.memory_ema_span_minutes": {
+    "bot.global.unstuck.memory_ema_span_minutes": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -364,7 +364,7 @@ FIELD_RUNTIME_RULES = {
     "live.risk_bootstrap_max_lookback_minutes": {
         "owner": "live", "consumed_by": {"live"}, "cli_exposed_on": {"live"},
     },
-    "bot.risk.hsl.scope": {
+    "bot.global.hsl.scope": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -764,18 +764,18 @@ def clean_config(config: dict) -> dict:
     else:
         reject_retired_v9_fields(source)
     template = normalization_template(get_template_config(), source)
-    portfolio = source.get("bot", {}).get("risk", {}).get("hsl", {})
+    portfolio = source.get("bot", {}).get("global", {}).get("hsl", {})
     if not isinstance(portfolio, dict):
-        raise TypeError("bot.risk.hsl must be a mapping")
+        raise TypeError("bot.global.hsl must be a mapping")
     # Retain explicit portfolio policy without hydrating missing authorization.
-    template["bot"]["risk"]["hsl"].update(
+    template["bot"]["global"]["hsl"].update(
         {key: None for key in FIELDS if key in portfolio}
     )
-    portfolio_bounds = source.get("optimize", {}).get("bounds", {}).get("risk", {}).get("hsl")
+    portfolio_bounds = source.get("optimize", {}).get("bounds", {}).get("global", {}).get("hsl")
     if portfolio_bounds is not None:
         if not isinstance(portfolio_bounds, dict):
-            raise TypeError("optimize.bounds.risk.hsl must be a mapping")
-        template["optimize"]["bounds"].setdefault("risk", {})["hsl"] = {
+            raise TypeError("optimize.bounds.global.hsl must be a mapping")
+        template["optimize"]["bounds"].setdefault("global", {})["hsl"] = {
             key: None for key in FIELDS if key in portfolio_bounds
         }
     from config.optimize_bounds import (
@@ -1158,9 +1158,9 @@ RESERVED_CLI_ARGS = {
             "when market orders are allowed; this is not a live slippage cap."
         ),
     },
-    "bot.risk.loss_gate.max_drawdown_ratio": {
+    "bot.global.loss_gate.max_drawdown_ratio": {
         "visible": ["--loss-gate-max-drawdown-ratio"],
-        "hidden": ["--bot.risk.loss_gate.max_drawdown_ratio", "--bot_risk_loss_gate_max_drawdown_ratio"],
+        "hidden": ["--bot.global.loss_gate.max_drawdown_ratio", "--bot_risk_loss_gate_max_drawdown_ratio"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1209,9 +1209,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Maximum age difference allowed when using ticker data to convert non-quote fee tokens.",
     },
-    "bot.unstuck.memory_ema_span_minutes": {
+    "bot.global.unstuck.memory_ema_span_minutes": {
         "visible": ["--unstuck-memory-ema-span-minutes"],
-        "hidden": ["--bot.unstuck.memory_ema_span_minutes", "--bot_unstuck_memory_ema_span_minutes"],
+        "hidden": ["--bot.global.unstuck.memory_ema_span_minutes", "--bot_unstuck_memory_ema_span_minutes"],
         "type": normalize_memory_ema_span_minutes,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1227,9 +1227,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Live reconstruction cap in minutes (maximum 90 days); requested horizon is five slow spans.",
     },
-    "bot.risk.hsl.scope": {
+    "bot.global.hsl.scope": {
         "visible": ["--hsl-scope"],
-        "hidden": ["--bot.risk.hsl.scope", "--bot_risk_hsl_scope"],
+        "hidden": ["--bot.global.hsl.scope", "--bot_risk_hsl_scope"],
         "type": normalize_hsl_signal_mode,
         "metavar": "MODE",
         "choices": tuple(HSL_SIGNAL_MODES),
@@ -1526,15 +1526,15 @@ for _pside in ("long", "short"):
         "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
     }
 
-for _path in ("bot.unstuck.memory_ema_span_minutes", "bot.risk.loss_gate.max_drawdown_ratio", "bot.risk.hsl.scope"):
+for _path in ("bot.global.unstuck.memory_ema_span_minutes", "bot.global.loss_gate.max_drawdown_ratio", "bot.global.hsl.scope"):
     FIELD_RUNTIME_RULES[_path]["owner"] = "bot"
-FIELD_RUNTIME_RULES["bot.risk.loss_gate.memory_ema_span_minutes"] = deepcopy(
-    FIELD_RUNTIME_RULES["bot.unstuck.memory_ema_span_minutes"]
+FIELD_RUNTIME_RULES["bot.global.loss_gate.memory_ema_span_minutes"] = deepcopy(
+    FIELD_RUNTIME_RULES["bot.global.unstuck.memory_ema_span_minutes"]
 )
-RESERVED_CLI_ARGS["bot.risk.loss_gate.memory_ema_span_minutes"] = {
-    **deepcopy(RESERVED_CLI_ARGS["bot.unstuck.memory_ema_span_minutes"]),
+RESERVED_CLI_ARGS["bot.global.loss_gate.memory_ema_span_minutes"] = {
+    **deepcopy(RESERVED_CLI_ARGS["bot.global.unstuck.memory_ema_span_minutes"]),
     "visible": ["--loss-gate-memory-ema-span-minutes"],
-    "hidden": ["--bot.risk.loss_gate.memory_ema_span_minutes", "--bot_risk_loss_gate_memory_ema_span_minutes"],
+    "hidden": ["--bot.global.loss_gate.memory_ema_span_minutes", "--bot_risk_loss_gate_memory_ema_span_minutes"],
     "help": "Global loss-gate realized-memory EMA span in minutes.",
 }
 
@@ -1784,7 +1784,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.exchange_symbol_unavailable_cooldown_hours",
         "live.leverage",
         "live.market_orders_allowed",
-        "bot.risk.loss_gate.max_drawdown_ratio",
+        "bot.global.loss_gate.max_drawdown_ratio",
         "live.limit_order_create_max_market_dist_pct",
         "live.order_match_tolerance_pct",
         "live.order_replacement_churn_gate_activation_count",

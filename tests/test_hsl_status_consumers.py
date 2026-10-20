@@ -125,9 +125,22 @@ def test_smoke_portfolio_policy_ignores_inactive_sides(enabled):
     config = {
         "live": {},
         "bot": {
-            "risk": {"hsl": {"scope": "portfolio", "enabled": enabled}},
-            "long": {"hsl": {"enabled": not enabled}},
-            "short": {"hsl": {"enabled": not enabled}},
+            "global": {
+                "hsl": {
+                    "scope": "portfolio",
+                    "enabled": enabled,
+                },
+            },
+            "long": {
+                "hsl": {
+                    "enabled": not enabled,
+                },
+            },
+            "short": {
+                "hsl": {
+                    "enabled": not enabled,
+                },
+            },
         },
     }
     assert report._smoke_hsl_enabled_scopes(config) == (

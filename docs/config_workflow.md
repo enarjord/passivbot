@@ -53,8 +53,8 @@ live/scenario coin settings still control data preparation.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
 - Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
 - Risk policy belongs to its consumers: each HSL policy has its own slow and ratio-smoothing
-  spans; global unstuck uses `bot.unstuck.memory_ema_span_minutes`; global loss gate uses
-  `bot.risk.loss_gate.memory_ema_span_minutes`. Acquisition uses the separately bounded
+  spans; global unstuck uses `bot.global.unstuck.memory_ema_span_minutes`; global loss gate uses
+  `bot.global.loss_gate.memory_ema_span_minutes`. Acquisition uses the separately bounded
   live bootstrap cap. A rolling window is not an equivalent EMA span.
 - Keep new configs on the canonical schema. Use nested active strategy paths and explicit
   [migration reports](v8_to_v9_migration.md) for released-v8 changes.
@@ -70,7 +70,7 @@ The default profile mirrored by `configs/examples/default_trailing_martingale_lo
 - short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
 - `bot.long.risk.total_wallet_exposure_limit = 1.5`
 - HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
-- HSL signal mode set to per-coin slots with `bot.risk.hsl.scope = "coin"`
+- HSL signal mode set to per-coin slots with `bot.global.hsl.scope = "coin"`
 - approved-coin universe seeded to the current 41-coin default list
 - optimizer backend defaulting to `pymoo`
 

@@ -8,11 +8,11 @@ supported GPU execution and live fact reconstruction. See the exact
 
 ## Scopes and budgets
 
-| `bot.risk.hsl.scope` | Scope and RED closes | Current base budget | Policy |
+| `bot.global.hsl.scope` | Scope and RED closes | Current base budget | Policy |
 |---|---|---|---|
 | `coin` | One symbol/position-side pair | Raw balance / that side's applicable slot count | `bot.long.hsl`, `bot.short.hsl`; coin patches allowed |
 | `pside` | Every position on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
-| `portfolio` | All positions | Raw balance | Explicit `bot.risk.hsl` |
+| `portfolio` | All positions | Raw balance | Explicit `bot.global.hsl` |
 
 Portfolio protection includes existing exposure on disabled entry sides. A hedged scope is
 flat only when gross inventory is zero. Replacing a constituent while an aggregate remains

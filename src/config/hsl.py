@@ -118,13 +118,13 @@ def engine(config):
 
 
 def _mode(config):
-    value = config.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
+    value = config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")
     if not isinstance(value, str) or value.strip().lower() not in {
         "coin",
         "pside",
         "portfolio",
     }:
-        raise ValueError("bot.risk.hsl.scope must be coin, pside or portfolio")
+        raise ValueError("bot.global.hsl.scope must be coin, pside or portfolio")
     return value.strip().lower()
 
 
@@ -151,11 +151,11 @@ def normalization_template(template, config):
 def generated_template(template, mode="coin"):
     """Generate an explicit v9 HSL configuration."""
     config = deepcopy(template)
-    config["bot"]["risk"]["hsl"]["scope"] = mode
+    config["bot"]["global"]["hsl"]["scope"] = mode
     config = normalization_template(config, config)
     if mode == "portfolio":
-        config["bot"]["risk"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
-        config["optimize"]["bounds"].setdefault("risk", {})["hsl"] = deepcopy(
+        config["bot"]["global"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
+        config["optimize"]["bounds"].setdefault("global", {})["hsl"] = deepcopy(
             template["optimize"]["bounds"]["long"]["hsl"]
         )
     return config
@@ -260,7 +260,7 @@ def validate_parameter_path(path, mode):
         )
     if mode == "portfolio" and re.search(r"(^|[._])(long|short)[._]hsl([._]|$)", path):
         raise ValueError(
-            f"{path} is inactive in portfolio mode; use explicit bot.risk.hsl portfolio parameter paths"
+            f"{path} is inactive in portfolio mode; use explicit bot.global.hsl portfolio parameter paths"
         )
 
 
@@ -305,8 +305,8 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
             "live.hsl_engine is a startup selector, not a scenario or optimizer override"
         )
     selected = deepcopy(config)
-    if "bot.risk.hsl.scope" in leaves:
-        selected.setdefault("bot", {}).setdefault("risk", {}).setdefault("hsl", {})["scope"] = leaves["bot.risk.hsl.scope"]
+    if "bot.global.hsl.scope" in leaves:
+        selected.setdefault("bot", {}).setdefault("global", {}).setdefault("hsl", {})["scope"] = leaves["bot.global.hsl.scope"]
     for key in ("hsl_engine",):
         if f"live.{key}" in leaves:
             selected["live"][key] = leaves[f"live.{key}"]
@@ -327,19 +327,19 @@ def normalize_hsl(config, template, *, verbose=True):
 
     config["live"].setdefault("risk_bootstrap_max_lookback_minutes", deepcopy(template["live"]["risk_bootstrap_max_lookback_minutes"]))
     bot = config.setdefault("bot", {})
-    bot.setdefault("risk", deepcopy(template["bot"]["risk"]))
-    bot["risk"].setdefault("hsl", {"scope": "coin"})
-    bot["risk"].setdefault("loss_gate", deepcopy(template["bot"]["risk"]["loss_gate"]))
-    bot.setdefault("unstuck", deepcopy(template["bot"]["unstuck"]))
-    for name, block in (("unstuck", bot["unstuck"]), ("risk.loss_gate", bot["risk"]["loss_gate"])):
-        defaults = template["bot"]["unstuck"] if name == "unstuck" else template["bot"]["risk"]["loss_gate"]
+    bot.setdefault("global", deepcopy(template["bot"]["global"]))
+    bot["global"].setdefault("hsl", {"scope": "coin"})
+    bot["global"].setdefault("loss_gate", deepcopy(template["bot"]["global"]["loss_gate"]))
+    bot["global"].setdefault("unstuck", deepcopy(template["bot"]["global"]["unstuck"]))
+    for name, block in (("global.unstuck", bot["global"]["unstuck"]), ("global.loss_gate", bot["global"]["loss_gate"])):
+        defaults = template["bot"]["global"]["unstuck"] if name == "global.unstuck" else template["bot"]["global"]["loss_gate"]
         for key, value in defaults.items():
             block.setdefault(key, deepcopy(value))
     normalize_risk_memory_config(config)
     mode = _mode(config)
-    bot["risk"]["hsl"]["scope"] = mode
-    if mode != "portfolio" and set(bot["risk"]["hsl"]) - {"scope"}:
-        raise ValueError("bot.risk.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/pside scope")
+    bot["global"]["hsl"]["scope"] = mode
+    if mode != "portfolio" and set(bot["global"]["hsl"]) - {"scope"}:
+        raise ValueError("bot.global.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/pside scope")
     validate_hsl_paths(config)
     enabled = False
     for side in ("long", "short"):
@@ -366,16 +366,16 @@ def normalize_hsl(config, template, *, verbose=True):
         enabled |= mode != "portfolio" and side_cfg["hsl"]["enabled"]
     if mode == "portfolio":
         normalize_block(
-            bot["risk"]["hsl"],
+            bot["global"]["hsl"],
             {},
-            "bot.risk.hsl",
+            "bot.global.hsl",
             active=mode == "portfolio",
             portfolio=True,
             verbose=verbose,
         )
-        if bot["risk"]["hsl"]["scale_budget_with_excess_allowance"]:
-            raise ValueError("bot.risk.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
-        enabled |= mode == "portfolio" and bot["risk"]["hsl"]["enabled"]
+        if bot["global"]["hsl"]["scale_budget_with_excess_allowance"]:
+            raise ValueError("bot.global.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
+        enabled |= mode == "portfolio" and bot["global"]["hsl"]["enabled"]
     for coin, patch in config.get("coin_overrides", {}).items():
         for side, values in patch.get("bot", {}).items():
             if side not in {"long", "short"} or not isinstance(values, dict):
@@ -424,7 +424,7 @@ def require_live_runtime_support(config):
     mode = _mode(config)
     policies = []
     if mode == "portfolio":
-        policies.append(("bot.risk.hsl", config["bot"]["risk"]["hsl"]))
+        policies.append(("bot.global.hsl", config["bot"]["global"]["hsl"]))
     else:
         for side in ("long", "short"):
             base = config["bot"][side]["hsl"]
@@ -460,7 +460,7 @@ def require_live_balance_support(config, override=None):
     )
     bot = config.get("bot", {})
     enabled = (
-        bot["risk"]["hsl"]["enabled"]
+        bot["global"]["hsl"]["enabled"]
         if mode == "portfolio"
         else any(
             bot.get(side, {}).get("hsl", {}).get("enabled", False)
@@ -547,7 +547,7 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
             )
         if signal and not side_signal:
             enabled = (
-                config["bot"]["risk"]["hsl"]["enabled"]
+                config["bot"]["global"]["hsl"]["enabled"]
                 if _mode(config) == "portfolio"
                 else any(
                     _side_has_enabled_policy(config, side, markets_by_exchange)

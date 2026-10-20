@@ -12,7 +12,7 @@ Allowed fields are intentionally limited:
   selected risk fields (position-exposure enforcer settings and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
   `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `exposure_trigger_ratio`); and
-  every HSL field when the global `bot.risk.hsl.scope` is `"coin"`; and
+  every HSL field when the global `bot.global.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
@@ -51,10 +51,10 @@ The complete conditional HSL override group is:
 - `hsl.panic_close_order_type`
 
 These fields are per `coin+side` only when the main config selects
-`bot.risk.hsl.scope = "coin"`. The signal mode itself remains global and is not overridable.
+`bot.global.hsl.scope = "coin"`. The signal mode itself remains global and is not overridable.
 An inline HSL patch in `pside` or `portfolio` mode is rejected. HSL values in a complete override
 file are warned about and ignored in those modes, while other eligible fields in that file still
-apply. A `bot.risk.hsl.scope` value inside an override file or inline patch cannot authorize the
+apply. A `bot.global.hsl.scope` value inside an override file or inline patch cannot authorize the
 HSL patch; the main config's effective global mode always decides.
 
 ## How overrides are loaded
@@ -320,4 +320,4 @@ excluded from discovery, but other JSON/HJSON files in that directory are treate
 - Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
   coerced into trading parameters.
 - Conditional HSL: setting HSL fields in a coin patch while the main config uses `pside` or
-  `portfolio` mode is invalid; changing `bot.risk.hsl.scope` inside the patch does not change that.
+  `portfolio` mode is invalid; changing `bot.global.hsl.scope` inside the patch does not change that.

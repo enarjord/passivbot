@@ -1851,7 +1851,7 @@ class Passivbot:
                 )
 
     def _live_max_realized_loss_pct(self) -> float:
-        return float(require_config_value(self.config, "bot.risk.loss_gate.max_drawdown_ratio"))
+        return float(require_config_value(self.config, "bot.global.loss_gate.max_drawdown_ratio"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -13015,13 +13015,13 @@ class Passivbot:
             "unstuck": {
                 "enabled": self._unstuck_uses_realized_pnl(),
                 "memory_ema_span_minutes": require_config_value(
-                    self.config, "bot.unstuck.memory_ema_span_minutes"
+                    self.config, "bot.global.unstuck.memory_ema_span_minutes"
                 ),
             },
             "loss_gate": {
                 "enabled": self._live_max_realized_loss_pct() < 1.0,
                 "memory_ema_span_minutes": require_config_value(
-                    self.config, "bot.risk.loss_gate.memory_ema_span_minutes"
+                    self.config, "bot.global.loss_gate.memory_ema_span_minutes"
                 ),
             },
         }
@@ -13352,7 +13352,7 @@ class Passivbot:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                    "adjust bot.risk.loss_gate.max_drawdown_ratio to change behavior",
+                    "adjust bot.global.loss_gate.max_drawdown_ratio to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,

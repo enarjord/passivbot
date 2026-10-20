@@ -102,12 +102,12 @@ def _make_analysis_entry(value):
 
 def test_backtest_hsl_scope_requires_canonical_global_config():
     assert (
-        bt._resolve_backtest_hsl_signal_mode({"bot": {"risk": {"hsl": {"scope": "coin"}}}})
+        bt._resolve_backtest_hsl_signal_mode({"bot": {'global': {'hsl': {'scope': 'coin'}}}})
         == "coin"
     )
 
-    with pytest.raises(KeyError, match="bot.risk.hsl.scope"):
-        bt._resolve_backtest_hsl_signal_mode({"bot": {"risk": {"hsl": {}}}})
+    with pytest.raises(KeyError, match="bot.global.hsl.scope"):
+        bt._resolve_backtest_hsl_signal_mode({"bot": {'global': {'hsl': {}}}})
 
 
 def test_expand_analysis_includes_entry_balance_pct():

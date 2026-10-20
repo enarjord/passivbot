@@ -32,7 +32,7 @@ def validate_hsl_signal_topology(
 
     if signal_mode not in HSL_SIGNAL_MODES:
         raise ValueError(
-            "GPU HSL requires bot.risk.hsl.scope to be coin, pside, or "
+            "GPU HSL requires bot.global.hsl.scope to be coin, pside, or "
             f"portfolio; got {signal_mode!r}"
         )
     if coin_count > 1:

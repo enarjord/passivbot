@@ -206,7 +206,7 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
             )
-    normalize_hsl_signal_mode(config["bot"]["risk"]["hsl"]["scope"])
+    normalize_hsl_signal_mode(config["bot"]["global"]["hsl"]["scope"])
     if config["live"]["disapproved_position_mode"] not in {"graceful_stop", "manual"}:
         raise ValueError("live.disapproved_position_mode must be graceful_stop or manual")
     _validate_startup_phase_budgets(config["live"])

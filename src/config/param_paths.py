@@ -12,8 +12,8 @@ from .strategy_spec import (
 )
 
 OPTIMIZABLE_BOT_KEY_PATHS = {
-    "unstuck_memory_ema_span_minutes": ("bot", "unstuck", "memory_ema_span_minutes"),
-    "loss_gate_memory_ema_span_minutes": ("bot", "risk", "loss_gate", "memory_ema_span_minutes"),
+    "unstuck_memory_ema_span_minutes": ("bot", "global", "unstuck", "memory_ema_span_minutes"),
+    "loss_gate_memory_ema_span_minutes": ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
     "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
     "long_forager_volatility_ema_span_1m": (
         "bot",
@@ -138,7 +138,7 @@ def iter_optimizer_key_paths(
 
 def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
-        if config.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope") == "portfolio":
+        if config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope") == "portfolio":
             field = canonical_key.removeprefix("hsl_")
             if field in {
                 "red_threshold",
@@ -146,7 +146,7 @@ def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
                 "memory_ema_span_minutes",
                 "cooldown_minutes_after_red",
             }:
-                return ("bot", "risk", "hsl", field)
+                return ("bot", "global", "hsl", field)
         return None
     if strategy_path_map is None:
         strategy_path_map = _strategy_path_map_for_config(config)

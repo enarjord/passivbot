@@ -71,7 +71,7 @@ class TestConfigAdapter:
                              "memory_ema_span_minutes": [100.0, 200.0, 1.0]}},
             "short": {"hsl": {"drawdown_ratio_ema_span_minutes": [30.0, 180.0, 5.0]}},
         })
-        config["bot"]["risk"]["hsl"]["scope"] = "pside"
+        config["bot"]["global"]["hsl"]["scope"] = "pside"
 
         key_paths = get_optimization_key_paths(config)
 

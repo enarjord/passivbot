@@ -85,8 +85,8 @@ _DEFAULT_RISK_CACHE = object()
 
 def _risk_memory_config(span_minutes=3.0):
     config = get_template_config()
-    config["bot"]["unstuck"]["memory_ema_span_minutes"] = span_minutes
-    config["bot"]["risk"]["loss_gate"].update(
+    config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = span_minutes
+    config["bot"]["global"]["loss_gate"].update(
         memory_ema_span_minutes=span_minutes, max_drawdown_ratio=.99,
     )
     for side in ("long", "short"):
@@ -348,7 +348,7 @@ class TestGetRealizedMemories:
         first = bot._get_realized_memories()
         assert first["loss_gate"]["drawdown"] == first["unstuck"]["drawdown"] == 7.5
         assert len(calls) == 1
-        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
+        bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
         second = bot._get_realized_memories()
         assert second["loss_gate"]["drawdown"] == 11.25
         assert second["unstuck"]["drawdown"] == 7.5
@@ -372,7 +372,7 @@ class TestGetRealizedMemories:
     def test_unknown_prefix_is_declared_and_not_a_rolling_expiry(self, caplog):
         rows = [_make_fill_event(-15.0, timestamp=540_001)]
         bot = _make_bot_with_events(rows)
-        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+        bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
         bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         bot.get_exchange_time = lambda: 600_000
         with caplog.at_level(logging.WARNING):
@@ -411,7 +411,7 @@ class TestGetRealizedMemories:
             _make_fill_event(-50.0, timestamp=539_999),
             _make_fill_event(-15.0, timestamp=540_001),
         ])
-        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+        bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
         bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         now = [600_000]
         bot.get_exchange_time = lambda: now[0]
@@ -439,7 +439,7 @@ class TestGetRealizedMemories:
         rows = [_make_fill_event(-15.0, timestamp=540_001)]
         first, restarted = _make_bot_with_events(rows), _make_bot_with_events(rows)
         for bot in (first, restarted):
-            bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+            bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
             bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         first.get_exchange_time = lambda: 600_000
         first._get_realized_memories()["loss_gate"]
@@ -459,7 +459,7 @@ class TestGetRealizedMemories:
             _make_fill_event(-50.0, timestamp=1_000, pnl_status=status, pnl_source=source),
             _make_fill_event(-15.0, timestamp=600_000),  # No elapsed minute after this fill.
         ])
-        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
+        bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.0
         bot.config["live"]["risk_bootstrap_max_lookback_minutes"] = 1.0
         bot.get_exchange_time = lambda: 600_000
         bot._max_configured_entry_cooldown_minutes = lambda: 720.0
@@ -1042,7 +1042,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config["bot"]["long"]["wallet_exposure_limit"] = .5
         config["bot"]["short"]["wallet_exposure_limit"] = 0.0
         if max_realized_loss_pct is not None:
-            config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = max_realized_loss_pct
+            config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = max_realized_loss_pct
         return config
 
     def _make_mss(self):
@@ -1069,8 +1069,8 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
 
     def test_explicit_value_passthrough(self):
         config = self._make_config(max_realized_loss_pct=0.05)
-        config["bot"]["unstuck"]["memory_ema_span_minutes"] = 3.0
-        config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
+        config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 3.0
+        config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["max_realized_loss_pct"] == pytest.approx(0.05)
         assert "realized_loss_gate_lookback_minutes" not in bp

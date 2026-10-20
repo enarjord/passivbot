@@ -151,7 +151,7 @@ def test_new_policy_fields_use_effective_config_and_type_validation():
 def test_unilateralness_forager_weight_is_not_a_coin_pin(side, source):
     cfg = get_template_config()
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-    cfg["optimize"]["bounds"][side]["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
+    cfg["optimize"]["bounds"][side]["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     cfg = prepare_config(cfg, verbose=False)
     if source == "inline":
         cfg["coin_overrides"] = {"BTC": {"bot": {side: {"forager": {"score_weights": {"unilateralness": 0.0}}}}}}

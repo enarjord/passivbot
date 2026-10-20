@@ -3720,8 +3720,8 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["unstuck"] == template["bot"]["unstuck"]
-            assert result[0]["bot"]["risk"]["loss_gate"] == template["bot"]["risk"]["loss_gate"]
+            assert result[0]["bot"]["global"]["unstuck"] == template["bot"]["global"]["unstuck"]
+            assert result[0]["bot"]["global"]["loss_gate"] == template["bot"]["global"]["loss_gate"]
         finally:
             os.unlink(path)
 

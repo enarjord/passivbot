@@ -54,15 +54,15 @@ def parse_screening_scenarios(value: str) -> list[str]:
 
 def gpu_hsl_policy(config: dict, side: str) -> dict:
 
-    if config["bot"]["risk"]["hsl"]["scope"] == "portfolio":
-        return config["bot"]["risk"]["hsl"]
+    if config["bot"]["global"]["hsl"]["scope"] == "portfolio":
+        return config["bot"]["global"]["hsl"]
     return config.get("bot", {}).get(side, {}).get("hsl", {})
 
 
 def gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
     from config.hsl import _side_has_enabled_policy
 
-    if config["bot"]["risk"]["hsl"]["scope"] == "coin":
+    if config["bot"]["global"]["hsl"]["scope"] == "coin":
         return _side_has_enabled_policy(config, side, markets_by_exchange)
     globally_enabled = bool(gpu_hsl_policy(config, side).get("enabled", False))
     if globally_enabled:

@@ -108,7 +108,7 @@ def _scenario() -> dict:
 class _StubBot:
     def __init__(self) -> None:
         self.loop_calls = 0
-        self.config = {"bot": {"risk": {"hsl": {"scope": "coin"}}}}
+        self.config = {"bot": {'global': {'hsl': {'scope': 'coin'}}}}
         self._hsl_live = SimpleNamespace(
             cycle=self.cycle, _ordinary=None,
             _quote_tasks={}, _discard_quote_tasks=set(),
@@ -249,7 +249,7 @@ def test_apply_assertions_validates_positions():
 def test_apply_assertions_supports_path_assertions_and_logs():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
-    bot.config = {"bot": {"risk": {"hsl": {"scope": "coin"}}}}
+    bot.config = {"bot": {'global': {'hsl': {'scope': 'coin'}}}}
     bot.get_exchange_time = lambda: 0
     step_summaries = [{"step_index": 0, "fills": 0, "positions": []}]
     scenario = {
@@ -399,7 +399,7 @@ def test_extract_hsl_trace_returns_serializable_state():
 def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fraction, horizon_ms, now_ms):
     config = get_template_config()
     config["live"]["risk_bootstrap_max_lookback_minutes"] = 15.0
-    config["bot"]["risk"]["loss_gate"].update(
+    config["bot"]["global"]["loss_gate"].update(
         memory_ema_span_minutes=3.0, max_drawdown_ratio=gate_fraction
     )
     for pside in ("long", "short"):
@@ -469,12 +469,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     class _Stub:
         def __init__(self):
             self.config = {
-                "bot": {
-                    "risk": {"hsl": {"scope": "coin"}},
-                    "long": {
-                        "hsl": {"enabled": True, "panic_close_order_type": "market"}
-                    }
-                },
+                "bot": {'global': {'hsl': {'scope': 'coin'}}, 'long': {'hsl': {'enabled': True, 'panic_close_order_type': 'market'}}},
             }
             self.coin_overrides = {}
             self.values = {
@@ -616,7 +611,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                     "short": {},
                 }
             }
-            self.config["bot"]["risk"] = {"hsl": {"scope": "coin"}}
+            self.config["bot"]["global"] = {"hsl": {"scope": "coin"}}
             self.config["bot"]["long"]["hsl"] = {
                 "enabled": True,
                 "panic_close_order_type": "market",
@@ -966,8 +961,8 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
     # both HSL and auto-unstuck disabled.
     for pside in ("long", "short"):
         cfg["bot"][pside]["unstuck"]["enabled"] = False
-    cfg["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.5
-    cfg["bot"]["risk"]["hsl"]["scope"] = "pside"
+    cfg["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.5
+    cfg["bot"]["global"]["hsl"]["scope"] = "pside"
     config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario_copy_path = tmp_path / "hsl_long_red_restart_no_assertions.hjson"

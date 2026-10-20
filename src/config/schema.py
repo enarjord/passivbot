@@ -302,11 +302,11 @@ def _build_template_config():
                 "volume_normalization": True,
             },
             "bot": {
-                "risk": {
+                "global": {
                     "hsl": {"scope": "coin"},
                     "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
+                    "unstuck": {"memory_ema_span_minutes": 43200.0},
                 },
-                "unstuck": {"memory_ema_span_minutes": 43200.0},
                 "long": {
                     **deepcopy(_get_shared_bot_defaults()["long"]),
                     "strategy": strategy_defaults["long"],

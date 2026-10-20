@@ -318,12 +318,23 @@ def test_extract_side_context_includes_global_and_risk_paths():
     config = {
         "live": {"forced_mode_long": "p"},
         "bot": {
-            "risk": {"hsl": {"scope": "coin"}, "loss_gate": {"max_drawdown_ratio": 0.05}},
+            "global": {
+                "hsl": {
+                    "scope": "coin",
+                },
+                "loss_gate": {
+                    "max_drawdown_ratio": 0.05,
+                },
+            },
             "long": {
                 "entry_cooldown": {
-                    "base_duration_minutes": 2.0, "min_duration_minutes": 0.0,
+                    "base_duration_minutes": 2.0,
+                    "min_duration_minutes": 0.0,
                     "max_duration_minutes": None,
-                    "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                    "weights_minutes": {
+                        "exposure_ratio": 0.0,
+                        "adverse_directionality": 0.0,
+                    },
                 },
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
@@ -345,9 +356,9 @@ def test_extract_side_context_includes_global_and_risk_paths():
                         **_params(),
                         "volatility_ema_span_1m": 100.0,
                         "volatility_ema_span_1h": 200.0,
-                    }
+                    },
                 },
-            }
+            },
         },
     }
 
@@ -370,9 +381,9 @@ def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
     from config.schema import get_template_config
 
     config = get_template_config()
-    config["bot"]["risk"]["hsl"].update(scope="portfolio", enabled=True)
+    config["bot"]["global"]["hsl"].update(scope="portfolio", enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.125
+    config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.125
     config["bot"]["long"]["risk"]["max_positions"] = 3.0
     config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 0.75
 
@@ -392,13 +403,26 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
             "forced_mode_long": "normal",
         },
         "bot": {
-            "risk": {"hsl": {"scope": "coin"}, "loss_gate": {"max_drawdown_ratio": 1.0}},
+            "global": {
+                "hsl": {
+                    "scope": "coin",
+                },
+                "loss_gate": {
+                    "max_drawdown_ratio": 1.0,
+                },
+            },
             "long": {
-                "hsl": {"enabled": False},
+                "hsl": {
+                    "enabled": False,
+                },
                 "entry_cooldown": {
-                    "base_duration_minutes": 0.0, "min_duration_minutes": 0.0,
+                    "base_duration_minutes": 0.0,
+                    "min_duration_minutes": 0.0,
                     "max_duration_minutes": None,
-                    "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                    "weights_minutes": {
+                        "exposure_ratio": 0.0,
+                        "adverse_directionality": 0.0,
+                    },
                 },
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
@@ -409,9 +433,9 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                         **_params(),
                         "volatility_ema_span_1m": 100.0,
                         "volatility_ema_span_1h": 200.0,
-                    }
+                    },
                 },
-            }
+            },
         },
         "coin_overrides": {
             "XRP": {
@@ -503,7 +527,14 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
     config = {
         "live": {"forced_mode_long": "not-a-mode"},
         "bot": {
-            "risk": {"hsl": {"scope": "coin"}, "loss_gate": {"max_drawdown_ratio": 1.0}},
+            "global": {
+                "hsl": {
+                    "scope": "coin",
+                },
+                "loss_gate": {
+                    "max_drawdown_ratio": 1.0,
+                },
+            },
             "long": {
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
@@ -514,9 +545,9 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
                         **_params(),
                         "volatility_ema_span_1m": 100.0,
                         "volatility_ema_span_1h": 200.0,
-                    }
+                    },
                 },
-            }
+            },
         },
     }
 

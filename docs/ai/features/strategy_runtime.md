@@ -189,13 +189,13 @@ EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance
 threshold, close sizing, and valid market/exchange inputs.
 
 V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
-`bot.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
+`bot.global.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
 ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
 order. UPNL and external balance changes do not. HSL episode transitions never reset it.
 Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
 graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
 exposure thresholds and close sizing retain their existing policies. The global
-`bot.risk.loss_gate` consumes the same ordered facts using its independently configured
+`bot.global.loss_gate` consumes the same ordered facts using its independently configured
 `memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_ratio`,
 without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
 configs still produce gate memory. Each enabled filter consumes each fill once and the

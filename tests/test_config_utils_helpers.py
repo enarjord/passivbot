@@ -80,7 +80,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
     assert base_config_path == ""
     assert source == get_template_config()
     assert raw_snapshot == get_template_config()
-    assert source["bot"]["risk"]["hsl"]["scope"] == "coin"
+    assert source["bot"]["global"]["hsl"]["scope"] == "coin"
 
 
 def test_hsl_signal_mode_accepts_coin():
@@ -95,7 +95,7 @@ def test_hsl_signal_mode_accepts_portfolio_and_rejects_retired_unified():
 
 @pytest.mark.parametrize(
     "flag",
-    ["--hsl-scope", "--bot.risk.hsl.scope", "--bot_risk_hsl_scope"],
+    ["--hsl-scope", "--bot.global.hsl.scope", "--bot_risk_hsl_scope"],
 )
 def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
     parser = argparse.ArgumentParser()
@@ -109,7 +109,7 @@ def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
 
     update_config_with_args(config, args, allowed_keys=allowed_keys)
 
-    assert config["bot"]["risk"]["hsl"]["scope"] == "coin"
+    assert config["bot"]["global"]["hsl"]["scope"] == "coin"
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
@@ -139,7 +139,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "lookback_ema_span_minutes" not in loaded["backtest"]
     assert "market_orders_allowed" in loaded["live"]
     assert "market_order_near_touch_threshold" in loaded["live"]
-    assert loaded["bot"]["unstuck"]["memory_ema_span_minutes"] > 0
+    assert loaded["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "risk_input_max_attempts" not in loaded["live"]
 
 
@@ -184,9 +184,9 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "unstuck",
         }
         expected_bounds = {"entry_cooldown", "forager", "risk", "strategy", "unstuck"}
-        if loaded["bot"]["risk"]["hsl"]["scope"] == "portfolio":
-            assert "hsl" in loaded["optimize"]["bounds"]["risk"]
-            assert "enabled" in loaded["bot"]["risk"]["hsl"]
+        if loaded["bot"]["global"]["hsl"]["scope"] == "portfolio":
+            assert "hsl" in loaded["optimize"]["bounds"]["global"]
+            assert "enabled" in loaded["bot"]["global"]["hsl"]
         else:
             expected_bounds.add("hsl")
         for side in ("long", "short"):
@@ -661,7 +661,7 @@ def test_migrate_config_version_sets_current_schema_version():
 
 def test_loss_gate_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
-    assert template["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
+    assert template["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
     assert template["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
     assert template["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
@@ -674,14 +674,14 @@ def test_loss_gate_default_is_consistent_across_template_and_formatting():
         "coin_overrides": {},
     }
     formatted = format_config(sparse, verbose=False)
-    assert formatted["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
+    assert formatted["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
     assert formatted["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
     assert formatted["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     loaded = load_config(
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
-    assert loaded["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
+    assert loaded["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
     assert loaded["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
     assert loaded["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
@@ -2070,9 +2070,9 @@ def test_live_independent_risk_memory_and_gate_fraction_flags_parse():
         "--loss-gate-memory-ema-span-minutes", "21.5",
         "--loss-gate-max-drawdown-ratio", "0.1",
     ])
-    assert getattr(parsed, "bot.unstuck.memory_ema_span_minutes") == 14.5
-    assert getattr(parsed, "bot.risk.loss_gate.memory_ema_span_minutes") == 21.5
-    assert getattr(parsed, "bot.risk.loss_gate.max_drawdown_ratio") == 0.1
+    assert getattr(parsed, "bot.global.unstuck.memory_ema_span_minutes") == 14.5
+    assert getattr(parsed, "bot.global.loss_gate.memory_ema_span_minutes") == 21.5
+    assert getattr(parsed, "bot.global.loss_gate.max_drawdown_ratio") == 0.1
     with pytest.raises(SystemExit):
         parser.parse_args(["--lookback-ema-span-minutes", "14"])
 
@@ -2223,10 +2223,10 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(
         parsed_near_touch, "live.market_order_near_touch_threshold"
     ) == pytest.approx(0.002)
-    assert getattr(parsed_lookback, "bot.unstuck.memory_ema_span_minutes") == pytest.approx(
+    assert getattr(parsed_lookback, "bot.global.unstuck.memory_ema_span_minutes") == pytest.approx(
         14.5
     )
-    assert getattr(parsed_loss, "bot.risk.loss_gate.max_drawdown_ratio") == pytest.approx(0.75)
+    assert getattr(parsed_loss, "bot.global.loss_gate.max_drawdown_ratio") == pytest.approx(0.75)
     assert getattr(parsed_fee_fallback, "live.fee_pct_fallback") == pytest.approx(0.0)
     assert getattr(parsed_fee_sanity, "live.fee_pct_sanity_abs_max") == pytest.approx(
         0.002
@@ -2268,7 +2268,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
     assert "market_orders_allowed" in config["live"]
     assert "market_order_near_touch_threshold" in config["live"]
     assert "max_warmup_minutes" in config["live"]
-    assert config["bot"]["unstuck"]["memory_ema_span_minutes"] > 0
+    assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "user" not in config["live"]
 
 
@@ -2281,7 +2281,7 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, config, command="optimize")
     parsed = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5"])
-    assert getattr(parsed, "bot.unstuck.memory_ema_span_minutes") == 17.5
+    assert getattr(parsed, "bot.global.unstuck.memory_ema_span_minutes") == 17.5
     assert "user" not in config["live"]
 
 

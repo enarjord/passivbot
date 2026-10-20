@@ -219,7 +219,7 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     bounds = cfg["optimize"]["bounds"][side]
     bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
     if consumer == "forager":
-        bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
+        bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     if bound_span is not None:
@@ -257,7 +257,7 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     bounds = cfg["optimize"]["bounds"]["long"]
     bounds["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
     if consumer == "forager":
-        bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
+        bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     cfg = prepare_config(cfg, verbose=False)
@@ -320,7 +320,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
     weight_bound = [0.0, 1.0 if positive_bound else 0.0]
     if consumer == "forager":
-        bounds["forager"]["score_weights_unilateralness"] = weight_bound
+        bounds["forager"]["score_weights"]["unilateralness"] = weight_bound
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": weight_bound}
     cfg = prepare_config(cfg, verbose=False)
@@ -422,8 +422,9 @@ def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
         weights_minutes={"exposure_ratio": [0, 10], "adverse_directionality": [0, 20]},
     )
     bounds[side]["forager"].update(
-        unilateralness_ema_span_1m=[10.5, 60.5], score_weights_unilateralness=[0, 1],
+        unilateralness_ema_span_1m=[10.5, 60.5],
     )
+    bounds[side]["forager"]["score_weights"]["unilateralness"] = [0, 1]
     expected = flatten_optimize_bounds(bounds, strategy_kind="trailing_martingale")
     prepared = prepare_config(cfg, verbose=False)
     for candidate in (prepared, prepare_config(clean_config(prepared), verbose=False)):
@@ -554,7 +555,7 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
     bounds = cfg["optimize"]["bounds"][side]
     bounds["risk"].update(max_positions=slots, total_wallet_exposure_limit=[1.0, 1.0])
-    bounds["forager"]["score_weights_unilateralness"] = [0.0, 1.0]
+    bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     if pinned is not None:
         cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.max_positions": pinned}
     cfg = prepare_config(cfg, verbose=False)

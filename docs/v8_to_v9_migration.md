@@ -13,10 +13,10 @@ before backtesting a proposed replacement.
 
 | Released field | Final v9 field or action |
 |---|---|
-| `live.hsl_signal_mode` | `bot.risk.hsl.scope`: `coin`, `pside` or `portfolio` |
-| `bot.hsl` portfolio policy | `bot.risk.hsl` alongside its scope |
+| `live.hsl_signal_mode` | `bot.global.hsl.scope`: `coin`, `pside` or `portfolio` |
+| `bot.hsl` portfolio policy | `bot.global.hsl` alongside its scope |
 | HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
-| `live.max_realized_loss_pct` | `bot.risk.loss_gate.max_drawdown_ratio` |
+| `live.max_realized_loss_pct` | `bot.global.loss_gate.max_drawdown_ratio` |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
 | `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |
@@ -29,8 +29,8 @@ before backtesting a proposed replacement.
 
 V9 uses separate slow EMA spans for each HSL policy, global unstuck realized memory and
 global loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
-The global span is `bot.unstuck.memory_ema_span_minutes`; the gate span is
-`bot.risk.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
+The global span is `bot.global.unstuck.memory_ema_span_minutes`; the gate span is
+`bot.global.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
 
 Scenario overrides and fixed optimizer overrides convert released flat shared fields
@@ -57,7 +57,7 @@ passivbot tool migrate-config-v9 input.v8.json \
 
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
   --lookback-ema-span-minutes 43200.0 \
-  --memory-span bot.unstuck.memory_ema_span_minutes=21600.0 \
+  --memory-span bot.global.unstuck.memory_ema_span_minutes=21600.0 \
   --report migration-report.json
 ```
 

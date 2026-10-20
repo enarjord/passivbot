@@ -82,6 +82,23 @@
         "volume_normalization": true
     },
     "bot": {
+        "global": {
+            "hsl": {
+                "cooldown_minutes_after_red": 0.0,
+                "drawdown_ratio_ema_span_minutes": 60.0,
+                "enabled": false,
+                "memory_ema_span_minutes": 43200.0,
+                "panic_close_order_type": "limit",
+                "red_threshold": 0.2,
+                "scale_budget_with_excess_allowance": false,
+                "scope": "portfolio"
+            },
+            "loss_gate": {
+                "max_drawdown_ratio": 1.0,
+                "memory_ema_span_minutes": 43200.0
+            },
+            "unstuck": {"memory_ema_span_minutes": 43200.0}
+        },
         "long": {
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
@@ -160,22 +177,6 @@
                 "enabled": true,
                 "exposure_trigger_ratio": 0.414,
                 "loss_allowance_pct": 0.00512
-            }
-        },
-        "risk": {
-            "hsl": {
-                "cooldown_minutes_after_red": 0.0,
-                "drawdown_ratio_ema_span_minutes": 60.0,
-                "enabled": false,
-                "memory_ema_span_minutes": 43200.0,
-                "panic_close_order_type": "limit",
-                "red_threshold": 0.2,
-                "scale_budget_with_excess_allowance": false,
-                "scope": "portfolio"
-            },
-            "loss_gate": {
-                "max_drawdown_ratio": 1.0,
-                "memory_ema_span_minutes": 43200.0
             }
         },
         "short": {
@@ -257,8 +258,7 @@
                 "exposure_trigger_ratio": 0.706,
                 "loss_allowance_pct": 0.00384
             }
-        },
-        "unstuck": {"memory_ema_span_minutes": 43200.0}
+        }
     },
     "coin_overrides": {},
     "config_version": "v9.0.0",
@@ -352,6 +352,16 @@
     "optimize": {
         "backend": "pymoo",
         "bounds": {
+            "global": {
+                "hsl": {
+                    "cooldown_minutes_after_red": [1, 2880, 10],
+                    "drawdown_ratio_ema_span_minutes": [1, 2880, 10],
+                    "memory_ema_span_minutes": [43200.0, 43200.0],
+                    "red_threshold": [0.01, 0.12, 0.001]
+                },
+                "loss_gate": {"memory_ema_span_minutes": [43200.0, 43200.0]},
+                "unstuck": {"memory_ema_span_minutes": [43200.0, 43200.0]}
+            },
             "long": {
                 "entry_cooldown": {
                     "base_duration_minutes": [0.0, 60.0, 0.1],
@@ -362,10 +372,12 @@
                     }
                 },
                 "forager": {
-                    "score_weights_ema_readiness": [0, 1, 0.01],
-                    "score_weights_unilateralness": [0.0, 0.0],
-                    "score_weights_volatility": [0, 1, 0.01],
-                    "score_weights_volume": [0, 1, 0.01],
+                    "score_weights": {
+                        "ema_readiness": [0, 1, 0.01],
+                        "unilateralness": [0.0, 0.0],
+                        "volatility": [0, 1, 0.01],
+                        "volume": [0, 1, 0.01]
+                    },
                     "unilateralness_ema_span_1m": [60.0, 60.0],
                     "volatility_ema_span_1m": [10, 720, 1],
                     "volume_ema_span_1m": [360, 2880, 10]
@@ -417,15 +429,6 @@
                     "loss_allowance_pct": [0.005, 0.025, 0.0001]
                 }
             },
-            "risk": {
-                "hsl": {
-                    "cooldown_minutes_after_red": [1, 2880, 10],
-                    "drawdown_ratio_ema_span_minutes": [1, 2880, 10],
-                    "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "red_threshold": [0.01, 0.12, 0.001]
-                },
-                "loss_gate": {"memory_ema_span_minutes": [43200.0, 43200.0]}
-            },
             "short": {
                 "entry_cooldown": {
                     "base_duration_minutes": [0.0, 60.0, 0.1],
@@ -436,10 +439,12 @@
                     }
                 },
                 "forager": {
-                    "score_weights_ema_readiness": [0, 1, 0.01],
-                    "score_weights_unilateralness": [0.0, 0.0],
-                    "score_weights_volatility": [0, 1, 0.01],
-                    "score_weights_volume": [0, 1, 0.01],
+                    "score_weights": {
+                        "ema_readiness": [0, 1, 0.01],
+                        "unilateralness": [0.0, 0.0],
+                        "volatility": [0, 1, 0.01],
+                        "volume": [0, 1, 0.01]
+                    },
                     "unilateralness_ema_span_1m": [60.0, 60.0],
                     "volatility_ema_span_1m": [10, 720, 1],
                     "volume_ema_span_1m": [360, 2880, 10]
@@ -490,8 +495,7 @@
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],
                     "loss_allowance_pct": [0.005, 0.025, 0.0001]
                 }
-            },
-            "unstuck": {"memory_ema_span_minutes": [43200.0, 43200.0]}
+            }
         },
         "compress_results_file": true,
         "enable_overrides": [],

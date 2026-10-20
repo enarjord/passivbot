@@ -58,7 +58,7 @@ def apply_features(config, case, coins, markets, bars):
     config["backtest"].update(offline=True, dynamic_wel_by_tradability="dynamic_wel_off" not in flags)
     config["live"]["hedge_mode"] = case.sides == "both" and "one_way" not in flags
     if "loss_gate" in flags:
-        config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.001
+        config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.001
     if "min_cost" in flags:
         config["backtest"]["filter_by_min_effective_cost"] = True
     if "fill_buffer" in flags:
@@ -93,7 +93,7 @@ def apply_features(config, case, coins, markets, bars):
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
             config["live"]["forager_score_hysteresis_pct"] = 0.1
-        policy = config["bot"]["risk"]["hsl"] if config["bot"]["risk"]["hsl"]["scope"] == "portfolio" else bot["hsl"]
+        policy = config["bot"]["global"]["hsl"] if config["bot"]["global"]["hsl"]["scope"] == "portfolio" else bot["hsl"]
         if "hsl_slow_memory" in flags:
             policy["memory_ema_span_minutes"] = 10.5
         if "hsl_zero_cooldown" in flags:
@@ -137,7 +137,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
     search = deepcopy(config)
     source_bounds = bounds_config
     if source_bounds is None:
-        template = generated_template(get_template_config(), config["bot"]["risk"]["hsl"]["scope"])
+        template = generated_template(get_template_config(), config["bot"]["global"]["hsl"]["scope"])
         source_bounds = template["optimize"]["bounds"]
     search["optimize"]["bounds"] = deepcopy(source_bounds)
     validate_hsl_paths(search)
@@ -149,14 +149,14 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
     for key, path in paths:
         bound = Bound.from_config(key, flat[key])
         value = get_path(config, path)
-        portfolio_hsl = path[:3] == ("bot", "risk", "hsl")
-        enabled = (portfolio_hsl and config["bot"]["risk"]["hsl"]["scope"] == "portfolio" and
+        portfolio_hsl = path[:3] == ("bot", "global", "hsl")
+        enabled = (portfolio_hsl and config["bot"]["global"]["hsl"]["scope"] == "portfolio" and
                    any(flag.startswith("hsl") for flag in flags)) or path[1] in active and (
             "strategy" in path or path[2] == "risk" or
             path[2] == "forager" and case.topology == "forager" or
             path[2] == "unstuck" and bool(flags & {"unstuck", "unstuck_no_ema"}) or
             path[2] == "entry_cooldown" and bool(flags & {"cooldown", "adaptive_cooldown"}) or
-            path[2] == "hsl" and config["bot"]["risk"]["hsl"]["scope"] != "portfolio" and
+            path[2] == "hsl" and config["bot"]["global"]["hsl"]["scope"] != "portfolio" and
             any(flag.startswith("hsl") for flag in flags))
         # Preserve the class: policies are fixed; zero weights/retracements stay zero.
         if value is None or isinstance(value, bool):

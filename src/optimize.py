@@ -3186,7 +3186,7 @@ def _format_starting_seed_bot(bot, live=None):
     for scope, path in (
         ("long", ("long", "hsl")),
         ("short", ("short", "hsl")),
-        ("portfolio", ("risk", "hsl")),
+        ("portfolio", ("global", "hsl")),
     ):
         parent = bot
         for key in path[:-1]:
@@ -3201,7 +3201,7 @@ def _format_starting_seed_bot(bot, live=None):
         block.update(deepcopy(defaults), enabled=False)
         if scope == "portfolio":
             block["scope"] = "portfolio"
-    for path in (("unstuck",), ("risk", "loss_gate")):
+    for path in (("global", "unstuck"), ("global", "loss_gate")):
         block = bot
         default = template["bot"]
         for key in path:

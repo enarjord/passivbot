@@ -72,9 +72,11 @@ BOT_BOUND_GROUP_BY_KEY = {
 SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     "long": {
         "forager": {
-            "score_weights_ema_readiness": [0, 1, 0.01],
-            "score_weights_volatility": [0, 1, 0.01],
-            "score_weights_volume": [0, 1, 0.01],
+            "score_weights": {
+                "ema_readiness": [0, 1, 0.01],
+                "volatility": [0, 1, 0.01],
+                "volume": [0, 1, 0.01],
+            },
             "volatility_ema_span_1m": [10, 2880, 1],
             "volume_ema_span_1m": [180, 2880, 1]
         },
@@ -102,9 +104,11 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     },
     "short": {
         "forager": {
-            "score_weights_ema_readiness": [0, 1, 0.01],
-            "score_weights_volatility": [0, 1, 0.01],
-            "score_weights_volume": [0, 1, 0.01],
+            "score_weights": {
+                "ema_readiness": [0, 1, 0.01],
+                "volatility": [0, 1, 0.01],
+                "volume": [0, 1, 0.01],
+            },
             "volatility_ema_span_1m": [10, 1440, 1],
             "volume_ema_span_1m": [180, 2880, 1]
         },
@@ -153,10 +157,10 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     }
     if not isinstance(bounds, dict):
         return flat
-    for key, value in bounds.get("unstuck", {}).items():
+    for key, value in bounds.get("global", {}).get("unstuck", {}).items():
         flat[f"unstuck_{key}"] = deepcopy(value)
     for group in ("hsl", "loss_gate"):
-        for key, value in bounds.get("risk", {}).get(group, {}).items():
+        for key, value in bounds.get("global", {}).get(group, {}).items():
             flat[f"{group}_{key}"] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
         side_bounds = bounds.get(pside, {})
@@ -171,16 +175,7 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
                 continue
             if not isinstance(group_bounds, dict):
                 continue
-            shared_items = []
-            for key, value in group_bounds.items():
-                if (group_name, key) in {
-                    ("entry_cooldown", "weights_minutes"),
-                    ("forager", "score_weights"),
-                } and isinstance(value, dict):
-                    shared_items.extend((f"{key}_{child}", bound) for child, bound in value.items())
-                else:
-                    shared_items.append((key, value))
-            for key, value in shared_items:
+            for key, value in _flatten_strategy_bound_items(group_bounds):
                 flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name, {}).get(key, key)
                 flat[f"{pside}_{flat_key}"] = deepcopy(value)
     return flat
@@ -232,11 +227,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
                 if not math.isfinite(float(value)):
                     raise ValueError(f"bot.{side}.entry_cooldown.max_duration_minutes must be finite when set")
             frozen = [value, value]
-            local_path = (
-                ("weights_minutes", local_key.removeprefix("weights_minutes_"))
-                if group == "entry_cooldown" and local_key.startswith("weights_minutes_")
-                else (local_key,)
-            )
+            local_path = _shared_bound_local_path(group, local_key)
             target = bounds.setdefault(side, {}).setdefault(group, {})
             for part in local_path[:-1]:
                 target = target.setdefault(part, {})
@@ -251,7 +242,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
 
     from .param_paths import resolve_optimizer_key_path
     span_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
-    if config["bot"]["risk"]["hsl"]["scope"] == "portfolio":
+    if config["bot"]["global"]["hsl"]["scope"] == "portfolio":
         span_keys.append("hsl_memory_ema_span_minutes")
     else:
         for side in BOT_POSITION_SIDES:
@@ -300,16 +291,23 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
             )
 
 
+def _shared_bound_local_path(group: str, local_key: str) -> tuple[str, ...]:
+    for owner, prefix in (("entry_cooldown", "weights_minutes"), ("forager", "score_weights")):
+        if group == owner and local_key.startswith(prefix + "_"):
+            return (prefix, local_key.removeprefix(prefix + "_"))
+    return (local_key,)
+
+
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     if flat_key == "unstuck_memory_ema_span_minutes":
-        bounds.setdefault("unstuck", {})["memory_ema_span_minutes"] = deepcopy(value)
+        bounds.setdefault("global", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = deepcopy(value)
         return
     if flat_key == "loss_gate_memory_ema_span_minutes":
-        bounds.setdefault("risk", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
+        bounds.setdefault("global", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
         return
     if flat_key.startswith("hsl_"):
-        bounds.setdefault("risk", {}).setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
+        bounds.setdefault("global", {}).setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
         return
     pside, key = flat_key.split("_", 1)
     if pside not in BOT_POSITION_SIDES:
@@ -334,12 +332,10 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
     else:
         local_key = SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY[group].get(key, key)
         target = side_bounds.setdefault(group, {})
-        if group == "entry_cooldown" and local_key.startswith("weights_minutes_"):
-            target.setdefault("weights_minutes", {})[local_key.removeprefix("weights_minutes_")] = (
-                deepcopy(value)
-            )
-        else:
-            target[local_key] = deepcopy(value)
+        path = _shared_bound_local_path(group, local_key)
+        for part in path[:-1]:
+            target = target.setdefault(part, {})
+        target[path[-1]] = deepcopy(value)
 
 
 def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio_hsl: bool = False) -> None:

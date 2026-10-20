@@ -17,8 +17,8 @@ def fixed_side_bounds(cfg):
         side: {"risk": {"max_positions": [1, 1], "total_wallet_exposure_limit": [1, 1]}}
         for side in ("long", "short")
     }
-    if cfg["bot"]["risk"]["hsl"]["scope"] == "portfolio":
-        cfg["optimize"]["bounds"]["risk"] = {"hsl": {}}
+    if cfg["bot"]["global"]["hsl"]["scope"] == "portfolio":
+        cfg["optimize"]["bounds"]["global"] = {"hsl": {}}
 
 
 def threshold_vector(shape, threshold):
@@ -33,7 +33,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
     cfg, markets, _ = inputs(mode)
     fixed_side_bounds(cfg)
     target = (
-        cfg["optimize"]["bounds"]["risk"]
+        cfg["optimize"]["bounds"]["global"]
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
@@ -81,10 +81,10 @@ def test_unified_rejects_inactive_side_signal_objectives(metric):
     for side in ["long", "short"]:
         cfg["bot"][side]["hsl"]["enabled"] = True
     for mode in ["coin", "pside"]:
-        cfg["bot"]["risk"]["hsl"]["scope"] = mode
+        cfg["bot"]["global"]["hsl"]["scope"] = mode
         validate_optimizer_metrics(cfg, [metric])
     cfg["live"]["hsl_engine"] = "legacy"
-    cfg["bot"]["risk"]["hsl"]["scope"] = "portfolio"
+    cfg["bot"]["global"]["hsl"]["scope"] = "portfolio"
     with pytest.raises(ValueError, match="legacy HSL has been removed"):
         validate_optimizer_metrics(cfg, [metric])
 
@@ -148,7 +148,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
             config=portfolio,
             msss={},
             overrides={
-                "bot.risk.hsl": portfolio["bot"]["risk"]["hsl"],
+                "bot.global.hsl": portfolio["bot"]["global"]["hsl"],
             },
         ),
     ]
@@ -158,7 +158,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
     evaluator.build_scenario_candidate_config(cfg, contexts[0])
     if scenario == "side":
         result = evaluator.build_scenario_candidate_config(cfg, contexts[1])
-        assert result["bot"]["risk"]["hsl"]["scope"] == "portfolio"
+        assert result["bot"]["global"]["hsl"]["scope"] == "portfolio"
     else:
         with pytest.raises(ValueError, match="no side controller"):
             evaluator.build_scenario_candidate_config(cfg, contexts[1])
@@ -280,13 +280,13 @@ def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
     for side in ("long", "short"):
         cfg["bot"][side]["hsl"]["enabled"] = False
     if mode == "portfolio":
-        cfg["bot"]["risk"]["hsl"]["enabled"] = False
+        cfg["bot"]["global"]["hsl"]["enabled"] = False
     with pytest.raises(ValueError, match="no enabled controller"):
         validate_optimizer_metrics(
             cfg, [metric], markets_by_exchange={"binance": markets}
         )
     validate_optimizer_metrics(cfg, ["drawdown_worst_strategy_eq", "adg"])
-    policy = cfg["bot"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    policy = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     policy["enabled"] = True
     validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
 
@@ -332,7 +332,7 @@ def test_suite_portfolio_metrics_only_require_the_consumed_scenarios(section, sc
     ]
     active = SimpleNamespace(label="active", config=cfg, overrides={}, msss={})
     inactive = SimpleNamespace(
-        label="inactive", config=cfg, overrides={"bot.risk.hsl.enabled": False}, msss={}
+        label="inactive", config=cfg, overrides={"bot.global.hsl.enabled": False}, msss={}
     )
     suite = SuiteEvaluator(
         Evaluator({}, {}, {}, cfg), [active, inactive], {"default": "mean"}

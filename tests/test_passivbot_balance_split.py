@@ -78,11 +78,11 @@ def _unit_config(patch):
 def _gate_history_config(patch, *, memory_span_minutes=None):
     """Exercise explicit independent memories with auto-unstuck disabled."""
     patch = deepcopy(patch)
-    policy = patch.setdefault("bot", {}).setdefault("risk", {})
+    policy = patch.setdefault("bot", {}).setdefault("global", {})
     policy.setdefault("loss_gate", {}).setdefault("max_drawdown_ratio", 0.5)
     if memory_span_minutes is not None:
         policy["loss_gate"]["memory_ema_span_minutes"] = memory_span_minutes
-        patch["bot"].setdefault("unstuck", {})["memory_ema_span_minutes"] = memory_span_minutes
+        policy.setdefault("unstuck", {})["memory_ema_span_minutes"] = memory_span_minutes
         for side in ("long", "short"):
             patch["bot"].setdefault(side, {}).setdefault("hsl", {})["memory_ema_span_minutes"] = memory_span_minutes
     for side in ("long", "short"):
@@ -8040,9 +8040,9 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
     bot = _unit_bot()
     assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
-    bot.config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"] = 0.0
+    bot.config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.0
     assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
-    del bot.config["bot"]["risk"]["loss_gate"]["max_drawdown_ratio"]
+    del bot.config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"]
     with pytest.raises(KeyError, match="max_drawdown_ratio"):
         bot._live_max_realized_loss_pct()
 
@@ -12144,7 +12144,7 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(
         }
     )
     if failure == "config_value":
-        bot.config["bot"]["risk"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
+        bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
