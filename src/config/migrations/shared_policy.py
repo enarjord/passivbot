@@ -108,3 +108,92 @@ def preserve_forced_normal_selection(document, *, record):
             {path: value},
             "preserved released coin-normal forced selection and operational exemptions",
         )
+
+
+def _overlay_coin_overrides(base, patch):
+    """Apply the released replacement semantics to coin authority only."""
+    result = deepcopy(base)
+    for key, value in patch.items():
+        parts = key.split(".")
+        if parts[0] != "coin_overrides":
+            continue
+        if len(parts) == 1:
+            result = deepcopy(value)
+            continue
+        target = result
+        for part in parts[1:-1]:
+            target = target.setdefault(part, {})
+            if not isinstance(target, dict):
+                raise ValueError(f"{key} crosses a non-mapping coin override")
+        target[parts[-1]] = deepcopy(value)
+    return result
+
+
+def _selection_sides(patch):
+    sides = set()
+    for key in patch:
+        parts = key.split(".")
+        if parts[0] != "coin_overrides":
+            continue
+        if len(parts) <= 2 or (len(parts) == 3 and parts[2] == "live"):
+            sides.update(("long", "short"))
+        elif len(parts) >= 4 and parts[2] == "live":
+            for side in ("long", "short"):
+                if parts[3] == f"forced_mode_{side}":
+                    sides.add(side)
+    return sides
+
+
+def preserve_forced_selection_overrides(document, *, record):
+    """Keep generated selections exact when fixed/scenario coin modes replace them.
+
+    A scenario can run over the ordinary root and the optimizer-fixed root.
+    Only identifiers normal in every applicable effective context are persisted
+    in its shared list. Retained operational normal modes supply context-specific
+    selections through the existing backtest flag, without adding false positives.
+    """
+    root = document.get("coin_overrides", {})
+    fixed = document.get("optimize", {}).get("fixed_runtime_overrides", {})
+    optimized = _overlay_coin_overrides(root, fixed)
+
+    def emit(patch, contexts, path):
+        affected = _selection_sides(patch)
+        if not affected:
+            return
+        normal_sets = [
+            forced_normal_coins(_overlay_coin_overrides(base, patch))
+            for base in contexts
+        ]
+        for side in ("long", "short"):
+            if side not in affected:
+                continue
+            first = normal_sets[0][side]
+            common = [
+                coin
+                for coin in first
+                if all(coin in values[side] for values in normal_sets[1:])
+            ]
+            target = f"bot.{side}.forager.always_include"
+            if target in patch and patch[target] != common:
+                raise ValueError(
+                    f"{path}.{target} conflicts with effective released normal selection"
+                )
+            patch[target] = common
+            record(
+                f"{path}.{target}",
+                None,
+                common,
+                "preserved effective released normal selection; persist the deterministic context "
+                "intersection and retain operational normal flags for context-specific selection",
+            )
+
+    emit(fixed, [root], "optimize.fixed_runtime_overrides")
+    # Derive optimized coin authority from the original coin controls. Generated
+    # bot selection lists above have no effect on the coin-mode map.
+    contexts = [root, optimized] if fixed else [root]
+    for index, scenario in enumerate(document.get("backtest", {}).get("scenarios", [])):
+        emit(
+            scenario.get("overrides", {}),
+            contexts,
+            f"backtest.scenarios[{index}].overrides",
+        )

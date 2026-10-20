@@ -136,6 +136,35 @@ def _set_patch(config, overrides, *, authored=False, scenario=False):
         target[path[-1]] = deepcopy(value)
 
 
+def _materialized_coin_patch(overrides, effective):
+    """Resolve files without expanding a leaf replacement to whole-map authority.
+
+    Scenarios run over both the ordinary and optimizer-fixed roots. Replacing
+    their complete coin map with the ordinary effective map would erase fixed
+    modes on unrelated coins. Preserve each authored replacement scope; a
+    changed file reference necessarily replaces its materialized coin document.
+    """
+    roots = ("coin_overrides", "live.coin_flags")
+    result = {
+        key: value for key, value in overrides.items()
+        if not any(key == root or key.startswith(root + ".") for root in roots)
+    }
+    if any(key == "live.coin_flags" or key.startswith("live.coin_flags.") for key in overrides):
+        result["coin_overrides"] = deepcopy(effective["coin_overrides"])
+        return result
+    for key in overrides:
+        parts = key.split(".")
+        if parts[0] != "coin_overrides":
+            continue
+        if "override_config_path" in parts[2:]:
+            parts = parts[:2]
+        value = effective
+        for part in parts:
+            value = value[part]
+        result[".".join(parts)] = deepcopy(value)
+    return result
+
+
 def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                        _null_policy_enablement=None, _root_enablement=None, best_effort=False,
                        _emit_guesses=True, _change_prefix=""):
@@ -393,9 +422,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     ("optimize", "fixed_runtime_overrides", *path): values
                     for path, values in fixed_enablement.items()
                 })
-                fixed = {key: value for key, value in fixed.items()
-                         if not any(key == root or key.startswith(root + ".") for root in roots)}
-                fixed["coin_overrides"] = effective_fixed["coin_overrides"]
+                fixed = _materialized_coin_patch(fixed, effective_fixed)
                 authored["optimize"]["fixed_runtime_overrides"] = fixed
         # Build each effective authored scenario before root flag conversion.
         # Otherwise generated root coin_overrides would hide scenario flags.
@@ -442,11 +469,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                         (*prefix, *path): values
                         for path, values in scenario_enablement.items()
                     })
-                    overrides = {
-                        key: value for key, value in overrides.items()
-                        if not any(key == root or key.startswith(root + ".") for root in roots)
-                    }
-                    overrides["coin_overrides"] = effective["coin_overrides"]
+                    overrides = _materialized_coin_patch(overrides, effective)
                     scenario["overrides"] = overrides
         transformed = migrate_v8_to_v9(
             authored, memory_span_minutes=span, memory_span_choices=memory_span_choices,

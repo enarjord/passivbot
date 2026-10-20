@@ -250,3 +250,245 @@ def test_minimum_cost_consumer_rejects_nonboolean_policy(value):
     config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = value
     with pytest.raises(TypeError, match="must be a boolean"):
         effective_minimum_cost_filter(config)
+
+
+def _forced_selection_payload(config, *, optimized=False, scenario=False):
+    """Read the complete native payload after applying the actual runtime patches."""
+    from backtest import prep_backtest_args
+    from tools.migrate_config_v9 import _set_patch
+
+    effective = prepare_config(deepcopy(config), verbose=False)
+    if optimized:
+        _set_patch(effective, effective["optimize"]["fixed_runtime_overrides"])
+        from optimizer_overrides import optimizer_overrides
+
+        overrides = effective["optimize"]["enable_overrides"]
+        effective = optimizer_overrides(overrides, effective, None)
+        for side in ("long", "short"):
+            effective = optimizer_overrides(overrides, effective, side)
+    if scenario:
+        _set_patch(
+            effective, effective["backtest"]["scenarios"][0]["overrides"], scenario=True
+        )
+    effective = prepare_config(effective, verbose=False)
+    coins = ["BTC", "ETH", "XRP"]
+    effective["backtest"]["coins"] = {"binance": coins}
+    for side in ("long", "short"):
+        effective["bot"][side]["universe"]["approved_coins"] = coins
+    mss = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.001,
+            "min_cost": 5.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+            "symbol": f"{coin}/USDT:USDT",
+        }
+        for coin in coins
+    }
+    bots, _, _, _ = prep_backtest_args(effective, mss, "binance")
+    return {
+        side: {
+            coin for coin, pair in zip(coins, bots) if pair[side]["is_forced_active"]
+        }
+        for side in ("long", "short")
+    }
+
+
+@pytest.mark.parametrize("converter", ["core", "tool"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("mode", ["manual", "", "tp_only", "graceful_stop"])
+@pytest.mark.parametrize("shape", ["leaf", "live", "coin", "map"])
+def test_v8_scenario_mode_replacements_clear_inherited_selection(
+    converter, side, mode, shape
+):
+    from tools.migrate_config_v9 import migrate
+
+    source = released_v8_policy()
+    source["coin_overrides"] = {
+        "BTC": {"live": {"forced_mode_long": "normal", "forced_mode_short": "normal"}}
+    }
+    source["optimize"]["fixed_runtime_overrides"] = {}
+    live = {"forced_mode_long": "normal", "forced_mode_short": "normal"}
+    live[f"forced_mode_{side}"] = mode
+    patch = {
+        "leaf": {f"coin_overrides.BTC.live.forced_mode_{side}": mode},
+        "live": {"coin_overrides.BTC.live": live},
+        "coin": {"coin_overrides.BTC": {"live": live}},
+        "map": {"coin_overrides": {"BTC": {"live": live}}},
+    }[shape]
+    source["backtest"]["scenarios"] = [{"label": "change-mode", "overrides": patch}]
+    original = deepcopy(source)
+    result = (migrate_v8_to_v9 if converter == "core" else migrate)(
+        source, memory_span_minutes=100.0
+    )
+    assert source == original
+    assert _forced_selection_payload(result.config) == {
+        "long": {"BTC"},
+        "short": {"BTC"},
+    }
+    expected = {"long": {"BTC"}, "short": {"BTC"}}
+    expected[side] = set()
+    for optimized in (False, True):
+        assert (
+            _forced_selection_payload(result.config, optimized=optimized, scenario=True)
+            == expected
+        )
+    converted_patch = result.config["backtest"]["scenarios"][0]["overrides"]
+    assert converted_patch[f"bot.{side}.forager.always_include"] == []
+    records = [
+        change
+        for change in result.changes
+        if "deterministic context intersection" in change["reason"]
+    ]
+    assert records
+    assert all(not change.get("best_effort") for change in records)
+
+
+@pytest.mark.parametrize("converter", ["core", "tool"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "scenario_coin,mode,expected_lists",
+    [
+        ("BTC", "", []),
+        ("BTC", "manual", []),
+        ("ETH", "normal", ["ETH"]),
+    ],
+)
+def test_v8_scenario_selection_intersects_root_and_fixed_contexts(
+    converter, side, scenario_coin, mode, expected_lists
+):
+    from tools.migrate_config_v9 import migrate
+
+    source = released_v8_policy()
+    source["coin_overrides"] = {
+        "BTC": {"live": {f"forced_mode_{side}": "normal"}},
+        "ETH": {"live": {f"forced_mode_{side}": "manual"}},
+    }
+    source["optimize"]["fixed_runtime_overrides"] = {
+        f"coin_overrides.BTC.live.forced_mode_{side}": "manual",
+        f"coin_overrides.ETH.live.forced_mode_{side}": "normal",
+    }
+    source["backtest"]["scenarios"] = [
+        {
+            "label": "change-mode",
+            "overrides": {
+                f"coin_overrides.{scenario_coin}.live.forced_mode_{side}": mode
+            },
+        }
+    ]
+    result = (migrate_v8_to_v9 if converter == "core" else migrate)(
+        source, memory_span_minutes=100.0
+    )
+    other = "short" if side == "long" else "long"
+    assert _forced_selection_payload(result.config) == {side: {"BTC"}, other: set()}
+    assert _forced_selection_payload(result.config, optimized=True) == {
+        side: {"ETH"},
+        other: set(),
+    }
+    for optimized in (False, True):
+        # These are the released effective mode maps: the scenario replaces
+        # only its authored leaf, retaining unrelated optimizer-fixed modes.
+        expected = {"ETH"} if optimized else {"BTC"}
+        if scenario_coin == "BTC":
+            expected.discard("BTC")
+        else:
+            expected.add("ETH")
+        assert _forced_selection_payload(
+            result.config, optimized=optimized, scenario=True
+        ) == {side: expected, other: set()}
+    patch = result.config["backtest"]["scenarios"][0]["overrides"]
+    assert patch[f"bot.{side}.forager.always_include"] == expected_lists
+
+
+@pytest.mark.parametrize("shape", ["leaf", "map"])
+def test_v8_file_normal_selection_obeys_scenario_and_atomic_replacement(
+    tmp_path, shape
+):
+    import json
+    from tools.migrate_config_v9 import migrate
+
+    (tmp_path / "coin.json").write_text(
+        json.dumps(
+            {"live": {"forced_mode_long": "normal", "forced_mode_short": "normal"}}
+        )
+    )
+    source = released_v8_policy()
+    source["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
+    source["optimize"]["fixed_runtime_overrides"] = {}
+    source["backtest"]["scenarios"] = [
+        {
+            "label": "replace-file-mode",
+            "overrides": (
+                {"coin_overrides.BTC.live.forced_mode_long": "manual"}
+                if shape == "leaf"
+                else {
+                    "coin_overrides": {"ETH": {"live": {"forced_mode_short": "normal"}}}
+                }
+            ),
+        }
+    ]
+    result = migrate(
+        source,
+        memory_span_minutes=100.0,
+        base_config_path=str(tmp_path / "config.json"),
+    )
+    assert result.config["coin_overrides"]["BTC"]["live"] == {
+        "forced_mode_long": "normal",
+        "forced_mode_short": "normal",
+    }
+    assert _forced_selection_payload(result.config) == {
+        "long": {"BTC"},
+        "short": {"BTC"},
+    }
+    expected = {"long": set(), "short": {"BTC"} if shape == "leaf" else {"ETH"}}
+    for optimized in (False, True):
+        assert (
+            _forced_selection_payload(result.config, optimized=optimized, scenario=True)
+            == expected
+        )
+
+
+def test_optimizer_mirror_preserves_directional_selection_and_mirrors_numeric_forager():
+    from optimizer_overrides import optimizer_overrides
+
+    config = get_template_config()
+    config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    for side, coin in (("long", "BTC"), ("short", "ETH")):
+        config["bot"][side]["forager"]["always_include"] = [coin]
+    weights = config["bot"]["long"]["forager"]["score_weights"]
+    weights.update(volume=0.7, volatility=0.3, unilateralness=0.0, ema_readiness=0.0)
+    mirrored = optimizer_overrides(
+        config["optimize"]["enable_overrides"], deepcopy(config)
+    )
+    assert mirrored["bot"]["short"]["forager"]["score_weights"] == weights
+    assert mirrored["bot"]["long"]["forager"]["always_include"] == ["BTC"]
+    assert mirrored["bot"]["short"]["forager"]["always_include"] == ["ETH"]
+    assert _forced_selection_payload(config, optimized=True) == {
+        "long": {"BTC"},
+        "short": {"ETH"},
+    }
+
+
+@pytest.mark.parametrize("converter", ["core", "tool"])
+def test_v8_mirrored_strategy_keeps_original_directional_normal_selection(converter):
+    from tools.migrate_config_v9 import migrate
+
+    source = released_v8_policy()
+    source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    source["optimize"]["fixed_runtime_overrides"] = {}
+    source["coin_overrides"] = {
+        "BTC": {"live": {"forced_mode_long": "normal"}},
+        "ETH": {"live": {"forced_mode_short": "normal"}},
+    }
+    result = (migrate_v8_to_v9 if converter == "core" else migrate)(
+        source, memory_span_minutes=100.0
+    )
+    for optimized in (False, True):
+        assert _forced_selection_payload(result.config, optimized=optimized) == {
+            "long": {"BTC"},
+            "short": {"ETH"},
+        }
