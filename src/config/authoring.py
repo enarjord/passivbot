@@ -202,6 +202,21 @@ def _resolved_context(config, *, base_config_path, require_complete=True):
     return parse_overrides(prepared, verbose=False), unresolved
 
 
+def _resolved_patch_value(value, parts, effective):
+    """Inline local sources within exactly the authored replacement scope."""
+    if parts == ("coin_overrides",):
+        return deepcopy(effective["coin_overrides"])
+    if len(parts) == 2 and parts[0] == "coin_overrides":
+        coin = next(iter(normalize_coin_override_keys({parts[1]: {}}, verbose=False)))
+        return deepcopy(effective["coin_overrides"][coin])
+    if parts in _UNIVERSE_PATHS:
+        return deepcopy(_get(effective, parts))
+    if isinstance(value, dict):
+        return {name: _resolved_patch_value(child, (*parts, name), effective)
+                for name, child in value.items()}
+    return deepcopy(value)
+
+
 def resolved_config(source, *, base_config_path=""):
     """Export explicit defaults, local coin-list contents and inline coin pins.
 
@@ -224,11 +239,8 @@ def resolved_config(source, *, base_config_path=""):
             continue
         effective, _ = _resolved_context(_patch(full, raw), base_config_path=base_config_path)
         for selector in list(raw):
-            parts = tuple(selector.split("."))
-            if parts in _UNIVERSE_PATHS:
-                raw[selector] = deepcopy(_get(effective, parts))
-            elif selector == "coin_overrides":
-                raw[selector] = deepcopy(effective["coin_overrides"])
+            parts = resolve_dotted_config_path(full, selector)
+            raw[selector] = _resolved_patch_value(raw[selector], parts, effective)
         owner[name] = raw
     return cleanup_config(result, base_config_path=base_config_path)
 

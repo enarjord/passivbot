@@ -198,6 +198,130 @@ def test_resolved_export_materializes_scenario_file_sources(tmp_path):
     assert resolved_config(resolved) == resolved
 
 
+def _replay_export_context(source, *, base="", fixed=False, scenario=False):
+    from optimization.warmup import _apply_config_overrides
+
+    context = effective(source, base)
+    if fixed:
+        _apply_config_overrides(context, deepcopy(context["optimize"]["fixed_runtime_overrides"]))
+    if scenario:
+        _apply_config_overrides(context, deepcopy(context["backtest"]["scenarios"][0]["overrides"]))
+    # These layers have already been applied; validate the selected policy
+    # without applying a replaced context's optimizer pins again.
+    context["optimize"]["fixed_runtime_overrides"] = {}
+    context["backtest"]["scenarios"] = []
+    return effective(context, base)
+
+
+@pytest.mark.parametrize("coin", ["BTC", "bybit::BTC/USDT:USDT"])
+def test_resolved_atomic_coin_scenario_replaces_only_its_authored_scope(tmp_path, coin):
+    original_file = write_json(tmp_path / "root-coin.json", {"bot": {"long": {"unstuck": {
+        "ema_span_0": 17.5, "ema_span_1": 29.5, "close_pct": 0.09,
+    }}}})
+    scenario_file = write_json(tmp_path / "scenario-coin.json", {"bot": {"long": {"unstuck": {
+        "ema_span_0": 19.5, "close_pct": 0.12,
+    }}}})
+    source = policy()
+    source["coin_overrides"] = {
+        coin: {"override_config_path": original_file.name,
+               "bot": {"long": {"unstuck": {"close_pct": 0.1}}}},
+        "ETH": {"bot": {"long": {"unstuck": {"close_pct": 0.11}}}},
+    }
+    source["optimize"]["fixed_runtime_overrides"] = {
+        f"coin_overrides.{coin}.bot.long.unstuck.close_pct": 0.2,
+        "coin_overrides.ETH.bot.long.unstuck.close_pct": 0.22,
+    }
+    selector = f"coin_overrides.{coin}"
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
+        selector: {"override_config_path": scenario_file.name,
+                   "bot": {"long": {"unstuck": {"close_pct": 0.13}}}},
+    }}]
+    base = str(tmp_path / "input.json")
+    before = deepcopy(source)
+    expected = {(fixed, scenario): _replay_export_context(
+        source, base=base, fixed=fixed, scenario=scenario,
+    ) for fixed in (False, True) for scenario in (False, True)}
+    resolved = resolved_config(source, base_config_path=base)
+    assert source == before
+    patch = resolved["backtest"]["scenarios"][0]["overrides"]
+    assert patch == {selector: {"bot": {"long": {"unstuck": {
+        "ema_span_0": 19.5, "close_pct": 0.13,
+    }}}}}
+    assert resolved["optimize"]["fixed_runtime_overrides"] == source["optimize"]["fixed_runtime_overrides"]
+    assert expected[(True, False)]["coin_overrides"][coin]["bot"]["long"]["unstuck"]["close_pct"] == 0.2
+    assert expected[(True, True)]["coin_overrides"][coin]["bot"]["long"]["unstuck"]["close_pct"] == 0.13
+    original_file.unlink()
+    scenario_file.unlink()
+    moved = write_json(tmp_path / "moved" / "resolved.json", resolved)
+    reloaded = json.loads(moved.read_text())
+    for (fixed, scenario), selected in expected.items():
+        assert _replay_export_context(reloaded, base=str(moved), fixed=fixed, scenario=scenario) == selected
+    assert resolved_config(reloaded, base_config_path=str(moved)) == resolved
+
+
+@pytest.mark.parametrize("scope", ["bot.long", "bot.long.universe"])
+def test_resolved_atomic_universe_sources_preserve_omitted_members(tmp_path, scope):
+    coins = write_json(tmp_path / "scenario-coins.json", ["BTC", "ETH"])
+    source = policy()
+    set_side_universe_sources(source, "ignored_coins", {"long": ["ETH"], "short": []})
+    value = {"approved_coins": str(coins)}
+    parts = scope.split(".")
+    for part in reversed(("bot", "long", "universe")[len(parts):]):
+        value = {part: value}
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {scope: value}}]
+    base = str(tmp_path / "input.json")
+    expected = _replay_export_context(source, base=base, scenario=True)
+    resolved = resolved_config(source, base_config_path=base)
+    selected = resolved["backtest"]["scenarios"][0]["overrides"][scope]
+    for part in ("bot", "long", "universe")[len(parts):]:
+        selected = selected[part]
+    assert selected == {"approved_coins": ["BTC", "ETH"]}
+    coins.unlink()
+    moved = write_json(tmp_path / "moved" / "resolved.json", resolved)
+    assert _replay_export_context(json.loads(moved.read_text()), base=str(moved), scenario=True) == expected
+
+
+def test_resolved_fixed_universe_leaf_survives_source_file_removal(tmp_path):
+    coins = write_json(tmp_path / "fixed-coins.json", ["ETH"])
+    source = policy()
+    selector = "bot.long.universe.approved_coins"
+    source["optimize"]["fixed_runtime_overrides"] = {selector: str(coins)}
+    base = str(tmp_path / "input.json")
+    expected = _replay_export_context(source, base=base, fixed=True)
+    resolved = resolved_config(source, base_config_path=base)
+    assert resolved["optimize"]["fixed_runtime_overrides"] == {selector: ["ETH"]}
+    coins.unlink()
+    assert _replay_export_context(resolved, fixed=True) == expected
+
+
+@pytest.mark.parametrize("owner", ["fixed", "scenario"])
+def test_resolved_does_not_grant_filename_leaf_override_permission(tmp_path, owner):
+    original = write_json(tmp_path / "root-coin.json", {"bot": {"long": {"unstuck": {"close_pct": 0.1}}}})
+    replacement = write_json(tmp_path / "replacement.json", {"bot": {"long": {"unstuck": {"close_pct": 0.2}}}})
+    source = policy()
+    source["coin_overrides"] = {"BTC": {"override_config_path": original.name}}
+    patch = {"coin_overrides.BTC.override_config_path": replacement.name}
+    if owner == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    else:
+        source["backtest"]["scenarios"] = [{"label": "one", "overrides": patch}]
+    with pytest.raises(ValueError, match="not overridable"):
+        resolved_config(source, base_config_path=str(tmp_path / "input.json"))
+
+
+@pytest.mark.parametrize("selector", ["coin_overrides", "coin_overrides.BTC"])
+def test_resolved_does_not_grant_fixed_coin_object_authority(tmp_path, selector):
+    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"close_pct": 0.1}}}})
+    source = policy()
+    source["coin_overrides"] = {"BTC": {"override_config_path": override.name}}
+    replacement = {"bot": {"long": {"unstuck": {"close_pct": 0.2}}}}
+    source["optimize"]["fixed_runtime_overrides"] = {
+        selector: {"BTC": replacement} if selector == "coin_overrides" else replacement,
+    }
+    with pytest.raises(TypeError, match="must target leaf settings"):
+        resolved_config(source, base_config_path=str(tmp_path / "input.json"))
+
+
 @pytest.mark.parametrize("exporter", [compact_config, resolved_config])
 def test_exports_keep_strict_authored_and_result_boundaries(exporter):
     source = policy()
