@@ -1869,8 +1869,14 @@ inline void generate_ema_multicoin_side_orders(
                     / fmax(close_price * c_mult, 1.0e-12f),
                 qty_step
             )));
+            // Recover aligned venue counts before subtracting: e.g. f32
+            // 1.51 - 1.50 is below 0.01 despite leaving one valid step.
+            // Unproven/off-grid operands retain the physical comparison;
+            // directional rounding must not promote real dust to a full step.
+            float remainder = psize[c] - clip;
+            try_aligned_qty_difference(psize[c], clip, qty_step, remainder);
             close_qty[c] = psize[c] <= minimum_close
-                    || psize[c] - clip < minimum_close
+                    || remainder < minimum_close
                 ? psize[c] : clip;
             close_tick[c] = candidate_close_tick;
             close_market[c] = should_use_ordinary_market_execution(

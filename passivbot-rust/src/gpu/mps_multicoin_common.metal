@@ -113,9 +113,11 @@ inline float strict_cap_quantity(
 }
 
 // Quantities produced by venue rounding can recover their integer counts.
-// Require a unique round-trip before subtracting counts; otherwise preserve
-// physical-unit directional rounding for representations outside that domain.
-inline float aligned_qty_difference(float total, float held, float step) {
+// Require a unique round-trip before subtracting counts. Leave the caller's
+// physical difference unchanged when the proof is unavailable.
+inline bool try_aligned_qty_difference(
+    float total, float held, float step, thread float& difference
+) {
     float total_count = rint(total / step);
     float held_count = rint(held / step);
     bool counts_resolvable = total_count >= 0.0f && total_count < 0x1p24f
@@ -124,8 +126,15 @@ inline float aligned_qty_difference(float total, float held, float step) {
         && nextafter(held, INFINITY) - held <= step;
     bool on_grid = total_count * step == total && held_count * step == held;
     if (counts_resolvable && on_grid) {
-        return fmax(total_count - held_count, 0.0f) * step;
+        difference = fmax(total_count - held_count, 0.0f) * step;
+        return true;
     }
+    return false;
+}
+
+inline float aligned_qty_difference(float total, float held, float step) {
+    float difference;
+    if (try_aligned_qty_difference(total, held, step, difference)) return difference;
     return fmax(floor_step(total - held, step), 0.0f);
 }
 

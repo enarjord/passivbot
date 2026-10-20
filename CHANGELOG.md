@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve valid minimum-sized EMA Anchor close remainders in native GPU replay
+  by subtracting uniquely recoverable venue-step counts before checking dust.
+
 - Align prepared optimizer benchmarks with the current CPU backend interface and
   prepare the recording evaluation contract once, matching production search setup.
   Permit local Unix-domain multiprocessing IPC while retaining network rejection in
