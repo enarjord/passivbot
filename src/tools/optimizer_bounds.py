@@ -40,7 +40,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
-            "Sparse authored v9 bounds freeze omitted dimensions. get_template_config() "
+            "Sparse authored v9 bounds freeze omitted independent genes. get_template_config() "
             "and the no-config optimizer command provide a complete starting profile "
             "with explicit recommended ranges."
         ),

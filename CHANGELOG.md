@@ -9,9 +9,10 @@ since the latest release tag; these features may already be available when insta
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently
   of template spelling, while preserving values, sparse overrides, and integer counts.
-- Freeze optimizer dimensions omitted from authored v9 bounds at their configured values. Add
-  `tool optimizer-bounds` for explicit recommended ranges, preserve released-v8 inherited ranges
+- Freeze independent optimizer genes omitted from authored v9 bounds at their configured values.
+  Add `tool optimizer-bounds` for explicit recommended ranges, preserve released-v8 inherited ranges
   during migration, and reject partial normalized-weight searches that would move fixed weights.
+  Explicit optimizer relationships retain authority over their derived effective values.
 
 - Pin released-v8 migration defaults independently of the current schema, distinguish omitted
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.
