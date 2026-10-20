@@ -63,7 +63,7 @@ def _authored(source, base_config_path):
 
     payload = extract_result_config(source, allow_unmarked_wrapper=True)
     # Validate the complete input before stripping metadata or pruning defaults.
-    full = cleanup_config(payload, base_config_path=base_config_path)
+    full = cleanup_config(payload, base_config_path=base_config_path, _allow_sparse=True)
     payload = strip_config_metadata(payload)
     payload.get("live", {}).pop("base_config_path", None)
     return payload, full
@@ -107,14 +107,14 @@ def compact_config(source, *, base_config_path="", destination_path=""):
     from tools.clean_config import cleanup_config
 
     authored, full = _authored(source, base_config_path)
-    baseline = {
-        "config_version": authored["config_version"],
-        "bot": {side: {} for side in ("long", "short") if side in authored["bot"]},
-        "live": {"strategy_kind": full["live"]["strategy_kind"]},
-    }
+    baseline = {"config_version": authored["config_version"]}
+    if "bot" in authored:
+        baseline["bot"] = {side: {} for side in ("long", "short") if side in authored["bot"]}
+    if "live" in authored:
+        baseline["live"] = {"strategy_kind": full["live"]["strategy_kind"]}
     if full["bot"]["risk"]["hsl"]["scope"] == "portfolio":
         baseline["bot"]["risk"] = {"hsl": deepcopy(full["bot"]["risk"]["hsl"])}
-    defaults = cleanup_config(baseline, base_config_path=base_config_path)
+    defaults = cleanup_config(baseline, base_config_path=base_config_path, _allow_sparse=True)
     registry = get_field_registry()
     keep_empty = {("bot",), ("live",), ("bot", "long"), ("bot", "short")}
 
@@ -137,7 +137,7 @@ def compact_config(source, *, base_config_path="", destination_path=""):
         return deepcopy(value)
 
     result = prune(authored)
-    if cleanup_config(result, base_config_path=base_config_path) != full:
+    if cleanup_config(result, base_config_path=base_config_path, _allow_sparse=True) != full:
         # A default may depend on another authored field. Retain the complete
         # authored authority rather than guessing which dependency can be omitted.
         result = deepcopy(authored)
@@ -252,7 +252,7 @@ def _bound_target(config, path):
     return None
 
 
-def _search_treatment(config, path, authored, *, coin_patch=None):
+def _search_treatment(config, path, authored, *, coin_patch=None, applied_overrides=()):
     from .optimize_bounds import flatten_optimize_bounds
     from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
     from optimization.bounds import Bound
@@ -273,10 +273,17 @@ def _search_treatment(config, path, authored, *, coin_patch=None):
         authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["live"]["strategy_kind"],
     )
     status = "fixed_selector" if fixed_by else "fixed_bound" if bound.low == bound.high else "searched"
+    gene_status = status
+    shadowed_by = [event for event in applied_overrides
+                   if _intersects(path, tuple(event["path"].split(".")))]
+    if shadowed_by:
+        status = shadowed_by[-1]["kind"]
     if coin_patch is not None and _get(coin_patch, path) is not _MISSING:
         status = "coin_override"
     return {
-        "status": status, "key": key, "bounds": deepcopy(raw_bound),
+        "status": status, "gene_status": gene_status,
+        "shadowed_by": [{"kind": event["kind"], "path": event["path"]} for event in shadowed_by],
+        "key": key, "bounds": deepcopy(raw_bound),
         "bounds_source": "authored" if key in authored_bounds else "loader_default_or_derived",
         "fixed_selectors": fixed_by,
     }
@@ -298,18 +305,21 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         events.append({"kind": "default_or_derived", "path": ".".join(parts)})
         if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"long", "short"}
                 and parts[2:] == ("risk", "total_wallet_exposure_limit")
-                and parts[1] not in authored["bot"]):
+                and "bot" in authored and parts[1] not in authored["bot"]):
             events[-1]["rule"] = "omitted_side_disabled"
     context = deepcopy(full)
     dataset_selection = None
+    applied_overrides = []
 
     def apply(raw, kind):
         nonlocal context
         normalized = normalize_scenario_overrides(raw)
         for selector, value in normalized.items():
             target = resolve_dotted_config_path(context, selector)
+            event = {"kind": kind, "path": ".".join(target), "value": deepcopy(value)}
+            applied_overrides.append(event)
             if _intersects(parts, target):
-                events.append({"kind": kind, "path": ".".join(target), "value": deepcopy(value)})
+                events.append(event)
         context = _patch(context, normalized)
 
     if optimize:
@@ -380,9 +390,9 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     coin_patch = None
     if coin is not None:
         from .overrides import nested_update
-        from utils import symbol_to_coin
-
-        coin = symbol_to_coin(coin)
+        # Reuse authored-key normalization: exact markets and venue-qualified
+        # identifiers must survive without a heuristic underlying substitution.
+        coin = next(iter(normalize_coin_override_keys({coin: {}}, verbose=False)))
         coin_patch = effective["coin_overrides"].get(coin, {})
         inline = normalize_coin_override_keys(before_files["coin_overrides"], verbose=False).get(coin, {})
         value = _get(coin_patch, parts)
@@ -435,7 +445,10 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         "denominator": metadata_field.denominator if metadata_field else None,
         "scope": metadata_field.scope if metadata_field else None,
         "default": {"declared": default is not NO_DEFAULT, **({"value": deepcopy(default)} if default is not NO_DEFAULT else {})},
-        "sources": events, "search": _search_treatment(context, bound_target or search_path, authored, coin_patch=search_coin_patch),
+        "sources": events, "search": _search_treatment(
+            context, bound_target or search_path, authored, coin_patch=search_coin_patch,
+            applied_overrides=applied_overrides,
+        ),
         "unresolved": unresolved,
         "dataset_selection": dataset_selection,
         "bound_target": ".".join(bound_target) if bound_target is not None else None,

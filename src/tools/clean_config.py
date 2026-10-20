@@ -105,7 +105,7 @@ def normalize_export_numbers(config: dict) -> dict:
 
 
 def cleanup_config(
-    source: dict, *, mode: str = "full", base_config_path: str = ""
+    source: dict, *, mode: str = "full", base_config_path: str = "", _allow_sparse: bool = False
 ) -> dict:
     """Reuse canonical normalization without resolving dates or coin-list sources.
 
@@ -132,9 +132,9 @@ def cleanup_config(
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
     payload = extract_result_config(source, allow_unmarked_wrapper=True)
-    if not isinstance(payload.get("bot"), dict) or not isinstance(
+    if not _allow_sparse and (not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
-    ):
+    )):
         raise ValueError(
             "expected a v9 config with bot and live objects (possibly inside config)"
         )

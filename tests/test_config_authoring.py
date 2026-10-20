@@ -48,6 +48,38 @@ def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
     assert compact_config(compact) == compact
 
 
+@pytest.mark.parametrize("sections", [
+    {}, {"bot": {}}, {"live": {}}, {"bot": {}, "live": {}},
+    {"bot": {"long": {}}}, {"live": {"strategy_kind": "ema_anchor"}},
+])
+def test_authoring_views_preserve_whole_section_omission(sections):
+    source = {"config_version": "v9.0.0", **deepcopy(sections)}
+    original = deepcopy(source)
+    expected = effective(source)
+    compact = compact_config(source)
+    assert ("bot" in compact) == ("bot" in source)
+    assert ("live" in compact) == ("live" in source)
+    assert effective(compact) == expected
+    assert compact_config(compact) == compact
+    assert effective(resolved_config(source)) == expected
+    report = explain_config(source, "bot.long.risk.total_wallet_exposure_limit")
+    assert report["value"] == expected["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+    assert (report["sources"][0].get("rule") == "omitted_side_disabled") == (
+        "bot" in source and "long" not in source["bot"]
+    )
+    assert source == original
+
+
+@pytest.mark.parametrize("export", [compact_config, resolved_config,
+                                    lambda config: explain_config(config, "live.hedge_mode")])
+@pytest.mark.parametrize("patch", [{"unknown": {}}, {"live": {"hsl_engine": "legacy"}},
+                                   {"bot": {"risk": {"unknown": True}}}])
+def test_sparse_authoring_does_not_bypass_unknown_or_retired_validation(export, patch):
+    source = {"config_version": "v9.0.0", **patch}
+    with pytest.raises((ValueError, TypeError)):
+        export(source)
+
+
 def test_compact_preserves_nondefault_strategy_selector():
     source = policy()
     source["live"]["strategy_kind"] = "ema_anchor"
@@ -221,6 +253,48 @@ def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
     assert report["value"] == 17.5
     assert report["sources"][-1]["kind"] == "override_file"
     assert Path(report["sources"][-1]["file"]) == override
+
+
+def test_search_treatment_reports_runtime_and_scenario_shadowing():
+    source = policy()
+    path = "bot.long.risk.total_exposure_enforcer_threshold"
+    source["optimize"]["bounds"]["long"]["risk"]["total_exposure_enforcer_threshold"] = [0.5, 1.0]
+    source["optimize"]["fixed_runtime_overrides"] = {path: 0.8}
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {path: 0.9}}]
+    ordinary = explain_config(source, path)
+    assert ordinary["search"]["status"] == "searched"
+    fixed = explain_config(source, path, optimize=True)
+    assert fixed["value"] == 0.8
+    assert fixed["search"]["status"] == "fixed_runtime_override"
+    assert fixed["search"]["gene_status"] == "searched"
+    assert fixed["search"]["bounds"] == [0.5, 1.0]
+    scenario = explain_config(source, path, optimize=True, scenario="one")
+    assert scenario["value"] == 0.9
+    assert scenario["search"]["status"] == "scenario_override"
+    assert scenario["search"]["shadowed_by"] == [
+        {"kind": "fixed_runtime_override", "path": path},
+        {"kind": "scenario_override", "path": path},
+    ]
+    bounds = explain_config(source, "optimize.bounds.long.risk.total_exposure_enforcer_threshold", optimize=True)
+    assert bounds["search"]["status"] == "fixed_runtime_override"
+
+
+@pytest.mark.parametrize("selected,expected", [
+    ("BTC", 0.1), ("BTC/USDT:USDT", 0.125),
+    ("bybit::BTC/USDT:USDT", 0.15), ("ETH", None),
+])
+def test_explain_coin_key_selection_preserves_exact_market_identity(selected, expected):
+    source = policy()
+    path = "bot.long.unstuck.close_pct"
+    source["coin_overrides"] = {
+        key: {"bot": {"long": {"unstuck": {"close_pct": value}}}}
+        for key, value in (("BTC", 0.1), ("BTC/USDT:USDT", 0.125), ("bybit::BTC/USDT:USDT", 0.15))
+    }
+    report = explain_config(source, path, coin=selected)
+    assert report["value"] == (source["bot"]["long"]["unstuck"]["close_pct"] if expected is None else expected)
+    if expected is not None:
+        assert report["sources"][-1]["kind"] == "coin_override"
+        assert report["search"]["status"] == "coin_override"
 
 
 def test_explain_reports_null_inheritance_fixed_selectors_and_fixed_bounds():

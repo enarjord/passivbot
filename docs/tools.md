@@ -416,6 +416,13 @@ metadata stays unknown. `--optimize` applies fixed runtime settings and existing
 overrides. `--coin` inspects the validated file/inline coin pins after those layers. Reports remain
 separate from config objects and are not accepted as authored configuration.
 
+The new authoring views accept valid sparse configs and preserve whole-section omission: omitting
+`bot` keeps the default profile, while an explicit `bot: {}` disables both omitted sides. Search
+treatment distinguishes a sampled gene from effective fixed/runtime/scenario shadowing and retains
+the original gene status and bounds. `--coin` selects a normalized authored override key; exact market
+and exchange-qualified identifiers remain intact. Mapping a different market alias requires prepared
+market metadata and is outside this offline view.
+
 An explanation does not discover exchange markets or prepared dataset membership. The `all`
 sentinel remains visibly unresolved. Scenario eligibility questions require a prepared dataset;
 inspect the `backtest.scenarios` record directly for the requested selection instead of treating
