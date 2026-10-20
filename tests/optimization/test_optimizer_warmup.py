@@ -160,7 +160,7 @@ def test_optimizer_rejects_invalid_effective_fixed_runtime_value_before_backend(
         "bot.long.forager.score_weights.volatility": -1.0
     }
 
-    with pytest.raises(ValueError, match="score_weights.*non-negative"):
+    with pytest.raises(ValueError, match=r"score_weights\.volatility pin.*nonnegative"):
         validate_optimizer_effective_configs(config)
 
 
@@ -282,6 +282,12 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     cfg["optimize"]["bounds"] = {}
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    if consumer == "forager":
+        # Only the searched coordinate participates in normalization. Its positive
+        # lower bound avoids activating an omitted weight at the all-zero fallback.
+        cfg["bot"][side]["forager"]["score_weights"] = dict(
+            volume=0.0, volatility=0.0, ema_readiness=0.0, unilateralness=1.0,
+        )
     weight_path = (["forager", "score_weights", "unilateralness"] if consumer == "forager"
                    else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
     weight_key = ("forager_score_weights_unilateralness" if consumer == "forager"
@@ -291,7 +297,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     for pside in ("long", "short"):
         _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
         _set_bounds(cfg, {f"{pside}_total_wallet_exposure_limit": [float(pside == side)]})
-    _set_bounds(cfg, {f"{side}_{weight_key}": [0.0, 1.0]})
+    _set_bounds(cfg, {f"{side}_{weight_key}": [0.1 if consumer == "forager" else 0.0, 1.0]})
     _set_bounds(cfg, {f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0]})
     key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
     path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
@@ -481,7 +487,9 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
     )
     if searched:
         _set_bounds(cfg, {
-            f"{side}_forager_score_weights_unilateralness": [0.0, 1.0],
+            # Keep omitted zero weights zero through normalization, including at
+            # the lower corner, while leaving RMS history fully reachable.
+            f"{side}_forager_score_weights_unilateralness": [0.1, 1.0],
             f"{side}_unilateralness_ema_span_1m": [1.0, 100000.0],
             f"{side}_n_positions": [slots],
         })

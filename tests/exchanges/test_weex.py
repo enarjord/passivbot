@@ -59,7 +59,7 @@ def _ccxt_exchange() -> ccxt.weex:
 def _bot(*, time_in_force: str = "gtc") -> WeexBot:
     bot = build_contract_bot("weex")
     bot.config["live"]["execution"]["time_in_force"] = time_in_force
-    bot.config["live"]["recovery"]["exchange_symbol_unavailable_cooldown_hours"] = 6.0
+    bot.config["live"]["recovery"] = {"exchange_symbol_unavailable_cooldown_hours": 6.0}
     bot.broker_code = "WEEX111164"
     bot.custom_id_max_length = 36
     return bot
