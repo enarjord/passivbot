@@ -9,6 +9,7 @@ import logging
 import math
 import time
 from copy import deepcopy
+from dataclasses import replace
 
 import numpy as np
 from pymoo.core.population import Population
@@ -58,6 +59,11 @@ class _Search:
         self.interrupt_check = interrupt_check
         self._last_checkpoint = 0.0
         self._pending = {}
+        # Ephemeral candidate-owned CPU configs never enter checkpoints, result
+        # caches or the service. Admission bounds their lifetime and count.
+        self._record_configs = {}
+        from optimize import individual_to_config
+        self._reuse_record_configs = build_config_fn is individual_to_config
         self._cadence = ResultCadence()
         self.screening_policy = screening_policy
         self._progress = OptimizerProgress(lambda: dict(
@@ -77,6 +83,7 @@ class _Search:
         population = self.state["population"]
         for completion in completions:
             index = self._pending.pop(completion.candidate_id)
+            prepared = self._record_configs.pop(completion.candidate_id, None)
             screening = self.state["phase"] == "screening"
             if completion.stage != ("screening" if screening else "full"):
                 raise RuntimeError("GPU completion stage does not match its search cohort")
@@ -97,9 +104,9 @@ class _Search:
                 self.state["screened"] += 1
                 self.checkpoint()
                 continue
-            self.apply_terminal(index, payload)
+            self.apply_terminal(index, payload, prepared=prepared)
 
-    def apply_terminal(self, index, payload):
+    def apply_terminal(self, index, payload, *, prepared=None):
         population = self.state["population"]
         problem = self.state["algorithm"].problem
         objectives = np.asarray(payload["fitness"], dtype=np.float64)
@@ -110,10 +117,15 @@ class _Search:
         individual = population[index]
         individual.X = np.asarray(payload["evaluation_vector"], dtype=np.float64)
         rejected = payload["metrics"].get("evaluation_origin") == "config_prefilter"
+        # Cached duplicate completions own their evaluation vector. Rebuild if
+        # it differs rather than recording a config from another canonical row.
+        record_config = (prepared[1] if self._reuse_record_configs and prepared is not None
+                         and tuple(payload["evaluation_vector"]) == prepared[0] else None)
         self.recorder.record(build_pymoo_record_entry(
             vector=payload["evaluation_vector"], metrics=payload["metrics"],
             template=self.template, build_config_fn=self.build_config_fn,
             overrides_fn=self.overrides_fn, overrides_list=self.overrides_list,
+            prepared_config=record_config,
         ))
         individual.F = objectives
         if problem.n_ieq_constr:
@@ -174,12 +186,15 @@ class _Search:
                     scenarios=self.screening_policy["scenarios"] if screening else None,
                 )
                 if plan.prefilter_payload is not None:
-                    self.apply_terminal(index, plan.prefilter_payload)
+                    self.apply_terminal(index, plan.prefilter_payload,
+                                        prepared=(plan.vector, plan.record_config))
                     if time.perf_counter() - started >= self._cadence.budget_seconds:
                         break
                     continue
-                self.session.admit(plan)
+                self.session.admit(replace(plan, record_config=None))
                 self._pending[candidate_id] = index
+                if plan.record_config is not None and self._reuse_record_configs:
+                    self._record_configs[candidate_id] = (plan.vector, plan.record_config)
                 if initial or time.perf_counter() - started >= self._cadence.budget_seconds:
                     initial = False
                     break
@@ -342,5 +357,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             except BaseException:
                 logging.exception("GPU native checkpoint failed after an earlier failure")
             raise
+        finally:
+            search._record_configs.clear()
     logging.info("GPU native optimization complete.")
     return {"pool": None, "pool_terminated": False}
