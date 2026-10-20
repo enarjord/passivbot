@@ -256,6 +256,66 @@ def test_explain_optimizer_transform_keeps_selected_relative_coin_file_context(
         assert (selected.lstat().st_ino, os.readlink(selected)) == link_identity
 
 
+@pytest.mark.parametrize("entrypoint", ["programmatic", "cli"])
+@pytest.mark.parametrize("origin", ["inline", "file", "symlink-only", "symlink-decoy"])
+def test_explain_canonical_alias_scenario_matches_suite_file_resolution_order(
+    tmp_path, monkeypatch, capsys, entrypoint, origin,
+):
+    from suite_runner import apply_scenario_overrides
+
+    source = policy()
+    patch = coin_patch(141.5)
+    actual = selected = tmp_path / "selected" / "source.json"
+    protected = {}
+    if origin == "inline":
+        source["coin_overrides"] = {"1000SHIB": patch}
+    else:
+        source["coin_overrides"] = {"1000SHIB": {"override_config_path": "coin.json"}}
+        coin_file = write_json(selected.parent / "coin.json", patch)
+        protected[coin_file] = coin_file.read_bytes()
+        if origin.startswith("symlink"):
+            actual = tmp_path / "physical" / "deep" / "source.json"
+            selected.parent.mkdir(parents=True, exist_ok=True)
+            selected.symlink_to(actual)
+            if origin == "symlink-decoy":
+                decoy = write_json(actual.parent / "coin.json", coin_patch(777.5))
+                protected[decoy] = decoy.read_bytes()
+    path = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
+    selector = f"coin_overrides.SHIB.{path}"
+    source["backtest"]["scenarios"] = [{"label": "canonical", "overrides": {selector: 314.5}}]
+    write_json(actual, source)
+    before = deepcopy(source)
+    source_bytes = actual.read_bytes()
+    link_identity = (selected.lstat().st_ino, os.readlink(selected)) if selected.is_symlink() else None
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    # The suite parses authored aliases and files before applying its scenario.
+    control = parse_overrides(load_prepared_config(str(selected), verbose=False), verbose=False)
+    assert list(control["coin_overrides"]) == ["SHIB"]
+    apply_scenario_overrides(control, control["backtest"]["scenarios"][0]["overrides"])
+    expected = control["coin_overrides"]["SHIB"]["bot"]["long"]["strategy"][
+        "trailing_martingale"
+    ]["entry"]["ema_span_0"]
+    assert expected == 314.5
+    if entrypoint == "programmatic":
+        report = explain_config(source, path, coin="SHIB", scenario="canonical",
+                                base_config_path=str(selected))
+    else:
+        assert cli_main(["tool", "config-explain", str(selected), path, "--coin", "SHIB",
+                         "--scenario", "canonical", "--json"]) == 0
+        report = json.loads(capsys.readouterr().out)
+    assert report["value"] == expected
+    assert any(event["kind"] == "scenario_override" and event["path"] == selector
+               and event["value"] == expected for event in report["sources"])
+    assert source == before
+    assert actual.read_bytes() == source_bytes
+    assert {path: path.read_bytes() for path in protected} == protected
+    if link_identity is not None:
+        assert selected.is_symlink()
+        assert (selected.lstat().st_ino, os.readlink(selected)) == link_identity
+
+
 def set_source(source, side, field, value, context):
     selector = f"bot.{side}.universe.{field}"
     if context == "root":
