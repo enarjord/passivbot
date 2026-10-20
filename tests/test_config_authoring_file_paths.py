@@ -203,6 +203,59 @@ def test_explain_cli_ordinary_relative_filename_context_is_unchanged(
     assert {path: path.read_bytes() for path in original} == original
 
 
+@pytest.mark.parametrize("entrypoint", ["programmatic", "cli"])
+@pytest.mark.parametrize("source_kind", ["ordinary", "symlink-only", "symlink-decoy"])
+@pytest.mark.parametrize("query", ["transformed", "dependency"])
+def test_explain_optimizer_transform_keeps_selected_relative_coin_file_context(
+    tmp_path, monkeypatch, capsys, entrypoint, source_kind, query,
+):
+    if source_kind == "ordinary":
+        source = policy()
+        source["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
+        actual = selected = tmp_path / "selected" / "source.json"
+        coin_file = write_json(selected.parent / "coin.json", coin_patch(141.5))
+        protected = {coin_file: coin_file.read_bytes()}
+        unrelated = tmp_path / "unrelated"
+        unrelated.mkdir()
+        monkeypatch.chdir(unrelated)
+    else:
+        source, actual, selected, protected = symlink_source(
+            tmp_path, monkeypatch, decoy=source_kind == "symlink-decoy",
+        )
+    source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    source["bot"]["long"]["unstuck"]["ema_span_0"] = 42.5
+    write_json(actual, source)
+    before = deepcopy(source)
+    source_bytes = actual.read_bytes()
+    link_identity = (selected.lstat().st_ino, os.readlink(selected)) if selected.is_symlink() else None
+    path = ("bot.long.unstuck.ema_span_0" if query == "transformed" else
+            "bot.long.strategy.trailing_martingale.entry.ema_span_0")
+    if entrypoint == "programmatic":
+        report = explain_config(source, path, coin="BTC", optimize=True,
+                                base_config_path=str(selected))
+    else:
+        assert cli_main(["tool", "config-explain", str(selected), path,
+                         "--coin", "BTC", "--optimize", "--json"]) == 0
+        report = json.loads(capsys.readouterr().out)
+    assert report["value"] == 141.5
+    if query == "transformed":
+        transforms = [event for event in report["sources"] if event["kind"] == "optimizer_transform"]
+        assert transforms[-1]["name"] == "couple_unstuck_ema_spans"
+        assert transforms[-1]["dependencies"][0]["path_parts"] == [
+            "coin_overrides", "BTC", "bot", "long", "strategy",
+            "trailing_martingale", "entry", "ema_span_0",
+        ]
+    else:
+        files = [event["file"] for event in report["sources"] if event["kind"] == "override_file"]
+        assert files == [str((selected.parent / "coin.json").resolve())]
+    assert source == before
+    assert actual.read_bytes() == source_bytes
+    assert {path: path.read_bytes() for path in protected} == protected
+    if link_identity is not None:
+        assert selected.is_symlink()
+        assert (selected.lstat().st_ino, os.readlink(selected)) == link_identity
+
+
 def set_source(source, side, field, value, context):
     selector = f"bot.{side}.universe.{field}"
     if context == "root":
