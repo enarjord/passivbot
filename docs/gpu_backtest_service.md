@@ -76,7 +76,11 @@ HSL scope signal on each completed reporting bar before reducing its worst 1%.
 Shared replay returns one compact portfolio-tail scalar; combining already reduced
 long/short tails loses their joint clock. Requested native EMA tails retain bounded
 device observations and reduce the actual largest `max(floor(count / 100), 1)`
-samples after replay succeeds. Scratch admission includes capture and reduction;
+samples after replay succeeds. Scopes reduce separately, retaining all capture
+histories but reserving reduction workspace for one scope at a time. Metal waits
+for the previous scope to complete before allocating the next scope's workspace;
+CUDA reuses freed intermediates on the current stream. Only compact scope means
+are retained from each completed reduction. Scratch admission includes capture and reduction;
 unrequested or disabled HSL capture remains compiled away. Temporal replay retains
 observations across dispatches, while a rejected attempt starts again with empty
 capture. Portfolio HSL reports only at portfolio scope; its long/short channels are
