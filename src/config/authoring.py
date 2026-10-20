@@ -76,8 +76,13 @@ def _authored(source, base_config_path):
 def _rebase_override_files(config, source, destination):
     if not source or not destination:
         return config
-    base = Path(source).resolve().parent
-    output = Path(destination).resolve().parent
+    source_path = Path(source).absolute()
+    destination_path = Path(destination).absolute()
+    base = source_path.parent.resolve()
+    output = destination_path.parent.resolve()
+    # In-place writes through a selected symlink target the physical file. A
+    # relative reference cannot in general survive loading through both aliases.
+    shared_file_aliases = source_path.resolve() == destination_path.resolve() and base != output
 
     def visit(node):
         if isinstance(node, list):
@@ -92,7 +97,7 @@ def _rebase_override_files(config, source, destination):
                         resolved = next((path.resolve() for path in candidates if path.is_file()), None)
                         if resolved is None:
                             raise FileNotFoundError(f"override_config_path not found: {value}")
-                        node[key] = os.path.relpath(resolved, output)
+                        node[key] = str(resolved) if shared_file_aliases else os.path.relpath(resolved, output)
                 else:
                     visit(value)
 
@@ -161,8 +166,8 @@ def _resolve_coin_sources(config, *, require_complete):
             for child in value.values():
                 check_source(child)
         elif isinstance(value, list):
-            if len(value) == 1:
-                check_source(value[0])
+            for child in value:
+                check_source(child)
         elif isinstance(value, str):
             file_like = value.startswith(("./", "../", "/", "~")) or Path(value).suffix.lower() in {
                 ".json", ".hjson", ".txt",
@@ -332,13 +337,21 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         raise ValueError("--coin expects a root setting path, not a coin_overrides path")
     if coin is not None:
         coin = next(iter(normalize_coin_override_keys({coin: {}}, verbose=False)))
+    direct_coin = parts[:1] == ("coin_overrides",) and len(parts) > 2
+    if direct_coin:
+        normalized_coin = next(iter(normalize_coin_override_keys({parts[1]: {}}, verbose=False)))
+        parts = ("coin_overrides", normalized_coin, *parts[2:])
+    selected_coin = parts[1] if direct_coin else coin
+    coin_parts = parts[2:] if direct_coin else parts
     bound_target = _bound_target(full, parts)
     query_target = bound_target or parts
+    selected_target = (parts if direct_coin else
+                       ("coin_overrides", coin, *query_target) if coin is not None else query_target)
     events = []
     root_value = _get(authored, parts)
     if root_value is not _MISSING:
         events.append({"kind": "authored", "path": ".".join(parts), "value": deepcopy(root_value)})
-    else:
+    elif not direct_coin:
         events.append({"kind": "default_or_derived", "path": ".".join(parts)})
         if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"long", "short"}
                 and parts[2:] == ("risk", "total_wallet_exposure_limit")
@@ -355,7 +368,6 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
                                   for source in dependencies],
                  "operation": operation, "value": deepcopy(value)}
         applied_overrides.append(event)
-        selected_target = ("coin_overrides", coin, *query_target) if coin is not None else query_target
         if _intersects(selected_target, target) or _intersects(query_target, target):
             events.append(event)
 
@@ -364,9 +376,10 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         normalized = normalize_scenario_overrides(raw)
         for selector, value in normalized.items():
             target = resolve_dotted_config_path(context, selector)
-            event = {"kind": kind, "path": ".".join(target), "value": deepcopy(value)}
+            event = {"kind": kind, "path": ".".join(target), "path_parts": list(target),
+                     "value": deepcopy(value)}
             applied_overrides.append(event)
-            if _intersects(parts, target):
+            if _intersects(query_target, target) or _intersects(selected_target, target):
                 events.append(event)
         context = _patch(context, normalized)
 
@@ -436,45 +449,48 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         # resolved exports, which preserve explicit null inheritance.
         effective["backtest"]["filter_by_min_effective_cost"] = value
     coin_patch = None
-    if coin is not None:
+    if selected_coin is not None:
         from .overrides import nested_update
         # Reuse authored-key normalization: exact markets and venue-qualified
         # identifiers must survive without a heuristic underlying substitution.
-        coin_patch = effective["coin_overrides"].get(coin, {})
-        inline = normalize_coin_override_keys(before_files["coin_overrides"], verbose=False).get(coin, {})
-        value = _get(coin_patch, parts)
+        coin_patch = effective["coin_overrides"].get(selected_coin, {})
+        inline = normalize_coin_override_keys(before_files["coin_overrides"], verbose=False).get(selected_coin, {})
+        value = _get(coin_patch, coin_parts)
         if value is not _MISSING:
-            inline_value = _get(inline, parts)
+            inline_value = _get(inline, coin_parts)
             generated = [event for event in applied_overrides if
-                         _intersects(("coin_overrides", coin, *parts), _event_path(event))]
-            event = (deepcopy(generated[-1]) if generated and generated[-1]["kind"] == "optimizer_transform" else
+                         selected_target[:len(_event_path(event))] == _event_path(event)
+                         and _get(event["value"], selected_target[len(_event_path(event)):]) is not _MISSING]
+            event = (deepcopy(generated[-1]) if generated and inline_value is not _MISSING else
                      {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
-                     "path": ".".join(("coin_overrides", coin, *parts)),
-                     "path_parts": ["coin_overrides", coin, *parts], "value": deepcopy(value)}
+                     "path": ".".join(selected_target),
+                     "path_parts": list(selected_target), "value": deepcopy(value)}
                      )
             if event["kind"] == "override_file":
                 from .overrides import _resolve_override_config_path
 
                 file_context = deepcopy(before_files)
                 file_context["live"]["base_config_path"] = base_config_path
-                event["file"] = _resolve_override_config_path(file_context, coin)
+                event["file"] = _resolve_override_config_path(file_context, selected_coin)
             if not events or events[-1] != event:
                 events.append(event)
-        effective = nested_update(deepcopy(effective), coin_patch)
+        if coin is not None:
+            effective = nested_update(deepcopy(effective), coin_patch)
     value = _get(effective, parts)
     if value is _MISSING:
         raise KeyError(f"unknown or inactive configuration path {path!r}")
-    for event in reversed(events):
+    # Bounds explain declarations; target transformations are separate evidence.
+    normalization_events = reversed(events) if bound_target is None else ()
+    for event in normalization_events:
         if event["kind"] in {"inherited", "coin_list_file"}:
             # These events explain a source resolution already; comparing its
             # authored null/path with the resolved value invents normalization.
             break
         event_path = _event_path(event)
-        if coin is not None and event_path[:2] == ("coin_overrides", coin):
-            event_path = event_path[2:]
-        if "value" not in event or parts[:len(event_path)] != event_path:
+        projection_path = selected_target if event_path[:1] == ("coin_overrides",) else parts
+        if "value" not in event or projection_path[:len(event_path)] != event_path:
             continue
-        projected = _get(event["value"], parts[len(event_path):])
+        projected = _get(event["value"], projection_path[len(event_path):])
         if projected is not _MISSING and projected != value:
             events.append({"kind": "normalization", "path": ".".join(parts), "value": deepcopy(value)})
         break

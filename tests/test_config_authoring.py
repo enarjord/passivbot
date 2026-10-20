@@ -678,3 +678,40 @@ def test_explain_complete_object_override_projects_value_before_reporting_normal
     report = explain_config(source, 'bot.long.forager.score_weights.volume', scenario='one')
     assert report['value'] == 0.5
     assert report['sources'][-1]['kind'] == 'scenario_override'
+
+
+@pytest.mark.parametrize("selector", ["coin_overrides", "coin_overrides.BTC"])
+def test_explain_atomic_coin_replacement_does_not_mislabel_removed_pin_as_normalization(selector):
+    source = policy()
+    root_path = "bot.long.unstuck.close_pct"
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"close_pct": 0.1}}}}}
+    replacement = {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}}
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
+        selector: {"BTC": replacement} if selector == "coin_overrides" else replacement,
+    }}]
+    original = deepcopy(source)
+    report = explain_config(source, root_path, coin="BTC", optimize=True, scenario="one")
+    assert report["value"] == source["bot"]["long"]["unstuck"]["close_pct"]
+    assert report["sources"][-1]["kind"] == "scenario_override"
+    assert report["sources"][-1]["path"] == selector
+    assert all(event["kind"] != "normalization" for event in report["sources"])
+    assert source == original
+
+
+def test_explain_coin_bounds_keeps_exact_target_transform_separate_from_declaration():
+    source = policy()
+    source["optimize"]["bounds"] = {}
+    source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    coin = "bybit::BTC/USDT:USDT"
+    source["coin_overrides"] = {coin: {"bot": {"long": {"strategy": {
+        "trailing_martingale": {"entry": {"ema_span_0": 321.5}},
+    }, "unstuck": {"ema_span_0": 42.5}}}}}
+    report = explain_config(source, "optimize.bounds.long.unstuck.ema_span_0", coin=coin, optimize=True)
+    matching = [event for event in report["sources"]
+                if event["kind"] == "optimizer_transform"
+                and event["path_parts"] == ["coin_overrides", coin, "bot", "long", "unstuck", "ema_span_0"]]
+    assert len(matching) == 1
+    assert matching[0]["value"] == 321.5
+    assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0"]] * 2
+    assert report["search"]["status"] == "optimizer_transform"
+    assert all(event["kind"] != "normalization" for event in report["sources"])
