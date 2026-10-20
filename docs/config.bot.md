@@ -171,9 +171,10 @@ Both spans support coin overrides and optimizer bounds under
 `optimize.bounds.<side>.unstuck`. For a composed portfolio with a shared unstucker, set global
 unstuck spans and leave these leaves out of the coin overrides.
 
-When loading an older config, missing spans are copied from each side's effective active strategy,
-including individual coin strategy overrides and file/inline precedence. This preserves the saved
-trading behavior; saving the normalized config makes the independent spans explicit. Explicit new
+During explicit released-v8 conversion, missing spans are copied from each side's effective active strategy,
+including individual coin strategy overrides and file/inline precedence. The converter preserves
+the starting band horizons and saves the independent spans explicitly. Normal loading rejects old
+schemas. Explicit new
 unstuck spans always win. An inactive legacy side with zero strategy spans receives positive
 strategy defaults with a warning to review them before enabling the side.
 

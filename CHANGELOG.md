@@ -9,6 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.
+  Inline scoped local file sources in resolved exports and omit runtime source-path metadata
+  from migrated configuration files.
 - Name HSL's configured trigger `drawdown_ratio_threshold`, unstuck's EMA offset
   `ema_distance_fraction`, and HSL's aggregate side scope `position_side`. Preserve
   existing units, values and native engine identifiers through explicit adapters;

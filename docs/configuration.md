@@ -448,7 +448,7 @@ command. Retired `--live...` policy paths are rejected.
 
 - **bot.global.warmup.max_minutes**: Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups. Use `0` to disable the cap; otherwise values above `0` clamp the per-symbol warmup calculated from EMA spans.
 
-- **bot.global.warmup.ratio**: Multiplier applied to the longest EMA or log-range span (in minutes) across long/short settings to decide how much 1m history to prefetch before trading. A value of `0.2`, for example, warmups ~20% of the deepest lookback, capped by `bot.global.warmup.max_minutes`.
+- **bot.global.warmup.ratio**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + ratio`; backtest warmup and trade activation use the span times `ratio`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.global.warmup.max_minutes` and other history requirements.
 
 ## Live Trading Settings
 
