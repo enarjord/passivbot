@@ -575,11 +575,13 @@ Released-v8 migration materializes its formerly inherited ranges before adopting
 semantics; previously optional adaptive bounds still freeze at configured values.
 
 Forager score weights form one normalized group. A varying weight must not renormalize an omitted,
-constant, runtime-pinned, or `fixed_params` positive weight. Search all participating positive
+constant, runtime-pinned, scenario-pinned, or `fixed_params` positive weight. Search all participating positive
 weights explicitly or freeze the whole `forager.score_weights` group. Omitted zero weights may
 remain zero, but a reachable all-zero vector also requires authority for the `ema_readiness`
 normalization fallback, or a positive lower bound. These checks also apply to fine-tune selectors
-and anchors. Migration rejects an incompatible legacy group rather than silently widening its
+and anchors, and validate active scenario pins before market or dataset preparation. A complete
+scenario weight-object pin freezes the whole group; partial object replacements must use leaf
+overrides or supply every required weight. Migration rejects an incompatible legacy group rather than silently widening its
 optional bounds, including in best-effort mode.
 
 **Bounds Formats:**

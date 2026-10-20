@@ -3393,6 +3393,9 @@ def _materialize_suite_run_contract(
     for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
         if key in suite_cfg:
             backtest[key] = deepcopy(suite_cfg[key])
+    from optimization.config_adapter import validate_forager_weight_search
+
+    validate_forager_weight_search(config)
 
 
 def _run_gpu_preparation_preflight(

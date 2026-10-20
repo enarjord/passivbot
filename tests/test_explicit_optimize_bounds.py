@@ -172,6 +172,77 @@ def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value):
         prepare_config(source, verbose=False)
 
 
+@pytest.mark.parametrize("patch", [
+    {"bot.long.forager.score_weights.volume": 0.5},
+    {"bot": {"long": {"forager": {"score_weights": {"volume": 0.5}}}}},
+    {"bot.long.forager.score_weights.unilateralness": 0.5},
+])
+def test_scenario_weight_pins_fail_before_evaluation(patch):
+    source = get_template_config()
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "pinned", "overrides": patch}])
+    with pytest.raises(ValueError, match=r"scenarios\[0\].*pinned.*bot.long.forager.score_weights.*partial normalized-weight"):
+        prepare_config(source, verbose=False)
+
+
+def test_scenario_activation_cannot_move_an_omitted_positive_coordinate():
+    source = get_template_config()
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "short-active", "overrides": {
+        "bot.short.risk.total_wallet_exposure_limit": 1.0,
+        "bot.short.forager.score_weights.unilateralness": 0.5,
+    }}])
+    with pytest.raises(ValueError, match=r"short-active.*bot.short.forager.score_weights.*unilateralness"):
+        prepare_config(source, verbose=False)
+
+
+def test_atomic_partial_weight_object_fails_before_evaluation():
+    source = get_template_config()
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "partial-object", "overrides": {
+        "bot.long.forager.score_weights": {"volume": 0.5},
+    }}])
+    with pytest.raises(ValueError, match=r"partial-object.*removes required bot.long.forager.score_weights.*complete object"):
+        prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("whole_forager", [False, True])
+def test_complete_scenario_weight_group_is_fixed_after_normalization(whole_forager):
+    from optimization.warmup import _apply_config_overrides
+    from config.bot import normalize_bot_forager_config
+
+    source = get_template_config()
+    fixed = {"volume": 0.2, "volatility": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    path, value = "bot.long.forager.score_weights", fixed
+    if whole_forager:
+        path, value = "bot.long.forager", deepcopy(source["bot"]["long"]["forager"])
+        value["score_weights"] = fixed
+    patch = {path: value}
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "fixed-group", "overrides": patch}])
+    config = prepare_config(source, verbose=False)
+    bounds = gene_bounds(config)
+    for fraction in (0.1, 0.9):
+        candidate = build_optimizer_vector_config([b.low + fraction * (b.high - b.low) for b in bounds.values()], config)
+        _apply_config_overrides(candidate, patch)
+        normalize_bot_forager_config(candidate, verbose=False)
+        assert candidate["bot"]["long"]["forager"]["score_weights"] == pytest.approx(fixed)
+
+
+@pytest.mark.asyncio
+async def test_external_suite_pins_fail_before_market_or_dataset_preparation(monkeypatch):
+    import optimize_suite
+    from optimize import _materialize_suite_run_contract
+
+    config = prepare_config(get_template_config(), verbose=False)
+    suite = {"enabled": True, "scenarios": [{"label": "external", "overrides": {
+        "bot.long.forager.score_weights.volume": 0.5,
+    }}]}
+    async def denied(*_args, **_kwargs):
+        pytest.fail("weight authority must fail before loading markets")
+    monkeypatch.setattr(optimize_suite, "load_markets", denied)
+    with pytest.raises(ValueError, match=r"external.*partial normalized-weight search"):
+        await optimize_suite.prepare_suite_contexts(config, suite, shared_array_manager=object())
+    with pytest.raises(ValueError, match=r"external.*partial normalized-weight search"):
+        _materialize_suite_run_contract(config, suite)
+
+
 @pytest.mark.parametrize("anchored", [False, True])
 def test_partial_fine_tune_weight_selection_fails_before_candidate_evaluation(anchored):
     from optimize import apply_fine_tune_bounds, install_anchored_fine_tune_plan

@@ -89,7 +89,7 @@ bound ranges remain searched. Existing fixed/runtime/scenario and anchor precede
 anchors and seeds are clamped to the effective domains, including omitted fixed coordinates.
 
 Normalized Forager weights must be searched together when they have positive participating
-coordinates. A partial weight fine-tune or a fixed positive sibling fails with an actionable
+coordinates. A partial weight fine-tune, scenario pin, or fixed positive sibling fails with an actionable
 group diagnostic; either select the entire group or freeze it. A missing zero coordinate is
 permitted only when it remains zero through normalization, including the all-zero fallback.
 

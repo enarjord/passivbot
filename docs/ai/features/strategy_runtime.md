@@ -356,12 +356,15 @@ A missing maximum-duration bound is hydrated only for a finite ceiling; null rem
 unbounded. Released-v8 conversion materializes its inherited mandatory domains from
 frozen released defaults while retaining previously optional adaptive freezing.
 
-Forager normalization may not move an omitted, constant, selector-fixed, runtime-pinned,
+Forager normalization may not move an omitted, constant, selector-fixed, runtime-pinned, scenario-pinned,
 or anchor-fixed positive weight while siblings vary. Such partial searches fail before
 evaluation; require explicit authority for every participating positive coordinate or
 freeze the entire group. An omitted zero may remain zero only when the reachable all-zero
 fallback does not activate that coordinate. Full-group search retains shared normalization.
 Fixing all weights to zero preserves that disabled group without activating a fallback.
+Validate root and active scenario pin authority in application order before market/data preparation,
+including scenarios supplied externally. A complete atomic weight-object pin freezes the group;
+an incomplete replacement fails rather than inheriting missing coordinates.
 
 Forager may carry a complete cached observation only within the existing candidate
 age budget, without feeding invented flat returns. Cooldown requires a current

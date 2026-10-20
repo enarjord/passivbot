@@ -239,60 +239,112 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     validate_forager_weight_search(config, authored_bounds)
 
 
-def validate_forager_weight_search(config: dict, optimize_bounds=None, *, tunable_keys=None) -> None:
-    """A normalized group cannot vary while a positive coordinate stays fixed.
+def validate_forager_weight_search(
+    config: dict, optimize_bounds=None, *, tunable_keys=None, suite_config=None
+) -> None:
+    """Check normalized weight authority before candidate or dataset evaluation.
 
-    Missing/constant bounds, fixed selectors, runtime pins and anchor-owned
-    coordinates are all fixed authority. Zero fixed weights remain safe unless
-    an all-zero draw would activate the normalization fallback at that coordinate.
+    Runtime pins precede scenario pins. Validate the base candidate stage too:
+    its normalization runs before the final scenario patches are applied.
     """
     from config.param_paths import resolve_bound_selectors
     from config.scenario_overrides import normalize_scenario_overrides
 
-    raw = config.get("optimize", {}).get("bounds", {}) if optimize_bounds is None else optimize_bounds
+    raw = (config.get("optimize", {}).get("bounds", {})
+           if optimize_bounds is None else optimize_bounds)
     flat = _flatten_bounds_for_config(config, raw)
     fixed = set(resolve_bound_selectors(
         config, config.get("optimize", {}).get("fixed_params", []) or [], flat
     ))
-    pins = normalize_scenario_overrides(config.get("optimize", {}).get("fixed_runtime_overrides", {}))
+    runtime_pins = list(normalize_scenario_overrides(
+        config.get("optimize", {}).get("fixed_runtime_overrides", {})
+    ).items())
+    contexts = [("", runtime_pins)]
+    suite = config.get("backtest", {}) if suite_config is None else suite_config
+    enabled = (suite.get("suite_enabled", False)
+               if suite_config is None else suite.get("enabled", False))
+    if enabled:
+        for index, scenario in enumerate(suite.get("scenarios") or []):
+            if not isinstance(scenario, dict):
+                continue  # The scenario-schema gate owns malformed rows.
+            label = scenario.get("label", index + 1)
+            context = f"backtest.scenarios[{index}] ({label}): "
+            scenario_pins = normalize_scenario_overrides(scenario.get("overrides"))
+            contexts.append((context, [*runtime_pins, *scenario_pins.items()]))
+    for context, pins in contexts:
+        _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, context)
+
+
+def _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, context):
+    def pinned_value(path, configured):
+        pinned, removed = False, False
+        for selector, value in pins:
+            parts = tuple(selector.split("."))
+            if path[:len(parts)] != parts:
+                continue
+            pinned, removed = True, False
+            for part in path[len(parts):]:
+                if not isinstance(value, dict) or part not in value:
+                    removed = True
+                    break
+                value = value[part]
+            if not removed:
+                configured = value
+        if removed:
+            raise ValueError(
+                f"{context}override removes required {'.'.join(path)}; "
+                "provide the complete object or use leaf overrides"
+            )
+        return configured, pinned
+
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
     for side in ("long", "short"):
         bot = config.get("bot", {}).get(side, {})
         weights = bot.get("forager", {}).get("score_weights")
         if not isinstance(weights, dict):
             continue
+        missing = set(names) - set(weights)
+        if missing:
+            raise ValueError(
+                f"{context}bot.{side}.forager.score_weights missing required weights: "
+                f"{', '.join(sorted(missing))}"
+            )
         active = True
         for field, key in (("max_positions", "n_positions"),
                            ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
             bound_key = f"{side}_{key}"
-            value = bot.get("risk", {}).get(field, 0.0)
-            if bound_key in flat and bound_key not in fixed and (tunable_keys is None or bound_key in tunable_keys):
+            value, pinned = pinned_value(
+                ("bot", side, "risk", field), bot.get("risk", {}).get(field, 0.0)
+            )
+            if (not pinned and bound_key in flat and bound_key not in fixed
+                    and (tunable_keys is None or bound_key in tunable_keys)):
                 value = Bound.from_config(bound_key, flat[bound_key]).high
             if float(value) <= 0:
                 active = False
         if not active:
             continue
         varied, fixed_positive, minima, fixed_values = [], [], [], {}
-        for name, configured in weights.items():
+        for name in names:
             key = f"{side}_forager_score_weights_{name}"
-            path = ("bot", side, "forager", "score_weights", name)
-            pinned = False
-            for selector, value in pins.items():
-                parts = tuple(selector.split("."))
-                if path[:len(parts)] != parts:
-                    continue
-                for part in path[len(parts):]:
-                    if not isinstance(value, dict) or part not in value:
-                        break
-                    value = value[part]
-                else:
-                    configured, pinned = value, True
-            can_vary = key in flat and key not in fixed and not pinned and (tunable_keys is None or key in tunable_keys)
-            bound = Bound.from_config(key, flat[key]) if key in flat else Bound(float(configured), float(configured))
+            configured, pinned = pinned_value(
+                ("bot", side, "forager", "score_weights", name), weights[name]
+            )
+            if pinned and (isinstance(configured, bool) or not isinstance(configured, (int, float))
+                           or not math.isfinite(configured) or configured < 0):
+                raise ValueError(
+                    f"{context}bot.{side}.forager.score_weights.{name} pin "
+                    "must be finite and nonnegative"
+                )
+            can_vary = (key in flat and key not in fixed and not pinned
+                        and (tunable_keys is None or key in tunable_keys))
+            bound = (Bound.from_config(key, flat[key]) if key in flat
+                     else Bound(float(configured), float(configured)))
             if can_vary and bound.low != bound.high:
                 varied.append(name)
                 minima.append(bound.low)
             else:
-                value = float(configured) if pinned or key in fixed or (tunable_keys is not None and key not in tunable_keys) else bound.low
+                value = (float(configured) if pinned or key in fixed
+                         or (tunable_keys is not None and key not in tunable_keys) else bound.low)
                 fixed_values[name] = value
                 minima.append(value)
                 if value > 0:
@@ -301,9 +353,9 @@ def validate_forager_weight_search(config: dict, optimize_bounds=None, *, tunabl
             continue
         fallback_fixed = (sum(minima) == 0 and "ema_readiness" in fixed_values)
         if fixed_positive or fallback_fixed:
-            affected = fixed_positive or ["ema_readiness (all-zero normalization fallback)"]
+            affected = sorted(fixed_positive) or ["ema_readiness (all-zero normalization fallback)"]
             raise ValueError(
-                f"bot.{side}.forager.score_weights: partial normalized-weight search would change "
+                f"{context}bot.{side}.forager.score_weights: partial normalized-weight search would change "
                 f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
                 "weight or freeze the whole score_weights group; omitted zero weights must "
                 "also remain zero at the all-zero fallback."
