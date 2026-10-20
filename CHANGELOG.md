@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add compact authored configs, resolved local policy snapshots and offline `config-explain`
+  reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
+  search/override authority and rebase relative coin override files when compact exports move.
+
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently
   of template spelling, while preserving values, sparse overrides, and integer counts.

@@ -1,0 +1,354 @@
+"""Authoring views preserve effective policy and keep evidence out of config."""
+
+from copy import deepcopy
+import json
+from pathlib import Path
+
+import pytest
+
+from config.authoring import compact_config, resolved_config, explain_config
+from config.load import prepare_config
+from config.overrides import parse_overrides
+from config.schema import get_template_config
+from config.hsl import generated_template
+from config_utils import strip_config_metadata
+from passivbot_cli.main import main as cli_main
+from tools.clean_config import cleanup_config, main as clean_main
+
+
+def policy():
+    config = get_template_config()
+    config["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    return config
+
+
+def effective(source, base=""):
+    prepared = prepare_config(source, base_config_path=base, verbose=False)
+    result = strip_config_metadata(parse_overrides(prepared, verbose=False))
+    result["live"].pop("base_config_path", None)
+    return result
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
+    source = policy()
+    before = deepcopy(source)
+    compact = compact_config(source)
+    assert source == before
+    assert len(json.dumps(compact)) < len(json.dumps(source)) * 0.7
+    assert "logging" not in compact
+    assert "warmup_ratio" not in compact["live"]
+    assert effective(compact) == effective(source)
+    assert compact_config(compact) == compact
+
+
+def test_compact_preserves_nondefault_strategy_selector():
+    source = policy()
+    source["live"]["strategy_kind"] = "ema_anchor"
+    compact = compact_config(source)
+    assert compact["live"]["strategy_kind"] == "ema_anchor"
+    assert effective(compact) == effective(source)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_compact_retains_side_presence_and_explicit_disable(side):
+    source = {"config_version": "v9.0.0", "bot": {side: {}}, "live": {}}
+    compact = compact_config(source)
+    assert side in compact["bot"]
+    assert effective(compact) == effective(source)
+    source["bot"][side]["risk"] = {"total_wallet_exposure_limit": 0.0}
+    assert effective(compact_config(source)) == effective(source)
+
+
+@pytest.mark.parametrize("weights", [
+    {"volume": 2.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0},
+    {"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0},
+])
+def test_compact_preserves_effective_normalized_weights(weights):
+    source = policy()
+    source["bot"]["long"]["forager"]["score_weights"] = weights
+    assert effective(compact_config(source)) == effective(source)
+
+
+def test_compact_preserves_authored_search_authority_and_sparse_pins():
+    source = policy()
+    source["optimize"]["bounds"] = {"long": {"unstuck": {"ema_span_0": [17.5, 17.5]}}}
+    source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0"]
+    source["optimize"]["fixed_runtime_overrides"] = {"bot.long.unstuck.close_pct": 0.11}
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {"bot.long.unstuck.close_pct": 0.12}}]
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 790.0}}}}}
+    compact = compact_config(source)
+    for name in ("bounds", "fixed_params", "fixed_runtime_overrides"):
+        assert compact["optimize"][name] == source["optimize"][name]
+    assert compact["coin_overrides"] == source["coin_overrides"]
+    assert compact["backtest"]["scenarios"] == source["backtest"]["scenarios"]
+    assert effective(compact) == effective(source)
+
+
+def test_compact_preserves_null_inheritance_and_eligibility_sources():
+    source = policy()
+    source["backtest"]["filter_by_min_effective_cost"] = None
+    source["live"]["approved_coins"] = []
+    source["live"]["ignored_coins"] = {"long": ["ETH"], "short": []}
+    compact = compact_config(source)
+    assert compact["backtest"]["filter_by_min_effective_cost"] is None
+    assert compact["live"]["approved_coins"] == []
+    assert compact["live"]["ignored_coins"] == source["live"]["ignored_coins"]
+    for flag in (False, True):
+        left, right = deepcopy(source), deepcopy(compact)
+        left["live"]["filter_by_min_effective_cost"] = flag
+        right["live"]["filter_by_min_effective_cost"] = flag
+        assert effective(left) == effective(right)
+
+
+def test_compact_retains_optional_portfolio_authorization():
+    source = generated_template(policy(), "portfolio")
+    compact = compact_config(source)
+    assert compact["bot"]["risk"]["hsl"] == source["bot"]["risk"]["hsl"]
+    assert effective(compact) == effective(source)
+
+
+def test_compact_rebases_relative_override_file_when_output_moves(tmp_path):
+    override = write_json(tmp_path / "inputs" / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}})
+    source = policy()
+    source["coin_overrides"] = {"BTC": {"override_config_path": override.name}}
+    input_path = write_json(override.parent / "input.json", source)
+    destination = tmp_path / "outputs" / "compact.json"
+    assert clean_main([str(input_path), str(destination), "--mode", "compact"]) == 0
+    compact = json.loads(destination.read_text())
+    assert compact["coin_overrides"]["BTC"]["override_config_path"] == "../inputs/coin.json"
+    assert effective(compact, str(destination))["coin_overrides"] == effective(source, str(input_path))["coin_overrides"]
+
+
+def test_resolved_export_inlines_files_and_preserves_sparse_override_precedence(tmp_path):
+    coins = write_json(tmp_path / "approved.json", {"long": ["BTC", "ETH"], "short": []})
+    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5, "close_pct": 0.12}}}})
+    source = policy()
+    source["live"]["approved_coins"] = str(coins)
+    source["live"]["ignored_coins"] = {"long": ["ETH"], "short": []}
+    source["backtest"]["filter_by_min_effective_cost"] = None
+    source["coin_overrides"] = {"BTC": {"override_config_path": override.name,
+                                       "bot": {"long": {"unstuck": {"close_pct": 0.13}}}}}
+    input_path = write_json(tmp_path / "input.json", source)
+    before = deepcopy(source)
+    resolved = resolved_config(source, base_config_path=str(input_path))
+    assert source == before
+    assert resolved["live"]["approved_coins"] == {"long": ["BTC", "ETH"], "short": []}
+    assert resolved["backtest"]["filter_by_min_effective_cost"] is None
+    assert resolved["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"ema_span_0": 17.5, "close_pct": 0.13}}}}
+    assert effective(resolved) == effective(source, str(input_path))
+    coins.unlink()
+    override.unlink()
+    assert resolved_config(resolved) == resolved
+
+
+def test_resolved_export_materializes_scenario_file_sources(tmp_path):
+    coins = write_json(tmp_path / "scenario-coins.json", ["ETH"])
+    override = write_json(tmp_path / "scenario-coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 19.5}}}})
+    source = policy()
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
+        "live.approved_coins.long": str(coins),
+        "coin_overrides": {"ETH": {"override_config_path": override.name}},
+    }}]
+    resolved = resolved_config(source, base_config_path=str(tmp_path / "input.json"))
+    patch = resolved["backtest"]["scenarios"][0]["overrides"]
+    assert patch["live.approved_coins.long"] == ["ETH"]
+    assert patch["coin_overrides"] == {"ETH": {"bot": {"long": {"unstuck": {"ema_span_0": 19.5}}}}}
+    override.unlink()
+    coins.unlink()
+    assert resolved_config(resolved) == resolved
+
+
+@pytest.mark.parametrize("exporter", [compact_config, resolved_config])
+def test_exports_keep_strict_authored_and_result_boundaries(exporter):
+    source = policy()
+    source["unknown"] = {"do_not_prune": True}
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        exporter(source)
+    source = policy()
+    wrapper = {"config": source, "analysis": {"adg": 1.0}}
+    assert "analysis" not in exporter(wrapper)
+    assert "sources" not in exporter(wrapper)
+
+
+def test_resolved_refuses_unavailable_market_universe_and_missing_coin_file(tmp_path):
+    source = policy()
+    source["live"]["approved_coins"] = "all"
+    with pytest.raises(ValueError, match="cannot expand"):
+        resolved_config(source)
+    source["live"]["approved_coins"] = str(tmp_path / "missing.json")
+    with pytest.raises(FileNotFoundError, match="coin-list file"):
+        resolved_config(source)
+
+
+def test_explain_defaults_declared_metadata_and_search_source():
+    source = {"config_version": "v9.0.0", "bot": {"long": {}}, "live": {}}
+    report = explain_config(source, "bot.long.strategy.trailing_martingale.entry.ema_span_0")
+    assert report["value"] == 790.0
+    assert report["types"] == ["float"]
+    assert report["scope"] == "long"
+    assert report["unit"] is None
+    assert report["default"] == {"declared": True, "value": 790.0}
+    assert report["sources"][0]["kind"] == "default_or_derived"
+    assert report["search"]["status"] == "searched"
+    assert report["search"]["bounds_source"] == "loader_default_or_derived"
+
+
+def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
+    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}})
+    source = policy()
+    source["optimize"]["fixed_runtime_overrides"] = {"bot.long.unstuck.close_pct": 0.11}
+    source["backtest"]["scenarios"] = [{"label": "one", "overrides": {"bot.long.unstuck.close_pct": 0.12}}]
+    source["coin_overrides"] = {"BTC": {"override_config_path": override.name,
+                                       "bot": {"long": {"unstuck": {"close_pct": 0.13}}}}}
+    before = deepcopy(source)
+    report = explain_config(source, "bot.long.unstuck.close_pct", coin="BTC", scenario="one", optimize=True,
+                            base_config_path=str(tmp_path / "input.json"))
+    assert source == before
+    assert report["value"] == 0.13
+    assert [item["kind"] for item in report["sources"]] == [
+        "authored", "fixed_runtime_override", "scenario_override", "coin_override",
+    ]
+    assert report["search"]["status"] == "coin_override"
+    report = explain_config(source, "bot.long.unstuck.ema_span_0", coin="BTC",
+                            base_config_path=str(tmp_path / "input.json"))
+    assert report["value"] == 17.5
+    assert report["sources"][-1]["kind"] == "override_file"
+    assert Path(report["sources"][-1]["file"]) == override
+
+
+def test_explain_reports_null_inheritance_fixed_selectors_and_fixed_bounds():
+    source = policy()
+    source["backtest"]["filter_by_min_effective_cost"] = None
+    report = explain_config(source, "backtest.filter_by_min_effective_cost")
+    assert report["value"] is True
+    assert report["sources"][-1] == {"kind": "inherited", "path": "live.filter_by_min_effective_cost", "value": True}
+    source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0", "short.unstuck.close_pct"]
+    search = explain_config(source, "bot.long.unstuck.ema_span_0")["search"]
+    assert search["status"] == "fixed_selector"
+    assert search["fixed_selectors"] == ["long.unstuck.ema_span_0"]
+    source["optimize"]["fixed_params"] = []
+    source["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] = [17.5, 17.5]
+    assert explain_config(source, "bot.long.unstuck.ema_span_0")["search"]["status"] == "fixed_bound"
+
+
+def test_explain_scenario_dates_and_dataset_limit_are_explicit():
+    source = policy()
+    source["backtest"]["scenarios"] = [{"label": "one", "start_date": "2024-01-01", "coins": ["BTC"]}]
+    report = explain_config(source, "backtest.start_date", scenario="one")
+    assert report["value"] == "2024-01-01"
+    assert report["sources"][-1]["kind"] == "scenario_selection"
+    assert report["dataset_selection"] == {"coins": ["BTC"]}
+    with pytest.raises(ValueError, match="prepared dataset"):
+        explain_config(source, "live.approved_coins", scenario="one")
+
+
+def test_explain_keeps_unexpanded_all_visible_and_does_not_invent_units():
+    source = policy()
+    source["live"]["approved_coins"] = "all"
+    report = explain_config(source, "live.approved_coins")
+    assert report["unresolved"] == ["live.approved_coins.long", "live.approved_coins.short"]
+    assert report["unit"] is None
+
+
+@pytest.mark.parametrize("path,target,element_type", [
+    ("optimize.bounds.long.risk.max_positions", "bot.long.risk.max_positions", "integer"),
+    ("optimize.bounds.long.forager.score_weights_volume", "bot.long.forager.score_weights.volume", "float"),
+])
+def test_explain_bounds_reuses_existing_parameter_path_adapter(path, target, element_type):
+    report = explain_config(policy(), path)
+    assert report["types"] == ["array"]
+    assert report["bound_target"] == target
+    assert report["bound_element_types"] == [element_type]
+    assert report["search"]["status"] in {"searched", "fixed_bound"}
+
+
+def test_explain_bounds_container_does_not_claim_one_parameter_type():
+    report = explain_config(policy(), "optimize.bounds.long")
+    assert report["bound_target"] is None
+    assert report["types"] is None
+
+
+def test_explain_dynamic_coin_patch_reuses_root_type_without_inventing_a_pin_default():
+    source = policy()
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}}}
+    report = explain_config(source, "coin_overrides.BTC.bot.long.unstuck.ema_span_0")
+    assert report["types"] == ["float"]
+    assert report["default"] == {"declared": False}
+    assert report["search"]["status"] == "coin_override"
+
+
+def test_explain_omitted_side_disable_and_normalized_weights_are_visible():
+    source = {"config_version": "v9.0.0", "bot": {}, "live": {}}
+    report = explain_config(source, "bot.long.risk.total_wallet_exposure_limit")
+    assert report["value"] == 0.0
+    assert report["sources"][0]["rule"] == "omitted_side_disabled"
+    source = policy()
+    source["bot"]["long"]["forager"]["score_weights"] = {
+        "ema_readiness": 1.0, "volume": 2.0, "volatility": 0.0, "unilateralness": 0.0,
+    }
+    report = explain_config(source, "bot.long.forager.score_weights.volume")
+    assert report["value"] == pytest.approx(2 / 3)
+    assert report["sources"][-1]["kind"] == "normalization"
+
+
+@pytest.mark.parametrize("path", ["live.unknown", "bot.long.strategy.ema_anchor.offset"])
+def test_explain_rejects_unknown_or_inactive_fields(path):
+    with pytest.raises(KeyError, match="unknown or inactive"):
+        explain_config(policy(), path)
+
+
+def test_explain_local_coin_list_source_is_report_evidence_only(tmp_path):
+    coins = write_json(tmp_path / "coins.json", ["BTC", "ETH"])
+    source = policy()
+    source["live"]["approved_coins"] = str(coins)
+    report = explain_config(source, "live.approved_coins")
+    assert report["value"] == {"long": ["BTC", "ETH"], "short": ["BTC", "ETH"]}
+    assert report["sources"][-1] == {"kind": "coin_list_file", "path": "live.approved_coins", "file": str(coins)}
+    assert "sources" not in source
+
+
+def test_authoring_tools_never_connect_to_network(monkeypatch):
+    import socket
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("offline authoring attempted a network connection")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    compact_config(policy())
+    resolved_config(policy())
+    explain_config(policy(), "bot.long.unstuck.close_pct", optimize=True)
+
+
+def test_explain_cli_prints_report_and_never_rewrites_input(tmp_path, capsys):
+    path = write_json(tmp_path / "input.json", policy())
+    before = path.read_bytes()
+    assert cli_main(["tool", "config-explain", str(path), "live.warmup_ratio", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["value"] == 0.3
+    assert report["context"]["scope"] == "offline_policy"
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["compact", "resolved"])
+def test_new_clean_modes_reload_and_are_idempotent(tmp_path, mode):
+    source = write_json(tmp_path / "input.json", policy())
+    destination = tmp_path / f"{mode}.json"
+    assert clean_main([str(source), str(destination), "--mode", mode]) == 0
+    exported = json.loads(destination.read_text())
+    assert effective(exported) == effective(policy())
+    assert clean_main([str(destination), "--mode", mode, "--check"]) == 0
+
+
+@pytest.mark.parametrize("path", sorted((Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.json")), ids=lambda path: path.name)
+@pytest.mark.parametrize("exporter", [compact_config, resolved_config])
+def test_public_examples_keep_effective_policy_in_new_views(path, exporter):
+    source = json.loads(path.read_text())
+    result = exporter(source, base_config_path=str(path))
+    assert effective(result, str(path)) == effective(source, str(path))
