@@ -572,6 +572,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         if effective["optimize"].get("backend") == "gpu":
             validate_hsl_gpu_inputs(effective)
     exported = strip_config_metadata(prepared)
+    # Keep resolution context internal after referenced coin files are inlined.
+    exported.get("live", {}).pop("base_config_path", None)
     _restore_authored_export_inputs(exported, transformed.config)
     return MigrationResult(exported, transformed.changes, transformed.warnings)
 
