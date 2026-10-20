@@ -163,7 +163,7 @@ def test_independent_slow_and_fast_spans_preserve_fractional_minutes(span):
 @pytest.mark.parametrize("cap", [0.0, -1.0, 0.99, 129600.01, float("inf"), float("nan"), True])
 def test_startup_coverage_cap_is_bounded_independently_of_memory_age(cap):
     cfg = source()
-    cfg["live"]["risk_bootstrap_max_lookback_minutes"] = cap
+    cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = cap
     with pytest.raises(ValueError, match="risk_bootstrap_max_lookback_minutes"):
         prepared(cfg)
 
@@ -385,7 +385,7 @@ async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, m
     import passivbot
 
     cfg = source(mode)
-    cfg["live"]["user"] = "offline_test"
+    cfg["live"]["account"]["user"] = "offline_test"
     monkeypatch.setattr(passivbot.sys, "argv", ["passivbot"])
     monkeypatch.setattr(passivbot, "configure_logging", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -438,13 +438,15 @@ def test_aggregate_balance_override_constructor_rejects_before_credentials(
     import passivbot
 
     config = prepared(source(mode))
-    config["live"]["balance_override"] = 1000.0
+    config["live"]["account"]["balance_override"] = 1000.0
     monkeypatch.setattr(
         passivbot,
         "load_user_info",
         lambda *args: pytest.fail("unsupported override reached credentials"),
     )
-    with pytest.raises(ValueError, match="does not support live.balance_override"):
+    with pytest.raises(
+        ValueError, match="does not support live.account.balance_override"
+    ):
         passivbot.Passivbot(config)
 
 

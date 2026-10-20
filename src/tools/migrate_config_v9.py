@@ -158,9 +158,23 @@ def _materialized_coin_patch(overrides, effective):
             continue
         if "override_config_path" in parts[2:]:
             parts = parts[:2]
-        value = effective
-        for part in parts:
-            value = value[part]
+        from config.migrations.operational_live import operational_live_selector
+
+        # A referenced coin file has already completed sparse conversion,
+        # while a file-free released coin patch still uses its source paths.
+        candidates = (parts, operational_live_selector(".".join(parts)).split("."))
+        for candidate in candidates:
+            value = effective
+            for part in candidate:
+                if not isinstance(value, dict) or part not in value:
+                    break
+                value = value[part]
+            else:
+                break
+        else:
+            raise ValueError(
+                f"{key} is missing after released coin-file materialization"
+            )
         result[".".join(parts)] = deepcopy(value)
     return result
 
@@ -273,6 +287,19 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
         )
         inline = deepcopy(inline)
         inline.pop("override_config_path")
+        from config.migrations.operational_live import move_operational_live
+
+        def record_operational(path, old, new, reason):
+            changes.append(
+                dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.{path}",
+                    old=deepcopy(old),
+                    new=deepcopy(new),
+                    reason=reason,
+                )
+            )
+
+        move_operational_live(inline, record=record_operational)
         # Resolve structural aliases independently on each authored patch before
         # merging. Otherwise a canonicalized file value can beat the higher-
         # precedence inline legacy value during later hydration. Keep raw HSL

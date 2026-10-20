@@ -28,7 +28,7 @@ must never infer a suspension from exception text or a portable-looking numeric 
 connector may opt in only with an exact structured exchange code and a fixture-backed regression
 test.
 
-On a proven suspension, `live.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
+On a proven suspension, `live.recovery.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
 RAM-only cooldown (default `6.0` hours; `0` disables it; maximum `876600` hours). Values outside
 that bounded conversion domain are rejected during configuration and cannot mask the original
 exchange failure. A flat affected symbol is nontradable for

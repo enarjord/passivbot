@@ -34,7 +34,7 @@ def test_setup_bot_unknown_exchange_uses_ccxt_bot():
     """setup_bot() returns CCXTBot for unknown exchanges."""
     from passivbot import setup_bot
 
-    config = {"live": {"user": "test_user"}}
+    config = {"live": {"account": {"user": "test_user"}}}
 
     # Mock load_user_info to return an unknown exchange
     mock_user_info = {
@@ -60,7 +60,7 @@ def test_setup_bot_known_exchange_uses_specific_bot():
     """setup_bot() still uses specific bots for known exchanges."""
     from passivbot import setup_bot
 
-    config = {"live": {"user": "test_user"}}
+    config = {"live": {"account": {"user": "test_user"}}}
 
     mock_user_info = {
         "exchange": "binance",
@@ -85,7 +85,7 @@ def test_setup_bot_binance_portfolio_margin_account_type(account_type):
     """setup_bot() routes to BinancePortfolioBot when account_type is portfolio_margin."""
     from passivbot import setup_bot
 
-    config = {"live": {"user": "test_user"}}
+    config = {"live": {"account": {"user": "test_user"}}}
 
     mock_user_info = {
         "exchange": "binance",
@@ -112,7 +112,7 @@ def test_setup_bot_binance_portfolio_margin_account_type(account_type):
 def test_setup_bot_rejects_retired_connectors_before_generic_fallback(exchange):
     from passivbot import setup_bot
 
-    config = {"live": {"user": "test_user"}}
+    config = {"live": {"account": {"user": "test_user"}}}
     with patch("passivbot.load_user_info", return_value={"exchange": exchange}):
         with patch("exchanges.ccxt_bot.CCXTBot") as generic:
             with pytest.raises(ValueError, match="retired in v9"):

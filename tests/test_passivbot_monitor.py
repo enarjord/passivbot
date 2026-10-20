@@ -453,10 +453,12 @@ def test_startup_timing_event_carries_configured_diagnostic_budgets(monkeypatch)
             self.bot_id = "bot_1"
             self.config = {
                 "live": {
-                    "startup_phase_budgets": {
-                        "account": {
-                            "elapsed_ms": 10_000,
-                            "since_previous_ms": 5_000,
+                    "startup": {
+                        "startup_phase_budgets": {
+                            "account": {
+                                "elapsed_ms": 10_000,
+                                "since_previous_ms": 5_000,
+                            }
                         }
                     }
                 }

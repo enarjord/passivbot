@@ -9436,10 +9436,12 @@ def test_live_smoke_report_allows_coin_hsl_with_balance_override(
     config_path.write_text(
         json.dumps(
             {
-                "live": {
-                    "balance_override": 1000,
+                "live": {"account": {"balance_override": 1000}},
+                "bot": {
+                    "global": {"hsl": {"scope": "coin"}},
+                    "long": {"hsl": {"enabled": True}},
+                    "short": {"hsl": {"enabled": True}},
                 },
-                "bot": {'global': {'hsl': {'scope': 'coin'}}, 'long': {'hsl': {'enabled': True}}, 'short': {'hsl': {'enabled': True}}},
             }
         ),
         encoding="utf-8",
@@ -9488,7 +9490,7 @@ def test_live_smoke_report_uses_coin_default_for_missing_hsl_signal_mode_with_ba
     config_path.write_text(
         json.dumps(
             {
-                "live": {"balance_override": 1000},
+                "live": {"account": {"balance_override": 1000}},
                 "bot": {
                     "long": {"hsl": {"enabled": True}},
                     "short": {"hsl": {"enabled": False}},

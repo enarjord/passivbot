@@ -281,7 +281,9 @@ class _BundleReproBot:
         self.cached_metric_error = cached_metric_error
         self.completed_candle_health_calls = 0
         self._orchestrator_close_ema_fallback_counts = {}
-        self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+        self.config = {
+            "live": {"candles": {"max_forager_candle_staleness_minutes": 10}}
+        }
         self.exchange = "kucoin"
         now_ms = int(time.time() * 1000)
         if prev_close_ema is None:
@@ -2463,7 +2465,7 @@ async def test_close_ema_fallback_scopes_symbol_when_previous_ema_is_stale(caplo
         prev_close_ema=prev,
         prev_age_ms=11 * 60_000,
     )
-    bot.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_forager_candle_staleness_minutes": 10}}}
 
     with caplog.at_level(logging.WARNING):
         result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
@@ -2723,7 +2725,7 @@ async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
     )
     bot.PB_modes = {"long": {symbol: "manual"}, "short": {symbol: "manual"}}
     bot.active_symbols = []
-    bot.config["live"]["max_ohlcv_fetches_per_minute"] = 1
+    bot.config["live"]["candles"]["max_ohlcv_fetches_per_minute"] = 1
     bot.cm.get_last_refresh_ms = lambda _symbol: fixed_now_ms
     bot.cm.get_last_final_ts = (
         lambda _symbol, timeframe=None: 8 * hour_ms
@@ -2785,7 +2787,7 @@ async def test_trailing_martingale_threshold_volatility_requires_h1_log_range():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {"max_forager_candle_staleness_minutes": 10},
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"global": {"strategy_kind": "trailing_martingale"}},
     }
 
@@ -2824,7 +2826,7 @@ async def test_trailing_martingale_threshold_h1_missing_is_scoped_in_rust():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {"max_forager_candle_staleness_minutes": 10},
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"global": {"strategy_kind": "trailing_martingale"}},
     }
 
@@ -2860,7 +2862,7 @@ async def test_trailing_martingale_present_none_threshold_weight_fails_loudly():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {"max_forager_candle_staleness_minutes": 10},
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"global": {"strategy_kind": "trailing_martingale"}},
     }
 
@@ -2943,7 +2945,7 @@ async def test_ema_anchor_h1_offset_weight_path_is_tuple_not_character_path():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {"max_forager_candle_staleness_minutes": 10},
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"global": {"strategy_kind": "ema_anchor"}},
     }
 

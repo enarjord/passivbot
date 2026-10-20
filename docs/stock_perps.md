@@ -237,28 +237,32 @@ Minimal test config for stock perps:
 
 ```json
 {
-  "live": {
-    "user": "hyperliquid_01",
-    "approved_coins": ["TSLA"],
-    "leverage": 2,
-    "filter_by_min_effective_cost": false,
-    "hedge_mode": false,
-    "minimum_coin_age_days": 0
-  },
-  "bot": {
-    "long": {
-      "n_positions": 2,
-      "total_wallet_exposure_limit": 1.0,
-      "entry_initial_qty_pct": 0.4
+    "live": {
+        "approved_coins": [
+            "TSLA"
+        ],
+        "filter_by_min_effective_cost": false,
+        "hedge_mode": false,
+        "minimum_coin_age_days": 0,
+        "account": {
+            "user": "hyperliquid_01",
+            "leverage": 2
+        }
     },
-    "short": {
-      "n_positions": 0,
-      "total_wallet_exposure_limit": 0
+    "bot": {
+        "long": {
+            "n_positions": 2,
+            "total_wallet_exposure_limit": 1.0,
+            "entry_initial_qty_pct": 0.4
+        },
+        "short": {
+            "n_positions": 0,
+            "total_wallet_exposure_limit": 0
+        }
+    },
+    "logging": {
+        "level": 2
     }
-  },
-  "logging": {
-    "level": 2
-  }
 }
 ```
 

@@ -2665,14 +2665,14 @@ def prep_backtest_args(
                 pside=pside,
                 override_side=override_side,
             )
-            coin_specific_bot_params[pside]["is_forced_active"] = (
-                coin_override.get("live", {}).get(f"forced_mode_{pside}", "")
-                == "normal"
-                or always_include_matches(
-                    config, pside, coin,
-                    exchange=mss.get(coin, {}).get("exchange") or exchange,
-                    market_symbol=mss.get(coin, {}).get("symbol"),
-                )
+            coin_specific_bot_params[pside]["is_forced_active"] = coin_override.get(
+                "live", {}
+            ).get("modes", {}).get(pside, "") == "normal" or always_include_matches(
+                config,
+                pside,
+                coin,
+                exchange=mss.get(coin, {}).get("exchange") or exchange,
+                market_symbol=mss.get(coin, {}).get("symbol"),
             )
         coin_key = normalize_backtest_coin(coin)
         coin_canonical = heuristic_symbol_to_coin(coin_key)

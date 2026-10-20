@@ -72,6 +72,55 @@ def describe_field(path):
                       "when": field.optimize_when, "recommended_bounds": field.recommended_bounds},
         "coin_override": field.coin_override.value if field.coin_override else None,
     }
+# One structural definition for operational field identities, current paths and
+# their released-v8 origins. Internal live-value APIs address these identities;
+# authored configuration accepts only the returned canonical paths.
+LIVE_OPERATIONAL_PATHS = {
+    name: ("live", group, name)
+    for group, names in {
+        "account": "user balance_override balance_hysteresis_snap_pct leverage margin_mode_preference",
+        "api": "custom_endpoints_path recv_window_ms max_concurrent_api_requests market_snapshot_ticker_strategy",
+        "candles": """
+            candle_lock_timeout_seconds enable_archive_candle_fetch enable_forager_ws_candles
+            forager_ws_candle_rest_audit_minutes inactive_coin_candle_ttl_minutes
+            max_active_candle_tail_gap_minutes max_disk_candles_per_symbol_per_tf
+            max_forager_candle_refresh_seconds max_forager_candle_staleness_minutes
+            max_memory_candles_per_symbol max_ohlcv_fetches_per_minute
+        """,
+        "startup": """
+            defer_broad_candle_warmup force_cold_startup risk_bootstrap_max_lookback_minutes
+            startup_phase_budgets warmup_concurrency warmup_jitter_seconds
+        """,
+        "fills": """
+            fee_conversion_max_age_ms fee_pct_fallback fee_pct_sanity_abs_max
+            fills_confirmation_overlap_minutes fills_recent_overlap_minutes
+        """,
+        "execution": """
+            execution_delay_seconds limit_order_create_max_market_dist_pct
+            max_n_cancellations_per_batch max_n_creations_per_batch order_match_tolerance_pct
+            order_replacement_churn_gate_activation_count order_replacement_churn_gate_market_dist_pct
+            order_replacement_churn_gate_stability_minutes order_replacement_churn_gate_window_minutes
+            time_in_force
+        """,
+        "recovery": "exchange_symbol_unavailable_cooldown_hours max_n_restarts_per_day",
+    }.items()
+    for name in names.split()
+}
+LIVE_OPERATIONAL_PATHS.update(
+    {
+        "forced_mode_long": ("live", "modes", "long"),
+        "forced_mode_short": ("live", "modes", "short"),
+        "disapproved_position_mode": ("live", "modes", "disapproved_position"),
+    }
+)
+
+
+def live_field_path(field_id: str) -> str:
+    """Return an explicit canonical path for an internal operational field ID."""
+    if field_id == "base_config_path":
+        # Internal source provenance; never an authored operational field.
+        return "live.base_config_path"
+    return ".".join(LIVE_OPERATIONAL_PATHS[field_id])
 
 
 # These declarations describe the current public schema. Keep numeric types
@@ -241,6 +290,12 @@ def get_field_registry() -> FieldRegistry:
             description="", optimize_key=None, domain=None, recommended_bounds=None,
             coin_override=None):
         parts = tuple(path.split("."))
+        if (
+            parts[0] == "live"
+            and len(parts) >= 2
+            and parts[1] in LIVE_OPERATIONAL_PATHS
+        ):
+            parts = (*LIVE_OPERATIONAL_PATHS[parts[1]], *parts[2:])
         semantic_parts = parts[2:] if parts[0] == "coin_overrides" else parts
         is_bot_field = semantic_parts[:1] == ("bot",)
         scope = None

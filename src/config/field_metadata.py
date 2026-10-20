@@ -12,7 +12,7 @@ from .field_spec import CoinOverridePolicy, FieldDomain, FieldType
 
 def enrich_fields(fields):
     from .field_registry import get_shared_optimizer_bindings
-    from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, LIVE_COIN_OVERRIDE_KEYS
+    from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, get_live_coin_override_paths
     from .field_registry import get_coin_override_paths
     from .optimize_bounds import flatten_optimize_bounds, get_optimize_bounds_defaults
     from .strategy_spec import get_strategy_param_keys
@@ -61,13 +61,12 @@ def enrich_fields(fields):
             # their shared-field classification into a second static list.
             from config_utils import get_field_runtime_rule
 
-            rule = get_field_runtime_rule(".".join(path[:2]))
+            rule = get_field_runtime_rule(".".join(path))
             if rule.get("consumed_by"):
                 data["consumers"] = tuple(command for command in ("live", "backtest", "optimize")
                                           if command in rule["consumed_by"])
-            if len(path) == 2:
-                data["coin_override"] = (CoinOverridePolicy.ALLOWED if path[1] in LIVE_COIN_OVERRIDE_KEYS
-                                         else CoinOverridePolicy.FORBIDDEN)
+            data["coin_override"] = (CoinOverridePolicy.ALLOWED if path in get_live_coin_override_paths()
+                                     else CoinOverridePolicy.FORBIDDEN)
         if path == ("optimize", "scoring", "*", "goal"):
             from .scoring import OBJECTIVE_GOALS
 

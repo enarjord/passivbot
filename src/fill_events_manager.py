@@ -8388,12 +8388,18 @@ def _extract_symbol_pool(config: dict, override: Optional[List[str]]) -> List[st
 def fee_policy_kwargs_from_config(config: dict) -> Dict[str, object]:
     live = config.get("live", {}) if isinstance(config, dict) else {}
     return {
-        "fee_pct_fallback": float(live.get("fee_pct_fallback", DEFAULT_FEE_PCT_FALLBACK)),
+        "fee_pct_fallback": float(
+            live.get("fills", {}).get("fee_pct_fallback", DEFAULT_FEE_PCT_FALLBACK)
+        ),
         "fee_pct_sanity_abs_max": float(
-            live.get("fee_pct_sanity_abs_max", DEFAULT_FEE_PCT_SANITY_ABS_MAX)
+            live.get("fills", {}).get(
+                "fee_pct_sanity_abs_max", DEFAULT_FEE_PCT_SANITY_ABS_MAX
+            )
         ),
         "fee_conversion_max_age_ms": int(
-            live.get("fee_conversion_max_age_ms", DEFAULT_FEE_CONVERSION_MAX_AGE_MS)
+            live.get("fills", {}).get(
+                "fee_conversion_max_age_ms", DEFAULT_FEE_CONVERSION_MAX_AGE_MS
+            )
         ),
     }
 
@@ -8508,9 +8514,9 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
 
 def _instantiate_bot(config: dict):
     live = config.get("live", {})
-    user = str(live.get("user") or "").strip()
+    user = str(live.get("account", {}).get("user") or "").strip()
     if not user:
-        raise ValueError("Config missing live.user to determine bot exchange")
+        raise ValueError("Config missing live.account.user to determine bot exchange")
     user_info = load_user_info(user)
     exchange = str(user_info.get("exchange") or "").lower()
     if not exchange:
@@ -8545,7 +8551,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
     )
     live = config.setdefault("live", {})
     if args.user:
-        live["user"] = args.user
+        live["account"]["user"] = args.user
     bot = _instantiate_bot(config)
     try:
         bot._fill_fetcher_allow_config_symbol_fallback = True

@@ -136,7 +136,7 @@ def _object_schema(tree, path, definitions):
         result["properties"] = properties
         result["additionalProperties"] = (_object_schema(children["*"], (*path, "*"), definitions)
                                           if "*" in children else False)
-    if path == ("live", "startup_phase_budgets"):
+    if path == ("live", "startup", "startup_phase_budgets"):
         from live.event_bus import STARTUP_TIMING_PHASES
 
         result["propertyNames"] = {"enum": sorted(STARTUP_TIMING_PHASES)}

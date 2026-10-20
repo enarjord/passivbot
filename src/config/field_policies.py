@@ -128,3 +128,10 @@ OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
 
 
 LIVE_COIN_OVERRIDE_KEYS = ("forced_mode_long", "forced_mode_short", "leverage")
+
+
+def get_live_coin_override_paths():
+    """Project existing operational permissions through canonical field IDs."""
+    from .field_registry import LIVE_OPERATIONAL_PATHS
+
+    return frozenset(LIVE_OPERATIONAL_PATHS[field] for field in LIVE_COIN_OVERRIDE_KEYS)

@@ -1004,7 +1004,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "y",
                 "--bot.global.hedge_mode",
                 "n",
-                "--live_leverage",
+                "--live_account_leverage",
                 "3",
                 "-h",
             ],

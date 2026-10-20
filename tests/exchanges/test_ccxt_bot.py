@@ -813,7 +813,7 @@ class TestCCXTBotExecuteCancellation:
 
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
-        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.config = {"live": {"account": {"margin_mode_preference": "cross"}}}
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
@@ -838,7 +838,7 @@ class TestCCXTBotExecuteCancellation:
         cross_symbol = "CROSS/USDT:USDT"
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
-        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.config = {"live": {"account": {"margin_mode_preference": "cross"}}}
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
@@ -880,7 +880,7 @@ class TestCCXTBotExecuteCancellation:
         symbol = "ISO/USDT:USDT"
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
-        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.config = {"live": {"account": {"margin_mode_preference": "cross"}}}
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
@@ -919,7 +919,7 @@ class TestCCXTBotExecuteCancellation:
         symbol = "ISO/USDT:USDT"
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
-        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.config = {"live": {"account": {"margin_mode_preference": "cross"}}}
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
@@ -946,7 +946,7 @@ class TestCCXTBotExecuteCancellation:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.config = {"live": {"account": {"margin_mode_preference": "cross"}}}
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
@@ -975,7 +975,7 @@ class TestCCXTBotExecuteCancellation:
 
         symbol = "ISO/USDT:USDT"
         bot = CCXTBot.__new__(CCXTBot)
-        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot.config = {"live": {"account": {"margin_mode_preference": "cross"}}}
         bot._blocked_margin_symbols_warned = set()
         bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}

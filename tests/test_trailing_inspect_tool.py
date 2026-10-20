@@ -313,7 +313,7 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
 
 def test_extract_side_context_includes_global_and_risk_paths():
     config = {
-        "live": {"forced_mode_long": "p"},
+        "live": {"modes": {"long": "p"}},
         "bot": {
             "global": {
                 "hsl": {
@@ -400,9 +400,7 @@ def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
 
 def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     config = {
-        "live": {
-            "forced_mode_long": "normal",
-        },
+        "live": {"modes": {"long": "normal"}},
         "bot": {
             "global": {
                 "hsl": {
@@ -440,7 +438,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
         },
         "coin_overrides": {
             "XRP": {
-                "live": {"forced_mode_long": "manual"},
+                "live": {"modes": {"long": "manual"}},
                 "bot": {
                     "long": {
                         "hsl": {"enabled": True},
@@ -451,7 +449,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                             }
                         },
                     }
-                }
+                },
             },
             "DOGE": {"bot": {"long": {"hsl": {"enabled": False}}}},
         },
@@ -466,7 +464,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     assert context["coin_strategy_override_symbols"] == ["XRP"]
     assert context["coin_context_override_descriptions"] == [
         "DOGE (bot.long.hsl)",
-        "XRP (bot.long.entry_cooldown, bot.long.hsl, live.forced_mode_long)",
+        "XRP (bot.long.entry_cooldown, bot.long.hsl, live.modes.long)",
     ]
 
 
@@ -474,7 +472,7 @@ def test_overview_marks_hsl_runtime_paths_and_coin_override_omission():
     context = _context(hsl_enabled=True)
     context["coin_strategy_override_symbols"] = ["XRP"]
     context["coin_context_override_descriptions"] = [
-        "XRP (bot.long.risk, live.forced_mode_long)"
+        "XRP (bot.long.risk, live.modes.long)"
     ]
     result = trailing_inspect.build_overview(
         sources={"long": {"params": _params(), "context": context}},
@@ -526,7 +524,7 @@ def test_hsl_runtime_precedes_static_forced_mode_labels(forced_mode):
 
 def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
     config = {
-        "live": {"forced_mode_long": "not-a-mode"},
+        "live": {"modes": {"long": "not-a-mode"}},
         "bot": {
             "global": {
                 "hsl": {
@@ -552,7 +550,7 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
         },
     }
 
-    with pytest.raises(ValueError, match="invalid live.forced_mode_long"):
+    with pytest.raises(ValueError, match="invalid live.modes.long"):
         trailing_inspect._extract_side_context(config, "long")
 
 

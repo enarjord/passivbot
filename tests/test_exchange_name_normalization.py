@@ -102,7 +102,7 @@ def test_gate_api_key_alias_selects_dedicated_gateio_connector(tmp_path, monkeyp
     monkeypatch.setattr(passivbot, "load_user_info", load_alias_user)
     monkeypatch.setattr(gateio_module, "GateIOBot", lambda _config: bot)
 
-    result = passivbot.setup_bot({"live": {"user": "gate_user"}})
+    result = passivbot.setup_bot({"live": {"account": {"user": "gate_user"}}})
 
     assert result is bot
     assert result._order_churn_gate_enabled_for_connector is True

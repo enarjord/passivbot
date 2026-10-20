@@ -44,7 +44,7 @@ The EVM address and API public key are not required when the account index is su
 Passivbot uses the existing key without rotating it, approving an integrator, or adding a
 builder fee. No L1 private key is needed.
 
-Use `live.user = "lighter_01"` in your reviewed private configuration. Begin with a small
+Use `live.account.user = "lighter_01"` in your reviewed private configuration. Begin with a small
 approved coin universe and exposure appropriate to your account. The quote currency is USDC;
 for example, CCXT's ETH market is `ETH/USDC:USDC`.
 
@@ -90,7 +90,7 @@ entry so each strategy side retains the correct quantity, fees, and realized PnL
 before-state evidence also restores the resulting position when cached history starts mid-position.
 
 Reported fee rates use Lighter's millionths scale. Missing fee evidence follows Passivbot's
-observable best-effort fee policy (`live.fee_pct_fallback`), so such fees are estimates rather than
+observable best-effort fee policy (`live.fills.fee_pct_fallback`), so such fees are estimates rather than
 exact reported amounts. Do not interpret an omitted fee as an authoritative zero.
 
 ## Validation

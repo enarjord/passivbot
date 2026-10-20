@@ -19,7 +19,7 @@ Path = tuple[str, ...]
 
 PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
     ("backtest", "reducer"),
-    ("live", "startup_phase_budgets"),
+    ("live", "startup", "startup_phase_budgets"),
     ("optimize", "fixed_runtime_overrides"),
 }
 BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
@@ -49,6 +49,8 @@ def reject_backtest_inherited_live_fields(result: dict) -> None:
     if invalid:
         joined = ", ".join(f"backtest.{key}" for key in invalid)
         owners = {
+            "fee_pct_fallback": "live.fills.fee_pct_fallback",
+            "fee_pct_sanity_abs_max": "live.fills.fee_pct_sanity_abs_max",
             "market_orders_allowed": "bot.global.execution.market_orders_allowed",
             "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_threshold",
         }

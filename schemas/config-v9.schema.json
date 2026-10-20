@@ -4187,309 +4187,360 @@
         "live": {
           "type": "object",
           "properties": {
-            "balance_hysteresis_snap_pct": {
-              "type": "number",
-              "default": 0.01,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "balance_override": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "default": null,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "candle_lock_timeout_seconds": {
-              "type": "number",
-              "default": 10,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "custom_endpoints_path": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "defer_broad_candle_warmup": {
-              "type": "boolean",
-              "default": true,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "disapproved_position_mode": {
-              "type": "string",
-              "default": "graceful_stop",
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "enable_archive_candle_fetch": {
-              "type": "boolean",
-              "default": false,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "enable_forager_ws_candles": {
-              "type": "boolean",
-              "default": true,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "exchange_symbol_unavailable_cooldown_hours": {
-              "type": "number",
-              "default": 6.0,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "execution_delay_seconds": {
-              "type": "number",
-              "default": 2,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "fee_conversion_max_age_ms": {
-              "type": "integer",
-              "default": 86400000,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "fee_pct_fallback": {
-              "type": "number",
-              "default": 0.0002,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "fee_pct_sanity_abs_max": {
-              "type": "number",
-              "default": 0.001,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "fills_confirmation_overlap_minutes": {
-              "type": "number",
-              "default": 60,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "fills_recent_overlap_minutes": {
-              "type": "number",
-              "default": 10,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "forager_ws_candle_rest_audit_minutes": {
-              "type": "number",
-              "default": 30,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "force_cold_startup": {
-              "type": "boolean",
-              "default": false,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "forced_mode_long": {
-              "type": "string",
-              "default": "",
-              "x-passivbot-coin-override": "allowed"
-            },
-            "forced_mode_short": {
-              "type": "string",
-              "default": "",
-              "x-passivbot-coin-override": "allowed"
-            },
-            "inactive_coin_candle_ttl_minutes": {
-              "type": "number",
-              "default": 10,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "leverage": {
-              "type": "integer",
-              "default": 10,
-              "x-passivbot-coin-override": "allowed"
-            },
-            "limit_order_create_max_market_dist_pct": {
-              "type": "number",
-              "default": 0.8,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "margin_mode_preference": {
-              "type": "string",
-              "default": "cross",
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "market_snapshot_ticker_strategy": {
-              "type": "string",
-              "default": "auto",
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_active_candle_tail_gap_minutes": {
-              "type": "number",
-              "default": 10,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_concurrent_api_requests": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "default": null,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_disk_candles_per_symbol_per_tf": {
-              "type": "integer",
-              "default": 2000000,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_forager_candle_refresh_seconds": {
-              "type": "number",
-              "default": 45,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_forager_candle_staleness_minutes": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "default": null,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_memory_candles_per_symbol": {
-              "type": "integer",
-              "default": 200000,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_n_cancellations_per_batch": {
-              "type": "integer",
-              "default": 5,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_n_creations_per_batch": {
-              "type": "integer",
-              "default": 3,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_n_restarts_per_day": {
-              "type": "integer",
-              "default": 10,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_ohlcv_fetches_per_minute": {
-              "type": "integer",
-              "default": 30,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "order_match_tolerance_pct": {
-              "type": "number",
-              "default": 0.0002,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "order_replacement_churn_gate_activation_count": {
-              "type": "integer",
-              "default": 10,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "order_replacement_churn_gate_market_dist_pct": {
-              "type": "number",
-              "default": 0.005,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "order_replacement_churn_gate_stability_minutes": {
-              "type": "number",
-              "default": 2.0,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "order_replacement_churn_gate_window_minutes": {
-              "type": "number",
-              "default": 10.0,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "recv_window_ms": {
-              "type": "integer",
-              "default": 5000,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "risk_bootstrap_max_lookback_minutes": {
-              "type": "number",
-              "default": 129600.0,
-              "x-passivbot-consumers": [
-                "live"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "startup_phase_budgets": {
+            "account": {
               "type": "object",
-              "default": {},
-              "x-passivbot-coin-override": "forbidden",
-              "properties": {},
-              "additionalProperties": {
-                "type": "object",
-                "properties": {
-                  "elapsed_ms": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "x-passivbot-unit": "milliseconds"
+              "properties": {
+                "balance_hysteresis_snap_pct": {
+                  "type": "number",
+                  "default": 0.01,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "balance_override": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "default": null,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "leverage": {
+                  "type": "integer",
+                  "default": 10,
+                  "x-passivbot-coin-override": "allowed"
+                },
+                "margin_mode_preference": {
+                  "type": "string",
+                  "default": "cross",
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "user": {
+                  "type": "string",
+                  "default": "bybit_01",
+                  "x-passivbot-coin-override": "forbidden"
+                }
+              },
+              "additionalProperties": false
+            },
+            "api": {
+              "type": "object",
+              "properties": {
+                "custom_endpoints_path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "market_snapshot_ticker_strategy": {
+                  "type": "string",
+                  "default": "auto",
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_concurrent_api_requests": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "default": null,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "recv_window_ms": {
+                  "type": "integer",
+                  "default": 5000,
+                  "x-passivbot-coin-override": "forbidden"
+                }
+              },
+              "additionalProperties": false
+            },
+            "candles": {
+              "type": "object",
+              "properties": {
+                "candle_lock_timeout_seconds": {
+                  "type": "number",
+                  "default": 10,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "enable_archive_candle_fetch": {
+                  "type": "boolean",
+                  "default": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "enable_forager_ws_candles": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "forager_ws_candle_rest_audit_minutes": {
+                  "type": "number",
+                  "default": 30,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "inactive_coin_candle_ttl_minutes": {
+                  "type": "number",
+                  "default": 10,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_active_candle_tail_gap_minutes": {
+                  "type": "number",
+                  "default": 10,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_disk_candles_per_symbol_per_tf": {
+                  "type": "integer",
+                  "default": 2000000,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_forager_candle_refresh_seconds": {
+                  "type": "number",
+                  "default": 45,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_forager_candle_staleness_minutes": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "default": null,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_memory_candles_per_symbol": {
+                  "type": "integer",
+                  "default": 200000,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_ohlcv_fetches_per_minute": {
+                  "type": "integer",
+                  "default": 30,
+                  "x-passivbot-coin-override": "forbidden"
+                }
+              },
+              "additionalProperties": false
+            },
+            "execution": {
+              "type": "object",
+              "properties": {
+                "execution_delay_seconds": {
+                  "type": "number",
+                  "default": 2,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "limit_order_create_max_market_dist_pct": {
+                  "type": "number",
+                  "default": 0.8,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_n_cancellations_per_batch": {
+                  "type": "integer",
+                  "default": 5,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_n_creations_per_batch": {
+                  "type": "integer",
+                  "default": 3,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "order_match_tolerance_pct": {
+                  "type": "number",
+                  "default": 0.0002,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "order_replacement_churn_gate_activation_count": {
+                  "type": "integer",
+                  "default": 10,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "order_replacement_churn_gate_market_dist_pct": {
+                  "type": "number",
+                  "default": 0.005,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "order_replacement_churn_gate_stability_minutes": {
+                  "type": "number",
+                  "default": 2.0,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "order_replacement_churn_gate_window_minutes": {
+                  "type": "number",
+                  "default": 10.0,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "time_in_force": {
+                  "type": "string",
+                  "default": "good_till_cancelled",
+                  "x-passivbot-coin-override": "forbidden"
+                }
+              },
+              "additionalProperties": false
+            },
+            "fills": {
+              "type": "object",
+              "properties": {
+                "fee_conversion_max_age_ms": {
+                  "type": "integer",
+                  "default": 86400000,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "fee_pct_fallback": {
+                  "type": "number",
+                  "default": 0.0002,
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "fee_pct_sanity_abs_max": {
+                  "type": "number",
+                  "default": 0.001,
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "fills_confirmation_overlap_minutes": {
+                  "type": "number",
+                  "default": 60,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "fills_recent_overlap_minutes": {
+                  "type": "number",
+                  "default": 10,
+                  "x-passivbot-coin-override": "forbidden"
+                }
+              },
+              "additionalProperties": false
+            },
+            "modes": {
+              "type": "object",
+              "properties": {
+                "disapproved_position": {
+                  "type": "string",
+                  "default": "graceful_stop",
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "long": {
+                  "type": "string",
+                  "default": "",
+                  "x-passivbot-coin-override": "allowed"
+                },
+                "short": {
+                  "type": "string",
+                  "default": "",
+                  "x-passivbot-coin-override": "allowed"
+                }
+              },
+              "additionalProperties": false
+            },
+            "recovery": {
+              "type": "object",
+              "properties": {
+                "exchange_symbol_unavailable_cooldown_hours": {
+                  "type": "number",
+                  "default": 6.0,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "max_n_restarts_per_day": {
+                  "type": "integer",
+                  "default": 10,
+                  "x-passivbot-coin-override": "forbidden"
+                }
+              },
+              "additionalProperties": false
+            },
+            "startup": {
+              "type": "object",
+              "properties": {
+                "defer_broad_candle_warmup": {
+                  "type": "boolean",
+                  "default": true,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "force_cold_startup": {
+                  "type": "boolean",
+                  "default": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "risk_bootstrap_max_lookback_minutes": {
+                  "type": "number",
+                  "default": 129600.0,
+                  "x-passivbot-consumers": [
+                    "live"
+                  ],
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "startup_phase_budgets": {
+                  "type": "object",
+                  "default": {},
+                  "x-passivbot-coin-override": "forbidden",
+                  "properties": {},
+                  "additionalProperties": {
+                    "type": "object",
+                    "x-passivbot-coin-override": "forbidden",
+                    "properties": {
+                      "elapsed_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "x-passivbot-unit": "milliseconds",
+                        "x-passivbot-coin-override": "forbidden"
+                      },
+                      "since_previous_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "x-passivbot-unit": "milliseconds",
+                        "x-passivbot-coin-override": "forbidden"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "minProperties": 1
                   },
-                  "since_previous_ms": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "x-passivbot-unit": "milliseconds"
+                  "propertyNames": {
+                    "enum": [
+                      "account",
+                      "active-candle",
+                      "full-warmup",
+                      "hsl",
+                      "market",
+                      "startup"
+                    ]
                   }
                 },
-                "additionalProperties": false,
-                "minProperties": 1
+                "warmup_concurrency": {
+                  "type": "integer",
+                  "default": 0,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "warmup_jitter_seconds": {
+                  "type": "number",
+                  "default": 30,
+                  "x-passivbot-coin-override": "forbidden"
+                }
               },
-              "propertyNames": {
-                "enum": [
-                  "account",
-                  "active-candle",
-                  "full-warmup",
-                  "hsl",
-                  "market",
-                  "startup"
-                ]
-              }
-            },
-            "time_in_force": {
-              "type": "string",
-              "default": "good_till_cancelled",
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "user": {
-              "type": "string",
-              "default": "bybit_01",
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "warmup_concurrency": {
-              "type": "integer",
-              "default": 0,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "warmup_jitter_seconds": {
-              "type": "number",
-              "default": 30,
-              "x-passivbot-coin-override": "forbidden"
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -9771,17 +9822,29 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "leverage": {
-              "type": "integer",
-              "x-passivbot-coin-override": "allowed"
+            "account": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "leverage": {
+                  "type": "integer",
+                  "x-passivbot-coin-override": "allowed"
+                }
+              }
             },
-            "forced_mode_long": {
-              "type": "string",
-              "x-passivbot-coin-override": "allowed"
-            },
-            "forced_mode_short": {
-              "type": "string",
-              "x-passivbot-coin-override": "allowed"
+            "modes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "long": {
+                  "type": "string",
+                  "x-passivbot-coin-override": "allowed"
+                },
+                "short": {
+                  "type": "string",
+                  "x-passivbot-coin-override": "allowed"
+                }
+              }
             }
           }
         },
@@ -11983,17 +12046,29 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "leverage": {
-              "type": "integer",
-              "x-passivbot-coin-override": "allowed"
+            "account": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "leverage": {
+                  "type": "integer",
+                  "x-passivbot-coin-override": "allowed"
+                }
+              }
             },
-            "forced_mode_long": {
-              "type": "string",
-              "x-passivbot-coin-override": "allowed"
-            },
-            "forced_mode_short": {
-              "type": "string",
-              "x-passivbot-coin-override": "allowed"
+            "modes": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "long": {
+                  "type": "string",
+                  "x-passivbot-coin-override": "allowed"
+                },
+                "short": {
+                  "type": "string",
+                  "x-passivbot-coin-override": "allowed"
+                }
+              }
             }
           }
         },
@@ -14676,143 +14751,167 @@
         "live": {
           "$ref": "#/$defs/scenarioPatch:live"
         },
-        "live.balance_hysteresis_snap_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/balance_hysteresis_snap_pct"
+        "live.account": {
+          "$ref": "#/$defs/config/properties/live/properties/account"
         },
-        "live.balance_override": {
-          "$ref": "#/$defs/config/properties/live/properties/balance_override"
+        "live.account.balance_hysteresis_snap_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/balance_hysteresis_snap_pct"
         },
-        "live.candle_lock_timeout_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/candle_lock_timeout_seconds"
+        "live.account.balance_override": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/balance_override"
         },
-        "live.custom_endpoints_path": {
-          "$ref": "#/$defs/config/properties/live/properties/custom_endpoints_path"
+        "live.account.leverage": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/leverage"
         },
-        "live.defer_broad_candle_warmup": {
-          "$ref": "#/$defs/config/properties/live/properties/defer_broad_candle_warmup"
+        "live.account.margin_mode_preference": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/margin_mode_preference"
         },
-        "live.disapproved_position_mode": {
-          "$ref": "#/$defs/config/properties/live/properties/disapproved_position_mode"
+        "live.account.user": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/user"
         },
-        "live.enable_archive_candle_fetch": {
-          "$ref": "#/$defs/config/properties/live/properties/enable_archive_candle_fetch"
+        "live.api": {
+          "$ref": "#/$defs/config/properties/live/properties/api"
         },
-        "live.enable_forager_ws_candles": {
-          "$ref": "#/$defs/config/properties/live/properties/enable_forager_ws_candles"
+        "live.api.custom_endpoints_path": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/custom_endpoints_path"
         },
-        "live.exchange_symbol_unavailable_cooldown_hours": {
-          "$ref": "#/$defs/config/properties/live/properties/exchange_symbol_unavailable_cooldown_hours"
+        "live.api.market_snapshot_ticker_strategy": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/market_snapshot_ticker_strategy"
         },
-        "live.execution_delay_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/execution_delay_seconds"
+        "live.api.max_concurrent_api_requests": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/max_concurrent_api_requests"
         },
-        "live.fee_conversion_max_age_ms": {
-          "$ref": "#/$defs/config/properties/live/properties/fee_conversion_max_age_ms"
+        "live.api.recv_window_ms": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/recv_window_ms"
         },
-        "live.fee_pct_fallback": {
-          "$ref": "#/$defs/config/properties/live/properties/fee_pct_fallback"
+        "live.candles": {
+          "$ref": "#/$defs/config/properties/live/properties/candles"
         },
-        "live.fee_pct_sanity_abs_max": {
-          "$ref": "#/$defs/config/properties/live/properties/fee_pct_sanity_abs_max"
+        "live.candles.candle_lock_timeout_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/candle_lock_timeout_seconds"
         },
-        "live.fills_confirmation_overlap_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/fills_confirmation_overlap_minutes"
+        "live.candles.enable_archive_candle_fetch": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/enable_archive_candle_fetch"
         },
-        "live.fills_recent_overlap_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/fills_recent_overlap_minutes"
+        "live.candles.enable_forager_ws_candles": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/enable_forager_ws_candles"
         },
-        "live.forager_ws_candle_rest_audit_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/forager_ws_candle_rest_audit_minutes"
+        "live.candles.forager_ws_candle_rest_audit_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/forager_ws_candle_rest_audit_minutes"
         },
-        "live.force_cold_startup": {
-          "$ref": "#/$defs/config/properties/live/properties/force_cold_startup"
+        "live.candles.inactive_coin_candle_ttl_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/inactive_coin_candle_ttl_minutes"
         },
-        "live.forced_mode_long": {
-          "$ref": "#/$defs/config/properties/live/properties/forced_mode_long"
+        "live.candles.max_active_candle_tail_gap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_active_candle_tail_gap_minutes"
         },
-        "live.forced_mode_short": {
-          "$ref": "#/$defs/config/properties/live/properties/forced_mode_short"
+        "live.candles.max_disk_candles_per_symbol_per_tf": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_disk_candles_per_symbol_per_tf"
         },
-        "live.inactive_coin_candle_ttl_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/inactive_coin_candle_ttl_minutes"
+        "live.candles.max_forager_candle_refresh_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_forager_candle_refresh_seconds"
         },
-        "live.leverage": {
-          "$ref": "#/$defs/config/properties/live/properties/leverage"
+        "live.candles.max_forager_candle_staleness_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_forager_candle_staleness_minutes"
         },
-        "live.limit_order_create_max_market_dist_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/limit_order_create_max_market_dist_pct"
+        "live.candles.max_memory_candles_per_symbol": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_memory_candles_per_symbol"
         },
-        "live.margin_mode_preference": {
-          "$ref": "#/$defs/config/properties/live/properties/margin_mode_preference"
+        "live.candles.max_ohlcv_fetches_per_minute": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_ohlcv_fetches_per_minute"
         },
-        "live.market_snapshot_ticker_strategy": {
-          "$ref": "#/$defs/config/properties/live/properties/market_snapshot_ticker_strategy"
+        "live.execution": {
+          "$ref": "#/$defs/config/properties/live/properties/execution"
         },
-        "live.max_active_candle_tail_gap_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/max_active_candle_tail_gap_minutes"
+        "live.execution.execution_delay_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/execution_delay_seconds"
         },
-        "live.max_concurrent_api_requests": {
-          "$ref": "#/$defs/config/properties/live/properties/max_concurrent_api_requests"
+        "live.execution.limit_order_create_max_market_dist_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/limit_order_create_max_market_dist_pct"
         },
-        "live.max_disk_candles_per_symbol_per_tf": {
-          "$ref": "#/$defs/config/properties/live/properties/max_disk_candles_per_symbol_per_tf"
+        "live.execution.max_n_cancellations_per_batch": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/max_n_cancellations_per_batch"
         },
-        "live.max_forager_candle_refresh_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/max_forager_candle_refresh_seconds"
+        "live.execution.max_n_creations_per_batch": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/max_n_creations_per_batch"
         },
-        "live.max_forager_candle_staleness_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/max_forager_candle_staleness_minutes"
+        "live.execution.order_match_tolerance_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_match_tolerance_pct"
         },
-        "live.max_memory_candles_per_symbol": {
-          "$ref": "#/$defs/config/properties/live/properties/max_memory_candles_per_symbol"
+        "live.execution.order_replacement_churn_gate_activation_count": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_activation_count"
         },
-        "live.max_n_cancellations_per_batch": {
-          "$ref": "#/$defs/config/properties/live/properties/max_n_cancellations_per_batch"
+        "live.execution.order_replacement_churn_gate_market_dist_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_market_dist_pct"
         },
-        "live.max_n_creations_per_batch": {
-          "$ref": "#/$defs/config/properties/live/properties/max_n_creations_per_batch"
+        "live.execution.order_replacement_churn_gate_stability_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_stability_minutes"
         },
-        "live.max_n_restarts_per_day": {
-          "$ref": "#/$defs/config/properties/live/properties/max_n_restarts_per_day"
+        "live.execution.order_replacement_churn_gate_window_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_window_minutes"
         },
-        "live.max_ohlcv_fetches_per_minute": {
-          "$ref": "#/$defs/config/properties/live/properties/max_ohlcv_fetches_per_minute"
+        "live.execution.time_in_force": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/time_in_force"
         },
-        "live.order_match_tolerance_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/order_match_tolerance_pct"
+        "live.fills": {
+          "$ref": "#/$defs/config/properties/live/properties/fills"
         },
-        "live.order_replacement_churn_gate_activation_count": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_activation_count"
+        "live.fills.fee_conversion_max_age_ms": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_conversion_max_age_ms"
         },
-        "live.order_replacement_churn_gate_market_dist_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_market_dist_pct"
+        "live.fills.fee_pct_fallback": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_pct_fallback"
         },
-        "live.order_replacement_churn_gate_stability_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_stability_minutes"
+        "live.fills.fee_pct_sanity_abs_max": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_pct_sanity_abs_max"
         },
-        "live.order_replacement_churn_gate_window_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_window_minutes"
+        "live.fills.fills_confirmation_overlap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fills_confirmation_overlap_minutes"
         },
-        "live.recv_window_ms": {
-          "$ref": "#/$defs/config/properties/live/properties/recv_window_ms"
+        "live.fills.fills_recent_overlap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fills_recent_overlap_minutes"
         },
-        "live.risk_bootstrap_max_lookback_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/risk_bootstrap_max_lookback_minutes"
+        "live.modes": {
+          "$ref": "#/$defs/config/properties/live/properties/modes"
         },
-        "live.startup_phase_budgets": {
-          "$ref": "#/$defs/config/properties/live/properties/startup_phase_budgets"
+        "live.modes.disapproved_position": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/disapproved_position"
         },
-        "live.time_in_force": {
-          "$ref": "#/$defs/config/properties/live/properties/time_in_force"
+        "live.modes.long": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/long"
         },
-        "live.user": {
-          "$ref": "#/$defs/config/properties/live/properties/user"
+        "live.modes.short": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/short"
         },
-        "live.warmup_concurrency": {
-          "$ref": "#/$defs/config/properties/live/properties/warmup_concurrency"
+        "live.recovery": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery"
         },
-        "live.warmup_jitter_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/warmup_jitter_seconds"
+        "live.recovery.exchange_symbol_unavailable_cooldown_hours": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery/properties/exchange_symbol_unavailable_cooldown_hours"
+        },
+        "live.recovery.max_n_restarts_per_day": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery/properties/max_n_restarts_per_day"
+        },
+        "live.startup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup"
+        },
+        "live.startup.defer_broad_candle_warmup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/defer_broad_candle_warmup"
+        },
+        "live.startup.force_cold_startup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/force_cold_startup"
+        },
+        "live.startup.risk_bootstrap_max_lookback_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/risk_bootstrap_max_lookback_minutes"
+        },
+        "live.startup.startup_phase_budgets": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/startup_phase_budgets"
+        },
+        "live.startup.warmup_concurrency": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/warmup_concurrency"
+        },
+        "live.startup.warmup_jitter_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/warmup_jitter_seconds"
         },
         "logging": {
           "$ref": "#/$defs/scenarioPatch:logging"
@@ -15527,14 +15626,20 @@
         "^coin_overrides\\.[^.]+\\.live$": {
           "$ref": "#/$defs/coinPatch/properties/live"
         },
-        "^coin_overrides\\.[^.]+\\.live\\.leverage$": {
-          "$ref": "#/$defs/coinPatch/properties/live/properties/leverage"
+        "^coin_overrides\\.[^.]+\\.live\\.account$": {
+          "$ref": "#/$defs/coinPatch/properties/live/properties/account"
         },
-        "^coin_overrides\\.[^.]+\\.live\\.forced_mode_long$": {
-          "$ref": "#/$defs/coinPatch/properties/live/properties/forced_mode_long"
+        "^coin_overrides\\.[^.]+\\.live\\.account\\.leverage$": {
+          "$ref": "#/$defs/coinPatch/properties/live/properties/account/properties/leverage"
         },
-        "^coin_overrides\\.[^.]+\\.live\\.forced_mode_short$": {
-          "$ref": "#/$defs/coinPatch/properties/live/properties/forced_mode_short"
+        "^coin_overrides\\.[^.]+\\.live\\.modes$": {
+          "$ref": "#/$defs/coinPatch/properties/live/properties/modes"
+        },
+        "^coin_overrides\\.[^.]+\\.live\\.modes\\.long$": {
+          "$ref": "#/$defs/coinPatch/properties/live/properties/modes/properties/long"
+        },
+        "^coin_overrides\\.[^.]+\\.live\\.modes\\.short$": {
+          "$ref": "#/$defs/coinPatch/properties/live/properties/modes/properties/short"
         },
         "^coin_overrides\\.[^.]+\\.bot$": {
           "$ref": "#/$defs/coinPatch/properties/bot"
@@ -18573,149 +18678,367 @@
     "scenarioPatch:live": {
       "type": "object",
       "properties": {
-        "balance_hysteresis_snap_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/balance_hysteresis_snap_pct"
+        "account": {
+          "$ref": "#/$defs/scenarioPatch:live.account"
         },
-        "balance_override": {
-          "$ref": "#/$defs/config/properties/live/properties/balance_override"
+        "account.balance_hysteresis_snap_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/balance_hysteresis_snap_pct"
         },
-        "candle_lock_timeout_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/candle_lock_timeout_seconds"
+        "account.balance_override": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/balance_override"
         },
-        "custom_endpoints_path": {
-          "$ref": "#/$defs/config/properties/live/properties/custom_endpoints_path"
+        "account.leverage": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/leverage"
         },
-        "defer_broad_candle_warmup": {
-          "$ref": "#/$defs/config/properties/live/properties/defer_broad_candle_warmup"
+        "account.margin_mode_preference": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/margin_mode_preference"
         },
-        "disapproved_position_mode": {
-          "$ref": "#/$defs/config/properties/live/properties/disapproved_position_mode"
+        "account.user": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/user"
         },
-        "enable_archive_candle_fetch": {
-          "$ref": "#/$defs/config/properties/live/properties/enable_archive_candle_fetch"
+        "api": {
+          "$ref": "#/$defs/scenarioPatch:live.api"
         },
-        "enable_forager_ws_candles": {
-          "$ref": "#/$defs/config/properties/live/properties/enable_forager_ws_candles"
+        "api.custom_endpoints_path": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/custom_endpoints_path"
         },
-        "exchange_symbol_unavailable_cooldown_hours": {
-          "$ref": "#/$defs/config/properties/live/properties/exchange_symbol_unavailable_cooldown_hours"
+        "api.market_snapshot_ticker_strategy": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/market_snapshot_ticker_strategy"
         },
-        "execution_delay_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/execution_delay_seconds"
+        "api.max_concurrent_api_requests": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/max_concurrent_api_requests"
         },
-        "fee_conversion_max_age_ms": {
-          "$ref": "#/$defs/config/properties/live/properties/fee_conversion_max_age_ms"
+        "api.recv_window_ms": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/recv_window_ms"
         },
-        "fee_pct_fallback": {
-          "$ref": "#/$defs/config/properties/live/properties/fee_pct_fallback"
+        "candles": {
+          "$ref": "#/$defs/scenarioPatch:live.candles"
         },
-        "fee_pct_sanity_abs_max": {
-          "$ref": "#/$defs/config/properties/live/properties/fee_pct_sanity_abs_max"
+        "candles.candle_lock_timeout_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/candle_lock_timeout_seconds"
         },
-        "fills_confirmation_overlap_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/fills_confirmation_overlap_minutes"
+        "candles.enable_archive_candle_fetch": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/enable_archive_candle_fetch"
         },
-        "fills_recent_overlap_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/fills_recent_overlap_minutes"
+        "candles.enable_forager_ws_candles": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/enable_forager_ws_candles"
         },
-        "forager_ws_candle_rest_audit_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/forager_ws_candle_rest_audit_minutes"
+        "candles.forager_ws_candle_rest_audit_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/forager_ws_candle_rest_audit_minutes"
         },
-        "force_cold_startup": {
-          "$ref": "#/$defs/config/properties/live/properties/force_cold_startup"
+        "candles.inactive_coin_candle_ttl_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/inactive_coin_candle_ttl_minutes"
         },
-        "forced_mode_long": {
-          "$ref": "#/$defs/config/properties/live/properties/forced_mode_long"
+        "candles.max_active_candle_tail_gap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_active_candle_tail_gap_minutes"
         },
-        "forced_mode_short": {
-          "$ref": "#/$defs/config/properties/live/properties/forced_mode_short"
+        "candles.max_disk_candles_per_symbol_per_tf": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_disk_candles_per_symbol_per_tf"
         },
-        "inactive_coin_candle_ttl_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/inactive_coin_candle_ttl_minutes"
+        "candles.max_forager_candle_refresh_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_forager_candle_refresh_seconds"
         },
-        "leverage": {
-          "$ref": "#/$defs/config/properties/live/properties/leverage"
+        "candles.max_forager_candle_staleness_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_forager_candle_staleness_minutes"
         },
-        "limit_order_create_max_market_dist_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/limit_order_create_max_market_dist_pct"
+        "candles.max_memory_candles_per_symbol": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_memory_candles_per_symbol"
         },
-        "margin_mode_preference": {
-          "$ref": "#/$defs/config/properties/live/properties/margin_mode_preference"
+        "candles.max_ohlcv_fetches_per_minute": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_ohlcv_fetches_per_minute"
         },
-        "market_snapshot_ticker_strategy": {
-          "$ref": "#/$defs/config/properties/live/properties/market_snapshot_ticker_strategy"
+        "execution": {
+          "$ref": "#/$defs/scenarioPatch:live.execution"
         },
-        "max_active_candle_tail_gap_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/max_active_candle_tail_gap_minutes"
+        "execution.execution_delay_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/execution_delay_seconds"
         },
-        "max_concurrent_api_requests": {
-          "$ref": "#/$defs/config/properties/live/properties/max_concurrent_api_requests"
+        "execution.limit_order_create_max_market_dist_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/limit_order_create_max_market_dist_pct"
         },
-        "max_disk_candles_per_symbol_per_tf": {
-          "$ref": "#/$defs/config/properties/live/properties/max_disk_candles_per_symbol_per_tf"
+        "execution.max_n_cancellations_per_batch": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/max_n_cancellations_per_batch"
         },
-        "max_forager_candle_refresh_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/max_forager_candle_refresh_seconds"
+        "execution.max_n_creations_per_batch": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/max_n_creations_per_batch"
         },
-        "max_forager_candle_staleness_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/max_forager_candle_staleness_minutes"
+        "execution.order_match_tolerance_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_match_tolerance_pct"
         },
-        "max_memory_candles_per_symbol": {
-          "$ref": "#/$defs/config/properties/live/properties/max_memory_candles_per_symbol"
+        "execution.order_replacement_churn_gate_activation_count": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_activation_count"
         },
-        "max_n_cancellations_per_batch": {
-          "$ref": "#/$defs/config/properties/live/properties/max_n_cancellations_per_batch"
+        "execution.order_replacement_churn_gate_market_dist_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_market_dist_pct"
         },
-        "max_n_creations_per_batch": {
-          "$ref": "#/$defs/config/properties/live/properties/max_n_creations_per_batch"
+        "execution.order_replacement_churn_gate_stability_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_stability_minutes"
         },
-        "max_n_restarts_per_day": {
-          "$ref": "#/$defs/config/properties/live/properties/max_n_restarts_per_day"
+        "execution.order_replacement_churn_gate_window_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_window_minutes"
         },
-        "max_ohlcv_fetches_per_minute": {
-          "$ref": "#/$defs/config/properties/live/properties/max_ohlcv_fetches_per_minute"
+        "execution.time_in_force": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/time_in_force"
         },
-        "order_match_tolerance_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/order_match_tolerance_pct"
+        "fills": {
+          "$ref": "#/$defs/scenarioPatch:live.fills"
         },
-        "order_replacement_churn_gate_activation_count": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_activation_count"
+        "fills.fee_conversion_max_age_ms": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_conversion_max_age_ms"
         },
-        "order_replacement_churn_gate_market_dist_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_market_dist_pct"
+        "fills.fee_pct_fallback": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_pct_fallback"
         },
-        "order_replacement_churn_gate_stability_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_stability_minutes"
+        "fills.fee_pct_sanity_abs_max": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_pct_sanity_abs_max"
         },
-        "order_replacement_churn_gate_window_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/order_replacement_churn_gate_window_minutes"
+        "fills.fills_confirmation_overlap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fills_confirmation_overlap_minutes"
         },
-        "recv_window_ms": {
-          "$ref": "#/$defs/config/properties/live/properties/recv_window_ms"
+        "fills.fills_recent_overlap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fills_recent_overlap_minutes"
         },
-        "risk_bootstrap_max_lookback_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/risk_bootstrap_max_lookback_minutes"
+        "modes": {
+          "$ref": "#/$defs/scenarioPatch:live.modes"
         },
-        "startup_phase_budgets": {
-          "$ref": "#/$defs/scenarioPatch:live.startup_phase_budgets"
+        "modes.disapproved_position": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/disapproved_position"
         },
-        "time_in_force": {
-          "$ref": "#/$defs/config/properties/live/properties/time_in_force"
+        "modes.long": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/long"
         },
-        "user": {
-          "$ref": "#/$defs/config/properties/live/properties/user"
+        "modes.short": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/short"
         },
-        "warmup_concurrency": {
-          "$ref": "#/$defs/config/properties/live/properties/warmup_concurrency"
+        "recovery": {
+          "$ref": "#/$defs/scenarioPatch:live.recovery"
         },
-        "warmup_jitter_seconds": {
-          "$ref": "#/$defs/config/properties/live/properties/warmup_jitter_seconds"
+        "recovery.exchange_symbol_unavailable_cooldown_hours": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery/properties/exchange_symbol_unavailable_cooldown_hours"
+        },
+        "recovery.max_n_restarts_per_day": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery/properties/max_n_restarts_per_day"
+        },
+        "startup": {
+          "$ref": "#/$defs/scenarioPatch:live.startup"
+        },
+        "startup.defer_broad_candle_warmup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/defer_broad_candle_warmup"
+        },
+        "startup.force_cold_startup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/force_cold_startup"
+        },
+        "startup.risk_bootstrap_max_lookback_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/risk_bootstrap_max_lookback_minutes"
+        },
+        "startup.startup_phase_budgets": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/startup_phase_budgets"
+        },
+        "startup.warmup_concurrency": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/warmup_concurrency"
+        },
+        "startup.warmup_jitter_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/warmup_jitter_seconds"
         }
       },
       "patternProperties": {},
       "additionalProperties": false
     },
-    "scenarioPatch:live.startup_phase_budgets": {
+    "scenarioPatch:live.account": {
+      "type": "object",
+      "properties": {
+        "balance_hysteresis_snap_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/balance_hysteresis_snap_pct"
+        },
+        "balance_override": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/balance_override"
+        },
+        "leverage": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/leverage"
+        },
+        "margin_mode_preference": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/margin_mode_preference"
+        },
+        "user": {
+          "$ref": "#/$defs/config/properties/live/properties/account/properties/user"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.api": {
+      "type": "object",
+      "properties": {
+        "custom_endpoints_path": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/custom_endpoints_path"
+        },
+        "market_snapshot_ticker_strategy": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/market_snapshot_ticker_strategy"
+        },
+        "max_concurrent_api_requests": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/max_concurrent_api_requests"
+        },
+        "recv_window_ms": {
+          "$ref": "#/$defs/config/properties/live/properties/api/properties/recv_window_ms"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.candles": {
+      "type": "object",
+      "properties": {
+        "candle_lock_timeout_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/candle_lock_timeout_seconds"
+        },
+        "enable_archive_candle_fetch": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/enable_archive_candle_fetch"
+        },
+        "enable_forager_ws_candles": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/enable_forager_ws_candles"
+        },
+        "forager_ws_candle_rest_audit_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/forager_ws_candle_rest_audit_minutes"
+        },
+        "inactive_coin_candle_ttl_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/inactive_coin_candle_ttl_minutes"
+        },
+        "max_active_candle_tail_gap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_active_candle_tail_gap_minutes"
+        },
+        "max_disk_candles_per_symbol_per_tf": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_disk_candles_per_symbol_per_tf"
+        },
+        "max_forager_candle_refresh_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_forager_candle_refresh_seconds"
+        },
+        "max_forager_candle_staleness_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_forager_candle_staleness_minutes"
+        },
+        "max_memory_candles_per_symbol": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_memory_candles_per_symbol"
+        },
+        "max_ohlcv_fetches_per_minute": {
+          "$ref": "#/$defs/config/properties/live/properties/candles/properties/max_ohlcv_fetches_per_minute"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.execution": {
+      "type": "object",
+      "properties": {
+        "execution_delay_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/execution_delay_seconds"
+        },
+        "limit_order_create_max_market_dist_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/limit_order_create_max_market_dist_pct"
+        },
+        "max_n_cancellations_per_batch": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/max_n_cancellations_per_batch"
+        },
+        "max_n_creations_per_batch": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/max_n_creations_per_batch"
+        },
+        "order_match_tolerance_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_match_tolerance_pct"
+        },
+        "order_replacement_churn_gate_activation_count": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_activation_count"
+        },
+        "order_replacement_churn_gate_market_dist_pct": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_market_dist_pct"
+        },
+        "order_replacement_churn_gate_stability_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_stability_minutes"
+        },
+        "order_replacement_churn_gate_window_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/order_replacement_churn_gate_window_minutes"
+        },
+        "time_in_force": {
+          "$ref": "#/$defs/config/properties/live/properties/execution/properties/time_in_force"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.fills": {
+      "type": "object",
+      "properties": {
+        "fee_conversion_max_age_ms": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_conversion_max_age_ms"
+        },
+        "fee_pct_fallback": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_pct_fallback"
+        },
+        "fee_pct_sanity_abs_max": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fee_pct_sanity_abs_max"
+        },
+        "fills_confirmation_overlap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fills_confirmation_overlap_minutes"
+        },
+        "fills_recent_overlap_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/fills/properties/fills_recent_overlap_minutes"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.modes": {
+      "type": "object",
+      "properties": {
+        "disapproved_position": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/disapproved_position"
+        },
+        "long": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/long"
+        },
+        "short": {
+          "$ref": "#/$defs/config/properties/live/properties/modes/properties/short"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.recovery": {
+      "type": "object",
+      "properties": {
+        "exchange_symbol_unavailable_cooldown_hours": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery/properties/exchange_symbol_unavailable_cooldown_hours"
+        },
+        "max_n_restarts_per_day": {
+          "$ref": "#/$defs/config/properties/live/properties/recovery/properties/max_n_restarts_per_day"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.startup": {
+      "type": "object",
+      "properties": {
+        "defer_broad_candle_warmup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/defer_broad_candle_warmup"
+        },
+        "force_cold_startup": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/force_cold_startup"
+        },
+        "risk_bootstrap_max_lookback_minutes": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/risk_bootstrap_max_lookback_minutes"
+        },
+        "startup_phase_budgets": {
+          "$ref": "#/$defs/scenarioPatch:live.startup.startup_phase_budgets"
+        },
+        "warmup_concurrency": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/warmup_concurrency"
+        },
+        "warmup_jitter_seconds": {
+          "$ref": "#/$defs/config/properties/live/properties/startup/properties/warmup_jitter_seconds"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:live.startup.startup_phase_budgets": {
       "type": "object",
       "properties": {},
       "patternProperties": {},
@@ -21679,6 +22002,8 @@
           },
           "patternProperties": {
             "^coin_overrides\\.[^.]+\\.live$": false,
+            "^coin_overrides\\.[^.]+\\.live\\.account$": false,
+            "^coin_overrides\\.[^.]+\\.live\\.modes$": false,
             "^coin_overrides\\.[^.]+\\.bot$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.hsl$": false,
@@ -21754,7 +22079,15 @@
                 "bot.short.strategy.trailing_martingale.entry",
                 "bot.short.universe",
                 "bot.short.unstuck",
-                "live.startup_phase_budgets",
+                "live.account",
+                "live.api",
+                "live.candles",
+                "live.execution",
+                "live.fills",
+                "live.modes",
+                "live.recovery",
+                "live.startup",
+                "live.startup.startup_phase_budgets",
                 "optimize.gpu",
                 "optimize.gpu.screening",
                 "optimize.prefilter",
@@ -22688,8 +23021,143 @@
         {
           "type": "object",
           "properties": {
+            "account": {
+              "$ref": "#/$defs/fixedPatch:live.account"
+            },
+            "api": {
+              "$ref": "#/$defs/fixedPatch:live.api"
+            },
+            "candles": {
+              "$ref": "#/$defs/fixedPatch:live.candles"
+            },
+            "execution": {
+              "$ref": "#/$defs/fixedPatch:live.execution"
+            },
+            "fills": {
+              "$ref": "#/$defs/fixedPatch:live.fills"
+            },
+            "modes": {
+              "$ref": "#/$defs/fixedPatch:live.modes"
+            },
+            "recovery": {
+              "$ref": "#/$defs/fixedPatch:live.recovery"
+            },
+            "startup": {
+              "$ref": "#/$defs/fixedPatch:live.startup"
+            }
+          },
+          "patternProperties": {},
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "startup.startup_phase_budgets"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "fixedPatch:live.account": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.account"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.api": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.api"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.candles": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.candles"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.execution": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.execution"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.fills": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.fills"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.modes": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.modes"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.recovery": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.recovery"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:live.startup": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:live.startup"
+        },
+        {
+          "type": "object",
+          "properties": {
             "startup_phase_budgets": {
-              "$ref": "#/$defs/fixedPatch:live.startup_phase_budgets"
+              "$ref": "#/$defs/fixedPatch:live.startup.startup_phase_budgets"
             }
           },
           "patternProperties": {},
@@ -22697,10 +23165,10 @@
         }
       ]
     },
-    "fixedPatch:live.startup_phase_budgets": {
+    "fixedPatch:live.startup.startup_phase_budgets": {
       "allOf": [
         {
-          "$ref": "#/$defs/scenarioPatch:live.startup_phase_budgets"
+          "$ref": "#/$defs/scenarioPatch:live.startup.startup_phase_budgets"
         },
         {
           "type": "object",

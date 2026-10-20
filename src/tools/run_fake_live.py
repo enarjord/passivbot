@@ -385,8 +385,10 @@ def _install_fake_user_override(
     config: dict, scenario_path: str, user: str | None
 ) -> tuple[str, callable]:
     config.setdefault("live", {})
-    fake_user = user or str(config["live"].get("user") or "fake_runner")
-    config["live"]["user"] = fake_user
+    fake_user = user or str(
+        config["live"].get("account", {}).get("user") or "fake_runner"
+    )
+    config["live"]["account"]["user"] = fake_user
     fake_user_info = {
         "exchange": "fake",
         "quote": str(config["live"].get("quote") or "USDT"),
@@ -439,7 +441,9 @@ def _fake_fill_cache_coverage(
     """Return the earliest fake-history start covered by the staged cache."""
     config = getattr(bot, "config", None)
     live = config.get("live") if isinstance(config, dict) else None
-    if isinstance(live, dict) and "risk_bootstrap_max_lookback_minutes" in live:
+    if isinstance(live, dict) and "risk_bootstrap_max_lookback_minutes" in live.get(
+        "startup", {}
+    ):
         now_ms = int(fake_client.now_ms)
         minutes, _ = risk_bootstrap_horizon_minutes(config)
         minutes = max(minutes, require_live_runtime_support(config))
@@ -1156,7 +1160,9 @@ async def _run_fake_case(
             output_dir / "run_metadata.json",
             {
                 "assertions_enforced": bool(enforce_assertions),
-                "user": str(config.get("live", {}).get("user") or ""),
+                "user": str(
+                    config.get("live", {}).get("account", {}).get("user") or ""
+                ),
                 "scenario_path": str(scenario_path),
                 "live_event_capture": live_event_capture,
             },
@@ -1209,7 +1215,7 @@ def main() -> int:
     parser.add_argument("config", help="Passivbot config path")
     parser.add_argument("scenario", help="Fake scenario path (HJSON or JSON)")
     parser.add_argument(
-        "--user", default=None, help="Override live.user from the config"
+        "--user", default=None, help="Override live.account.user from the config"
     )
     parser.add_argument(
         "--max-steps",

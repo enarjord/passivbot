@@ -202,7 +202,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
 def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
     for value in (1.5, "1.5", True):
         config = get_template_config()
-        config["live"]["fee_conversion_max_age_ms"] = value
+        config["live"]["fills"]["fee_conversion_max_age_ms"] = value
 
         with pytest.raises(
             TypeError, match="fee_conversion_max_age_ms must be an integer"
@@ -213,14 +213,14 @@ def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
 def test_limit_order_create_market_distance_default_and_validation():
     config = get_template_config()
 
-    assert config["live"]["limit_order_create_max_market_dist_pct"] == pytest.approx(
-        0.8
-    )
+    assert config["live"]["execution"][
+        "limit_order_create_max_market_dist_pct"
+    ] == pytest.approx(0.8)
     validate_config(config, verbose=False)
 
     for value in (-0.01, 1.0, float("inf"), "invalid"):
         invalid = get_template_config()
-        invalid["live"]["limit_order_create_max_market_dist_pct"] = value
+        invalid["live"]["execution"]["limit_order_create_max_market_dist_pct"] = value
 
         with pytest.raises(
             (TypeError, ValueError),
@@ -234,7 +234,7 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
 
     config = get_template_config()
 
-    assert config["live"][
+    assert config["live"]["recovery"][
         "exchange_symbol_unavailable_cooldown_hours"
     ] == pytest.approx(6.0)
     validate_config(config, verbose=False)
@@ -249,7 +249,9 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
         "invalid",
     ):
         invalid = get_template_config()
-        invalid["live"]["exchange_symbol_unavailable_cooldown_hours"] = value
+        invalid["live"]["recovery"][
+            "exchange_symbol_unavailable_cooldown_hours"
+        ] = value
 
         with pytest.raises(
             (TypeError, ValueError),
@@ -258,11 +260,11 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
             validate_config(invalid, verbose=False)
 
     disabled = get_template_config()
-    disabled["live"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
+    disabled["live"]["recovery"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
     validate_config(disabled, verbose=False)
 
     maximum = get_template_config()
-    maximum["live"][
+    maximum["live"]["recovery"][
         "exchange_symbol_unavailable_cooldown_hours"
     ] = MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
     validate_config(maximum, verbose=False)
@@ -271,11 +273,17 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
 def test_order_replacement_churn_gate_defaults_and_validation():
     config = get_template_config()
     live = config["live"]
-    assert live["order_replacement_churn_gate_activation_count"] == 10
-    assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
-    assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
-    assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
-    assert live["order_match_tolerance_pct"] == pytest.approx(0.0002)
+    assert live["execution"]["order_replacement_churn_gate_activation_count"] == 10
+    assert live["execution"][
+        "order_replacement_churn_gate_window_minutes"
+    ] == pytest.approx(10.0)
+    assert live["execution"][
+        "order_replacement_churn_gate_stability_minutes"
+    ] == pytest.approx(2.0)
+    assert live["execution"][
+        "order_replacement_churn_gate_market_dist_pct"
+    ] == pytest.approx(0.005)
+    assert live["execution"]["order_match_tolerance_pct"] == pytest.approx(0.0002)
     validate_config(config, verbose=False)
 
     invalid_cases = (
@@ -299,7 +307,7 @@ def test_order_replacement_churn_gate_defaults_and_validation():
 
     for tolerance in (0.0, 0.01):
         valid = get_template_config()
-        valid["live"]["order_match_tolerance_pct"] = tolerance
+        valid["live"]["execution"]["order_match_tolerance_pct"] = tolerance
         validate_config(valid, verbose=False)
 
 
@@ -361,7 +369,7 @@ def test_retired_initial_entry_gate_accepts_matching_new_distance():
     prepared = _prepare_released_v8(source)
 
     assert "initial_entry_exec_max_market_dist_pct" not in prepared["live"]
-    assert prepared["live"][
+    assert prepared["live"]["execution"][
         "order_replacement_churn_gate_market_dist_pct"
     ] == pytest.approx(0.005)
 
@@ -384,8 +392,10 @@ def test_retired_disabled_initial_entry_gate_rejects_enabled_new_gate():
 
 def test_retired_enabled_initial_entry_gate_rejects_disabled_new_gate():
     source = get_template_config()
-    source["live"].pop("order_replacement_churn_gate_market_dist_pct")
-    source["live"]["order_replacement_churn_gate_activation_count"] = 0
+    source["live"].get("execution", {}).pop(
+        "order_replacement_churn_gate_market_dist_pct"
+    )
+    source["live"]["execution"]["order_replacement_churn_gate_activation_count"] = 0
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
 
     with pytest.raises(ValueError, match="disables the replacement"):
@@ -402,7 +412,7 @@ def test_prepare_config_rejects_deprecated_price_distance_threshold():
 
 def test_prepare_config_preserves_raw_snapshot_and_effective_input():
     source, base_config_path, raw_snapshot = load_input_config(None, log_info=False)
-    source["live"]["user"] = "test_user"
+    source["live"]["account"]["user"] = "test_user"
 
     prepared = prepare_config(
         source,
@@ -415,13 +425,13 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
     )
 
     assert "backtest" not in prepared
-    assert prepared["live"]["user"] == "test_user"
+    assert prepared["live"]["account"]["user"] == "test_user"
     assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == pytest.approx(
         prepared["bot"]["long"]["forager"]["volume_ema_span_1m"]
     )
     assert prepared["_raw"] == raw_snapshot
-    assert prepared["_raw_effective"]["live"]["user"] == "test_user"
-    assert prepared["_raw"]["live"]["user"] != "test_user"
+    assert prepared["_raw_effective"]["live"]["account"]["user"] == "test_user"
+    assert prepared["_raw"]["live"]["account"]["user"] != "test_user"
 
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
@@ -668,8 +678,8 @@ def test_migrate_config_version_sets_current_schema_version():
 def test_loss_gate_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
     assert template["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
-    assert template["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
-    assert template["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
+    assert template["live"]["fills"]["fee_pct_fallback"] == pytest.approx(0.0002)
+    assert template["live"]["fills"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     sparse = {
         "config_version": "v9.0.0",
@@ -681,15 +691,15 @@ def test_loss_gate_default_is_consistent_across_template_and_formatting():
     }
     formatted = format_config(sparse, verbose=False)
     assert formatted["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
-    assert formatted["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
-    assert formatted["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
+    assert formatted["live"]["fills"]["fee_pct_fallback"] == pytest.approx(0.0002)
+    assert formatted["live"]["fills"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     loaded = load_config(
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
     assert loaded["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
-    assert loaded["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
-    assert loaded["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
+    assert loaded["live"]["fills"]["fee_pct_fallback"] == pytest.approx(0.0002)
+    assert loaded["live"]["fills"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
 
 def test_migrate_btc_collateral_settings_converts_bool():
@@ -2261,10 +2271,12 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
         14.5
     )
     assert getattr(parsed_loss, "bot.global.loss_gate.max_drawdown_ratio") == pytest.approx(0.75)
-    assert getattr(parsed_fee_fallback, "live.fee_pct_fallback") == pytest.approx(0.0)
-    assert getattr(parsed_fee_sanity, "live.fee_pct_sanity_abs_max") == pytest.approx(
-        0.002
+    assert getattr(parsed_fee_fallback, "live.fills.fee_pct_fallback") == pytest.approx(
+        0.0
     )
+    assert getattr(
+        parsed_fee_sanity, "live.fills.fee_pct_sanity_abs_max"
+    ) == pytest.approx(0.002)
     assert getattr(parsed_maker_fee, "backtest.maker_fee_override") == pytest.approx(
         0.0002
     )
@@ -2303,7 +2315,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
     assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
     assert "max_minutes" in config["bot"]["global"]["warmup"]
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
-    assert "user" not in config["live"]
+    assert "user" not in config["live"].get("account", {})
 
 
 def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_fields():
@@ -2316,7 +2328,7 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
     add_config_arguments(parser, config, command="optimize")
     parsed = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5"])
     assert getattr(parsed, "bot.global.unstuck.memory_ema_span_minutes") == 17.5
-    assert "user" not in config["live"]
+    assert "user" not in config["live"].get("account", {})
 
 
 def test_live_reserved_user_alias_parses_short_and_long():
@@ -2339,8 +2351,8 @@ def test_live_reserved_user_alias_parses_short_and_long():
     parsed_short = parser.parse_args(["-u", "binance_01"])
     parsed_long = parser.parse_args(["--user", "bybit_02"])
 
-    assert getattr(parsed_short, "live.user") == "binance_01"
-    assert getattr(parsed_long, "live.user") == "bybit_02"
+    assert getattr(parsed_short, "live.account.user") == "binance_01"
+    assert getattr(parsed_long, "live.account.user") == "bybit_02"
 
 
 @pytest.mark.parametrize(
