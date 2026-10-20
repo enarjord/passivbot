@@ -185,9 +185,9 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         source_side = optimizer_numeric_group_source_side(
             config, pside, "forager", overrides_list=overrides_list,
         )
-        # A deliberately fixed all-zero group disables score components. Only
-        # an explicitly searched source group may reach the normalization fallback.
-        # Mirrored targets inherit that source's domain, including at all-low.
+        # Preserve fixed raw zero genes; runtime scoring still applies its existing
+        # EMA-readiness fallback. Searched source groups normalize here, and
+        # mirrored targets inherit that source's domain, including at all-low.
         if not any(weights.values()) and all(
             ("bot", source_side, "forager", "score_weights", name) in fixed_value_paths
             or (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
@@ -323,16 +323,18 @@ def _build_optimizer_boundary_configs(config: dict, *, rms_consumer_corner: bool
 
 
 def validate_optimizer_effective_configs(config: dict) -> None:
-    """Validate exact finalized optimizer boundary configs before backend work."""
+    """Validate effective optimizer boundary policy before backend work."""
 
+    from config.bot import normalize_bot_forager_config
     from config.validate import validate_config
 
     for candidate in _build_optimizer_boundary_configs(config):
         effective = deepcopy(candidate)
         effective.setdefault("optimize", {})["fixed_runtime_overrides"] = {}
-        # Validate the finalized candidate itself. Search bounds were checked
-        # while building its shape; reapplying them here would undo runtime pins.
+        # Validate the canonical scoring view without changing raw candidate genes.
+        # Reapplying search bounds here would undo runtime pins.
         effective["optimize"]["bounds"] = {}
+        normalize_bot_forager_config(effective, verbose=False)
         validate_config(
             effective,
             raw_optimize=effective.get("optimize", {}),
