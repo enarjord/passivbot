@@ -306,6 +306,7 @@ pip-selfcheck.json
 .vscode/*
 !.vscode/tasks.json
 !.vscode/launch.json
+!.vscode/settings.json
 *.code-workspace
 
 ### VisualStudioCode Patch ###

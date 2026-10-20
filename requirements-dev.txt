@@ -1,5 +1,6 @@
 pytest>=8.2,<9
 pytest-asyncio>=1.2,<2
+jsonschema>=4.18,<5
 prospector==1.17.3
 mkdocs==1.6.1
 mkdocs-material==9.5.32
