@@ -453,6 +453,10 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     if value is _MISSING:
         raise KeyError(f"unknown or inactive configuration path {path!r}")
     for event in reversed(events):
+        if event["kind"] == "inherited":
+            # This event names the inheritance source and already carries the
+            # query's effective value; resolving null is not normalization.
+            break
         event_path = _event_path(event)
         if coin is not None and event_path[:2] == ("coin_overrides", coin):
             event_path = event_path[2:]
