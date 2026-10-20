@@ -737,3 +737,40 @@ def test_explain_alias_coin_bound_trace_uses_canonical_identity_without_rewritin
     assert report["search"]["status"] == "optimizer_transform"
     assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0"]] * 2
     assert source == original
+
+
+@pytest.mark.parametrize("direct", [False, True])
+def test_explain_nested_coin_container_keeps_file_and_inline_leaf_origins(tmp_path, direct):
+    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {
+        "ema_span_0": 17.5, "ema_span_1": 21.5, "close_pct": 0.12,
+    }}}})
+    source = policy()
+    source["coin_overrides"] = {"1000SHIB": {
+        "override_config_path": override.name,
+        "bot": {"long": {"unstuck": {"close_pct": 0.13}}},
+    }}
+    original = deepcopy(source)
+    path = "coin_overrides.SHIB.bot.long.unstuck" if direct else "bot.long.unstuck"
+    report = explain_config(source, path, coin=None if direct else "SHIB",
+                            base_config_path=str(tmp_path / "input.json"))
+    assert report["value"]["close_pct"] == 0.13
+    assert report["value"]["ema_span_0"] == 17.5
+    assert report["value"]["ema_span_1"] == 21.5
+    origins = {(event["path"], event["kind"]): event for event in report["sources"]}
+    for span in ("ema_span_0", "ema_span_1"):
+        event = origins[(f"coin_overrides.SHIB.bot.long.unstuck.{span}", "override_file")]
+        assert event["file"] == str(override)
+    assert ("coin_overrides.SHIB.bot.long.unstuck.close_pct", "coin_override") in origins
+    assert all(event["kind"] not in {"normalization", "default_or_derived"} for event in report["sources"])
+    assert source == original
+
+
+def test_explain_selected_coin_keeps_unrelated_root_container_normalization_visible():
+    source = policy()
+    source["backtest"]["end_date"] = "now"
+    source["coin_overrides"] = {"SHIB": {"bot": {"long": {"unstuck": {"close_pct": 0.13}}}}}
+    report = explain_config(source, "backtest", coin="SHIB")
+    assert report["value"]["end_date"] != "now"
+    assert report["sources"][-1] == {
+        "kind": "normalization", "path": "backtest", "value": report["value"],
+    }

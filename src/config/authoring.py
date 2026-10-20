@@ -347,7 +347,7 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         raise ValueError("--coin expects a root setting path, not a coin_overrides path")
     if coin is not None:
         coin = next(iter(normalize_coin_override_keys({coin: {}}, verbose=False)))
-    direct_coin = parts[:1] == ("coin_overrides",) and len(parts) > 2
+    direct_coin = parts[:1] == ("coin_overrides",) and len(parts) >= 2
     if direct_coin:
         normalized_coin = next(iter(normalize_coin_override_keys({parts[1]: {}}, verbose=False)))
         parts = ("coin_overrides", normalized_coin, *parts[2:])
@@ -376,6 +376,9 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     source_context["coin_overrides"] = normalize_coin_override_keys(
         source_context["coin_overrides"], verbose=False,
     )
+    # Both suite and optimizer entrypoints materialize coin policy before pins.
+    # Keep that actual ordering distinct from the retained authored sources.
+    context = parse_overrides(context, verbose=False)
     dataset_selection = None
     applied_overrides = []
 
@@ -394,6 +397,16 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     def apply(raw, kind):
         nonlocal context, source_context
         normalized = normalize_scenario_overrides(raw)
+        if kind == "fixed_runtime_override":
+            from optimization.warmup import _apply_config_overrides
+
+            _apply_config_overrides(context, normalized)
+        elif kind == "scenario_override":
+            from suite_runner import apply_scenario_overrides
+
+            apply_scenario_overrides(context, normalized)
+        else:
+            context = _patch(context, normalized)
         for selector, value in normalized.items():
             target = resolve_dotted_config_path(context, selector)
             target, event_value = _canonical_coin_event(target, value)
@@ -403,7 +416,6 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
             if _intersects(query_target, target) or _intersects(selected_target, target):
                 events.append(event)
             _set(source_context, target, event_value)
-        context = _patch(context, normalized)
 
     if optimize:
         from optimizer_overrides import optimizer_overrides
@@ -477,17 +489,21 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         # identifiers must survive without a heuristic underlying substitution.
         coin_patch = effective["coin_overrides"].get(selected_coin, {})
         inline = normalize_coin_override_keys(before_files["coin_overrides"], verbose=False).get(selected_coin, {})
-        value = _get(coin_patch, coin_parts)
-        if value is not _MISSING:
-            inline_value = _get(inline, coin_parts)
+
+        def append_coin_source(local_parts):
+            value = _get(coin_patch, local_parts)
+            if value is _MISSING:
+                return
+            target = ("coin_overrides", selected_coin, *local_parts)
+            inline_value = _get(inline, local_parts)
             generated = [event for event in applied_overrides if
-                         selected_target[:len(_event_path(event))] == _event_path(event)
-                         and _get(event["value"], selected_target[len(_event_path(event)):]) is not _MISSING]
+                         target[:len(_event_path(event))] == _event_path(event)
+                         and _get(event["value"], target[len(_event_path(event)):]) is not _MISSING]
             event = (deepcopy(generated[-1]) if generated and (
                          inline_value is not _MISSING or generated[-1]["kind"] == "optimizer_transform") else
                      {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
-                     "path": ".".join(selected_target),
-                     "path_parts": list(selected_target), "value": deepcopy(value)}
+                     "path": ".".join(target),
+                     "path_parts": list(target), "value": deepcopy(value)}
                      )
             if event["kind"] == "override_file":
                 from .overrides import _resolve_override_config_path
@@ -497,13 +513,24 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
                 event["file"] = _resolve_override_config_path(file_context, selected_coin)
             if not events or events[-1] != event:
                 events.append(event)
+
+        def leaf_paths(value, prefix):
+            if isinstance(value, dict):
+                for name, child in value.items():
+                    yield from leaf_paths(child, (*prefix, name))
+            else:
+                yield prefix
+
+        for local_parts in leaf_paths(_get(coin_patch, coin_parts), coin_parts):
+            append_coin_source(local_parts)
         if coin is not None:
             effective = nested_update(deepcopy(effective), coin_patch)
     value = _get(effective, parts)
     if value is _MISSING:
         raise KeyError(f"unknown or inactive configuration path {path!r}")
     # Bounds explain declarations; target transformations are separate evidence.
-    normalization_events = reversed(events) if bound_target is None else ()
+    aggregate_coin_sources = selected_coin is not None and isinstance(_get(coin_patch, coin_parts), dict)
+    normalization_events = reversed(events) if bound_target is None and not aggregate_coin_sources else ()
     for event in normalization_events:
         if event["kind"] in {"inherited", "coin_list_file"}:
             # These events explain a source resolution already; comparing its
