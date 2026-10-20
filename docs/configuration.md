@@ -555,9 +555,9 @@ Bounds mirror the corresponding bot path exactly: `bot.long.forager.score_weight
 has its bound at `optimize.bounds.long.forager.score_weights.volume`. Both trees use the
 scopes `global`, `long`, and `short`; flattened optimizer identifiers are internal adapters.
 
-Only explicitly listed v9 bounds authorize variation. An omitted parameter, side, `bounds`, or
-`optimize` section fixes every omitted numeric optimizer dimension at its effective configured
-value. Resolved exports show these as `[value, value]`; a null cooldown ceiling remains outside
+Only explicitly listed v9 bounds authorize independent search dimensions. An omitted parameter,
+side, `bounds`, or `optimize` section fixes every omitted numeric optimizer gene at its configured
+value after canonical normalization. Resolved exports show these as `[value, value]`; a null cooldown ceiling remains outside
 the numeric genome unless a finite bound is explicitly provided. Sorting, cleaning, and reloading
 must not add recommended search ranges.
 
@@ -573,6 +573,13 @@ This offline authoring command replaces `optimize.bounds`, keeps other configura
 and refuses to overwrite an existing output. Review its visible ranges before optimizing.
 Released-v8 migration materializes its formerly inherited ranges before adopting v9 omission
 semantics; previously optional adaptive bounds still freeze at configured values.
+
+Explicit `optimize.enable_overrides` relationships still apply after candidate genes are assigned.
+Their targets are derived effective values: `mirror_short_from_long` can change omitted short
+parameters, `couple_unstuck_ema_spans` derives unstuck spans from strategy spans, and
+`lossless_close_trailing` derives the close threshold from its retracement constraint. A fixed
+range or fixed-parameter selector on such a target fixes its independent gene, not the derived
+result. Review these authored relationships together with bounds and runtime/scenario pins.
 
 Forager score weights form one normalized group. A varying weight must not renormalize an omitted,
 constant, runtime-pinned, scenario-pinned, or `fixed_params` positive weight. Search all participating positive
@@ -615,7 +622,11 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
                 "max_positions": [1, 20, 1],
                 "total_wallet_exposure_limit": [0.1, 2.0, 0.1]
             },
-            "forager": {"score_weights": {"volume": [0.0, 1.0, 0.01]}},
+            "forager": {"score_weights": {
+                "volume": [0.0, 1.0, 0.01],
+                "volatility": [0.0, 1.0, 0.01],
+                "ema_readiness": [0.0, 1.0, 0.01]
+            }},
             "strategy": {
                 "trailing_martingale": {
                     "entry": {"ema_span_0": [100, 10000], "ema_span_1": [200, 20000]}

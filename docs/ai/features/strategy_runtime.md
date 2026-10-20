@@ -349,12 +349,18 @@ not request RMS history, allocate CPU trackers, or restrict candle intervals. Op
 dataset preflight checks finalized per-coin eligibility and overrides across reachable
 boundary configs. Entry-ineligible sides do not restrict intervals or RMS activation.
 
-Canonical loading and cleaning expose every omitted numeric optimizer dimension as
-a fixed range at its effective configured value. The complete starting profile has
+Canonical loading and cleaning expose every omitted independent numeric optimizer dimension as
+a fixed range at its canonically normalized configured value. The complete starting profile has
 explicit recommended domains; sparse authored documents never inherit those ranges.
 A missing maximum-duration bound is hydrated only for a finite ceiling; null remains
 unbounded. Released-v8 conversion materializes its inherited mandatory domains from
 frozen released defaults while retaining previously optional adaptive freezing.
+
+Authored `enable_overrides` remain explicit derivation policy after gene assignment. Mirrored
+short parameters, coupled unstuck spans and the lossless-close threshold may therefore move with
+their source parameters despite omitted/fixed target genes. A fixed target domain or selector
+constrains the independent genome, not the result of an authored derivation. Preserve existing
+transformation and runtime/scenario precedence; describe derived targets separately from fixed genes.
 
 Forager normalization may not move an omitted, constant, selector-fixed, runtime-pinned, scenario-pinned,
 or anchor-fixed positive weight while siblings vary. Such partial searches fail before

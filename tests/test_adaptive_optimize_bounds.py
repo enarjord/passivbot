@@ -33,7 +33,7 @@ def freeze_other_score_weights(config):
         )
         target = config["optimize"]["bounds"][side]["forager"]
         for name in ("volume", "volatility", "ema_readiness"):
-            target[f"score_weights_{name}"] = [values[name], values[name]]
+            target.setdefault("score_weights", {})[name] = [values[name], values[name]]
 
 def omit_cooldown_bounds(config):
     for side in ("long", "short"):
@@ -160,7 +160,7 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
     for side in ("long", "short"):
         forager = source["optimize"]["bounds"][side]["forager"]
         if form == "nested":
-            forager["score_weights"] = {"unilateralness": [0.0, 1.0, 0.01]}
+            forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
             forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
         elif form == "grouped":
             forager["score_weights_unilateralness"] = [0.0, 1.0, 0.01]

@@ -82,7 +82,10 @@ the saved population rather than starting a new one.
 ## Running Optimization
 
 An authored v9 config searches only its explicitly listed domains. Missing bounds fix the
-corresponding configured numeric values; they do not inherit ranges from the schema template.
+corresponding normalized numeric genes; they do not inherit ranges from the schema template.
+Explicit `enable_overrides` relationships can still derive effective target values from searched
+sources, even when a target's own gene is omitted or fixed. Review these relationships with bounds;
+a fixed independent gene does not imply a fixed derived result.
 Use `passivbot tool optimizer-bounds input.json search.json` to write recommended ranges explicitly.
 Running `passivbot optimize` without a config selects the complete starting profile, whose visible
 bound ranges remain searched. Existing fixed/runtime/scenario and anchor precedence still applies;

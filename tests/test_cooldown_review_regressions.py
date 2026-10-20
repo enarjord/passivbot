@@ -391,7 +391,7 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     if consumer == "forager":
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-        cfg["optimize"]["bounds"][side]["forager"]["score_weights_unilateralness"] = [0, 1]
+        cfg["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0, 1]
     else:
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
     prepared = prepare_config(cfg, verbose=False)

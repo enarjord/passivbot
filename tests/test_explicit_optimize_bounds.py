@@ -17,7 +17,7 @@ from tools.optimizer_bounds import apply_recommended_bounds, main
 
 
 def flattened(config):
-    return flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["live"]["strategy_kind"])
+    return flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["global"]["strategy_kind"])
 
 
 def gene_bounds(config):
@@ -29,7 +29,7 @@ def gene_bounds(config):
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
 def test_omitted_dimensions_freeze_effective_values_through_exports(omission, strategy):
     source = get_template_config()
-    source["live"]["strategy_kind"] = strategy
+    source["bot"]["global"]["strategy_kind"] = strategy
     if strategy == "trailing_martingale":
         source["bot"]["long"]["strategy"][strategy]["entry"]["ema_span_0"] = 123.5
         branch = source["optimize"]["bounds"]["long"]["strategy"][strategy]["entry"]
@@ -108,7 +108,7 @@ def weight_source(bounds):
 
 
 def test_partial_weight_search_cannot_move_omitted_positive_coordinates():
-    source = weight_source({"score_weights_volume": [0.1, 1.0]})
+    source = weight_source({"score_weights": {"volume": [0.1, 1.0]}})
     with pytest.raises(ValueError, match=r"bot.long.forager.score_weights.*ema_readiness, volatility.*freeze the whole"):
         prepare_config(source, verbose=False)
 
@@ -119,12 +119,12 @@ def test_weight_validation_respects_the_supplied_search_space():
     config = prepare_config(get_template_config(), verbose=False)
     with pytest.raises(ValueError, match="partial normalized-weight search"):
         validate_optimize_bounds_against_bot_config(config, {
-            "long": {"forager": {"score_weights_volume": [0.1, 1.0]}}
+            "long": {"forager": {"score_weights": {"volume": [0.1, 1.0]}}}
         })
 
 
 def test_whole_positive_weight_group_keeps_normalization_and_zero_omission():
-    source = weight_source({f"score_weights_{name}": [0.1, 1.0] for name in ("volume", "volatility", "ema_readiness")})
+    source = weight_source({"score_weights": {name: [0.1, 1.0] for name in ("volume", "volatility", "ema_readiness")}})
     config = prepare_config(source, verbose=False)
     bounds = gene_bounds(config)
     result = build_optimizer_vector_config([bound.high for bound in bounds.values()], config)
@@ -135,7 +135,7 @@ def test_whole_positive_weight_group_keeps_normalization_and_zero_omission():
 
 @pytest.mark.parametrize("low,allowed", [(0.1, True), (0.0, False)])
 def test_omitted_zero_weight_is_safe_except_at_an_unauthorized_fallback(low, allowed):
-    source = weight_source({"score_weights_volume": [low, 1.0]})
+    source = weight_source({"score_weights": {"volume": [low, 1.0]}})
     source["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 1.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 0.0,
     }
@@ -283,12 +283,12 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
     from config.hsl import generated_template
 
     source = generated_template(get_template_config(), scope)
-    source["live"]["strategy_kind"] = strategy
+    source["bot"]["global"]["strategy_kind"] = strategy
     source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.5
     source["optimize"]["bounds"] = {}
     prescribed = apply_recommended_bounds(source)
-    assert prescribed["live"]["strategy_kind"] == strategy
-    assert prescribed["bot"]["risk"]["hsl"]["scope"] == scope
+    assert prescribed["bot"]["global"]["strategy_kind"] == strategy
+    assert prescribed["bot"]["global"]["hsl"]["scope"] == scope
     assert flattened(prescribed)["long_forager_score_weights_unilateralness"] == [0.0, 1.0, 0.01]
     assert gene_bounds(prepare_config(prescribed, verbose=False)) == gene_bounds(prescribed)
 
@@ -326,3 +326,102 @@ def test_v8_runtime_weight_pin_requires_freezing_its_normalized_group():
     source["optimize"]["fixed_params"] = ["bot.long.forager.score_weights"]
     migrated = migrate(source, memory_span_minutes=123.5)
     assert migrate(migrated.config).config == migrated.config
+
+
+@pytest.mark.parametrize("parts", [
+    ("future_scope", "unknown"),
+    ("global", "future_policy", "unknown"),
+    ("global", "unstuck", "future_span"),
+    ("long", "forager", "score_weights", "future_signal"),
+    ("long", "risk", "position_exposure_enforcer", "future_threshold"),
+    ("long", "strategy", "trailing_martingale", "entry", "future_span"),
+])
+def test_v8_materializing_ranges_preserves_unknown_bounds_for_strict_rejection(parts):
+    source = released_v8_policy()
+    target = source["optimize"]["bounds"]
+    for part in parts[:-1]:
+        target = target.setdefault(part, {})
+    target[parts[-1]] = [0.0, 1.0]
+    original = deepcopy(source)
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        migrate(source, memory_span_minutes=123.5)
+    assert source == original
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("owner,legacy", [
+    ("position_exposure_enforcer", "position_exposure_enforcer_threshold"),
+    ("total_exposure_enforcer", "total_exposure_enforcer_threshold"),
+])
+def test_v8_materializing_ranges_cannot_erase_conflicting_feature_bound_aliases(reverse, owner, legacy):
+    source = released_v8_policy()
+    risk = source["optimize"]["bounds"]["long"]["risk"]
+    aliases = [(legacy, [0.5, 0.75]), (owner, {"threshold": [0.9, 1.0]})]
+    risk.pop(legacy)
+    risk.update(reversed(aliases) if reverse else aliases)
+    with pytest.raises(ValueError, match="conflict"):
+        migrate(source, memory_span_minutes=123.5)
+
+
+def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
+    from config.migrations.released_v8 import materialize_released_v8_optimizer_bounds
+
+    source = get_template_config()
+    source["optimize"]["bounds"] = {
+        "global": {"unknown": {"future": [2.0, 3.0]}},
+        "long": {
+            "risk": {"position_exposure_enforcer": {"threshold": [0.9, 0.95], "future": [4.0, 5.0]}},
+            "forager": {"score_weights": {"volume": [0.2, 0.8], "future": [6.0, 7.0]}},
+        },
+    }
+    authored = deepcopy(source["optimize"]["bounds"])
+    materialize_released_v8_optimizer_bounds(source, changes=[])
+    bounds = source["optimize"]["bounds"]
+    assert bounds["global"] == authored["global"]
+    assert bounds["long"]["risk"]["position_exposure_enforcer"] == authored["long"]["risk"]["position_exposure_enforcer"]
+    for name in ("volume", "future"):
+        assert bounds["long"]["forager"]["score_weights"][name] == authored["long"]["forager"]["score_weights"][name]
+    assert bounds["long"]["forager"]["score_weights"]["volatility"] == [0, 1, 0.01]
+    assert bounds["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == [100.0, 2880.0, 10.0]
+
+
+@pytest.mark.parametrize("transform,source_parts,target_parts,configured,domain", [
+    ("couple_unstuck_ema_spans", ("strategy", "trailing_martingale", "entry", "ema_span_0"),
+     ("long", "unstuck", "ema_span_0"), 42.5, [100.0, 200.0]),
+    ("mirror_short_from_long", ("risk", "total_wallet_exposure_limit"),
+     ("short", "risk", "total_wallet_exposure_limit"), 0.0, [0.5, 1.5]),
+    ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_pct"),
+     ("long", "strategy", "trailing_martingale", "close", "threshold_base_pct"), 0.0, [0.01, 0.02]),
+])
+def test_explicit_relationships_derive_effective_targets_without_opening_target_genes(
+    transform, source_parts, target_parts, configured, domain,
+):
+    source = get_template_config()
+    target = source["bot"]
+    for part in target_parts[:-1]:
+        target = target[part]
+    target[target_parts[-1]] = configured
+    source["optimize"]["enable_overrides"] = [transform]
+    source["optimize"]["bounds"] = {"long": {}}
+    target = source["optimize"]["bounds"]["long"]
+    for part in source_parts[:-1]:
+        target = target.setdefault(part, {})
+    target[source_parts[-1]] = domain
+    config = prepare_config(source, verbose=False)
+    key_paths = get_optimization_key_paths(config)
+    bounds = extract_bounds_tuple_list_from_config(config)
+    varied = [path for (_key, path), bound in zip(key_paths, bounds) if bound.low != bound.high]
+    assert varied == [("bot", "long", *source_parts)]
+    if transform == "couple_unstuck_ema_spans":
+        assert ("bot", *target_parts) not in [path for _key, path in key_paths]
+    else:
+        gene = next(bound for (_key, path), bound in zip(key_paths, bounds) if path == ("bot", *target_parts))
+        assert gene.low == gene.high == configured
+    values = []
+    for corner in ("low", "high"):
+        candidate = build_optimizer_vector_config([getattr(bound, corner) for bound in bounds], config)
+        target = candidate["bot"]
+        for part in target_parts:
+            target = target[part]
+        values.append(target)
+    assert values == domain

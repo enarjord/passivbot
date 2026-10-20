@@ -175,7 +175,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         weights = forager_cfg["score_weights"]
         flat_bounds = flatten_optimize_bounds(
             config.get("optimize", {}).get("bounds", {}),
-            strategy_kind=config["live"]["strategy_kind"],
+            strategy_kind=config["bot"]["global"]["strategy_kind"],
         )
         # A deliberately fixed all-zero group disables score components. Only
         # an explicitly searched group may reach the normalization fallback.

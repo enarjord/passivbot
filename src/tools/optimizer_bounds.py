@@ -21,7 +21,7 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     template = get_template_config()
     validate_authored_config(source, template)
     result = strip_config_metadata(source)
-    mode = result.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
+    mode = result.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")
     profile = generated_template(template, mode)
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
     # Unilateralness is optional in the starting profile. A positive fixed
@@ -29,7 +29,7 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     for side in ("long", "short"):
         weights = result.get("bot", {}).get(side, {}).get("forager", {}).get("score_weights", {})
         if weights.get("unilateralness", 0.0) > 0:
-            result["optimize"]["bounds"][side]["forager"]["score_weights_unilateralness"] = [0.0, 1.0, 0.01]
+            result["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
     result = prepare_config(result, base_config_path=base_config_path, verbose=False)
     result = strip_config_metadata(result)
     result["live"].pop("base_config_path", None)
@@ -37,9 +37,16 @@ def apply_recommended_bounds(source, *, base_config_path=""):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path)
-    parser.add_argument("output", type=Path)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "Sparse authored v9 bounds freeze omitted dimensions. get_template_config() "
+            "and the no-config optimizer command provide a complete starting profile "
+            "with explicit recommended ranges."
+        ),
+    )
+    parser.add_argument("input", type=Path, help="Authored v9 configuration")
+    parser.add_argument("output", type=Path, help="New config containing explicit bounds")
     parser.add_argument("--preset", choices=("recommended",), default="recommended")
     args = parser.parse_args(argv)
     from config import load_input_config

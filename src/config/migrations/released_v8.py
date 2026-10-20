@@ -1042,9 +1042,11 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
     adaptive dimensions are deliberately absent here: canonical hydration fixes
     them at their configured values, as the released loader did.
     """
-    from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+    from config.optimize_bounds import flatten_optimize_bounds
 
-    kind = config.get("live", {}).get("strategy_kind", _RELEASED_V8_DEFAULTS["live"]["strategy_kind"])
+    kind = config.get("bot", {}).get("global", {}).get(
+        "strategy_kind", _RELEASED_V8_DEFAULTS["live"]["strategy_kind"]
+    )
     # Use only the released default resolver, never the evolving v9 template or
     # loaded native metadata, for the ranges that v8 supplied implicitly.
     released = resolve_released_v8_defaults({
@@ -1052,32 +1054,43 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
         "live": {"strategy_kind": kind},
     })
     defaults = released["optimize"]["bounds"]
-    portfolio = config.get("bot", {}).get("risk", {}).get("hsl", {}).get("scope") == "portfolio"
+    portfolio = config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope") == "portfolio"
     for side in ("long", "short"):
         shared = defaults[side]
+        shared["strategy"] = {kind: shared["strategy"][kind]}
         shared["risk"]["max_positions"] = shared["risk"].pop("n_positions")
+        for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+            shared["risk"][owner] = {"threshold": shared["risk"].pop(f"{owner}_threshold")}
         shared["unstuck"]["exposure_trigger_ratio"] = shared["unstuck"].pop("threshold")
         shared["forager"].pop("volume_drop_pct", None)
+        shared["forager"]["score_weights"] = {
+            name: shared["forager"].pop(f"score_weights_{name}")
+            for name in ("volume", "volatility", "ema_readiness")
+        }
         if portfolio:
             shared.pop("hsl", None)
         else:
             shared["hsl"]["drawdown_ratio_ema_span_minutes"] = shared["hsl"].pop("ema_span_minutes")
     original = config.setdefault("optimize", {}).get("bounds", {})
-    authored = flatten_optimize_bounds(original, strategy_kind=kind)
-    flat = flatten_optimize_bounds(defaults, strategy_kind=kind)
-    added = sorted(set(flat) - set(authored))
-    flat.update(authored)
-    # Keep unrecognized root fields for the authored-schema gate below. The
-    # flattening helper only understands grouped bounds and must not turn a
-    # misspelled field into a successful migration by silently discarding it.
-    rebuilt = {
-        key: deepcopy(value) for key, value in original.items()
-        if key not in {"long", "short", "unstuck", "risk"}
-    }
-    for key, value in flat.items():
-        set_flat_optimize_bound(rebuilt, kind, key, value)
+    rebuilt = deepcopy(original)
+
+    def overlay_missing(target, template):
+        if not isinstance(target, dict):
+            return
+        for key, value in template.items():
+            if key not in target:
+                target[key] = deepcopy(value)
+            elif isinstance(value, dict):
+                overlay_missing(target[key], value)
+
+    # Preserve every authored field and malformed container for the strict
+    # schema gate. Rebuilding from a flattened projection would erase unknown
+    # nested/global fields and could silently turn invalid input into success.
+    overlay_missing(rebuilt, defaults)
     config["optimize"]["bounds"] = rebuilt
-    if added:
+    if rebuilt != original:
+        authored = flatten_optimize_bounds(original, strategy_kind=kind)
+        added = sorted(set(flatten_optimize_bounds(defaults, strategy_kind=kind)) - set(authored))
         changes.append(dict(
             path="optimize.bounds", old=deepcopy(original), new=deepcopy(rebuilt),
             reason="materialized released-v8 inherited search ranges before explicit-only v9 bounds",

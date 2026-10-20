@@ -133,8 +133,8 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert cleaned["backtest"]["reducer"] == {"adg_strategy_eq": "max", "default": "mean"}
     assert cleaned["live"]["startup_phase_budgets"] == {"candles": 15.0}
     assert "_note" not in cleaned["coin_overrides"]["BTC"]
-    assert cleaned["optimize"]["bounds"]["long"]["forager"][
-        "score_weights_unilateralness"
+    assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
+        "unilateralness"
     ] == [0.0, 0.5]
     assert set(cleaned["bot"]["long"]["strategy"]) == {strategy}
     if sparse and mode == "portfolio":

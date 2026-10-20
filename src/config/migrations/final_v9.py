@@ -684,8 +684,19 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                         f"optimize.bounds.{side}.forager.{key} conflicts with "
                         f"optimize.bounds.{side}.forager.score_weights.{name}"
                     )
+    from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
+    from config.param_paths import OPTIMIZABLE_BOT_KEY_PATHS
+    from config.strategy_spec import strategy_optimize_key_path_map
+
+    known_keys = set(strategy_optimize_key_path_map(kind)) | set(OPTIMIZABLE_BOT_KEY_PATHS)
+    for mapping in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.values():
+        known_keys.update(f"{side}_{key}" for side in ("long", "short") for key in mapping.values())
+    known_keys.update(SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].values())
     for key, value in flatten_optimize_bounds(bounds, strategy_kind=kind).items():
-        set_flat_optimize_bound(bounds, kind, key, value)
+        # Canonical unknown fields retain their authored tree and reach the
+        # strict schema gate; they are not optimizer aliases to reinterpret.
+        if key in known_keys:
+            set_flat_optimize_bound(bounds, kind, key, value)
     for side in ("long", "short"):
         for key in list(bounds.get(side, {}).get("forager", {})):
             if key.startswith("score_weights_"):
