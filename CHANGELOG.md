@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Rebuild Pareto selection fronts on the active objectives after limits, normalize on that
+  front, and report loaded, post-limit, and active-front counts separately.
+
 - Reuse validated GPU optimizer execution identities when every registered
   scenario/exchange variant replays exactly one selected coin and a bounded
   planner-local guard proves that only finite request-owned numeric values

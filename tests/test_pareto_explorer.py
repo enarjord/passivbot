@@ -658,7 +658,8 @@ def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(
     assert payload["scenario_front_complete"] is False
     assert payload["loaded_count"] == 4
     assert payload["retained_count"] == 4
-    assert payload["scenario_front_count"] == 2
+    assert payload["scenario_front_count"] == 1
+    assert payload["active_front_count"] == 1
     assert payload["selected"]["objectives"]["sharpe_ratio_strategy_eq"] == pytest.approx(1.5)
 
 

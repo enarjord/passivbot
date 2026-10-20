@@ -58,14 +58,17 @@ Available methods:
 - `lexicographic` - strict objective priority order
 - `outranking` - simplified PROMETHEE-style pairwise net-flow ranking
 
-The explorer applies limits first, then ranks the retained candidates. It is intended for quickly
+The explorer applies limits first, rebuilds the nondominated front on the active objectives,
+then normalizes and ranks only that front. Text and JSON output distinguish loaded candidates,
+limit survivors, and active-front members (`active_front_count` in JSON). Equal active-objective
+vectors retain the first member in filename order. It is intended for quickly
 promoting one config out of a large Pareto front without opening the dashboard. Its selection
 methods are practical decision heuristics for high-dimensional Passivbot fronts, not full formal
 multi-criteria decision-analysis implementations.
 
 For suite optimization results, `--scenario LABEL` projects every saved Pareto member onto that
 scenario's stored metric values, applies CLI limits in that scenario context, rebuilds a
-nondominated sub-front using the original `optimize.scoring` goals, and then runs the selected
+nondominated sub-front using the active objectives and their min/max goals, and then runs the selected
 decision method. Suite artifacts store one mean value per scenario and metric, so explicit
 non-`mean` limit statistics are unavailable in this mode. The rebuilt front covers only members of
 the saved aggregate-suite Pareto front: candidates already discarded by the optimizer cannot be
@@ -89,6 +92,8 @@ staged before installation. Concurrent destination mutation is outside the tool'
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
+Normalization uses the active front's min/max values, so removing dominated candidates can
+change the selected winner. The front covers only saved candidates, not discarded optimizer results.
 
 ## Pareto trade-off explorer
 

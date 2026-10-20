@@ -392,7 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--objectives",
         type=str,
         default=None,
-        help="Optional comma-separated subset of metrics to consider. May include stored non-scoring metrics with known min/max direction.",
+        help="Rebuild and normalize the front on these comma-separated objectives. May include stored non-scoring metrics with known min/max direction.",
     )
     parser.add_argument(
         "--weight",
@@ -655,11 +655,19 @@ def build_scenario_front(
     candidates: Sequence[ParetoCandidate],
     scoring_specs: Sequence[ObjectiveSpec],
 ) -> List[ParetoCandidate]:
+    return build_objective_front(candidates, scoring_specs)
+
+
+def build_objective_front(
+    candidates: Sequence[ParetoCandidate],
+    scoring_specs: Sequence[ObjectiveSpec],
+) -> List[ParetoCandidate]:
+    """Keep nondominated objective vectors, retaining the first member of a tie."""
     metrics = [spec.metric for spec in scoring_specs]
     front: List[ParetoCandidate] = []
     front_vectors: List[tuple[float, ...]] = []
     for candidate in candidates:
-        vector = tuple(float(candidate.objectives[metric]) for metric in metrics)
+        vector = tuple(float(_resolve_candidate_metric_value(candidate, metric)) for metric in metrics)
         if vector in front_vectors:
             continue
         if any(
@@ -1414,6 +1422,7 @@ def format_selection_result(
         ("Pareto directory", _display_path(pareto_dir)),
         ("Loaded candidates", str(loaded_count)),
         ("Retained after limits", str(retained_count)),
+        ("Active front", str(len(candidates))),
     ]
     if scenario is not None:
         summary_rows.extend(
@@ -1767,15 +1776,19 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     )
     if not filtered_candidates:
         raise ValueError("No Pareto candidates remained after applying limits.")
-    scenario_front = (
-        build_scenario_front(filtered_candidates, scoring_specs)
-        if scenario is not None
-        else filtered_candidates
+    active_specs = _resolve_active_objective_metrics(
+        scoring_specs,
+        filtered_candidates,
+        objectives_arg=getattr(args, "objectives", None),
+        priority_arg=getattr(args, "priority", None) if method == "lexicographic" else None,
+        target_map=_parse_key_value_pairs(getattr(args, "target", None) or [], value_name="target"),
+        method=method,
     )
-    if not scenario_front:
-        raise ValueError("No Pareto candidates remained after rebuilding the scenario front.")
+    active_front = build_objective_front(filtered_candidates, active_specs)
+    if not active_front:
+        raise ValueError("No Pareto candidates remained after rebuilding the active-objective front.")
     result = select_candidate(
-        scenario_front,
+        active_front,
         scoring_specs,
         method=method,
         objectives_arg=getattr(args, "objectives", None),
@@ -1827,13 +1840,14 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
-        ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
-        score_vector = result.details.get("score_vector") or [result.score] * len(scenario_front)
+        ranking_order = result.details.get("ranking_order") or [active_front.index(result.candidate)]
+        score_vector = result.details.get("score_vector") or [result.score] * len(active_front)
         active_metrics = result.details.get("active_metrics") or list(result.objective_values)
         payload = {
             "pareto_dir": str(pareto_dir),
             "loaded_count": len(candidates),
             "retained_count": len(filtered_candidates),
+            "active_front_count": len(active_front),
             "applied_limits": _json_ready(active_limits),
             "method": result.method,
             "method_description": _method_explanation(result.method),
@@ -1847,7 +1861,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             },
             "top_candidates": _json_ready(
                 _ranked_rows(
-                    scenario_front,
+                    active_front,
                     active_metrics,
                     ranking_order,
                     score_vector,
@@ -1860,7 +1874,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 {
                     "scenario": scenario,
                     "front_scope": "saved_aggregate_pareto_members",
-                    "scenario_front_count": len(scenario_front),
+                    "scenario_front_count": len(active_front),
                     "scenario_front_complete": False,
                 }
             )
@@ -1876,11 +1890,11 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     else:
         output = format_selection_result(
             pareto_dir,
-            candidates=scenario_front,
+            candidates=active_front,
             loaded_count=len(candidates),
             retained_count=len(filtered_candidates),
             scenario=scenario,
-            scenario_front_count=len(scenario_front) if scenario is not None else None,
+            scenario_front_count=len(active_front) if scenario is not None else None,
             active_limits=active_limits,
             result=result,
             show_top=show_top,
