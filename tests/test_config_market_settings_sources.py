@@ -32,7 +32,7 @@ def _base_config():
                 "warmup": {"ratio": 0.2, "max_minutes": 0},
             },
         },
-        "live": {},
+        "live": {"account": {}, "candles": {}},
         "optimize": {"bounds": {}, "scoring": []},
     }
 
