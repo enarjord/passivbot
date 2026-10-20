@@ -271,8 +271,14 @@ controllers measure successful replay, reductions and host results using actual 
 counts, including partial request cohorts. Failed work and each actual count's first cold
 use do not contribute to throughput trials. A window requires at least six successful warm
 observations and three seconds of completed work, so ordinary finite searches can assess
-width trials without waiting for a 24-sample/30-second window. Median smoothing, the growth
-threshold, smaller-plateau preference, cooldown and rollback apply. Growth also requires
+width trials without waiting for a 24-sample/30-second window. Timing samples are grouped
+by actual candidate count. Each group retains up to six durations; its median duration is
+weighted by its number of warm occurrences. Total actual candidates divided by the sum of
+those weighted durations supplies the decision rate. This smooths stalls within like-sized
+work without giving a singleton the same influence as a nearly full batch. A rarely seen
+count has fewer samples to smooth. The decision rate is a robust replay-cost estimate,
+not measured end-to-end optimizer throughput. The growth threshold, smaller-plateau
+preference, cooldown and rollback apply. Growth also requires
 observed request demand and device memory headroom. When growth is blocked, the service
 can probe a smaller width using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
 screening or a bounded producer from indefinitely starving the tuner of evidence or
