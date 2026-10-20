@@ -3167,7 +3167,7 @@ def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_ord
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
-    bot._live_values["forager_score_hysteresis_pct"] = 0.005
+    bot.config["bot"]["global"]["forager"]["score_hysteresis_pct"] = 0.005
     bot.open_orders[symbol] = [
         {
             "symbol": symbol,
