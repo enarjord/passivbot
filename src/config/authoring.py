@@ -437,7 +437,8 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
                          _intersects(("coin_overrides", coin, *parts), _event_path(event))]
             event = (deepcopy(generated[-1]) if generated and generated[-1]["kind"] == "optimizer_transform" else
                      {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
-                     "path": ".".join(("coin_overrides", coin, *parts)), "value": deepcopy(value)}
+                     "path": ".".join(("coin_overrides", coin, *parts)),
+                     "path_parts": ["coin_overrides", coin, *parts], "value": deepcopy(value)}
                      )
             if event["kind"] == "override_file":
                 from .overrides import _resolve_override_config_path
@@ -451,8 +452,16 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     value = _get(effective, parts)
     if value is _MISSING:
         raise KeyError(f"unknown or inactive configuration path {path!r}")
-    if events and "value" in events[-1] and events[-1]["value"] != value:
-        events.append({"kind": "normalization", "path": ".".join(parts), "value": deepcopy(value)})
+    for event in reversed(events):
+        event_path = _event_path(event)
+        if coin is not None and event_path[:2] == ("coin_overrides", coin):
+            event_path = event_path[2:]
+        if "value" not in event or parts[:len(event_path)] != event_path:
+            continue
+        projected = _get(event["value"], parts[len(event_path):])
+        if projected is not _MISSING and projected != value:
+            events.append({"kind": "normalization", "path": ".".join(parts), "value": deepcopy(value)})
+        break
     registry = get_field_registry()
     field = registry.find(parts)
     inherited_field = None
@@ -485,7 +494,7 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         "scope": metadata_field.scope if metadata_field else None,
         "default": {"declared": default is not NO_DEFAULT, **({"value": deepcopy(default)} if default is not NO_DEFAULT else {})},
         "sources": events, "search": _search_treatment(
-            context, bound_target or search_path, authored, coin_patch=search_coin_patch,
+            full, bound_target or search_path, authored, coin_patch=search_coin_patch,
             coin=coin or (parts[1] if parts[:1] == ("coin_overrides",) and len(parts) > 2 else None),
             applied_overrides=applied_overrides,
         ),

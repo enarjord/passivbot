@@ -229,8 +229,8 @@ def test_explain_defaults_declared_metadata_and_search_source():
     assert report["unit"] is None
     assert report["default"] == {"declared": True, "value": 790.0}
     assert report["sources"][0]["kind"] == "default_or_derived"
-    assert report["search"]["status"] == "searched"
-    assert report["search"]["bounds_source"] == "loader_default_or_derived"
+    assert report["search"]["status"] == "omitted_fixed"
+    assert report["search"]["bounds_source"] == "configured_value"
 
 
 def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
@@ -516,3 +516,41 @@ def test_explain_mirroring_does_not_derive_directional_selection():
     report = explain_config(source, 'bot.short.forager.always_include', optimize=True)
     assert report['value'] == ['ETH']
     assert all(event['kind'] != 'optimizer_transform' for event in report['sources'])
+
+
+@pytest.mark.parametrize('metadata,value', [
+    ('fixed_params', ['long.unstuck.ema_span_0']),
+    ('bounds.long.unstuck.ema_span_0', [300.0, 400.0]),
+    ('enable_overrides', ['couple_unstuck_ema_spans']),
+])
+def test_explain_scenario_metadata_does_not_redefine_outer_genome(metadata, value):
+    source = policy()
+    source['optimize']['bounds'] = {'long': {'unstuck': {'ema_span_0': [100.0, 200.0]}}}
+    source['backtest']['scenarios'] = [{'label': 'one', 'overrides': {'optimize.' + metadata: value}}]
+    report = explain_config(source, 'bot.long.unstuck.ema_span_0', optimize=True, scenario='one')
+    assert report['search']['gene_status'] == 'searched'
+    assert report['search']['bounds'] == [100.0, 200.0]
+    assert report['search']['fixed_selectors'] == []
+    assert report['search']['independent_gene'] is True
+
+
+def test_explain_bound_declaration_is_not_normalized_by_a_target_transform():
+    source = policy()
+    source['optimize']['bounds'] = {}
+    source['optimize']['enable_overrides'] = ['mirror_short_from_long']
+    source['bot']['long']['risk']['total_wallet_exposure_limit'] = 1.25
+    source['bot']['short']['risk']['total_wallet_exposure_limit'] = 0.0
+    report = explain_config(source, 'optimize.bounds.short.risk.total_wallet_exposure_limit', optimize=True)
+    assert report['value'] == [0.0, 0.0]
+    assert report['search']['status'] == 'optimizer_transform'
+    assert any(event['kind'] == 'optimizer_transform' and event['value'] == 1.25 for event in report['sources'])
+    assert all(event['kind'] != 'normalization' for event in report['sources'])
+
+
+def test_explain_complete_object_override_projects_value_before_reporting_normalization():
+    source = policy()
+    weights = {'volume': 0.5, 'volatility': 0.25, 'ema_readiness': 0.25, 'unilateralness': 0.0}
+    source['backtest']['scenarios'] = [{'label': 'one', 'overrides': {'bot.long.forager.score_weights': weights}}]
+    report = explain_config(source, 'bot.long.forager.score_weights.volume', scenario='one')
+    assert report['value'] == 0.5
+    assert report['sources'][-1]['kind'] == 'scenario_override'

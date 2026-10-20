@@ -425,7 +425,11 @@ separate from config objects and are not accepted as authored configuration.
 The new authoring views accept valid sparse configs and preserve whole-section omission: omitting
 `bot` keeps the default profile, while an explicit `bot: {}` disables both omitted sides. Search
 treatment distinguishes a sampled gene from effective fixed/runtime/scenario shadowing and retains
-the original gene status and bounds. `--coin` selects a normalized authored override key; exact market
+the original gene status and bounds. Omitted independent genes are fixed at their configured values;
+enabled optimizer relationships report their actual derived targets and dependency paths, including
+coupled spans that are absent from the genome. Scenario optimizer metadata does not redefine the
+outer search space. Bound declarations and their derived bot targets retain separate provenance.
+`--coin` selects a normalized authored override key; exact market
 and exchange-qualified identifiers remain intact. Mapping a different market alias requires prepared
 market metadata and is outside this offline view.
 
