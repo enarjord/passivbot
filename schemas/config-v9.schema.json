@@ -134,7 +134,7 @@
                 "boolean",
                 "null"
               ],
-              "default": false,
+              "default": null,
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -792,6 +792,72 @@
             "global": {
               "type": "object",
               "properties": {
+                "execution": {
+                  "type": "object",
+                  "properties": {
+                    "market_order_near_touch_threshold": {
+                      "type": "number",
+                      "default": 0.001,
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "market price",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "market_orders_allowed": {
+                      "type": "boolean",
+                      "default": false,
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "forager": {
+                  "type": "object",
+                  "properties": {
+                    "score_hysteresis_pct": {
+                      "type": "number",
+                      "default": 0.02,
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "incumbent selection score",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "hedge_mode": {
+                  "type": "boolean",
+                  "default": false,
+                  "x-passivbot-scope": "global",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
                 "hsl": {
                   "type": "object",
                   "properties": {
@@ -970,6 +1036,54 @@
                   },
                   "additionalProperties": false
                 },
+                "strategy_kind": {
+                  "type": "string",
+                  "default": "trailing_martingale",
+                  "enum": [
+                    "trailing_martingale",
+                    "ema_anchor"
+                  ],
+                  "x-passivbot-scope": "global",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "universe": {
+                  "type": "object",
+                  "properties": {
+                    "filter_by_min_effective_cost": {
+                      "type": "boolean",
+                      "default": true,
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "minimum_coin_age_days": {
+                      "type": "number",
+                      "default": 60.0,
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "days",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "unstuck": {
                   "type": "object",
                   "properties": {
@@ -987,6 +1101,42 @@
                       ],
                       "x-passivbot-optimizer-key": "unstuck_memory_ema_span_minutes",
                       "x-passivbot-optimizable": true,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "warmup": {
+                  "type": "object",
+                  "properties": {
+                    "max_minutes": {
+                      "type": "number",
+                      "default": 0,
+                      "description": "Zero disables the history warmup cap; acquisition and activation retain their existing formulas.",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "ratio": {
+                      "type": "number",
+                      "default": 0.3,
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "indicator span",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "forbidden"
                     }
                   },
@@ -1101,6 +1251,31 @@
                 "forager": {
                   "type": "object",
                   "properties": {
+                    "always_include": {
+                      "type": "array",
+                      "default": [],
+                      "description": "Persistent side selection within the eligible universe; operational modes and risk gates retain priority.",
+                      "x-passivbot-scope": "long",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "items": {
+                        "type": "string",
+                        "description": "Persistent selection identifier; order is retained and duplicates are removed.",
+                        "x-passivbot-scope": "long",
+                        "x-passivbot-consumers": [
+                          "live",
+                          "backtest",
+                          "optimize"
+                        ],
+                        "x-passivbot-optimizable": false,
+                        "x-passivbot-coin-override": "forbidden"
+                      }
+                    },
                     "score_weights": {
                       "type": "object",
                       "properties": {
@@ -1402,88 +1577,100 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "position_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "default": false,
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "allowed"
+                    "position_exposure_enforcer": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "default": false,
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "allowed"
+                        },
+                        "threshold": {
+                          "type": "number",
+                          "default": 1.0,
+                          "description": "A positive threshold is required when its exposure enforcer is enabled.",
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "effective per-position wallet exposure limit",
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            1,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "allowed"
+                        }
+                      },
+                      "additionalProperties": false
                     },
-                    "position_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "default": 1.0,
-                      "description": "A positive threshold is required when its exposure enforcer is enabled.",
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "effective per-position wallet exposure limit",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        1,
-                        1,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "allowed"
-                    },
-                    "total_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "default": false,
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "total_exposure_enforcer_policy": {
-                      "type": "string",
-                      "default": "reduce_overweight",
-                      "enum": [
-                        "reduce_overweight",
-                        "reduce_portfolio"
-                      ],
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "total_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "default": 1.0,
-                      "description": "Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.",
-                      "exclusiveMinimum": 0.0,
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "side total wallet exposure limit",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "long_risk_twel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        1,
-                        1,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "forbidden"
+                    "total_exposure_enforcer": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "default": false,
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "forbidden"
+                        },
+                        "policy": {
+                          "type": "string",
+                          "default": "reduce_overweight",
+                          "enum": [
+                            "reduce_overweight",
+                            "reduce_portfolio"
+                          ],
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "forbidden"
+                        },
+                        "threshold": {
+                          "type": "number",
+                          "default": 1.0,
+                          "description": "Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.",
+                          "exclusiveMinimum": 0.0,
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "side total wallet exposure limit",
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "long_risk_twel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            1,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "forbidden"
+                        }
+                      },
+                      "additionalProperties": false
                     },
                     "total_wallet_exposure_limit": {
                       "type": "number",
@@ -2205,6 +2392,116 @@
                   },
                   "additionalProperties": false
                 },
+                "universe": {
+                  "type": "object",
+                  "properties": {
+                    "approved_coins": {
+                      "type": [
+                        "array",
+                        "string",
+                        "null"
+                      ],
+                      "default": [
+                        "BTC",
+                        "ETH",
+                        "BNB",
+                        "XRP",
+                        "SOL",
+                        "TRX",
+                        "HYPE",
+                        "DOGE",
+                        "ZEC",
+                        "XLM",
+                        "ADA",
+                        "LINK",
+                        "XMR",
+                        "CC",
+                        "BCH",
+                        "TON",
+                        "GRAM",
+                        "LTC",
+                        "HBAR",
+                        "SUI",
+                        "AVAX",
+                        "NEAR",
+                        "UNI",
+                        "TAO",
+                        "ASTER",
+                        "ONDO",
+                        "AAVE",
+                        "DOT",
+                        "WLD",
+                        "MNT",
+                        "MORPHO",
+                        "POL",
+                        "ATOM",
+                        "RENDER",
+                        "KAS",
+                        "ENA",
+                        "ALGO",
+                        "FIL",
+                        "ARB",
+                        "APT",
+                        "INJ"
+                      ],
+                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "x-passivbot-scope": "long",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ignored_coins": {
+                      "type": [
+                        "array",
+                        "string",
+                        "null"
+                      ],
+                      "default": [],
+                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "x-passivbot-scope": "long",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "unstuck": {
                   "type": "object",
                   "properties": {
@@ -2470,6 +2767,31 @@
                 "forager": {
                   "type": "object",
                   "properties": {
+                    "always_include": {
+                      "type": "array",
+                      "default": [],
+                      "description": "Persistent side selection within the eligible universe; operational modes and risk gates retain priority.",
+                      "x-passivbot-scope": "short",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "items": {
+                        "type": "string",
+                        "description": "Persistent selection identifier; order is retained and duplicates are removed.",
+                        "x-passivbot-scope": "short",
+                        "x-passivbot-consumers": [
+                          "live",
+                          "backtest",
+                          "optimize"
+                        ],
+                        "x-passivbot-optimizable": false,
+                        "x-passivbot-coin-override": "forbidden"
+                      }
+                    },
                     "score_weights": {
                       "type": "object",
                       "properties": {
@@ -2771,88 +3093,100 @@
                       ],
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "position_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "default": true,
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "allowed"
+                    "position_exposure_enforcer": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "default": true,
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "allowed"
+                        },
+                        "threshold": {
+                          "type": "number",
+                          "default": 0.8,
+                          "description": "A positive threshold is required when its exposure enforcer is enabled.",
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "effective per-position wallet exposure limit",
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0.8,
+                            1.01,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "allowed"
+                        }
+                      },
+                      "additionalProperties": false
                     },
-                    "position_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "default": 0.8,
-                      "description": "A positive threshold is required when its exposure enforcer is enabled.",
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "effective per-position wallet exposure limit",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        0.8,
-                        1.01,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "allowed"
-                    },
-                    "total_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "default": true,
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "total_exposure_enforcer_policy": {
-                      "type": "string",
-                      "default": "reduce_overweight",
-                      "enum": [
-                        "reduce_overweight",
-                        "reduce_portfolio"
-                      ],
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "total_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "default": 0.8,
-                      "description": "Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.",
-                      "exclusiveMinimum": 0.0,
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "side total wallet exposure limit",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "short_risk_twel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        0.8,
-                        1.01,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "forbidden"
+                    "total_exposure_enforcer": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "default": true,
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "forbidden"
+                        },
+                        "policy": {
+                          "type": "string",
+                          "default": "reduce_overweight",
+                          "enum": [
+                            "reduce_overweight",
+                            "reduce_portfolio"
+                          ],
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "forbidden"
+                        },
+                        "threshold": {
+                          "type": "number",
+                          "default": 0.8,
+                          "description": "Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.",
+                          "exclusiveMinimum": 0.0,
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "side total wallet exposure limit",
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "short_risk_twel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0.8,
+                            1.01,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "forbidden"
+                        }
+                      },
+                      "additionalProperties": false
                     },
                     "total_wallet_exposure_limit": {
                       "type": "number",
@@ -3573,6 +3907,116 @@
                   },
                   "additionalProperties": false
                 },
+                "universe": {
+                  "type": "object",
+                  "properties": {
+                    "approved_coins": {
+                      "type": [
+                        "array",
+                        "string",
+                        "null"
+                      ],
+                      "default": [
+                        "BTC",
+                        "ETH",
+                        "BNB",
+                        "XRP",
+                        "SOL",
+                        "TRX",
+                        "HYPE",
+                        "DOGE",
+                        "ZEC",
+                        "XLM",
+                        "ADA",
+                        "LINK",
+                        "XMR",
+                        "CC",
+                        "BCH",
+                        "TON",
+                        "GRAM",
+                        "LTC",
+                        "HBAR",
+                        "SUI",
+                        "AVAX",
+                        "NEAR",
+                        "UNI",
+                        "TAO",
+                        "ASTER",
+                        "ONDO",
+                        "AAVE",
+                        "DOT",
+                        "WLD",
+                        "MNT",
+                        "MORPHO",
+                        "POL",
+                        "ATOM",
+                        "RENDER",
+                        "KAS",
+                        "ENA",
+                        "ALGO",
+                        "FIL",
+                        "ARB",
+                        "APT",
+                        "INJ"
+                      ],
+                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "x-passivbot-scope": "short",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ignored_coins": {
+                      "type": [
+                        "array",
+                        "string",
+                        "null"
+                      ],
+                      "default": [],
+                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "x-passivbot-scope": "short",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "unstuck": {
                   "type": "object",
                   "properties": {
@@ -3743,160 +4187,6 @@
         "live": {
           "type": "object",
           "properties": {
-            "approved_coins": {
-              "type": [
-                "array",
-                "string",
-                "object",
-                "null"
-              ],
-              "default": {
-                "long": [
-                  "BTC",
-                  "ETH",
-                  "BNB",
-                  "XRP",
-                  "SOL",
-                  "TRX",
-                  "HYPE",
-                  "DOGE",
-                  "ZEC",
-                  "XLM",
-                  "ADA",
-                  "LINK",
-                  "XMR",
-                  "CC",
-                  "BCH",
-                  "TON",
-                  "GRAM",
-                  "LTC",
-                  "HBAR",
-                  "SUI",
-                  "AVAX",
-                  "NEAR",
-                  "UNI",
-                  "TAO",
-                  "ASTER",
-                  "ONDO",
-                  "AAVE",
-                  "DOT",
-                  "WLD",
-                  "MNT",
-                  "MORPHO",
-                  "POL",
-                  "ATOM",
-                  "RENDER",
-                  "KAS",
-                  "ENA",
-                  "ALGO",
-                  "FIL",
-                  "ARB",
-                  "APT",
-                  "INJ"
-                ],
-                "short": [
-                  "BTC",
-                  "ETH",
-                  "BNB",
-                  "XRP",
-                  "SOL",
-                  "TRX",
-                  "HYPE",
-                  "DOGE",
-                  "ZEC",
-                  "XLM",
-                  "ADA",
-                  "LINK",
-                  "XMR",
-                  "CC",
-                  "BCH",
-                  "TON",
-                  "GRAM",
-                  "LTC",
-                  "HBAR",
-                  "SUI",
-                  "AVAX",
-                  "NEAR",
-                  "UNI",
-                  "TAO",
-                  "ASTER",
-                  "ONDO",
-                  "AAVE",
-                  "DOT",
-                  "WLD",
-                  "MNT",
-                  "MORPHO",
-                  "POL",
-                  "ATOM",
-                  "RENDER",
-                  "KAS",
-                  "ENA",
-                  "ALGO",
-                  "FIL",
-                  "ARB",
-                  "APT",
-                  "INJ"
-                ]
-              },
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden",
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "long": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "short": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              ]
-            },
             "balance_hysteresis_snap_pct": {
               "type": "number",
               "default": 0.01,
@@ -3994,21 +4284,6 @@
               "default": 10,
               "x-passivbot-coin-override": "forbidden"
             },
-            "filter_by_min_effective_cost": {
-              "type": "boolean",
-              "default": true,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "forager_score_hysteresis_pct": {
-              "type": "number",
-              "default": 0.02,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
             "forager_ws_candle_rest_audit_minutes": {
               "type": "number",
               "default": 30,
@@ -4028,85 +4303,6 @@
               "type": "string",
               "default": "",
               "x-passivbot-coin-override": "allowed"
-            },
-            "hedge_mode": {
-              "type": "boolean",
-              "default": false,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "ignored_coins": {
-              "type": [
-                "array",
-                "string",
-                "object",
-                "null"
-              ],
-              "default": {
-                "long": [],
-                "short": []
-              },
-              "x-passivbot-consumers": [
-                "live",
-                "backtest"
-              ],
-              "x-passivbot-coin-override": "forbidden",
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "long": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "short": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              ]
             },
             "inactive_coin_candle_ttl_minutes": {
               "type": "number",
@@ -4129,26 +4325,6 @@
             "margin_mode_preference": {
               "type": "string",
               "default": "cross",
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "market_order_near_touch_threshold": {
-              "type": "number",
-              "default": 0.001,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "market_orders_allowed": {
-              "type": "boolean",
-              "default": false,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
               "x-passivbot-coin-override": "forbidden"
             },
             "market_snapshot_ticker_strategy": {
@@ -4210,26 +4386,6 @@
             "max_ohlcv_fetches_per_minute": {
               "type": "integer",
               "default": 30,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "max_warmup_minutes": {
-              "type": "integer",
-              "default": 0,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "minimum_coin_age_days": {
-              "type": "number",
-              "default": 60,
-              "x-passivbot-consumers": [
-                "live",
-                "backtest",
-                "optimize"
-              ],
               "x-passivbot-coin-override": "forbidden"
             },
             "order_match_tolerance_pct": {
@@ -4315,11 +4471,6 @@
                 ]
               }
             },
-            "strategy_kind": {
-              "type": "string",
-              "default": "trailing_martingale",
-              "x-passivbot-coin-override": "forbidden"
-            },
             "time_in_force": {
               "type": "string",
               "default": "good_till_cancelled",
@@ -4338,11 +4489,6 @@
             "warmup_jitter_seconds": {
               "type": "number",
               "default": 30,
-              "x-passivbot-coin-override": "forbidden"
-            },
-            "warmup_ratio": {
-              "type": "number",
-              "default": 0.3,
               "x-passivbot-coin-override": "forbidden"
             }
           },
@@ -5315,75 +5461,87 @@
                             ]
                           ]
                         },
-                        "position_exposure_enforcer_threshold": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "array",
-                              "minItems": 1,
-                              "maxItems": 3,
-                              "prefixItems": [
+                        "position_exposure_enforcer": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "threshold": {
+                              "anyOf": [
                                 {
                                   "type": "number"
                                 },
                                 {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": [
-                                    "number",
-                                    "null"
-                                  ]
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 3,
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": [
+                                        "number",
+                                        "null"
+                                      ]
+                                    }
+                                  ],
+                                  "items": false
                                 }
                               ],
-                              "items": false
+                              "x-passivbot-target": "bot.long.risk.position_exposure_enforcer.threshold",
+                              "examples": [
+                                [
+                                  1,
+                                  1,
+                                  0.001
+                                ]
+                              ]
                             }
-                          ],
-                          "x-passivbot-target": "bot.long.risk.position_exposure_enforcer_threshold",
-                          "examples": [
-                            [
-                              1,
-                              1,
-                              0.001
-                            ]
-                          ]
+                          }
                         },
-                        "total_exposure_enforcer_threshold": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "array",
-                              "minItems": 1,
-                              "maxItems": 3,
-                              "prefixItems": [
+                        "total_exposure_enforcer": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "threshold": {
+                              "anyOf": [
                                 {
                                   "type": "number"
                                 },
                                 {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": [
-                                    "number",
-                                    "null"
-                                  ]
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 3,
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": [
+                                        "number",
+                                        "null"
+                                      ]
+                                    }
+                                  ],
+                                  "items": false
                                 }
                               ],
-                              "items": false
+                              "x-passivbot-target": "bot.long.risk.total_exposure_enforcer.threshold",
+                              "examples": [
+                                [
+                                  1,
+                                  1,
+                                  0.001
+                                ]
+                              ]
                             }
-                          ],
-                          "x-passivbot-target": "bot.long.risk.total_exposure_enforcer_threshold",
-                          "examples": [
-                            [
-                              1,
-                              1,
-                              0.001
-                            ]
-                          ]
+                          }
                         },
                         "total_wallet_exposure_limit": {
                           "anyOf": [
@@ -7444,75 +7602,87 @@
                             ]
                           ]
                         },
-                        "position_exposure_enforcer_threshold": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "array",
-                              "minItems": 1,
-                              "maxItems": 3,
-                              "prefixItems": [
+                        "position_exposure_enforcer": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "threshold": {
+                              "anyOf": [
                                 {
                                   "type": "number"
                                 },
                                 {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": [
-                                    "number",
-                                    "null"
-                                  ]
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 3,
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": [
+                                        "number",
+                                        "null"
+                                      ]
+                                    }
+                                  ],
+                                  "items": false
                                 }
                               ],
-                              "items": false
+                              "x-passivbot-target": "bot.short.risk.position_exposure_enforcer.threshold",
+                              "examples": [
+                                [
+                                  0.8,
+                                  1.01,
+                                  0.001
+                                ]
+                              ]
                             }
-                          ],
-                          "x-passivbot-target": "bot.short.risk.position_exposure_enforcer_threshold",
-                          "examples": [
-                            [
-                              0.8,
-                              1.01,
-                              0.001
-                            ]
-                          ]
+                          }
                         },
-                        "total_exposure_enforcer_threshold": {
-                          "anyOf": [
-                            {
-                              "type": "number"
-                            },
-                            {
-                              "type": "array",
-                              "minItems": 1,
-                              "maxItems": 3,
-                              "prefixItems": [
+                        "total_exposure_enforcer": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "threshold": {
+                              "anyOf": [
                                 {
                                   "type": "number"
                                 },
                                 {
-                                  "type": "number"
-                                },
-                                {
-                                  "type": [
-                                    "number",
-                                    "null"
-                                  ]
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "maxItems": 3,
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": [
+                                        "number",
+                                        "null"
+                                      ]
+                                    }
+                                  ],
+                                  "items": false
                                 }
                               ],
-                              "items": false
+                              "x-passivbot-target": "bot.short.risk.total_exposure_enforcer.threshold",
+                              "examples": [
+                                [
+                                  0.8,
+                                  1.01,
+                                  0.001
+                                ]
+                              ]
                             }
-                          ],
-                          "x-passivbot-target": "bot.short.risk.total_exposure_enforcer_threshold",
-                          "examples": [
-                            [
-                              0.8,
-                              1.01,
-                              0.001
-                            ]
-                          ]
+                          }
                         },
                         "total_wallet_exposure_limit": {
                           "anyOf": [
@@ -9845,25 +10015,42 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "position_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "description": "A positive threshold is required when its exposure enforcer is enabled.",
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "effective per-position wallet exposure limit",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        1,
-                        1,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "allowed"
+                    "position_exposure_enforcer": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "threshold": {
+                          "type": "number",
+                          "description": "A positive threshold is required when its exposure enforcer is enabled.",
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "effective per-position wallet exposure limit",
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            1,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "allowed"
+                        },
+                        "enabled": {
+                          "type": "boolean",
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "allowed"
+                        }
+                      }
                     },
                     "we_excess_allowance_pct": {
                       "type": "number",
@@ -9883,17 +10070,6 @@
                         0.4,
                         0.01
                       ],
-                      "x-passivbot-coin-override": "allowed"
-                    },
-                    "position_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "allowed"
                     }
                   }
@@ -10928,25 +11104,42 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "position_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "description": "A positive threshold is required when its exposure enforcer is enabled.",
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "effective per-position wallet exposure limit",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        0.8,
-                        1.01,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "allowed"
+                    "position_exposure_enforcer": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "threshold": {
+                          "type": "number",
+                          "description": "A positive threshold is required when its exposure enforcer is enabled.",
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "effective per-position wallet exposure limit",
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0.8,
+                            1.01,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "allowed"
+                        },
+                        "enabled": {
+                          "type": "boolean",
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "allowed"
+                        }
+                      }
                     },
                     "we_excess_allowance_pct": {
                       "type": "number",
@@ -10966,17 +11159,6 @@
                         0.5,
                         0.01
                       ],
-                      "x-passivbot-coin-override": "allowed"
-                    },
-                    "position_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "allowed"
                     }
                   }
@@ -11922,25 +12104,42 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "position_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "description": "A positive threshold is required when its exposure enforcer is enabled.",
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "effective per-position wallet exposure limit",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        1,
-                        1,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "allowed"
+                    "position_exposure_enforcer": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "threshold": {
+                          "type": "number",
+                          "description": "A positive threshold is required when its exposure enforcer is enabled.",
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "effective per-position wallet exposure limit",
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            1,
+                            1,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "allowed"
+                        },
+                        "enabled": {
+                          "type": "boolean",
+                          "x-passivbot-scope": "long",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "allowed"
+                        }
+                      }
                     },
                     "we_excess_allowance_pct": {
                       "type": "number",
@@ -11960,17 +12159,6 @@
                         0.4,
                         0.01
                       ],
-                      "x-passivbot-coin-override": "allowed"
-                    },
-                    "position_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "x-passivbot-scope": "long",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "allowed"
                     }
                   }
@@ -12882,25 +13070,42 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "position_exposure_enforcer_threshold": {
-                      "type": "number",
-                      "description": "A positive threshold is required when its exposure enforcer is enabled.",
-                      "x-passivbot-unit": "ratio",
-                      "x-passivbot-denominator": "effective per-position wallet exposure limit",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-recommended-bounds": [
-                        0.8,
-                        1.01,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "allowed"
+                    "position_exposure_enforcer": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "threshold": {
+                          "type": "number",
+                          "description": "A positive threshold is required when its exposure enforcer is enabled.",
+                          "x-passivbot-unit": "ratio",
+                          "x-passivbot-denominator": "effective per-position wallet exposure limit",
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizable": true,
+                          "x-passivbot-recommended-bounds": [
+                            0.8,
+                            1.01,
+                            0.001
+                          ],
+                          "x-passivbot-coin-override": "allowed"
+                        },
+                        "enabled": {
+                          "type": "boolean",
+                          "x-passivbot-scope": "short",
+                          "x-passivbot-consumers": [
+                            "live",
+                            "backtest",
+                            "optimize"
+                          ],
+                          "x-passivbot-optimizable": false,
+                          "x-passivbot-coin-override": "allowed"
+                        }
+                      }
                     },
                     "we_excess_allowance_pct": {
                       "type": "number",
@@ -12920,17 +13125,6 @@
                         0.5,
                         0.01
                       ],
-                      "x-passivbot-coin-override": "allowed"
-                    },
-                    "position_exposure_enforcer_enabled": {
-                      "type": "boolean",
-                      "x-passivbot-scope": "short",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "allowed"
                     }
                   }
@@ -13867,6 +14061,24 @@
         "bot.global": {
           "$ref": "#/$defs/config/properties/bot/properties/global"
         },
+        "bot.global.execution": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution"
+        },
+        "bot.global.execution.market_order_near_touch_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        },
+        "bot.global.execution.market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
+        },
+        "bot.global.forager": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager"
+        },
+        "bot.global.forager.score_hysteresis_pct": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_pct"
+        },
+        "bot.global.hedge_mode": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hedge_mode"
+        },
         "bot.global.hsl": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl"
         },
@@ -13903,11 +14115,32 @@
         "bot.global.loss_gate.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
         },
+        "bot.global.strategy_kind": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
+        },
+        "bot.global.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
+        },
+        "bot.global.universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
+        },
+        "bot.global.universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
+        },
         "bot.global.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
         },
         "bot.global.unstuck.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        },
+        "bot.global.warmup": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup"
+        },
+        "bot.global.warmup.max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
+        },
+        "bot.global.warmup.ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
         },
         "bot.long": {
           "$ref": "#/$defs/config/properties/bot/properties/long"
@@ -13935,6 +14168,9 @@
         },
         "bot.long.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager"
+        },
+        "bot.long.forager.always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/always_include"
         },
         "bot.long.forager.score_weights": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights"
@@ -13990,20 +14226,26 @@
         "bot.long.risk.max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/max_positions"
         },
-        "bot.long.risk.position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_enabled"
+        "bot.long.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "bot.long.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "bot.long.risk.position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "bot.long.risk.total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_enabled"
+        "bot.long.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "bot.long.risk.total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_policy"
+        "bot.long.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "bot.long.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "bot.long.risk.total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "bot.long.risk.total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "bot.long.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "bot.long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -14128,6 +14370,15 @@
         "bot.long.strategy.trailing_martingale.volatility_ema_span_1m": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/strategy/properties/trailing_martingale/properties/volatility_ema_span_1m"
         },
+        "bot.long.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe"
+        },
+        "bot.long.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "bot.long.universe.ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
         "bot.long.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck"
         },
@@ -14181,6 +14432,9 @@
         },
         "bot.short.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager"
+        },
+        "bot.short.forager.always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/always_include"
         },
         "bot.short.forager.score_weights": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights"
@@ -14236,20 +14490,26 @@
         "bot.short.risk.max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/max_positions"
         },
-        "bot.short.risk.position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_enabled"
+        "bot.short.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "bot.short.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "bot.short.risk.position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "bot.short.risk.total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_enabled"
+        "bot.short.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "bot.short.risk.total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_policy"
+        "bot.short.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "bot.short.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "bot.short.risk.total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "bot.short.risk.total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "bot.short.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "bot.short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -14374,6 +14634,15 @@
         "bot.short.strategy.trailing_martingale.volatility_ema_span_1m": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/strategy/properties/trailing_martingale/properties/volatility_ema_span_1m"
         },
+        "bot.short.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe"
+        },
+        "bot.short.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "bot.short.universe.ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        },
         "bot.short.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/unstuck"
         },
@@ -14406,9 +14675,6 @@
         },
         "live": {
           "$ref": "#/$defs/scenarioPatch:live"
-        },
-        "live.approved_coins": {
-          "$ref": "#/$defs/config/properties/live/properties/approved_coins"
         },
         "live.balance_hysteresis_snap_pct": {
           "$ref": "#/$defs/config/properties/live/properties/balance_hysteresis_snap_pct"
@@ -14455,12 +14721,6 @@
         "live.fills_recent_overlap_minutes": {
           "$ref": "#/$defs/config/properties/live/properties/fills_recent_overlap_minutes"
         },
-        "live.filter_by_min_effective_cost": {
-          "$ref": "#/$defs/config/properties/live/properties/filter_by_min_effective_cost"
-        },
-        "live.forager_score_hysteresis_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/forager_score_hysteresis_pct"
-        },
         "live.forager_ws_candle_rest_audit_minutes": {
           "$ref": "#/$defs/config/properties/live/properties/forager_ws_candle_rest_audit_minutes"
         },
@@ -14473,12 +14733,6 @@
         "live.forced_mode_short": {
           "$ref": "#/$defs/config/properties/live/properties/forced_mode_short"
         },
-        "live.hedge_mode": {
-          "$ref": "#/$defs/config/properties/live/properties/hedge_mode"
-        },
-        "live.ignored_coins": {
-          "$ref": "#/$defs/config/properties/live/properties/ignored_coins"
-        },
         "live.inactive_coin_candle_ttl_minutes": {
           "$ref": "#/$defs/config/properties/live/properties/inactive_coin_candle_ttl_minutes"
         },
@@ -14490,12 +14744,6 @@
         },
         "live.margin_mode_preference": {
           "$ref": "#/$defs/config/properties/live/properties/margin_mode_preference"
-        },
-        "live.market_order_near_touch_threshold": {
-          "$ref": "#/$defs/config/properties/live/properties/market_order_near_touch_threshold"
-        },
-        "live.market_orders_allowed": {
-          "$ref": "#/$defs/config/properties/live/properties/market_orders_allowed"
         },
         "live.market_snapshot_ticker_strategy": {
           "$ref": "#/$defs/config/properties/live/properties/market_snapshot_ticker_strategy"
@@ -14530,12 +14778,6 @@
         "live.max_ohlcv_fetches_per_minute": {
           "$ref": "#/$defs/config/properties/live/properties/max_ohlcv_fetches_per_minute"
         },
-        "live.max_warmup_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/max_warmup_minutes"
-        },
-        "live.minimum_coin_age_days": {
-          "$ref": "#/$defs/config/properties/live/properties/minimum_coin_age_days"
-        },
         "live.order_match_tolerance_pct": {
           "$ref": "#/$defs/config/properties/live/properties/order_match_tolerance_pct"
         },
@@ -14560,9 +14802,6 @@
         "live.startup_phase_budgets": {
           "$ref": "#/$defs/config/properties/live/properties/startup_phase_budgets"
         },
-        "live.strategy_kind": {
-          "$ref": "#/$defs/config/properties/live/properties/strategy_kind"
-        },
         "live.time_in_force": {
           "$ref": "#/$defs/config/properties/live/properties/time_in_force"
         },
@@ -14574,9 +14813,6 @@
         },
         "live.warmup_jitter_seconds": {
           "$ref": "#/$defs/config/properties/live/properties/warmup_jitter_seconds"
-        },
-        "live.warmup_ratio": {
-          "$ref": "#/$defs/config/properties/live/properties/warmup_ratio"
         },
         "logging": {
           "$ref": "#/$defs/scenarioPatch:logging"
@@ -14842,11 +15078,17 @@
         "optimize.bounds.long.risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/max_positions"
         },
-        "optimize.bounds.long.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "optimize.bounds.long.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "optimize.bounds.long.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "optimize.bounds.long.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "optimize.bounds.long.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
+        },
+        "optimize.bounds.long.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "optimize.bounds.long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -15061,11 +15303,17 @@
         "optimize.bounds.short.risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/max_positions"
         },
-        "optimize.bounds.short.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "optimize.bounds.short.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "optimize.bounds.short.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "optimize.bounds.short.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "optimize.bounds.short.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
+        },
+        "optimize.bounds.short.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "optimize.bounds.short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -15342,14 +15590,17 @@
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer_threshold$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer"
+        },
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer\\.threshold$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer\\.enabled$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.we_excess_allowance_pct$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/we_excess_allowance_pct"
-        },
-        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer_enabled$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_enabled"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.unstuck$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/unstuck"
@@ -15549,14 +15800,17 @@
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer_threshold$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer"
+        },
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer\\.threshold$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer\\.enabled$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.we_excess_allowance_pct$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/we_excess_allowance_pct"
-        },
-        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer_enabled$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_enabled"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.unstuck$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/unstuck"
@@ -15872,6 +16126,24 @@
         "global": {
           "$ref": "#/$defs/scenarioPatch:bot.global"
         },
+        "global.execution": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution"
+        },
+        "global.execution.market_order_near_touch_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        },
+        "global.execution.market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
+        },
+        "global.forager": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager"
+        },
+        "global.forager.score_hysteresis_pct": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_pct"
+        },
+        "global.hedge_mode": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hedge_mode"
+        },
         "global.hsl": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl"
         },
@@ -15908,11 +16180,32 @@
         "global.loss_gate.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
         },
+        "global.strategy_kind": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
+        },
+        "global.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
+        },
+        "global.universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
+        },
+        "global.universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
+        },
         "global.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
         },
         "global.unstuck.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        },
+        "global.warmup": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup"
+        },
+        "global.warmup.max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
+        },
+        "global.warmup.ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
         },
         "long": {
           "$ref": "#/$defs/scenarioPatch:bot.long"
@@ -15940,6 +16233,9 @@
         },
         "long.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager"
+        },
+        "long.forager.always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/always_include"
         },
         "long.forager.score_weights": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights"
@@ -15995,20 +16291,26 @@
         "long.risk.max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/max_positions"
         },
-        "long.risk.position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_enabled"
+        "long.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "long.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "long.risk.position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "long.risk.total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_enabled"
+        "long.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "long.risk.total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_policy"
+        "long.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "long.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "long.risk.total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "long.risk.total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "long.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -16133,6 +16435,15 @@
         "long.strategy.trailing_martingale.volatility_ema_span_1m": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/strategy/properties/trailing_martingale/properties/volatility_ema_span_1m"
         },
+        "long.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe"
+        },
+        "long.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "long.universe.ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
         "long.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck"
         },
@@ -16186,6 +16497,9 @@
         },
         "short.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager"
+        },
+        "short.forager.always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/always_include"
         },
         "short.forager.score_weights": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights"
@@ -16241,20 +16555,26 @@
         "short.risk.max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/max_positions"
         },
-        "short.risk.position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_enabled"
+        "short.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "short.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "short.risk.position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "short.risk.total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_enabled"
+        "short.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "short.risk.total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_policy"
+        "short.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "short.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "short.risk.total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "short.risk.total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "short.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -16379,6 +16699,15 @@
         "short.strategy.trailing_martingale.volatility_ema_span_1m": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/strategy/properties/trailing_martingale/properties/volatility_ema_span_1m"
         },
+        "short.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe"
+        },
+        "short.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "short.universe.ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        },
         "short.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/unstuck"
         },
@@ -16413,6 +16742,24 @@
     "scenarioPatch:bot.global": {
       "type": "object",
       "properties": {
+        "execution": {
+          "$ref": "#/$defs/scenarioPatch:bot.global.execution"
+        },
+        "execution.market_order_near_touch_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        },
+        "execution.market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
+        },
+        "forager": {
+          "$ref": "#/$defs/scenarioPatch:bot.global.forager"
+        },
+        "forager.score_hysteresis_pct": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_pct"
+        },
+        "hedge_mode": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hedge_mode"
+        },
         "hsl": {
           "$ref": "#/$defs/scenarioPatch:bot.global.hsl"
         },
@@ -16449,11 +16796,55 @@
         "loss_gate.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
         },
+        "strategy_kind": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
+        },
+        "universe": {
+          "$ref": "#/$defs/scenarioPatch:bot.global.universe"
+        },
+        "universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
+        },
+        "universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
+        },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.global.unstuck"
         },
         "unstuck.memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        },
+        "warmup": {
+          "$ref": "#/$defs/scenarioPatch:bot.global.warmup"
+        },
+        "warmup.max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
+        },
+        "warmup.ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.global.execution": {
+      "type": "object",
+      "properties": {
+        "market_order_near_touch_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        },
+        "market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.global.forager": {
+      "type": "object",
+      "properties": {
+        "score_hysteresis_pct": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_pct"
         }
       },
       "patternProperties": {},
@@ -16503,11 +16894,37 @@
       "patternProperties": {},
       "additionalProperties": false
     },
+    "scenarioPatch:bot.global.universe": {
+      "type": "object",
+      "properties": {
+        "filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
+        },
+        "minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
     "scenarioPatch:bot.global.unstuck": {
       "type": "object",
       "properties": {
         "memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.global.warmup": {
+      "type": "object",
+      "properties": {
+        "max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
+        },
+        "ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
         }
       },
       "patternProperties": {},
@@ -16539,6 +16956,9 @@
         },
         "forager": {
           "$ref": "#/$defs/scenarioPatch:bot.long.forager"
+        },
+        "forager.always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/always_include"
         },
         "forager.score_weights": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/score_weights"
@@ -16594,20 +17014,26 @@
         "risk.max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/max_positions"
         },
-        "risk.position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_enabled"
+        "risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "risk.position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "risk.total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_enabled"
+        "risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "risk.total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_policy"
+        "risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "risk.total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "risk.total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -16732,6 +17158,15 @@
         "strategy.trailing_martingale.volatility_ema_span_1m": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/strategy/properties/trailing_martingale/properties/volatility_ema_span_1m"
         },
+        "universe": {
+          "$ref": "#/$defs/scenarioPatch:bot.long.universe"
+        },
+        "universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "universe.ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.long.unstuck"
         },
@@ -16804,6 +17239,9 @@
     "scenarioPatch:bot.long.forager": {
       "type": "object",
       "properties": {
+        "always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/forager/properties/always_include"
+        },
         "score_weights": {
           "$ref": "#/$defs/scenarioPatch:bot.long.forager.score_weights"
         },
@@ -16885,26 +17323,61 @@
         "max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/max_positions"
         },
-        "position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_enabled"
+        "position_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:bot.long.risk.position_exposure_enforcer"
         },
-        "position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_enabled"
+        "position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_policy"
+        "total_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:bot.long.risk.total_exposure_enforcer"
         },
-        "total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
         },
         "we_excess_allowance_pct": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/we_excess_allowance_pct"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.long.risk.position_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
+        },
+        "threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.long.risk.total_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         }
       },
       "patternProperties": {},
@@ -17233,6 +17706,19 @@
       "patternProperties": {},
       "additionalProperties": false
     },
+    "scenarioPatch:bot.long.universe": {
+      "type": "object",
+      "properties": {
+        "approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
     "scenarioPatch:bot.long.unstuck": {
       "type": "object",
       "properties": {
@@ -17291,6 +17777,9 @@
         "forager": {
           "$ref": "#/$defs/scenarioPatch:bot.short.forager"
         },
+        "forager.always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/always_include"
+        },
         "forager.score_weights": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/score_weights"
         },
@@ -17345,20 +17834,26 @@
         "risk.max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/max_positions"
         },
-        "risk.position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_enabled"
+        "risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "risk.position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "risk.total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_enabled"
+        "risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "risk.total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_policy"
+        "risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "risk.total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "risk.total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -17483,6 +17978,15 @@
         "strategy.trailing_martingale.volatility_ema_span_1m": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/strategy/properties/trailing_martingale/properties/volatility_ema_span_1m"
         },
+        "universe": {
+          "$ref": "#/$defs/scenarioPatch:bot.short.universe"
+        },
+        "universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "universe.ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.short.unstuck"
         },
@@ -17555,6 +18059,9 @@
     "scenarioPatch:bot.short.forager": {
       "type": "object",
       "properties": {
+        "always_include": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/forager/properties/always_include"
+        },
         "score_weights": {
           "$ref": "#/$defs/scenarioPatch:bot.short.forager.score_weights"
         },
@@ -17636,26 +18143,61 @@
         "max_positions": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/max_positions"
         },
-        "position_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_enabled"
+        "position_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:bot.short.risk.position_exposure_enforcer"
         },
-        "position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "position_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "total_exposure_enforcer_enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_enabled"
+        "position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
         },
-        "total_exposure_enforcer_policy": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_policy"
+        "total_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:bot.short.risk.total_exposure_enforcer"
         },
-        "total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "total_exposure_enforcer.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "total_exposure_enforcer.policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
         },
         "we_excess_allowance_pct": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/we_excess_allowance_pct"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.short.risk.position_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
+        },
+        "threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.short.risk.total_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/enabled"
+        },
+        "policy": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
+        },
+        "threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         }
       },
       "patternProperties": {},
@@ -17984,6 +18526,19 @@
       "patternProperties": {},
       "additionalProperties": false
     },
+    "scenarioPatch:bot.short.universe": {
+      "type": "object",
+      "properties": {
+        "approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "ignored_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
     "scenarioPatch:bot.short.unstuck": {
       "type": "object",
       "properties": {
@@ -18018,9 +18573,6 @@
     "scenarioPatch:live": {
       "type": "object",
       "properties": {
-        "approved_coins": {
-          "$ref": "#/$defs/config/properties/live/properties/approved_coins"
-        },
         "balance_hysteresis_snap_pct": {
           "$ref": "#/$defs/config/properties/live/properties/balance_hysteresis_snap_pct"
         },
@@ -18066,12 +18618,6 @@
         "fills_recent_overlap_minutes": {
           "$ref": "#/$defs/config/properties/live/properties/fills_recent_overlap_minutes"
         },
-        "filter_by_min_effective_cost": {
-          "$ref": "#/$defs/config/properties/live/properties/filter_by_min_effective_cost"
-        },
-        "forager_score_hysteresis_pct": {
-          "$ref": "#/$defs/config/properties/live/properties/forager_score_hysteresis_pct"
-        },
         "forager_ws_candle_rest_audit_minutes": {
           "$ref": "#/$defs/config/properties/live/properties/forager_ws_candle_rest_audit_minutes"
         },
@@ -18084,12 +18630,6 @@
         "forced_mode_short": {
           "$ref": "#/$defs/config/properties/live/properties/forced_mode_short"
         },
-        "hedge_mode": {
-          "$ref": "#/$defs/config/properties/live/properties/hedge_mode"
-        },
-        "ignored_coins": {
-          "$ref": "#/$defs/config/properties/live/properties/ignored_coins"
-        },
         "inactive_coin_candle_ttl_minutes": {
           "$ref": "#/$defs/config/properties/live/properties/inactive_coin_candle_ttl_minutes"
         },
@@ -18101,12 +18641,6 @@
         },
         "margin_mode_preference": {
           "$ref": "#/$defs/config/properties/live/properties/margin_mode_preference"
-        },
-        "market_order_near_touch_threshold": {
-          "$ref": "#/$defs/config/properties/live/properties/market_order_near_touch_threshold"
-        },
-        "market_orders_allowed": {
-          "$ref": "#/$defs/config/properties/live/properties/market_orders_allowed"
         },
         "market_snapshot_ticker_strategy": {
           "$ref": "#/$defs/config/properties/live/properties/market_snapshot_ticker_strategy"
@@ -18141,12 +18675,6 @@
         "max_ohlcv_fetches_per_minute": {
           "$ref": "#/$defs/config/properties/live/properties/max_ohlcv_fetches_per_minute"
         },
-        "max_warmup_minutes": {
-          "$ref": "#/$defs/config/properties/live/properties/max_warmup_minutes"
-        },
-        "minimum_coin_age_days": {
-          "$ref": "#/$defs/config/properties/live/properties/minimum_coin_age_days"
-        },
         "order_match_tolerance_pct": {
           "$ref": "#/$defs/config/properties/live/properties/order_match_tolerance_pct"
         },
@@ -18171,9 +18699,6 @@
         "startup_phase_budgets": {
           "$ref": "#/$defs/scenarioPatch:live.startup_phase_budgets"
         },
-        "strategy_kind": {
-          "$ref": "#/$defs/config/properties/live/properties/strategy_kind"
-        },
         "time_in_force": {
           "$ref": "#/$defs/config/properties/live/properties/time_in_force"
         },
@@ -18185,9 +18710,6 @@
         },
         "warmup_jitter_seconds": {
           "$ref": "#/$defs/config/properties/live/properties/warmup_jitter_seconds"
-        },
-        "warmup_ratio": {
-          "$ref": "#/$defs/config/properties/live/properties/warmup_ratio"
         }
       },
       "patternProperties": {},
@@ -18471,11 +18993,17 @@
         "bounds.long.risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/max_positions"
         },
-        "bounds.long.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "bounds.long.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "bounds.long.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "bounds.long.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "bounds.long.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
+        },
+        "bounds.long.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "bounds.long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -18690,11 +19218,17 @@
         "bounds.short.risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/max_positions"
         },
-        "bounds.short.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "bounds.short.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "bounds.short.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "bounds.short.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "bounds.short.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
+        },
+        "bounds.short.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "bounds.short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -19152,11 +19686,17 @@
         "long.risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/max_positions"
         },
-        "long.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "long.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "long.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "long.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "long.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
+        },
+        "long.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -19371,11 +19911,17 @@
         "short.risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/max_positions"
         },
-        "short.risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "short.risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "short.risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "short.risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "short.risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
+        },
+        "short.risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -19667,11 +20213,17 @@
         "risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/max_positions"
         },
-        "risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
+        },
+        "risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -19887,17 +20439,43 @@
         "max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/max_positions"
         },
-        "position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer_threshold"
+        "position_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk.position_exposure_enforcer"
         },
-        "total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer_threshold"
+        "position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "total_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk.total_exposure_enforcer"
+        },
+        "total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
         },
         "we_excess_allowance_pct": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/we_excess_allowance_pct"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:optimize.bounds.long.risk.position_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:optimize.bounds.long.risk.total_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         }
       },
       "patternProperties": {},
@@ -20358,11 +20936,17 @@
         "risk.max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/max_positions"
         },
-        "risk.position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "risk.position_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "risk.total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "risk.position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "risk.total_exposure_enforcer": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
+        },
+        "risk.total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -20578,17 +21162,43 @@
         "max_positions": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/max_positions"
         },
-        "position_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer_threshold"
+        "position_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk.position_exposure_enforcer"
         },
-        "total_exposure_enforcer_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer_threshold"
+        "position_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        },
+        "total_exposure_enforcer": {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk.total_exposure_enforcer"
+        },
+        "total_exposure_enforcer.threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
         },
         "we_excess_allowance_pct": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/we_excess_allowance_pct"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:optimize.bounds.short.risk.position_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:optimize.bounds.short.risk.total_exposure_enforcer": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
         }
       },
       "patternProperties": {},
@@ -21075,6 +21685,7 @@
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.entry_cooldown$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.entry_cooldown\\.weights_minutes$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk$": false,
+            "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.unstuck$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.strategy$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.long\\.strategy\\.trailing_martingale$": false,
@@ -21086,6 +21697,7 @@
             "^coin_overrides\\.[^.]+\\.bot\\.short\\.entry_cooldown$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.short\\.entry_cooldown\\.weights_minutes$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk$": false,
+            "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.short\\.unstuck$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.short\\.strategy$": false,
             "^coin_overrides\\.[^.]+\\.bot\\.short\\.strategy\\.trailing_martingale$": false,
@@ -21103,9 +21715,13 @@
                 "backtest.market_settings_sources",
                 "backtest.reducer",
                 "bot.global",
+                "bot.global.execution",
+                "bot.global.forager",
                 "bot.global.hsl",
                 "bot.global.loss_gate",
+                "bot.global.universe",
                 "bot.global.unstuck",
+                "bot.global.warmup",
                 "bot.long",
                 "bot.long.entry_cooldown",
                 "bot.long.entry_cooldown.weights_minutes",
@@ -21113,11 +21729,14 @@
                 "bot.long.forager.score_weights",
                 "bot.long.hsl",
                 "bot.long.risk",
+                "bot.long.risk.position_exposure_enforcer",
+                "bot.long.risk.total_exposure_enforcer",
                 "bot.long.strategy",
                 "bot.long.strategy.ema_anchor",
                 "bot.long.strategy.trailing_martingale",
                 "bot.long.strategy.trailing_martingale.close",
                 "bot.long.strategy.trailing_martingale.entry",
+                "bot.long.universe",
                 "bot.long.unstuck",
                 "bot.short",
                 "bot.short.entry_cooldown",
@@ -21126,11 +21745,14 @@
                 "bot.short.forager.score_weights",
                 "bot.short.hsl",
                 "bot.short.risk",
+                "bot.short.risk.position_exposure_enforcer",
+                "bot.short.risk.total_exposure_enforcer",
                 "bot.short.strategy",
                 "bot.short.strategy.ema_anchor",
                 "bot.short.strategy.trailing_martingale",
                 "bot.short.strategy.trailing_martingale.close",
                 "bot.short.strategy.trailing_martingale.entry",
+                "bot.short.universe",
                 "bot.short.unstuck",
                 "live.startup_phase_budgets",
                 "optimize.gpu",
@@ -21156,6 +21778,8 @@
                 "optimize.bounds.global.hsl",
                 "optimize.bounds.long",
                 "optimize.bounds.long.risk",
+                "optimize.bounds.long.risk.position_exposure_enforcer",
+                "optimize.bounds.long.risk.total_exposure_enforcer",
                 "optimize.bounds.long.forager",
                 "optimize.bounds.long.forager.score_weights",
                 "optimize.bounds.long.hsl",
@@ -21169,6 +21793,8 @@
                 "optimize.bounds.long.strategy.ema_anchor",
                 "optimize.bounds.short",
                 "optimize.bounds.short.risk",
+                "optimize.bounds.short.risk.position_exposure_enforcer",
+                "optimize.bounds.short.risk.total_exposure_enforcer",
                 "optimize.bounds.short.forager",
                 "optimize.bounds.short.forager.score_weights",
                 "optimize.bounds.short.hsl",
@@ -21327,20 +21953,27 @@
           "propertyNames": {
             "not": {
               "enum": [
+                "global.execution",
+                "global.forager",
                 "global.hsl",
                 "global.loss_gate",
+                "global.universe",
                 "global.unstuck",
+                "global.warmup",
                 "long.entry_cooldown",
                 "long.entry_cooldown.weights_minutes",
                 "long.forager",
                 "long.forager.score_weights",
                 "long.hsl",
                 "long.risk",
+                "long.risk.position_exposure_enforcer",
+                "long.risk.total_exposure_enforcer",
                 "long.strategy",
                 "long.strategy.ema_anchor",
                 "long.strategy.trailing_martingale",
                 "long.strategy.trailing_martingale.close",
                 "long.strategy.trailing_martingale.entry",
+                "long.universe",
                 "long.unstuck",
                 "short.entry_cooldown",
                 "short.entry_cooldown.weights_minutes",
@@ -21348,11 +21981,14 @@
                 "short.forager.score_weights",
                 "short.hsl",
                 "short.risk",
+                "short.risk.position_exposure_enforcer",
+                "short.risk.total_exposure_enforcer",
                 "short.strategy",
                 "short.strategy.ema_anchor",
                 "short.strategy.trailing_martingale",
                 "short.strategy.trailing_martingale.close",
                 "short.strategy.trailing_martingale.entry",
+                "short.universe",
                 "short.unstuck"
               ]
             }
@@ -21368,16 +22004,54 @@
         {
           "type": "object",
           "properties": {
+            "execution": {
+              "$ref": "#/$defs/fixedPatch:bot.global.execution"
+            },
+            "forager": {
+              "$ref": "#/$defs/fixedPatch:bot.global.forager"
+            },
             "hsl": {
               "$ref": "#/$defs/fixedPatch:bot.global.hsl"
             },
             "loss_gate": {
               "$ref": "#/$defs/fixedPatch:bot.global.loss_gate"
             },
+            "universe": {
+              "$ref": "#/$defs/fixedPatch:bot.global.universe"
+            },
             "unstuck": {
               "$ref": "#/$defs/fixedPatch:bot.global.unstuck"
+            },
+            "warmup": {
+              "$ref": "#/$defs/fixedPatch:bot.global.warmup"
             }
           },
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.global.execution": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.global.execution"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.global.forager": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.global.forager"
+        },
+        {
+          "type": "object",
+          "properties": {},
           "patternProperties": {},
           "propertyNames": {}
         }
@@ -21409,10 +22083,36 @@
         }
       ]
     },
+    "fixedPatch:bot.global.universe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.global.universe"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
     "fixedPatch:bot.global.unstuck": {
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:bot.global.unstuck"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.global.warmup": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.global.warmup"
         },
         {
           "type": "object",
@@ -21445,6 +22145,9 @@
             "strategy": {
               "$ref": "#/$defs/fixedPatch:bot.long.strategy"
             },
+            "universe": {
+              "$ref": "#/$defs/fixedPatch:bot.long.universe"
+            },
             "unstuck": {
               "$ref": "#/$defs/fixedPatch:bot.long.unstuck"
             }
@@ -21455,6 +22158,8 @@
               "enum": [
                 "entry_cooldown.weights_minutes",
                 "forager.score_weights",
+                "risk.position_exposure_enforcer",
+                "risk.total_exposure_enforcer",
                 "strategy.ema_anchor",
                 "strategy.trailing_martingale",
                 "strategy.trailing_martingale.close",
@@ -21542,6 +22247,39 @@
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:bot.long.risk"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "position_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:bot.long.risk.position_exposure_enforcer"
+            },
+            "total_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:bot.long.risk.total_exposure_enforcer"
+            }
+          },
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.long.risk.position_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.long.risk.position_exposure_enforcer"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.long.risk.total_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.long.risk.total_exposure_enforcer"
         },
         {
           "type": "object",
@@ -21637,6 +22375,19 @@
         }
       ]
     },
+    "fixedPatch:bot.long.universe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.long.universe"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
     "fixedPatch:bot.long.unstuck": {
       "allOf": [
         {
@@ -21673,6 +22424,9 @@
             "strategy": {
               "$ref": "#/$defs/fixedPatch:bot.short.strategy"
             },
+            "universe": {
+              "$ref": "#/$defs/fixedPatch:bot.short.universe"
+            },
             "unstuck": {
               "$ref": "#/$defs/fixedPatch:bot.short.unstuck"
             }
@@ -21683,6 +22437,8 @@
               "enum": [
                 "entry_cooldown.weights_minutes",
                 "forager.score_weights",
+                "risk.position_exposure_enforcer",
+                "risk.total_exposure_enforcer",
                 "strategy.ema_anchor",
                 "strategy.trailing_martingale",
                 "strategy.trailing_martingale.close",
@@ -21773,6 +22529,39 @@
         },
         {
           "type": "object",
+          "properties": {
+            "position_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:bot.short.risk.position_exposure_enforcer"
+            },
+            "total_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:bot.short.risk.total_exposure_enforcer"
+            }
+          },
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.short.risk.position_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.short.risk.position_exposure_enforcer"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.short.risk.total_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.short.risk.total_exposure_enforcer"
+        },
+        {
+          "type": "object",
           "properties": {},
           "patternProperties": {},
           "propertyNames": {}
@@ -21856,6 +22645,19 @@
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:bot.short.strategy.trailing_martingale.entry"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.short.universe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.short.universe"
         },
         {
           "type": "object",
@@ -21976,6 +22778,8 @@
                 "bounds.global.hsl",
                 "bounds.long",
                 "bounds.long.risk",
+                "bounds.long.risk.position_exposure_enforcer",
+                "bounds.long.risk.total_exposure_enforcer",
                 "bounds.long.forager",
                 "bounds.long.forager.score_weights",
                 "bounds.long.hsl",
@@ -21989,6 +22793,8 @@
                 "bounds.long.strategy.ema_anchor",
                 "bounds.short",
                 "bounds.short.risk",
+                "bounds.short.risk.position_exposure_enforcer",
+                "bounds.short.risk.total_exposure_enforcer",
                 "bounds.short.forager",
                 "bounds.short.forager.score_weights",
                 "bounds.short.hsl",
@@ -22197,6 +23003,8 @@
                 "global.unstuck",
                 "global.hsl",
                 "long.risk",
+                "long.risk.position_exposure_enforcer",
+                "long.risk.total_exposure_enforcer",
                 "long.forager",
                 "long.forager.score_weights",
                 "long.hsl",
@@ -22209,6 +23017,8 @@
                 "long.strategy.trailing_martingale.close",
                 "long.strategy.ema_anchor",
                 "short.risk",
+                "short.risk.position_exposure_enforcer",
+                "short.risk.total_exposure_enforcer",
                 "short.forager",
                 "short.forager.score_weights",
                 "short.hsl",
@@ -22319,6 +23129,8 @@
           "propertyNames": {
             "not": {
               "enum": [
+                "risk.position_exposure_enforcer",
+                "risk.total_exposure_enforcer",
                 "forager.score_weights",
                 "entry_cooldown.weights_minutes",
                 "strategy.trailing_martingale",
@@ -22335,6 +23147,39 @@
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "position_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.risk.position_exposure_enforcer"
+            },
+            "total_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:optimize.bounds.long.risk.total_exposure_enforcer"
+            }
+          },
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:optimize.bounds.long.risk.position_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk.position_exposure_enforcer"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:optimize.bounds.long.risk.total_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk.total_exposure_enforcer"
         },
         {
           "type": "object",
@@ -22547,6 +23392,8 @@
           "propertyNames": {
             "not": {
               "enum": [
+                "risk.position_exposure_enforcer",
+                "risk.total_exposure_enforcer",
                 "forager.score_weights",
                 "entry_cooldown.weights_minutes",
                 "strategy.trailing_martingale",
@@ -22563,6 +23410,39 @@
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "position_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.risk.position_exposure_enforcer"
+            },
+            "total_exposure_enforcer": {
+              "$ref": "#/$defs/fixedPatch:optimize.bounds.short.risk.total_exposure_enforcer"
+            }
+          },
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:optimize.bounds.short.risk.position_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk.position_exposure_enforcer"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:optimize.bounds.short.risk.total_exposure_enforcer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk.total_exposure_enforcer"
         },
         {
           "type": "object",

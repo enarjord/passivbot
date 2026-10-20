@@ -244,3 +244,32 @@ def test_schema_cli_is_offline_and_registered():
                                 "tool", "config-schema", "--check"],
                                text=True, capture_output=True)
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("path", [
+    "bot.global.strategy_kind", "bot.global.hedge_mode",
+    "bot.global.universe.minimum_coin_age_days", "bot.global.universe.filter_by_min_effective_cost",
+    "bot.global.execution.market_orders_allowed", "bot.global.execution.market_order_near_touch_threshold",
+    "bot.global.forager.score_hysteresis_pct", "bot.global.warmup.ratio", "bot.global.warmup.max_minutes",
+    "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
+    "bot.long.forager.always_include",
+])
+def test_shared_policy_relocation_does_not_grant_search_or_coin_authority(path):
+    report = describe_field(path)
+    assert report["optimizer"]["eligible"] is False
+    assert report["optimizer"]["key"] is None
+    assert report["coin_override"] == "forbidden"
+
+
+def test_side_owned_coin_sources_and_persistent_selection_have_distinct_shapes(validator):
+    validator.validate(source(bot={"long": {
+        "universe": {"approved_coins": "coins.json", "ignored_coins": None},
+        "forager": {"always_include": ["BTC", "bybit::ETH/USDT:USDT"]},
+    }}))
+    for patch in (
+        {"universe": {"approved_coins": {"long": ["BTC"]}}},
+        {"forager": {"always_include": "coins.json"}},
+        {"forager": {"always_include": [True]}},
+    ):
+        with pytest.raises(ValidationError):
+            validator.validate(source(bot={"long": patch}))
