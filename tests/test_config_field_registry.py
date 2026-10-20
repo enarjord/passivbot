@@ -55,7 +55,7 @@ def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
 
 @pytest.mark.parametrize("path", [
     "backtest.starting_balance", "backtest.gap_tolerance_ohlcvs_minutes",
-    "live.minimum_coin_age_days", "live.candle_lock_timeout_seconds",
+    "bot.global.universe.minimum_coin_age_days", "bot.global.warmup.max_minutes", "live.candle_lock_timeout_seconds",
     "live.execution_delay_seconds", "live.fills_confirmation_overlap_minutes",
     "live.fills_recent_overlap_minutes", "live.forager_ws_candle_rest_audit_minutes",
     "live.inactive_coin_candle_ttl_minutes", "live.max_active_candle_tail_gap_minutes",
@@ -67,10 +67,17 @@ def test_fractional_consumer_fields_are_declared_as_float(path):
     field = get_field_registry().find(parts)
     assert field.numeric_type is float
     for value in (2, 2.0, 2.25):
-        payload = {parts[0]: {parts[1]: value}}
+        payload = {}
+        target = payload
+        for part in parts[:-1]:
+            target = target.setdefault(part, {})
+        target[parts[-1]] = value
         exported = normalize_export_numbers(payload)
-        assert type(exported[parts[0]][parts[1]]) is float
-        assert exported[parts[0]][parts[1]] == value
+        target = exported
+        for part in parts:
+            target = target[part]
+        assert type(target) is float
+        assert target == value
 
 
 @pytest.mark.parametrize("path,numeric_type", [

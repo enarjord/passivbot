@@ -6,6 +6,8 @@ import os
 import stat
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 
@@ -188,3 +190,17 @@ def test_entrypoint_preserves_mounted_config_path_and_uses_canonical_logging_ove
         str(logs_root),
     ]
     assert not (runtime_root / "config.runtime.json").exists()
+
+
+@pytest.mark.parametrize("version", [None, "v8.6.0", "v9.1.0"])
+def test_render_config_rejects_unversioned_legacy_and_future_input(tmp_path, version):
+    target = tmp_path / "config.runtime.json"
+    source = {"bot": {}, "live": {"user": "test_user"}}
+    if version is not None:
+        source["config_version"] = version
+    env = os.environ | {"PB_USER": "test_user", "PB_CONFIG_INLINE": json.dumps(source)}
+    result = subprocess.run([sys.executable, str(RENDER_CONFIG), str(target)],
+                            cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "config.config_version" in result.stderr
+    assert not target.exists()

@@ -13,7 +13,8 @@ if SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
 from config.parse import load_raw_config
-from config.migrations.v9 import V9_SCHEMA_VERSION, reject_retired_v9_fields
+from config.migrations.v9 import require_v9_runtime_config
+from config.schema import get_template_config
 from config.universe import set_side_universe_sources
 
 
@@ -29,7 +30,7 @@ def load_base_config() -> dict[str, Any]:
     config_path = os.environ.get("PB_CONFIG_PATH", "").strip()
     if config_path:
         return load_raw_config(config_path)
-    return {}
+    return get_template_config()
 
 
 def parse_jsonish(raw: str, *, source: str) -> Any:
@@ -92,8 +93,7 @@ def main() -> int:
     if not isinstance(config, dict):
         raise SystemExit("Rendered container config must be a dictionary at the top level")
 
-    reject_retired_v9_fields(config)
-    config.setdefault("config_version", V9_SCHEMA_VERSION)
+    require_v9_runtime_config(config)
     set_nested(config, ["live", "user"], os.environ["PB_USER"])
 
     approved_coins = os.environ.get("PB_APPROVED_COINS", "").strip()

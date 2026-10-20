@@ -26,7 +26,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.equity_floor_ratio` | float | `0.05` | python |
 | `backtest.ew_half_life_days` | float \| null | `null` | python |
 | `backtest.exchanges` | array | 2 items (see template) | python |
-| `backtest.filter_by_min_effective_cost` | boolean \| null | `false` | python |
+| `backtest.filter_by_min_effective_cost` | boolean \| null | `null` | python |
 | `backtest.gap_tolerance_ohlcvs_minutes` | float | `120.0` | python |
 | `backtest.hlcvs_data_dir` | string \| null | `null` | python |
 | `backtest.hlcvs_data_override_mode` | string | `"intersection"` | python |
@@ -72,6 +72,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Source |
 | --- | --- | --- | --- |
+| `bot.global.execution.market_order_near_touch_threshold` | float | `0.001` | python |
+| `bot.global.execution.market_orders_allowed` | boolean | `false` | python |
+| `bot.global.forager.score_hysteresis_pct` | float | `0.02` | python |
+| `bot.global.hedge_mode` | boolean | `false` | python |
 | `bot.global.hsl.cooldown_minutes_after_red` | float | Not declared | python |
 | `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | python |
 | `bot.global.hsl.enabled` | boolean | Not declared | python |
@@ -82,12 +86,19 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.hsl.scope` | string | `"coin"` | python |
 | `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | python |
 | `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | python |
+| `bot.global.strategy_kind` | string | `"trailing_martingale"` | python |
+| `bot.global.universe.filter_by_min_effective_cost` | boolean | `true` | python |
+| `bot.global.universe.minimum_coin_age_days` | float | `60.0` | python |
 | `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | python |
+| `bot.global.warmup.max_minutes` | float | `0.0` | python |
+| `bot.global.warmup.ratio` | float | `0.3` | python |
 | `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | python |
 | `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | python |
 | `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | python |
 | `bot.long.entry_cooldown.weights_minutes.adverse_directionality` | float | `0.0` | python |
 | `bot.long.entry_cooldown.weights_minutes.exposure_ratio` | float | `0.0` | python |
+| `bot.long.forager.always_include` | array | `[]` | python |
+| `bot.long.forager.always_include.*` | string | Not declared | python |
 | `bot.long.forager.score_weights.ema_readiness` | float | `0.21` | python |
 | `bot.long.forager.score_weights.unilateralness` | float | `0.0` | python |
 | `bot.long.forager.score_weights.volatility` | float | `0.61` | python |
@@ -144,6 +155,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.strategy.trailing_martingale.entry.threshold_we_weight` | float | `1.007` | rust strategy metadata |
 | `bot.long.strategy.trailing_martingale.volatility_ema_span_1h` | float | `683.0` | rust strategy metadata |
 | `bot.long.strategy.trailing_martingale.volatility_ema_span_1m` | float | `604.0` | rust strategy metadata |
+| `bot.long.universe.approved_coins` | array \| string \| null | 41 items (see template) | python |
+| `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | python |
 | `bot.long.unstuck.close_pct` | float | `0.041` | python |
 | `bot.long.unstuck.ema_dist` | float | `-0.0269` | python |
 | `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | python |
@@ -157,6 +170,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.entry_cooldown.min_duration_minutes` | float | `0.0` | python |
 | `bot.short.entry_cooldown.weights_minutes.adverse_directionality` | float | `0.0` | python |
 | `bot.short.entry_cooldown.weights_minutes.exposure_ratio` | float | `0.0` | python |
+| `bot.short.forager.always_include` | array | `[]` | python |
+| `bot.short.forager.always_include.*` | string | Not declared | python |
 | `bot.short.forager.score_weights.ema_readiness` | float | `0.0` | python |
 | `bot.short.forager.score_weights.unilateralness` | float | `0.0` | python |
 | `bot.short.forager.score_weights.volatility` | float | `0.0` | python |
@@ -213,6 +228,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.strategy.trailing_martingale.entry.threshold_we_weight` | float | `0.0` | rust strategy metadata |
 | `bot.short.strategy.trailing_martingale.volatility_ema_span_1h` | float | `672.0` | rust strategy metadata |
 | `bot.short.strategy.trailing_martingale.volatility_ema_span_1m` | float | `5.0` | rust strategy metadata |
+| `bot.short.universe.approved_coins` | array \| string \| null | 41 items (see template) | python |
+| `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | python |
 | `bot.short.unstuck.close_pct` | float | `0.01` | python |
 | `bot.short.unstuck.ema_dist` | float | `-0.2` | python |
 | `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | python |
@@ -241,9 +258,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Source |
 | --- | --- | --- | --- |
-| `live.approved_coins` | array \| string \| object \| null | 2 members (see template) | python |
-| `live.approved_coins.long` | array \| string \| null | 41 items (see template) | python |
-| `live.approved_coins.short` | array \| string \| null | 41 items (see template) | python |
 | `live.balance_hysteresis_snap_pct` | float | `0.01` | python |
 | `live.balance_override` | float \| null | `null` | python |
 | `live.candle_lock_timeout_seconds` | float | `10.0` | python |
@@ -259,22 +273,14 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.fee_pct_sanity_abs_max` | float | `0.001` | python |
 | `live.fills_confirmation_overlap_minutes` | float | `60.0` | python |
 | `live.fills_recent_overlap_minutes` | float | `10.0` | python |
-| `live.filter_by_min_effective_cost` | boolean | `true` | python |
-| `live.forager_score_hysteresis_pct` | float | `0.02` | python |
 | `live.forager_ws_candle_rest_audit_minutes` | float | `30.0` | python |
 | `live.force_cold_startup` | boolean | `false` | python |
 | `live.forced_mode_long` | string | `""` | python |
 | `live.forced_mode_short` | string | `""` | python |
-| `live.hedge_mode` | boolean | `false` | python |
-| `live.ignored_coins` | array \| string \| object \| null | 2 members (see template) | python |
-| `live.ignored_coins.long` | array \| string \| null | `[]` | python |
-| `live.ignored_coins.short` | array \| string \| null | `[]` | python |
 | `live.inactive_coin_candle_ttl_minutes` | float | `10.0` | python |
 | `live.leverage` | integer | `10` | python |
 | `live.limit_order_create_max_market_dist_pct` | float | `0.8` | python |
 | `live.margin_mode_preference` | string | `"cross"` | python |
-| `live.market_order_near_touch_threshold` | float | `0.001` | python |
-| `live.market_orders_allowed` | boolean | `false` | python |
 | `live.market_snapshot_ticker_strategy` | string | `"auto"` | python |
 | `live.max_active_candle_tail_gap_minutes` | float | `10.0` | python |
 | `live.max_concurrent_api_requests` | integer \| null | `null` | python |
@@ -286,8 +292,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.max_n_creations_per_batch` | integer | `3` | python |
 | `live.max_n_restarts_per_day` | integer | `10` | python |
 | `live.max_ohlcv_fetches_per_minute` | integer | `30` | python |
-| `live.max_warmup_minutes` | integer | `0` | python |
-| `live.minimum_coin_age_days` | float | `60.0` | python |
 | `live.order_match_tolerance_pct` | float | `0.0002` | python |
 | `live.order_replacement_churn_gate_activation_count` | integer | `10` | python |
 | `live.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | python |
@@ -299,12 +303,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.startup_phase_budgets.*` | object | Not declared | python |
 | `live.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | python |
 | `live.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | python |
-| `live.strategy_kind` | string | `"trailing_martingale"` | python |
 | `live.time_in_force` | string | `"good_till_cancelled"` | python |
 | `live.user` | string | `"bybit_01"` | python |
 | `live.warmup_concurrency` | integer | `0` | python |
 | `live.warmup_jitter_seconds` | float | `30.0` | python |
-| `live.warmup_ratio` | float | `0.3` | python |
 
 ## logging
 

@@ -137,7 +137,7 @@ def test_explicit_migration_materializes_missing_defaults_and_retains_null(conve
     before = deepcopy(source)
     result = converter(source, memory_span_minutes=123.5)
     assert source == before
-    assert result.config["live"]["filter_by_min_effective_cost"] is True
+    assert result.config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] is True
     assert result.config["backtest"]["filter_by_min_effective_cost"] is (
         False if backtest is _MISSING else backtest
     )
@@ -148,20 +148,23 @@ def test_explicit_migration_materializes_missing_defaults_and_retains_null(conve
     )
     assert all(not item.get("best_effort") for item in reports.values())
     loaded = prepare_config(result.config, verbose=False)
-    assert loaded["backtest"]["filter_by_min_effective_cost"] is (
-        True if backtest is None else False if backtest is _MISSING else backtest
-    )
+    from config.policy import effective_minimum_cost_filter
+    assert loaded["backtest"]["filter_by_min_effective_cost"] is (False if backtest is _MISSING else backtest)
+    assert effective_minimum_cost_filter(loaded) is (True if backtest is None else False if backtest is _MISSING else backtest)
 
 
-def test_migrated_null_tracks_live_policy_when_authored_config_is_reused():
+def test_migrated_null_tracks_shared_policy_when_authored_config_is_reused():
     source = released_v8_policy()
     source["backtest"]["filter_by_min_effective_cost"] = None
     result = migrate(source, memory_span_minutes=123.5)
     assert result.config["backtest"]["filter_by_min_effective_cost"] is None
     for enabled in (False, True):
         config = deepcopy(result.config)
-        config["live"]["filter_by_min_effective_cost"] = enabled
-        assert prepare_config(config, verbose=False)["backtest"]["filter_by_min_effective_cost"] is enabled
+        from config.policy import effective_minimum_cost_filter
+        config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = enabled
+        loaded = prepare_config(config, verbose=False)
+        assert loaded["backtest"]["filter_by_min_effective_cost"] is None
+        assert effective_minimum_cost_filter(loaded) is enabled
     assert migrate(result.config).config == result.config
 
 

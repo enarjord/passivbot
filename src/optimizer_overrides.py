@@ -29,9 +29,18 @@ def _mirror_short_from_long(config):
     if not isinstance(long_side, dict) or not isinstance(short_side, dict):
         return config
 
+    selection = {
+        key: deepcopy(value) for key, value in short_side.get("forager", {}).items()
+        if key == "always_include"
+    }
     for group_name in BOT_SHARED_GROUPS:
         if group_name in long_side:
             short_side[group_name] = deepcopy(long_side[group_name])
+            if group_name == "forager":
+                # Selection sources remain directional, like the universe.
+                # Mirroring strategy parameters must not select another coin.
+                short_side[group_name].pop("always_include", None)
+                short_side[group_name].update(selection)
 
     long_strategy = long_side.get("strategy")
     if isinstance(long_strategy, dict) and strategy_kind in long_strategy:

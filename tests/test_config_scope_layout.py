@@ -17,7 +17,7 @@ from tools.migrate_config_v9 import migrate
 @pytest.mark.parametrize("scope", ["coin", "pside", "portfolio"])
 def test_canonical_bounds_mirror_their_bot_parameter_paths(strategy, scope):
     source = generated_template(get_template_config(), scope)
-    source["live"]["strategy_kind"] = strategy
+    source["bot"]["global"]["strategy_kind"] = strategy
     config = prepare_config(source, verbose=False)
     bounds = config["optimize"]["bounds"]
     flat = flatten_optimize_bounds(bounds, strategy_kind=strategy)
