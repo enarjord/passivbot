@@ -103,7 +103,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                             new={"mutation_prob": value}, reason="explicit released pymoo spelling migration"))
     if legacy_backend == "deap":
         if best_effort:
-            from config.schema import get_template_config
+            from .released_v8 import get_released_v8_defaults
             from .best_effort_v9 import record_guess
 
             numeric_controls = {}
@@ -121,7 +121,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                 if not math.isfinite(number):
                     raise ValueError(f"optimize.{key} must be a finite number")
                 numeric_controls[key] = number
-            defaults = get_template_config()["optimize"]["pymoo"]["shared"]
+            defaults = get_released_v8_defaults()["optimize"]["pymoo"]["shared"]
             mapping = {"crossover_eta": "crossover_eta", "crossover_probability": "crossover_prob_var",
                        "mutation_eta": "mutation_eta", "mutation_probability": "mutation_prob",
                        "mutation_indpb": "mutation_prob_per_variable"}
@@ -134,7 +134,7 @@ def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
                     value = default
                 shared[key] = deepcopy(value)
                 record_guess(changes, f"optimize.pymoo.shared.{key}", None, value,
-                             f"approximate DEAP policy using {legacy or 'canonical pymoo default'}; search evolution differs")
+                             f"approximate DEAP policy using {legacy or 'released pymoo default'}; search evolution differs")
             if not acknowledge:
                 record_guess(changes, "optimize.backend", "deap", "pymoo",
                              "retire DEAP in favor of pymoo; start a fresh optimization")
