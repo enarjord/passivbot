@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce requested GPU HSL EMA tails one scope at a time, retaining exact observed
+  samples while allowing larger replay batches within the existing scratch budget.
+
 - Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.
