@@ -542,7 +542,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
 
     stub = _Stub()
     stub.values["risk_twel_enforcer_policy"] = "invalid_policy"
-    with pytest.raises(ValueError, match="total_exposure_enforcer_policy"):
+    with pytest.raises(ValueError, match=r"risk\.total_exposure_enforcer\.policy"):
         Passivbot._bot_params_to_rust_dict(stub, "long", None)
 
 
@@ -962,7 +962,7 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
     for pside in ("long", "short"):
         cfg["bot"][pside]["unstuck"]["enabled"] = False
     cfg["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.5
-    cfg["bot"]["global"]["hsl"]["scope"] = "pside"
+    cfg["bot"]["global"]["hsl"]["scope"] = "position_side"
     config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario_copy_path = tmp_path / "hsl_long_red_restart_no_assertions.hjson"

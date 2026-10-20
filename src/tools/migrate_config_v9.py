@@ -296,6 +296,27 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                         reason="explicit released-v8 shared field conversion before file/inline merge",
                     ))
             canonicalize_shared_bot_side(values)
+            risk = values.get("risk", {})
+            for owner, leaf in (
+                ("position_exposure_enforcer", "enabled"),
+                ("position_exposure_enforcer", "threshold"),
+                ("total_exposure_enforcer", "enabled"),
+                ("total_exposure_enforcer", "threshold"),
+                ("total_exposure_enforcer", "policy"),
+            ):
+                old = f"{owner}_{leaf}"
+                if old not in risk:
+                    continue
+                value = risk.pop(old)
+                block = risk.setdefault(owner, {})
+                if not isinstance(block, dict) or (leaf in block and block[leaf] != value):
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{leaf}")
+                block[leaf] = deepcopy(value)
+                changes.append(dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{old}",
+                    old=deepcopy(value), new={f"{owner}.{leaf}": deepcopy(value)},
+                    reason="explicit released-v8 enforcer conversion before file/inline merge",
+                ))
             for group, old, new in (
                 ("hsl", "red_threshold", "drawdown_ratio_threshold"),
                 ("unstuck", "ema_dist", "ema_distance_fraction"),
