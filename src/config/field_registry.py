@@ -248,18 +248,23 @@ def get_field_registry() -> FieldRegistry:
         for name in ("price_step", "qty_step", "min_qty", "min_cost", "c_mult"):
             add(f"{prefix}.{name}", FieldType.FLOAT)
     add("optimize.limits.*.value", FieldType.FLOAT)
+    add("optimize.limits.*.range", FieldType.ARRAY)
     add("optimize.limits.*.range.*", FieldType.FLOAT)
     add("optimize.limits.*.enabled", FieldType.BOOLEAN)
     for name in ("metric", "penalize_if", "reducer", "scenario"):
-        add(f"optimize.limits.*.{name}", FieldType.STRING)
+        add(f"optimize.limits.*.{name}", FieldType.STRING, nullable=name == "scenario")
     for name in ("goal", "metric", "reducer", "scenario"):
-        add(f"optimize.scoring.*.{name}", FieldType.STRING)
+        add(f"optimize.scoring.*.{name}", FieldType.STRING, nullable=name == "scenario")
     for name in ("label", "start_date", "end_date"):
-        add(f"backtest.scenarios.*.{name}", FieldType.STRING)
-    for name in ("coins", "ignored_coins", "exchanges"):
-        add(f"backtest.scenarios.*.{name}", FieldType.ARRAY)
-    for name in ("coin_sources", "overrides"):
-        add(f"backtest.scenarios.*.{name}", FieldType.OBJECT)
+        add(f"backtest.scenarios.*.{name}", FieldType.STRING, nullable=True)
+    # Suite coin selection also accepts a long/short object. Exchanges have
+    # their own narrower string/list/null contract in _coerce_exchange_list.
+    for name in ("coins", "ignored_coins"):
+        add(f"backtest.scenarios.*.{name}",
+            (FieldType.ARRAY, FieldType.STRING, FieldType.OBJECT), nullable=True)
+    add("backtest.scenarios.*.exchanges", (FieldType.ARRAY, FieldType.STRING), nullable=True)
+    add("backtest.scenarios.*.coin_sources", FieldType.OBJECT, nullable=True)
+    add("backtest.scenarios.*.overrides", FieldType.OBJECT)
     add("optimize.prefilter.exposure_ratios.*", FieldType.FLOAT)
     add("optimize.prefilter.checks.*.enabled", FieldType.BOOLEAN)
     add("optimize.prefilter.checks.*.metric", FieldType.STRING)
@@ -267,5 +272,8 @@ def get_field_registry() -> FieldRegistry:
     for name in ("min", "max", "scale", "weight"):
         add(f"optimize.prefilter.checks.*.{name}", FieldType.FLOAT,
             nullable=name in {"min", "max"})
-    add("live.startup_phase_budgets.*", FieldType.FLOAT)
+    add("live.startup_phase_budgets.*", FieldType.OBJECT)
+    for name in ("elapsed_ms", "since_previous_ms"):
+        add(f"live.startup_phase_budgets.*.{name}", FieldType.INTEGER,
+            unit="milliseconds", domain=FieldDomain(minimum=0))
     return FieldRegistry(fields)

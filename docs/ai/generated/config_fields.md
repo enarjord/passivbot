@@ -53,14 +53,14 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.organillo_sha256` | string \| null | `null` | python |
 | `backtest.reducer.*` | string | Not declared | python |
 | `backtest.scenarios` | array | 7 items (see template) | python |
-| `backtest.scenarios.*.coin_sources` | object | Not declared | python |
-| `backtest.scenarios.*.coins` | array | Not declared | python |
-| `backtest.scenarios.*.end_date` | string | Not declared | python |
-| `backtest.scenarios.*.exchanges` | array | Not declared | python |
-| `backtest.scenarios.*.ignored_coins` | array | Not declared | python |
-| `backtest.scenarios.*.label` | string | Not declared | python |
+| `backtest.scenarios.*.coin_sources` | object \| null | Not declared | python |
+| `backtest.scenarios.*.coins` | array \| string \| object \| null | Not declared | python |
+| `backtest.scenarios.*.end_date` | string \| null | Not declared | python |
+| `backtest.scenarios.*.exchanges` | array \| string \| null | Not declared | python |
+| `backtest.scenarios.*.ignored_coins` | array \| string \| object \| null | Not declared | python |
+| `backtest.scenarios.*.label` | string \| null | Not declared | python |
 | `backtest.scenarios.*.overrides` | object | Not declared | python |
-| `backtest.scenarios.*.start_date` | string | Not declared | python |
+| `backtest.scenarios.*.start_date` | string \| null | Not declared | python |
 | `backtest.start_date` | string | `"2021-04-20"` | python |
 | `backtest.starting_balance` | float | `100000.0` | python |
 | `backtest.suite_enabled` | boolean | `false` | python |
@@ -296,7 +296,9 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.recv_window_ms` | integer | `5000` | python |
 | `live.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | python |
 | `live.startup_phase_budgets` | object | `{}` | python |
-| `live.startup_phase_budgets.*` | float | Not declared | python |
+| `live.startup_phase_budgets.*` | object | Not declared | python |
+| `live.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | python |
+| `live.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | python |
 | `live.strategy_kind` | string | `"trailing_martingale"` | python |
 | `live.time_in_force` | string | `"good_till_cancelled"` | python |
 | `live.user` | string | `"bybit_01"` | python |
@@ -359,9 +361,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `optimize.limits.*.enabled` | boolean | Not declared | python |
 | `optimize.limits.*.metric` | string | Not declared | python |
 | `optimize.limits.*.penalize_if` | string | Not declared | python |
+| `optimize.limits.*.range` | array | Not declared | python |
 | `optimize.limits.*.range.*` | float | Not declared | python |
 | `optimize.limits.*.reducer` | string | Not declared | python |
-| `optimize.limits.*.scenario` | string | Not declared | python |
+| `optimize.limits.*.scenario` | string \| null | Not declared | python |
 | `optimize.limits.*.value` | float | Not declared | python |
 | `optimize.n_cpus` | integer | `4` | python |
 | `optimize.objective_scenario` | string \| null | `null` | python |
@@ -397,7 +400,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `optimize.scoring.*.goal` | string | Not declared | python |
 | `optimize.scoring.*.metric` | string | Not declared | python |
 | `optimize.scoring.*.reducer` | string | Not declared | python |
-| `optimize.scoring.*.scenario` | string | Not declared | python |
+| `optimize.scoring.*.scenario` | string \| null | Not declared | python |
 | `optimize.seed` | integer \| null | `null` | python |
 | `optimize.write_all_results` | boolean | `true` | python |
 
