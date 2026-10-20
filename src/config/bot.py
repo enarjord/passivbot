@@ -550,16 +550,6 @@ def ensure_optimize_bounds_for_bot(
 
     hydrate_adaptive_optimize_bounds(result, source_bounds=source_bounds, tracker=tracker)
     bounds = result["optimize"]["bounds"]
-    defaults = normalization_template(get_template_config(), result)["optimize"][
-        "bounds"
-    ]
-    add_missing_keys_recursively(
-        defaults,
-        bounds,
-        parent=["optimize", "bounds"],
-        verbose=False,
-        tracker=tracker,
-    )
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
         if "score_weights" not in forager_cfg:

@@ -64,6 +64,8 @@ def test_shared_position_selector_converts_without_changing_authored_value(owner
 ])
 def test_other_declared_shared_fields_and_dictionary_tails_convert(owner, old, new, value):
     source = legacy()
+    if owner == "fixed" and "score_weights" in old:
+        source["optimize"]["fixed_params"] = ["bot.long.forager.score_weights"]
     put_patch(source, owner, {"bot.long." + old: value})
     before = deepcopy(source)
     output = migrate(source, memory_span_minutes=123.5).config
@@ -75,6 +77,8 @@ def test_other_declared_shared_fields_and_dictionary_tails_convert(owner, old, n
 @pytest.mark.parametrize("nested", [False, True])
 def test_flat_shared_dictionary_map_preserves_each_authored_leaf(owner, nested):
     source = legacy()
+    if owner == "fixed":
+        source["optimize"]["fixed_params"] = ["bot.long.forager.score_weights"]
     weights = {"volume": 0.375, "volatility": 0.625}
     patch = ({"bot": {"long": {"forager_score_weights": weights}}} if nested else
              {"bot.long.forager_score_weights": weights})
@@ -98,6 +102,8 @@ def test_flat_shared_dictionary_map_preserves_each_authored_leaf(owner, nested):
 @pytest.mark.parametrize("owner", ["scenario", "suite", "fixed"])
 def test_canonical_strategy_leaves_and_grouped_shared_leaves_are_not_realiased(owner):
     source = legacy()
+    if owner == "fixed":
+        source["optimize"]["fixed_params"] = ["bot.long.forager.score_weights"]
     patch = {"bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.125,
              "bot.long.strategy.trailing_martingale.entry.threshold_base_pct": 0.025,
              "bot.long.risk.max_positions": 4,

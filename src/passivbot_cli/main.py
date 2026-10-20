@@ -43,6 +43,9 @@ CORE_COMMANDS: dict[str, CommandSpec] = {
 }
 
 TOOL_COMMANDS: dict[str, CommandSpec] = {
+    "optimizer-bounds": CommandSpec(
+        "tools.optimizer_bounds", "explicitly apply recommended optimizer bounds to a v9 config"
+    ),
     "candle-doctor": CommandSpec(
         "tools.candle_doctor",
         "audit candle caches (requires full install)",

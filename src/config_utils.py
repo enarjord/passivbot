@@ -789,13 +789,9 @@ def clean_config(config: dict) -> dict:
     # Derive fixed weight bounds from the same normalized weights the loader
     # will consume, while preserving the cleaner's authored bot values.
     bound_config = {**cleaned, "bot": deepcopy(cleaned["bot"])}
-    from config.bot import normalize_forager_score_weights
+    from config.bot import normalize_bot_forager_config
 
-    for side in ("long", "short"):
-        forager = bound_config["bot"][side]["forager"]
-        forager["score_weights"] = normalize_forager_score_weights(
-            forager["score_weights"], path=f"bot.{side}.forager.score_weights"
-        )
+    normalize_bot_forager_config(bound_config, verbose=False)
     hydrate_adaptive_optimize_bounds(
         bound_config, source_bounds=source.get("optimize", {}).get("bounds", {})
     )

@@ -113,6 +113,9 @@ def normalize_config(
         tracker=tracker,
         source_bounds=raw_optimize_snapshot.get("bounds", {}),
     )
+    # All missing numeric dimensions were fixed from effective bot values above;
+    # later default hydration must not reopen the profile's recommended ranges.
+    template["optimize"]["bounds"] = deepcopy(result["optimize"]["bounds"])
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     reject_backtest_inherited_live_fields(result)
     sync_with_template(

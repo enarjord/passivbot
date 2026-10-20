@@ -85,6 +85,9 @@ async def prepare_suite_contexts(
 ) -> tuple[List[ScenarioEvalContext], Dict[str, Any]]:
     """Prepare datasets and configs for every optimizer suite scenario."""
 
+    from optimization.config_adapter import validate_forager_weight_search
+
+    validate_forager_weight_search(config, suite_config=suite_cfg)
     base_exchanges = require_config_value(config, "backtest.exchanges")
     scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 

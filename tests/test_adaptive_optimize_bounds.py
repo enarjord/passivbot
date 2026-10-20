@@ -22,6 +22,19 @@ def omit_unilateralness_bounds(config):
         bounds.pop("unilateralness_ema_span_1m", None)
 
 
+
+def freeze_other_score_weights(config):
+    """Omitted positive adaptive weights require the whole group to stay fixed."""
+    from config.bot import normalize_forager_score_weights
+
+    for side in ("long", "short"):
+        values = normalize_forager_score_weights(
+            config["bot"][side]["forager"]["score_weights"], path=f"bot.{side}.forager.score_weights"
+        )
+        target = config["optimize"]["bounds"][side]["forager"]
+        for name in ("volume", "volatility", "ema_readiness"):
+            target.setdefault("score_weights", {})[name] = [values[name], values[name]]
+
 def omit_cooldown_bounds(config):
     for side in ("long", "short"):
         bounds = config["optimize"]["bounds"][side]["entry_cooldown"]
@@ -81,6 +94,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
         "entry_cooldown_min_duration_minutes": 20.0,
         "entry_cooldown_max_duration_minutes": 90.0,
     }
+    freeze_other_score_weights(source)
     parsed = prepare_config(source, verbose=False)
     for cfg in (parsed, clean_config(source)):
         bounds = flat_bounds(cfg)
@@ -113,6 +127,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
             score_weights={"volume": 1.0, "ema_readiness": 1.0,
                            "volatility": 0.0, "unilateralness": weight},
         )
+    freeze_other_score_weights(source)
     omit_unilateralness_bounds(source)
     if missing == "forager":
         for side in ("long", "short"):
@@ -145,7 +160,7 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
     for side in ("long", "short"):
         forager = source["optimize"]["bounds"][side]["forager"]
         if form == "nested":
-            forager["score_weights"] = {"unilateralness": [0.0, 1.0, 0.01]}
+            forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
             forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
         elif form == "grouped":
             forager["score_weights_unilateralness"] = [0.0, 1.0, 0.01]
@@ -179,6 +194,7 @@ def test_direct_cleaning_freezes_effective_weight_without_mutating_source():
         "volume": 1.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 2.0,
     }
     source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
+    freeze_other_score_weights(source)
     snapshot = deepcopy(source)
     cleaned = clean_config(source)
     assert source == snapshot
@@ -201,6 +217,7 @@ def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, frac
         min_duration_minutes=2.5, max_duration_minutes=90.25,
         weights_minutes={"exposure_ratio": 3.25, "adverse_directionality": 2.5},
     )
+    freeze_other_score_weights(source)
     hydrated = prepare_config(source, verbose=False)
     previous = deepcopy(hydrated)
     omit_unilateralness_bounds(previous)
