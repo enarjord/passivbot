@@ -258,7 +258,11 @@ def _bound_target(config, path):
     return None
 
 
-def _search_treatment(config, path, authored, *, coin_patch=None, applied_overrides=()):
+def _event_path(event):
+    return tuple(event.get("path_parts", event["path"].split(".")))
+
+
+def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, applied_overrides=()):
     from .optimize_bounds import flatten_optimize_bounds
     from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
     from optimization.bounds import Bound
@@ -278,19 +282,30 @@ def _search_treatment(config, path, authored, *, coin_patch=None, applied_overri
     authored_bounds = flatten_optimize_bounds(
         authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["global"]["strategy_kind"],
     )
-    status = "fixed_selector" if fixed_by else "fixed_bound" if bound.low == bound.high else "searched"
+    status = ("fixed_selector" if fixed_by else
+              "fixed_bound" if key in authored_bounds and bound.low == bound.high else
+              "omitted_fixed" if bound.low == bound.high else "searched")
     gene_status = status
     shadowed_by = [event for event in applied_overrides
-                   if _intersects(path, tuple(event["path"].split(".")))]
+                   if _intersects(path, _event_path(event))]
     if shadowed_by:
         status = shadowed_by[-1]["kind"]
     if coin_patch is not None and _get(coin_patch, path) is not _MISSING:
-        status = "coin_override"
+        coin_events = [event for event in applied_overrides if
+                       _intersects(("coin_overrides", coin, *path), _event_path(event))]
+        status = coin_events[-1]["kind"] if coin_events else "coin_override"
+        shadowed_by.extend(coin_events)
+    from optimizer_overrides import COUPLED_UNSTUCK_EMA_BOUND_KEYS, unstuck_ema_spans_coupled
+    independent = not (key in COUPLED_UNSTUCK_EMA_BOUND_KEYS and unstuck_ema_spans_coupled(config))
+    if not independent:
+        gene_status = "not_in_genome"
     return {
         "status": status, "gene_status": gene_status,
+        "independent_gene": independent,
         "shadowed_by": [{"kind": event["kind"], "path": event["path"]} for event in shadowed_by],
         "key": key, "bounds": deepcopy(raw_bound),
-        "bounds_source": "authored" if key in authored_bounds else "loader_default_or_derived",
+        "bounds_source": "authored" if key in authored_bounds else
+                         "configured_value" if bound.low == bound.high else "loader_default_or_derived",
         "fixed_selectors": fixed_by,
     }
 
@@ -303,6 +318,10 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         raise ValueError("configuration path must not be empty")
     if coin is not None and parts[:1] == ("coin_overrides",):
         raise ValueError("--coin expects a root setting path, not a coin_overrides path")
+    if coin is not None:
+        coin = next(iter(normalize_coin_override_keys({coin: {}}, verbose=False)))
+    bound_target = _bound_target(full, parts)
+    query_target = bound_target or parts
     events = []
     root_value = _get(authored, parts)
     if root_value is not _MISSING:
@@ -316,6 +335,17 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     context = deepcopy(full)
     dataset_selection = None
     applied_overrides = []
+
+    def trace(name, target, dependencies, value, operation):
+        event = {"kind": "optimizer_transform", "name": name,
+                 "path": ".".join(target), "path_parts": list(target),
+                 "dependencies": [{"path": ".".join(source), "path_parts": list(source)}
+                                  for source in dependencies],
+                 "operation": operation, "value": deepcopy(value)}
+        applied_overrides.append(event)
+        selected_target = ("coin_overrides", coin, *query_target) if coin is not None else query_target
+        if _intersects(selected_target, target) or _intersects(query_target, target):
+            events.append(event)
 
     def apply(raw, kind):
         nonlocal context
@@ -333,11 +363,9 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
 
         apply(context["optimize"]["fixed_runtime_overrides"], "fixed_runtime_override")
         transformations = context["optimize"]["enable_overrides"]
-        context = optimizer_overrides(transformations, context, None)
+        context = optimizer_overrides(transformations, context, None, trace=trace)
         for side in ("long", "short"):
-            context = optimizer_overrides(transformations, context, side)
-        if transformations:
-            events.append({"kind": "optimizer_transforms", "names": list(transformations)})
+            context = optimizer_overrides(transformations, context, side, trace=trace)
     if scenario is not None:
         selected = [item for item in context["backtest"]["scenarios"] if item.get("label") == scenario]
         if len(selected) != 1:
@@ -365,7 +393,7 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         if optimize:
             from optimizer_overrides import apply_coupled_unstuck_ema_spans
 
-            context = apply_coupled_unstuck_ema_spans(context)
+            context = apply_coupled_unstuck_ema_spans(context, trace=trace)
     before_files = deepcopy(context)
     effective, unresolved = _resolved_context(context, base_config_path=base_config_path, require_complete=False)
     # The same non-live loader resolves null inheritance, ignored lists and
@@ -400,21 +428,25 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         from .overrides import nested_update
         # Reuse authored-key normalization: exact markets and venue-qualified
         # identifiers must survive without a heuristic underlying substitution.
-        coin = next(iter(normalize_coin_override_keys({coin: {}}, verbose=False)))
         coin_patch = effective["coin_overrides"].get(coin, {})
         inline = normalize_coin_override_keys(before_files["coin_overrides"], verbose=False).get(coin, {})
         value = _get(coin_patch, parts)
         if value is not _MISSING:
             inline_value = _get(inline, parts)
-            event = {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
+            generated = [event for event in applied_overrides if
+                         _intersects(("coin_overrides", coin, *parts), _event_path(event))]
+            event = (deepcopy(generated[-1]) if generated and generated[-1]["kind"] == "optimizer_transform" else
+                     {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
                      "path": ".".join(("coin_overrides", coin, *parts)), "value": deepcopy(value)}
+                     )
             if event["kind"] == "override_file":
                 from .overrides import _resolve_override_config_path
 
                 file_context = deepcopy(before_files)
                 file_context["live"]["base_config_path"] = base_config_path
                 event["file"] = _resolve_override_config_path(file_context, coin)
-            events.append(event)
+            if not events or events[-1] != event:
+                events.append(event)
         effective = nested_update(deepcopy(effective), coin_patch)
     value = _get(effective, parts)
     if value is _MISSING:
@@ -432,7 +464,6 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         search_coin_patch = effective["coin_overrides"].get(parts[1], {})
     if field is None and coin is not None:
         field = registry.find(("coin_overrides", coin, *parts))
-    bound_target = _bound_target(context, parts)
     parameter_field = registry.find(bound_target) if bound_target is not None else None
     default = field.default if field is not None else NO_DEFAULT
     if bound_target is not None:
@@ -455,6 +486,7 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         "default": {"declared": default is not NO_DEFAULT, **({"value": deepcopy(default)} if default is not NO_DEFAULT else {})},
         "sources": events, "search": _search_treatment(
             context, bound_target or search_path, authored, coin_patch=search_coin_patch,
+            coin=coin or (parts[1] if parts[:1] == ("coin_overrides",) and len(parts) > 2 else None),
             applied_overrides=applied_overrides,
         ),
         "unresolved": unresolved,

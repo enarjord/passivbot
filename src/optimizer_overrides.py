@@ -20,7 +20,18 @@ KNOWN_OPTIMIZER_OVERRIDES = frozenset(
 
 from config.access import get_optional_config_value
 
-def _mirror_short_from_long(config):
+def _trace_copy(trace, name, value, target, source):
+    """Describe actual writes without adding provenance to runtime configs."""
+    if trace is None:
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _trace_copy(trace, name, child, (*target, key), (*source, key))
+    else:
+        trace(name, target, (source,), value, "copy")
+
+
+def _mirror_short_from_long(config, *, trace=None):
     strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
 
     bot_cfg = config.get("bot", {})
@@ -41,11 +52,18 @@ def _mirror_short_from_long(config):
                 # Mirroring strategy parameters must not select another coin.
                 short_side[group_name].pop("always_include", None)
                 short_side[group_name].update(selection)
+            copied = {key: value for key, value in long_side[group_name].items()
+                      if group_name != "forager" or key != "always_include"}
+            _trace_copy(trace, "mirror_short_from_long", copied,
+                        ("bot", "short", group_name), ("bot", "long", group_name))
 
     long_strategy = long_side.get("strategy")
     if isinstance(long_strategy, dict) and strategy_kind in long_strategy:
         short_strategy = short_side.setdefault("strategy", {})
         short_strategy[strategy_kind] = deepcopy(long_strategy[strategy_kind])
+        _trace_copy(trace, "mirror_short_from_long", long_strategy[strategy_kind],
+                    ("bot", "short", "strategy", strategy_kind),
+                    ("bot", "long", "strategy", strategy_kind))
 
     return config
 
@@ -56,7 +74,7 @@ def unstuck_ema_spans_coupled(config):
     )
 
 
-def couple_unstuck_ema_spans(config, pside):
+def couple_unstuck_ema_spans(config, pside, *, trace=None):
     """Materialize the effective strategy horizons, including each coin's patches.
 
     This is optimizer finalization only. Saved candidates contain ordinary explicit
@@ -76,15 +94,19 @@ def couple_unstuck_ema_spans(config, pside):
     strategy = base["strategy"][kind]
     if kind == DEFAULT_STRATEGY_KIND:
         strategy = strategy["entry"]
-    targets = [("global", base, strategy)]
+    strategy_path = ("bot", pside, "strategy", kind)
+    if kind == DEFAULT_STRATEGY_KIND:
+        strategy_path += ("entry",)
+    targets = [("global", base, strategy, ("bot", pside), set())]
     for coin, patch in (config.get("coin_overrides") or {}).items():
         side_patch = patch.setdefault("bot", {}).setdefault(pside, {})
         patch_strategy = side_patch.get("strategy", {}).get(kind, {})
         if kind == DEFAULT_STRATEGY_KIND:
             patch_strategy = patch_strategy.get("entry", {})
         effective = {**strategy, **patch_strategy}
-        targets.append((coin, side_patch, effective))
-    for coin, target, source in targets:
+        targets.append((coin, side_patch, effective,
+                        ("coin_overrides", coin, "bot", pside), set(patch_strategy)))
+    for coin, target, source, target_path, patched_spans in targets:
         for key in ("ema_span_0", "ema_span_1"):
             value = source[key]
             if not math.isfinite(float(value)) or float(value) <= 0:
@@ -92,6 +114,12 @@ def couple_unstuck_ema_spans(config, pside):
                     f"couple_unstuck_ema_spans requires positive finite strategy spans: {coin} {pside}.{key}={value!r}"
                 )
             target.setdefault("unstuck", {})[key] = value
+            if trace is not None:
+                source_path = (*strategy_path, key)
+                if key in patched_spans:
+                    source_path = ("coin_overrides", coin, *source_path)
+                trace("couple_unstuck_ema_spans", (*target_path, "unstuck", key),
+                      (source_path,), value, "copy")
             # Refresh transport aliases only when this config already carries them.
             alias = f"unstuck_{key}"
             if alias in target:
@@ -99,7 +127,7 @@ def couple_unstuck_ema_spans(config, pside):
     return config
 
 
-def apply_coupled_unstuck_ema_spans(config):
+def apply_coupled_unstuck_ema_spans(config, *, trace=None):
     """Apply coupling after scenario overrides without replaying other overrides."""
     if unstuck_ema_spans_coupled(config):
         from config.overrides import parse_overrides
@@ -108,7 +136,7 @@ def apply_coupled_unstuck_ema_spans(config):
             "coin_overrides"
         ]
         for side in ("long", "short"):
-            couple_unstuck_ema_spans(config, side)
+            couple_unstuck_ema_spans(config, side, trace=trace)
     return config
 
 
@@ -173,7 +201,7 @@ def _require_trailing_martingale_side(config, pside):
     return strategy_cfg
 
 
-def optimizer_overrides(overrides_list, config, pside=None):
+def optimizer_overrides(overrides_list, config, pside=None, *, trace=None):
     if not overrides_list:
         # No overrides to apply
         return config
@@ -183,14 +211,14 @@ def optimizer_overrides(overrides_list, config, pside=None):
     for override in overrides_list:
         if override == "mirror_short_from_long":
             if pside is None:
-                config = _mirror_short_from_long(config)
+                config = _mirror_short_from_long(config, trace=trace)
             continue
 
         if pside is None:
             continue
 
         if override == "couple_unstuck_ema_spans":
-            config = couple_unstuck_ema_spans(config, pside)
+            config = couple_unstuck_ema_spans(config, pside, trace=trace)
 
         elif override == "lossless_close_trailing":
             strategy_cfg = _require_trailing_martingale_side(config, pside)
@@ -203,5 +231,9 @@ def optimizer_overrides(overrides_list, config, pside=None):
                 f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.retracement_base_pct",
             )
             strategy_cfg.setdefault("close", {})["threshold_base_pct"] = max(threshold, retracement)
+            if trace is not None:
+                target = ("bot", pside, "strategy", DEFAULT_STRATEGY_KIND, "close", "threshold_base_pct")
+                dependency = (*target[:-1], "retracement_base_pct")
+                trace(override, target, (target, dependency), max(threshold, retracement), "max")
 
     return config

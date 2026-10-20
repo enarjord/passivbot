@@ -427,3 +427,92 @@ def test_public_examples_keep_effective_policy_in_new_views(path, exporter):
     source = json.loads(path.read_text())
     result = exporter(source, base_config_path=str(path))
     assert effective(result, str(path)) == effective(source, str(path))
+
+
+@pytest.mark.parametrize('transform,target,dependency,value,independent', [
+    ('couple_unstuck_ema_spans', 'bot.long.unstuck.ema_span_0',
+     'bot.long.strategy.trailing_martingale.entry.ema_span_0', 123.5, False),
+    ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit',
+     'bot.long.risk.total_wallet_exposure_limit', 1.25, True),
+    ('lossless_close_trailing', 'bot.long.strategy.trailing_martingale.close.threshold_base_pct',
+     'bot.long.strategy.trailing_martingale.close.retracement_base_pct', 0.02, True),
+])
+def test_explain_distinguishes_explicit_relationship_from_target_gene(transform, target, dependency, value, independent):
+    from config.param_paths import resolve_dotted_config_path
+    source = policy()
+    source['optimize']['bounds'] = {}
+    source['optimize']['enable_overrides'] = [transform]
+    def assign(path, value):
+        parts = resolve_dotted_config_path(source, path)
+        owner = source
+        for part in parts[:-1]:
+            owner = owner[part]
+        owner[parts[-1]] = value
+    assign(dependency, value)
+    assign(target, 0.0 if transform != 'couple_unstuck_ema_spans' else 42.5)
+    original = deepcopy(source)
+    report = explain_config(source, target, optimize=True)
+    assert report['value'] == value
+    assert report['search']['status'] == 'optimizer_transform'
+    assert report['search']['independent_gene'] is independent
+    assert report['search']['gene_status'] == ('omitted_fixed' if independent else 'not_in_genome')
+    event = report['sources'][-1]
+    assert event['kind'] == 'optimizer_transform'
+    assert event['name'] == transform
+    assert dependency in [item['path'] for item in event['dependencies']]
+    assert source == original
+    # A relationship remains a derivation even when it writes the same number.
+    assign(target, value)
+    assert explain_config(source, target, optimize=True)['search']['status'] == 'optimizer_transform'
+
+
+@pytest.mark.parametrize('transform,target,dependency,late_coupling', [
+    ('couple_unstuck_ema_spans', 'bot.long.unstuck.ema_span_0',
+     'bot.long.strategy.trailing_martingale.entry.ema_span_0', True),
+    ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit',
+     'bot.long.risk.total_wallet_exposure_limit', False),
+    ('lossless_close_trailing', 'bot.long.strategy.trailing_martingale.close.threshold_base_pct',
+     'bot.long.strategy.trailing_martingale.close.retracement_base_pct', False),
+])
+def test_explain_reports_scenario_order_relative_to_optimizer_relationships(transform, target, dependency, late_coupling):
+    source = policy()
+    source['optimize']['bounds'] = {}
+    source['optimize']['enable_overrides'] = [transform]
+    source['backtest']['scenarios'] = [{'label': 'one', 'overrides': {target: 0.25}}]
+    report = explain_config(source, target, optimize=True, scenario='one')
+    assert report['search']['status'] == ('optimizer_transform' if late_coupling else 'scenario_override')
+    if late_coupling:
+        owner = source
+        for part in dependency.split('.'):
+            owner = owner[part]
+        assert report['value'] == owner
+    else:
+        assert report['value'] == 0.25
+
+
+def test_explain_coupled_coin_span_uses_exact_coin_dependency_and_is_not_authored_pin():
+    source = policy()
+    source['optimize']['bounds'] = {}
+    source['optimize']['enable_overrides'] = ['couple_unstuck_ema_spans']
+    coin = 'bybit::BTC/USDT:USDT'
+    source['coin_overrides'] = {coin: {'bot': {'long': {'strategy': {
+        'trailing_martingale': {'entry': {'ema_span_0': 321.5}},
+    }, 'unstuck': {'ema_span_0': 42.5}}}}}
+    report = explain_config(source, 'bot.long.unstuck.ema_span_0', coin=coin, optimize=True)
+    assert report['value'] == 321.5
+    assert report['search']['status'] == 'optimizer_transform'
+    assert report['sources'][-1]['name'] == 'couple_unstuck_ema_spans'
+    dependency = report['sources'][-1]['dependencies'][0]
+    assert dependency['path_parts'] == ['coin_overrides', coin, 'bot', 'long', 'strategy',
+                                       'trailing_martingale', 'entry', 'ema_span_0']
+    assert source['coin_overrides'][coin]['bot']['long']['unstuck']['ema_span_0'] == 42.5
+
+
+def test_explain_mirroring_does_not_derive_directional_selection():
+    source = policy()
+    source['optimize']['enable_overrides'] = ['mirror_short_from_long']
+    source['bot']['long']['forager']['always_include'] = ['BTC']
+    source['bot']['short']['forager']['always_include'] = ['ETH']
+    report = explain_config(source, 'bot.short.forager.always_include', optimize=True)
+    assert report['value'] == ['ETH']
+    assert all(event['kind'] != 'optimizer_transform' for event in report['sources'])
