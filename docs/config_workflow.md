@@ -38,7 +38,10 @@ passivbot live configs/private/my_config.json
 ## Best Practices
 
 Use `passivbot tool clean-config input.json output.json` to produce a full schema-aligned config,
-or add `--mode live` for a lean live export. Formatting only is available with `--mode format`.
+or add `--mode live` for a lean live export. Use `--mode compact` for an editable authored view
+that preserves search and override authority, or `--mode resolved` to inline local coin files and
+capture effective defaults. Inspect a setting with `passivbot tool config-explain input.json PATH`.
+Formatting only is available with `--mode format`.
 Inputs stay untouched by default; replacement requires `--in-place`. See
 [Config cleanup and formatting](tools.md#config-cleanup-and-formatting) for bulk depth, HJSON,
 dry-run/check modes and migration boundaries.

@@ -19,7 +19,7 @@ if str(SRC_DIR) not in sys.path:
 
 from json_utils import json_dumps_streamlined, reformat_json_text
 
-MODES = ("full", "live", "backtest", "optimize", "format")
+MODES = ("full", "live", "backtest", "optimize", "compact", "resolved", "format")
 
 
 def _unique_object(pairs):
@@ -105,13 +105,18 @@ def normalize_export_numbers(config: dict) -> dict:
 
 
 def cleanup_config(
-    source: dict, *, mode: str = "full", base_config_path: str = ""
+    source: dict, *, mode: str = "full", base_config_path: str = "", _allow_sparse: bool = False
 ) -> dict:
     """Reuse canonical normalization without resolving dates or coin-list sources.
 
     Exporting is not runtime compilation or strategy migration. In particular,
     never apply optimizer fixed runtime overrides to the authored bot values.
     """
+    if mode in {"compact", "resolved"}:
+        from config.authoring import compact_config, resolved_config
+
+        export = compact_config if mode == "compact" else resolved_config
+        return export(source, base_config_path=base_config_path)
     from config.load import prepare_config
     from config.hydrate import (
         normalize_backtest_coin_sources,
@@ -127,9 +132,9 @@ def cleanup_config(
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
     payload = extract_result_config(source, allow_unmarked_wrapper=True)
-    if not isinstance(payload.get("bot"), dict) or not isinstance(
+    if not _allow_sparse and (not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
-    ):
+    )):
         raise ValueError(
             "expected a v9 config with bot and live objects (possibly inside config)"
         )
@@ -187,6 +192,7 @@ def render_source(
     indent: int = 4,
     max_inline: int = 72,
     sort_keys: bool = False,
+    destination: Path | None = None,
 ) -> str:
     is_hjson = input_format == "hjson" or (
         input_format == "auto" and source.suffix.lower() == ".hjson"
@@ -215,7 +221,13 @@ def render_source(
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
-    cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
+    if mode == "compact":
+        from config.authoring import compact_config
+
+        cleaned = compact_config(payload, base_config_path=str(source),
+                                 destination_path=str(destination) if destination else "")
+    else:
+        cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
     return (
         json_dumps_streamlined(
             normalize_export_numbers(cleaned),
@@ -347,6 +359,7 @@ def plan_files(args) -> list[PlannedFile]:
                 indent=args.indent,
                 max_inline=args.max_inline,
                 sort_keys=args.sort_keys,
+                destination=target,
             ).encode("utf-8")
         except (OSError, ValueError, TypeError, KeyError) as exc:
             raise ValueError(f"{path}: {exc}") from exc
@@ -404,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=MODES,
         default="full",
-        help="full (default), live, backtest, optimize, or format only",
+        help="full (default), live, backtest, optimize, compact authored settings, resolved local snapshot, or lossless format",
     )
     parser.add_argument(
         "--in-place", action="store_true", help="Explicitly replace source files"

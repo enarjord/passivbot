@@ -293,6 +293,9 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "clean-config": CommandSpec(
         "tools.clean_config", "clean/export configs or format JSON with explicit output paths"
     ),
+    "config-explain": CommandSpec(
+        "tools.config_explain", "explain config values, sources and search treatment offline"
+    ),
     "config-schema": CommandSpec(
         "tools.config_schema", "print/check the authored-config JSON Schema or field metadata"
     ),

@@ -308,13 +308,13 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
 
 `passivbot tool clean-config SRC DST` exports a clean config offline. The default `--mode full`
 uses the shared config normalization and schema cleaner: fill missing defaults, normalize supported
-V8 aliases, remove result metrics, helper metadata, unknown static fields and inactive strategy
-subtrees/bounds, then sort keys and write streamlined JSON. It accepts full or lean V8 configs and
-result envelopes containing a `config` object with `bot` and `live` sections. A missing bot side
+values, remove recognized result/helper metadata and inactive strategy subtrees/bounds, then sort
+keys and write streamlined JSON. It accepts final canonical v9 configs and recognized result
+envelopes containing a `config` object with `bot` and `live` sections. A missing bot side
 stays disabled. The command preserves authored date tokens such as `"now"`, approved/ignored coin
 lists and file references, sparse coin overrides, scenarios, reducers and optimizer runtime pins.
 It does not apply optimizer pins to bot values or flatten referenced override files.
-Cleanup modes standardize numeric output using schema defaults: float settings use `0.0`
+Cleanup modes standardize numeric output using declared field types: float settings use `0.0`
 and integer settings use `0`, including sparse coin patches, scenario overrides, runtime pins
 and optimizer bounds. Position counts use integers. Fractional values are never rounded to match
 an integer default, and converting an integer to a float must preserve its value exactly.
@@ -322,7 +322,9 @@ Supported override selectors use their canonical field types. Numeric market-set
 such as `price_step`, `qty_step`, `min_qty`, `min_cost`, contract multipliers and fees use floats.
 Optimizer limit thresholds and range endpoints also use floats, regardless of list order.
 Relative `override_config_path` values are kept verbatim and resolve relative to the exported
-config's directory. Keep the output beside the input or update those references when relocating it.
+config's directory in the existing `full`, `live`, `backtest` and `optimize` modes. Keep those outputs
+beside the input or update their references when relocating them. `compact` rebases those references
+to the destination directory; `resolved` replaces them with validated inline pins.
 
 Modes:
 
@@ -332,7 +334,19 @@ Modes:
 | `live` | `config_version`, `bot`, `coin_overrides`, `live`, `logging`, `monitor` |
 | `backtest` | Backtest inputs and shared bot/live/logging sections; no optimize or monitor |
 | `optimize` | Optimizer and backtest inputs with shared bot/live/logging sections; no monitor |
+| `compact` | Authored settings with redundant defaults removed; retain eligibility, search policy, sparse pins, scenarios, explicit nulls and optional HSL authorization |
+| `resolved` | Complete defaults, local approved/ignored list contents and validated inline coin overrides, including sources in scenario/runtime patches |
 | `format` | Strict JSON formatting only; preserve every value, numeric spelling and duplicate object member |
+
+`compact` verifies that the normal loader produces the same canonical policy after pruning.
+Context-dependent defaults conservatively retain authored settings. It keeps the authored bounds
+section, including sparse or empty bounds, rather than replacing it with a recommended search space.
+
+`resolved` snapshots local list files using the loader's existing lookup rules and resolves coin
+override files relative to their source config. It retains date tokens and null inheritance; it
+does not apply optimizer pins to root bot settings. Dataset files and exchange capabilities are
+outside this policy snapshot. An `approved_coins="all"` universe cannot be expanded offline, so
+resolved export requires explicit lists. Missing list files fail instead of becoming coin names.
 
 Cleanup accepts final canonical v9 configuration and explicitly extracts supported config wrappers
 and known top-level result metadata from saved artifacts. It rejects unknown authored keys and
@@ -354,6 +368,10 @@ passivbot tool clean-config configs/private/input.json configs/private/live.json
 # Formatting only, without schema/default changes or metadata removal.
 passivbot tool clean-config input.json pretty.json --mode format
 passivbot tool clean-config input.json pretty.json --mode format --sort-keys --max-inline 100
+
+# Compact editing and a resolved local policy snapshot.
+passivbot tool clean-config input.json compact.json --mode compact
+passivbot tool clean-config input.json resolved.json --mode resolved
 
 # Explicit in-place replacement (never the default).
 passivbot tool clean-config configs/private/input.json --in-place
@@ -388,6 +406,37 @@ The tool makes no network or authenticated exchange calls and starts no bot.
 
 `streamline-json` retains its existing in-place, recursively selected formatting interface for
 compatibility. Prefer `clean-config --mode format` for explicit output paths and bounded depth.
+
+## Explain a config setting
+
+```shell
+passivbot tool config-explain input.json bot.long.unstuck.ema_span_0
+passivbot tool config-explain input.json bot.long.unstuck.ema_span_0 --coin BTC --json
+passivbot tool config-explain input.json bot.long.unstuck.close_pct --scenario base --optimize
+```
+
+The read-only offline report shows the value, declared type, scope, unit/denominator when known,
+declared default, authored/default/override sources and optimizer bounds/fixed selectors. Unknown
+metadata stays unknown. `--optimize` applies fixed runtime settings and existing optimizer transforms;
+`--scenario` selects an explicit scenario label and applies its dates, exchanges and authored
+overrides. `--coin` inspects the validated file/inline coin pins after those layers. Reports remain
+separate from config objects and are not accepted as authored configuration.
+
+The new authoring views accept valid sparse configs and preserve whole-section omission: omitting
+`bot` keeps the default profile, while an explicit `bot: {}` disables both omitted sides. Search
+treatment distinguishes a sampled gene from effective fixed/runtime/scenario shadowing and retains
+the original gene status and bounds. Omitted independent genes are fixed at their configured values;
+enabled optimizer relationships report their actual derived targets and dependency paths, including
+coupled spans that are absent from the genome. Scenario optimizer metadata does not redefine the
+outer search space. Bound declarations and their derived bot targets retain separate provenance.
+`--coin` selects a normalized authored override key; exact market
+and exchange-qualified identifiers remain intact. Mapping a different market alias requires prepared
+market metadata and is outside this offline view.
+
+An explanation does not discover exchange markets or prepared dataset membership. The `all`
+sentinel remains visibly unresolved. Scenario eligibility questions require a prepared dataset;
+inspect the `backtest.scenarios` record directly for the requested selection instead of treating
+that request as established historical membership.
 The migration tools retain their own reports and explicit semantic choices; all cleanup modes use
 the shared config pipeline rather than adding a second migration implementation.
 
