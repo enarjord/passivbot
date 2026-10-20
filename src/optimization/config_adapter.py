@@ -27,6 +27,7 @@ from config.strategy_spec import (
 from optimization.bounds import Bound
 from optimizer_overrides import (
     COUPLED_UNSTUCK_EMA_BOUND_KEYS,
+    optimizer_numeric_group_source_side,
     unstuck_ema_spans_coupled,
 )
 
@@ -244,8 +245,8 @@ def validate_forager_weight_search(
 ) -> None:
     """Check normalized weight authority before candidate or dataset evaluation.
 
-    Runtime pins precede scenario pins. Validate the base candidate stage too:
-    its normalization runs before the final scenario patches are applied.
+    Runtime pins precede mirroring and scenario pins follow it. Validate the
+    base candidate stage too, before the final scenario patches are applied.
     """
     from config.param_paths import resolve_bound_selectors
     from config.scenario_overrides import normalize_scenario_overrides
@@ -259,7 +260,7 @@ def validate_forager_weight_search(
     runtime_pins = list(normalize_scenario_overrides(
         config.get("optimize", {}).get("fixed_runtime_overrides", {})
     ).items())
-    contexts = [("", runtime_pins)]
+    contexts = [("", [])]
     suite = config.get("backtest", {}) if suite_config is None else suite_config
     enabled = (suite.get("suite_enabled", False)
                if suite_config is None else suite.get("enabled", False))
@@ -270,13 +271,17 @@ def validate_forager_weight_search(
             label = scenario.get("label", index + 1)
             context = f"backtest.scenarios[{index}] ({label}): "
             scenario_pins = normalize_scenario_overrides(scenario.get("overrides"))
-            contexts.append((context, [*runtime_pins, *scenario_pins.items()]))
-    for context, pins in contexts:
-        _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, context)
+            contexts.append((context, list(scenario_pins.items())))
+    for context, scenario_pins in contexts:
+        _validate_forager_weight_context(
+            config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
+        )
 
 
-def _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, context):
-    def pinned_value(path, configured):
+def _validate_forager_weight_context(
+    config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
+):
+    def pinned_value(path, configured, pins):
         pinned, removed = False, False
         for selector, value in pins:
             parts = tuple(selector.split("."))
@@ -299,7 +304,8 @@ def _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, co
 
     names = ("volume", "volatility", "ema_readiness", "unilateralness")
     for side in ("long", "short"):
-        bot = config.get("bot", {}).get(side, {})
+        weight_source = optimizer_numeric_group_source_side(config, side, "forager")
+        bot = config.get("bot", {}).get(weight_source, {})
         weights = bot.get("forager", {}).get("score_weights")
         if not isinstance(weights, dict):
             continue
@@ -310,12 +316,18 @@ def _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, co
                 f"{', '.join(sorted(missing))}"
             )
         active = True
+        risk_source = optimizer_numeric_group_source_side(config, side, "risk")
+        risk = config.get("bot", {}).get(risk_source, {}).get("risk", {})
         for field, key in (("max_positions", "n_positions"),
                            ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
-            bound_key = f"{side}_{key}"
-            value, pinned = pinned_value(
-                ("bot", side, "risk", field), bot.get("risk", {}).get(field, 0.0)
+            bound_key = f"{risk_source}_{key}"
+            value, runtime_pinned = pinned_value(
+                ("bot", risk_source, "risk", field), risk.get(field, 0.0), runtime_pins
             )
+            value, scenario_pinned = pinned_value(
+                ("bot", side, "risk", field), value, scenario_pins
+            )
+            pinned = runtime_pinned or scenario_pinned
             if (not pinned and bound_key in flat and bound_key not in fixed
                     and (tunable_keys is None or bound_key in tunable_keys)):
                 value = Bound.from_config(bound_key, flat[bound_key]).high
@@ -325,10 +337,15 @@ def _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, co
             continue
         varied, fixed_positive, minima, fixed_values = [], [], [], {}
         for name in names:
-            key = f"{side}_forager_score_weights_{name}"
-            configured, pinned = pinned_value(
-                ("bot", side, "forager", "score_weights", name), weights[name]
+            key = f"{weight_source}_forager_score_weights_{name}"
+            configured, runtime_pinned = pinned_value(
+                ("bot", weight_source, "forager", "score_weights", name),
+                weights[name], runtime_pins,
             )
+            configured, scenario_pinned = pinned_value(
+                ("bot", side, "forager", "score_weights", name), configured, scenario_pins
+            )
+            pinned = runtime_pinned or scenario_pinned
             if pinned and (isinstance(configured, bool) or not isinstance(configured, (int, float))
                            or not math.isfinite(configured) or configured < 0):
                 raise ValueError(
@@ -354,11 +371,16 @@ def _validate_forager_weight_context(config, flat, fixed, tunable_keys, pins, co
         fallback_fixed = (sum(minima) == 0 and "ema_readiness" in fixed_values)
         if fixed_positive or fallback_fixed:
             affected = sorted(fixed_positive) or ["ema_readiness (all-zero normalization fallback)"]
+            source_note = (
+                f" Mirrored search domains come from bot.{weight_source}.forager.score_weights; "
+                "freeze that source group or replace the complete target weight group."
+                if weight_source != side else ""
+            )
             raise ValueError(
                 f"{context}bot.{side}.forager.score_weights: partial normalized-weight search would change "
                 f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
                 "weight or freeze the whole score_weights group; omitted zero weights must "
-                "also remain zero at the all-zero fallback."
+                f"also remain zero at the all-zero fallback.{source_note}"
             )
 
 

@@ -165,8 +165,11 @@ def test_fixed_weight_leaf_is_rejected_but_fixing_whole_group_is_safe():
     ("bot.long.forager.score_weights.volume", 0.2),
     ("bot.long.forager.score_weights.volatility", 0.2),
 ])
-def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value):
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value, mirrored):
     source = get_template_config()
+    if mirrored:
+        source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     source["optimize"]["fixed_runtime_overrides"] = {selector: value}
     with pytest.raises(ValueError, match=rf"partial normalized-weight search.*{selector.split('.')[-1]}"):
         prepare_config(source, verbose=False)
@@ -194,6 +197,126 @@ def test_scenario_activation_cannot_move_an_omitted_positive_coordinate():
         prepare_config(source, verbose=False)
 
 
+def mirrored_weight_source(strategy="trailing_martingale"):
+    source = weight_source({"score_weights": {
+        name: [0.0, 1.0] for name in ("volume", "volatility", "ema_readiness")
+    }})
+    source["bot"]["global"]["strategy_kind"] = strategy
+    source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    return source
+
+
+def mirrored_weight_candidate(config, volume):
+    bounds = gene_bounds(config)
+    selected = {"volume": volume, "volatility": 0.2, "ema_readiness": 0.3}
+    return build_optimizer_vector_config([
+        selected.get(key.removeprefix("long_forager_score_weights_"), bound.low)
+        if key.startswith("long_forager_score_weights_") else bound.low
+        for key, bound in bounds.items()
+    ], config)
+
+
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("weight", ["volume", "unilateralness"])
+def test_mirrored_short_scenario_pins_validate_the_active_source_domains(strategy, weight):
+    source = mirrored_weight_source(strategy)
+    assert source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    source["backtest"].update(suite_enabled=True, scenarios=[{
+        "label": "mirrored-pin", "overrides": {
+            f"bot.short.forager.score_weights.{weight}": 0.5,
+        },
+    }])
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match=rf"mirrored-pin.*bot.short.forager.score_weights.*{weight}.*Mirrored search domains come from bot.long"):
+        prepare_config(source, verbose=False)
+    assert source == before
+
+
+def test_mirroring_shadows_short_runtime_pins_and_keeps_directional_selection():
+    source = mirrored_weight_source()
+    source["bot"]["long"]["forager"]["always_include"] = ["BTC"]
+    source["bot"]["short"]["forager"]["always_include"] = ["ETH"]
+    source["optimize"]["fixed_runtime_overrides"] = {
+        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+        "bot.short.forager.score_weights.volume": 0.5,
+    }
+    config = prepare_config(source, verbose=False)
+    volumes = []
+    for volume in (0.1, 0.9):
+        candidate = mirrored_weight_candidate(config, volume)
+        assert candidate["bot"]["short"]["risk"]["total_wallet_exposure_limit"] > 0
+        assert candidate["bot"]["short"]["forager"]["score_weights"] == candidate["bot"]["long"]["forager"]["score_weights"]
+        assert candidate["bot"]["short"]["forager"]["always_include"] == ["ETH"]
+        volumes.append(candidate["bot"]["short"]["forager"]["score_weights"]["volume"])
+    assert volumes[0] != volumes[1]
+
+
+def test_source_runtime_pins_fix_mirrored_domains_before_scenario_pins():
+    from config.bot import normalize_bot_forager_config
+    from optimization.warmup import _apply_config_overrides
+
+    source = mirrored_weight_source()
+    fixed = {"volume": 0.2, "volatility": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    source["optimize"]["fixed_runtime_overrides"] = {
+        f"bot.long.forager.score_weights.{name}": value for name, value in fixed.items()
+    }
+    patch = {"bot.short.forager.score_weights.volume": 0.5}
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "source-fixed", "overrides": patch}])
+    config = prepare_config(source, verbose=False)
+    results = []
+    for volume in (0.1, 0.9):
+        candidate = mirrored_weight_candidate(config, volume)
+        _apply_config_overrides(candidate, patch)
+        normalize_bot_forager_config(candidate, verbose=False)
+        results.append(candidate["bot"]["short"]["forager"]["score_weights"])
+    assert results[0] == results[1]
+    assert results[0]["volume"] == pytest.approx(0.5 / 1.3)
+
+
+def test_postmirror_long_scenario_pins_do_not_fix_short_source_domains():
+    from config.bot import normalize_bot_forager_config
+    from optimization.warmup import _apply_config_overrides
+
+    source = mirrored_weight_source()
+    fixed = {"volume": 0.2, "volatility": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
+    patch = {"bot.long.forager.score_weights": fixed}
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "postmirror", "overrides": patch}])
+    config = prepare_config(source, verbose=False)
+    short_volumes = []
+    for volume in (0.1, 0.9):
+        candidate = mirrored_weight_candidate(config, volume)
+        _apply_config_overrides(candidate, patch)
+        normalize_bot_forager_config(candidate, verbose=False)
+        assert candidate["bot"]["long"]["forager"]["score_weights"] == pytest.approx(fixed)
+        short_volumes.append(candidate["bot"]["short"]["forager"]["score_weights"]["volume"])
+    assert short_volumes[0] != short_volumes[1]
+    patch["bot.short.forager.score_weights.volume"] = 0.5
+    with pytest.raises(ValueError, match=r"postmirror.*bot.short.forager.score_weights.*partial normalized-weight"):
+        prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("field", ["max_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("activity", ["runtime_source_disabled", "scenario_target_disabled", "scenario_target_reactivated"])
+def test_mirrored_weight_pins_follow_effective_runtime_and_scenario_activity(field, activity):
+    from optimization.warmup import _apply_config_overrides
+
+    source = mirrored_weight_source()
+    patch = {"bot.short.forager.score_weights.volume": 0.5}
+    if activity != "scenario_target_disabled":
+        source["optimize"]["fixed_runtime_overrides"] = {f"bot.long.risk.{field}": 0}
+    if activity != "runtime_source_disabled":
+        patch[f"bot.short.risk.{field}"] = int(activity == "scenario_target_reactivated")
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": activity, "overrides": patch}])
+    if activity == "scenario_target_reactivated":
+        with pytest.raises(ValueError, match=rf"{activity}.*bot.short.forager.score_weights.*partial normalized-weight"):
+            prepare_config(source, verbose=False)
+    else:
+        config = prepare_config(source, verbose=False)
+        candidate = mirrored_weight_candidate(config, 0.9)
+        _apply_config_overrides(candidate, patch)
+        assert candidate["bot"]["short"]["risk"][field] == 0
+
+
 def test_atomic_partial_weight_object_fails_before_evaluation():
     source = get_template_config()
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "partial-object", "overrides": {
@@ -204,15 +327,19 @@ def test_atomic_partial_weight_object_fails_before_evaluation():
 
 
 @pytest.mark.parametrize("whole_forager", [False, True])
-def test_complete_scenario_weight_group_is_fixed_after_normalization(whole_forager):
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_complete_scenario_weight_group_is_fixed_after_normalization(whole_forager, mirrored):
     from optimization.warmup import _apply_config_overrides
     from config.bot import normalize_bot_forager_config
 
     source = get_template_config()
+    side = "short" if mirrored else "long"
+    if mirrored:
+        source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     fixed = {"volume": 0.2, "volatility": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}
-    path, value = "bot.long.forager.score_weights", fixed
+    path, value = f"bot.{side}.forager.score_weights", fixed
     if whole_forager:
-        path, value = "bot.long.forager", deepcopy(source["bot"]["long"]["forager"])
+        path, value = f"bot.{side}.forager", deepcopy(source["bot"][side]["forager"])
         value["score_weights"] = fixed
     patch = {path: value}
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "fixed-group", "overrides": patch}])
@@ -222,17 +349,22 @@ def test_complete_scenario_weight_group_is_fixed_after_normalization(whole_forag
         candidate = build_optimizer_vector_config([b.low + fraction * (b.high - b.low) for b in bounds.values()], config)
         _apply_config_overrides(candidate, patch)
         normalize_bot_forager_config(candidate, verbose=False)
-        assert candidate["bot"]["long"]["forager"]["score_weights"] == pytest.approx(fixed)
+        assert candidate["bot"][side]["forager"]["score_weights"] == pytest.approx(fixed)
 
 
 @pytest.mark.asyncio
-async def test_external_suite_pins_fail_before_market_or_dataset_preparation(monkeypatch):
+@pytest.mark.parametrize("mirrored", [False, True])
+async def test_external_suite_pins_fail_before_market_or_dataset_preparation(monkeypatch, mirrored):
     import optimize_suite
     from optimize import _materialize_suite_run_contract
 
-    config = prepare_config(get_template_config(), verbose=False)
+    source = get_template_config()
+    if mirrored:
+        source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    config = prepare_config(source, verbose=False)
+    side = "short" if mirrored else "long"
     suite = {"enabled": True, "scenarios": [{"label": "external", "overrides": {
-        "bot.long.forager.score_weights.volume": 0.5,
+        f"bot.{side}.forager.score_weights.volume": 0.5,
     }}]}
     async def denied(*_args, **_kwargs):
         pytest.fail("weight authority must fail before loading markets")
