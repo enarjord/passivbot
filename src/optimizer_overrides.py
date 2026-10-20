@@ -17,6 +17,30 @@ KNOWN_OPTIMIZER_OVERRIDES = frozenset(
     }
 )
 
+_MIRROR_SIDE_SOURCES = {"short": "long"}
+
+
+def optimizer_numeric_group_source_side(
+    config, target_side, group_name, *, overrides_list=None
+):
+    """Return the gene side supplying a mirrored shared group's numeric fields.
+
+    This does not describe directional universe or forager.always_include lists.
+    An explicit override list, including an empty list, owns finalization policy.
+    """
+    enabled = (config.get("optimize", {}).get("enable_overrides", [])
+               if overrides_list is None else overrides_list)
+    source_side = _MIRROR_SIDE_SOURCES.get(target_side)
+    if (source_side is None or group_name not in BOT_SHARED_GROUPS
+            or "mirror_short_from_long" not in (enabled or [])):
+        return target_side
+    bot = config.get("bot", {})
+    source, target = bot.get(source_side), bot.get(target_side)
+    if (not isinstance(source, dict) or not isinstance(target, dict)
+            or group_name not in source):
+        return target_side
+    return source_side
+
 
 from config.access import get_optional_config_value
 
@@ -35,7 +59,7 @@ def _mirror_short_from_long(config, *, trace=None):
     strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
 
     bot_cfg = config.get("bot", {})
-    long_side = bot_cfg.get("long")
+    long_side = bot_cfg.get(_MIRROR_SIDE_SOURCES["short"])
     short_side = bot_cfg.get("short")
     if not isinstance(long_side, dict) or not isinstance(short_side, dict):
         return config
