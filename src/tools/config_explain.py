@@ -21,7 +21,7 @@ def main(argv=None):
     try:
         report = explain_config(
             load_raw_config(str(args.config), log_errors=False), args.path,
-            base_config_path=str(args.config.resolve()), coin=args.coin,
+            base_config_path=str(args.config.absolute()), coin=args.coin,
             scenario=args.scenario, optimize=args.optimize,
         )
     except (OSError, ValueError, TypeError, KeyError) as exc:

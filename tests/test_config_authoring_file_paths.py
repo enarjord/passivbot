@@ -12,6 +12,7 @@ from config import load_prepared_config
 from config.authoring import compact_config, explain_config, resolved_config
 from config.overrides import parse_overrides
 from config.schema import get_template_config
+from passivbot_cli.main import main as cli_main
 from tools.clean_config import main as clean_main
 
 
@@ -158,6 +159,48 @@ def test_compact_parent_symlink_dotdot_uses_filesystem_directory_resolution(
     assert coin_span(destination) == coin_span(output_dir / "search.json") == 141.5
     assert not (tmp_path / "search.json").exists()
     assert {path: path.read_bytes() for path in protected} == protected
+
+
+def explain_args(config_path, *, direct):
+    path = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
+    return ["tool", "config-explain", str(config_path),
+            f"coin_overrides.BTC.{path}" if direct else path,
+            *([] if direct else ["--coin", "BTC"]), "--json"]
+
+
+@pytest.mark.parametrize("decoy", [False, True], ids=["only-beside-link", "target-decoy"])
+@pytest.mark.parametrize("direct", [False, True], ids=["coin-option", "direct-coin-path"])
+def test_explain_cli_keeps_selected_symlink_context(
+    tmp_path, monkeypatch, capsys, decoy, direct,
+):
+    _source, actual, selected, protected = symlink_source(tmp_path, monkeypatch, decoy=decoy)
+    original = actual.read_bytes()
+    link_identity = (selected.lstat().st_ino, os.readlink(selected))
+    assert cli_main(explain_args(selected, direct=direct)) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["value"] == 141.5
+    files = [event["file"] for event in report["sources"] if event["kind"] == "override_file"]
+    assert files == [str((selected.parent / "coin.json").resolve())]
+    assert actual.read_bytes() == original
+    assert selected.is_symlink()
+    assert (selected.lstat().st_ino, os.readlink(selected)) == link_identity
+    assert {path: path.read_bytes() for path in protected} == protected
+
+
+@pytest.mark.parametrize("direct", [False, True], ids=["coin-option", "direct-coin-path"])
+def test_explain_cli_ordinary_relative_filename_context_is_unchanged(
+    tmp_path, monkeypatch, capsys, direct,
+):
+    source = policy()
+    source["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
+    source_path = write_json(tmp_path / "ordinary" / "source.json", source)
+    coin_file = write_json(source_path.parent / "coin.json", coin_patch(141.5))
+    original = {path: path.read_bytes() for path in (source_path, coin_file)}
+    monkeypatch.chdir(tmp_path)
+    assert cli_main(explain_args(Path("ordinary/source.json"), direct=direct)) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["value"] == 141.5
+    assert {path: path.read_bytes() for path in original} == original
 
 
 def set_source(source, side, field, value, context):
