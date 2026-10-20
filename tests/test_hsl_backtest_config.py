@@ -40,7 +40,7 @@ def inputs(mode="coin"):
     active = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     active.update(
         enabled=True,
-        red_threshold=0.01,
+        drawdown_ratio_threshold=0.01,
         drawdown_ratio_ema_span_minutes=1.5,
         cooldown_minutes_after_red=10,
         panic_close_order_type="market",
@@ -89,7 +89,7 @@ def run(args):
     return passivbot_rust.run_backtest(*args)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_native_hsl_transport_and_report(mode):
     args = payload(mode)
     hsl = args[-1]["equity_hard_stop_loss"]
@@ -109,7 +109,7 @@ def test_native_hsl_transport_and_report(mode):
     )
     full = run(args)
     report = full[4]["hsl"]
-    assert report["mode"] == mode
+    assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert report["summary"]["triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert any("panic" in str(fill[13]) for fill in full[0])
@@ -140,7 +140,7 @@ def test_effective_coin_override_has_single_authority():
                 "long": {
                     "hsl": {
                         "drawdown_ratio_ema_span_minutes": 2.75,
-                        "red_threshold": 0.4,
+                        "drawdown_ratio_threshold": 0.4,
                         "panic_close_order_type": "limit",
                     }
                 }
@@ -235,7 +235,7 @@ def test_portfolio_ignores_conflicting_inactive_side_policies():
 
 
 def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
-    args = payload("pside")
+    args = payload("position_side")
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
         policy.update(enabled=False)
     args[-1]["max_realized_loss_pct"] = 0.1
@@ -247,7 +247,7 @@ def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
 def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
     cfg, markets, _ = inputs()
     cfg["bot"]["long"]["unstuck"]["enabled"] = False
-    cfg["bot"]["long"]["hsl"].update(red_threshold=.03, drawdown_ratio_ema_span_minutes=1.0)
+    cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=.03, drawdown_ratio_ema_span_minutes=1.0)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_pct=1.0, initial_ema_dist=0.0, ema_span_0=2.0, ema_span_1=3.0)
     counts = []
@@ -499,7 +499,7 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
         total_wallet_exposure_limit=2.5,
         we_excess_allowance_pct=0.44,
     )
-    cfg["bot"]["long"]["hsl"].update(red_threshold=0.2, drawdown_ratio_ema_span_minutes=1)
+    cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=0.2, drawdown_ratio_ema_span_minutes=1)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_pct=1,
         initial_ema_dist=0,

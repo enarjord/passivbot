@@ -262,21 +262,24 @@ def _looks_like_bool_token(value: str) -> bool:
 
 def _resolve_backtest_hsl(config, coin_policies):
     """Transport canonical v9 HSL policies without retired restart choices."""
+    from config.hsl import native_hsl_policy
+
     mode = _resolve_backtest_hsl_signal_mode(config)
     return {
         "engine": "hsl",
         "mode": mode,
-        "sides": [deepcopy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
-        "portfolio": {key: deepcopy(value) for key, value in config["bot"]["global"]["hsl"].items()
-                      if key != "scope"} if mode == "portfolio" else None,
-        "coins": coin_policies if mode == "coin" else {},
+        "sides": [native_hsl_policy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
+        "portfolio": native_hsl_policy({key: deepcopy(value) for key, value in config["bot"]["global"]["hsl"].items()
+                      if key != "scope"}) if mode == "portfolio" else None,
+        "coins": {coin: [native_hsl_policy(policy) for policy in policies]
+                  for coin, policies in coin_policies.items()} if mode == "coin" else {},
     }
 
 
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
-    return normalize_hsl_signal_mode(
-        require_config_value(config, "bot.global.hsl.scope")
-    )
+    from config.hsl import native_hsl_mode
+
+    return native_hsl_mode(require_config_value(config, "bot.global.hsl.scope"))
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -984,10 +987,10 @@ def build_backtest_payload(
 
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
+    require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
     if runtime_config is not None:
         require_runtime_support(
-            runtime_config, supported_modes=("coin", "pside", "portfolio")
+            runtime_config, supported_modes=("coin", "position_side", "portfolio")
         )
     if runtime_config is None:
         runtime_config = compile_runtime_config(
@@ -3345,7 +3348,7 @@ async def main():
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
+    require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

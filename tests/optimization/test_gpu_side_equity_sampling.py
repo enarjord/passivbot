@@ -11,12 +11,12 @@ def _side_equity_inputs(strategy, sides, hsl):
     if hsl != 'disabled':
         for side in ('long', 'short'):
             inputs[0]['bot'][side]['hsl'].update(
-                red_threshold=.002, ema_span_minutes=2.5,
+                drawdown_ratio_threshold=.002, ema_span_minutes=2.5,
                 cooldown_minutes_after_red=5,
             )
         if hsl == 'portfolio':
             inputs[0]['bot']['hsl'].update(
-                red_threshold=.002, ema_span_minutes=2.5,
+                drawdown_ratio_threshold=.002, ema_span_minutes=2.5,
                 cooldown_minutes_after_red=5,
             )
     inputs[1][1500:, 0, :3] *= .7

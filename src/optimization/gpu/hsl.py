@@ -57,7 +57,12 @@ def project_bot(payload, coin_index, side, config, *, base=False):
         policy = hsl["portfolio"]
     elif mode == "coin":
         coin = payload.backtest_params["coins"][coin_index]
-        policy = config["bot"][side]["hsl"] if base else hsl["coins"][coin][index]
+        if base:
+            from config.hsl import native_hsl_policy
+
+            policy = native_hsl_policy(config["bot"][side]["hsl"])
+        else:
+            policy = hsl["coins"][coin][index]
     else:
         policy = hsl["sides"][index]
     result = dict(bot)

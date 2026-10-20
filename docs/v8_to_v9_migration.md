@@ -13,7 +13,9 @@ before backtesting a proposed replacement.
 
 | Released field | Final v9 field or action |
 |---|---|
-| `live.hsl_signal_mode` | `bot.global.hsl.scope`: `coin`, `pside` or `portfolio` |
+| `live.hsl_signal_mode` | `bot.global.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
+| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_ratio_threshold`, with the same fractional value |
+| `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
 | `bot.hsl` portfolio policy | `bot.global.hsl` alongside its scope |
 | HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
 | `live.max_realized_loss_pct` | `bot.global.loss_gate.max_drawdown_ratio` |

@@ -152,7 +152,7 @@ def test_sparse_dynamic_fields_and_all_bound_types_are_declared():
     assert registry.find(("backtest", "market_settings", "overrides", "BTC", "min_cost")).numeric_type is float
     assert registry.find(("optimize", "limits", 17, "range", 1)).numeric_type is float
     assert registry.find(("optimize", "prefilter", "checks", 9, "weight")).numeric_type is float
-    for scope in ("coin", "pside", "portfolio"):
+    for scope in ("coin", "position_side", "portfolio"):
         config = generated_template(get_template_config(), scope)
         exported = normalize_export_numbers(config)
 

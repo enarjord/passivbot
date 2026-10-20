@@ -8,7 +8,7 @@ from config.strategy_spec import get_supported_strategy_kinds, strategy_optimize
 
 
 @pytest.mark.parametrize("kind", get_supported_strategy_kinds())
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("nested", [False, True])
 def test_group_resolution_matches_single_keys_with_one_metadata_projection(
     monkeypatch, kind, mode, nested
@@ -57,7 +57,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
     )
     assert first["long_n_positions"] == ("bot", "long", "risk", "max_positions")
     assert second["long_n_positions"] == ("bot", "long", "risk", "max_positions")
-    assert second["hsl_red_threshold"] == ("bot", "global", "hsl", "red_threshold")
+    assert second["hsl_red_threshold"] == ("bot", "global", "hsl", "drawdown_ratio_threshold")
 
 
 def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
@@ -68,9 +68,9 @@ def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
     config = {"bot": {'global': {'hsl': {'scope': 'portfolio'}}}}
     assert list(param_paths.iter_optimizer_key_paths(config, [])) == []
     assert list(param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold"])) == [
-        ("hsl_red_threshold", ("bot", "global", "hsl", "red_threshold"))
+        ("hsl_red_threshold", ("bot", "global", "hsl", "drawdown_ratio_threshold"))
     ]
     paths = param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold", "long_n_positions"])
-    assert next(paths) == ("hsl_red_threshold", ("bot", "global", "hsl", "red_threshold"))
+    assert next(paths) == ("hsl_red_threshold", ("bot", "global", "hsl", "drawdown_ratio_threshold"))
     with pytest.raises(RuntimeError, match="metadata unavailable"):
         next(paths)

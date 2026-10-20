@@ -315,7 +315,7 @@ def test_live_owner_admits_after_estimated_cooldown_and_rechecks_repaired_histor
             fee_paid=0.0,
         ),
     ]
-    value = bot(mode, side=side, events=events)
+    value = bot("position_side" if mode == "pside" else mode, side=side, events=events)
     value.positions[SYMBOL][side].update(size=0.0, price=0.0)
     value.get_raw_balance = lambda: 100.0
     policy = (

@@ -352,7 +352,7 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     current["bot"]["long"]["risk"].pop("we_excess_allowance_pct")
     current["bot"]["long"]["risk"]["position_exposure_enforcer"].pop("threshold")
     current["bot"]["long"]["unstuck"].pop("close_pct")
-    current["bot"]["long"]["unstuck"].pop("ema_dist")
+    current["bot"]["long"]["unstuck"].pop("ema_distance_fraction")
     current["bot"]["long"]["unstuck"].pop("loss_allowance_pct")
     current["bot"]["long"]["unstuck"].pop("exposure_trigger_ratio")
 
@@ -409,8 +409,8 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     assert long_cfg["unstuck"]["close_pct"] == pytest.approx(
         default_long["unstuck"]["close_pct"]
     )
-    assert long_cfg["unstuck"]["ema_dist"] == pytest.approx(
-        default_long["unstuck"]["ema_dist"]
+    assert long_cfg["unstuck"]["ema_distance_fraction"] == pytest.approx(
+        default_long["unstuck"]["ema_distance_fraction"]
     )
     assert long_cfg["unstuck"]["loss_allowance_pct"] == pytest.approx(
         default_long["unstuck"]["loss_allowance_pct"]
@@ -519,7 +519,7 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.1, 0.3, 0.01]
     current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = [
         10.0,
         120.0,
@@ -528,7 +528,7 @@ def test_format_config_preserves_live_optimize_bounds():
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] == [
         0.1,
         0.3,
         0.01,

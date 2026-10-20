@@ -321,7 +321,7 @@ LIVE_COMMAND_EQ_PREFIXES = {
     "--live.balance_override=": "balance_override",
     "--live.balance-override=": "balance_override",
 }
-ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"portfolio", "pside", "per_side"}
+ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"portfolio", "position_side", "pside", "per_side"}
 HSL_BALANCE_OVERRIDE_UNSAFE_CODE = "hsl_balance_override_account_level_replay_unsafe"
 
 

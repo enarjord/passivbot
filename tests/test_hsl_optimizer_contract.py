@@ -23,12 +23,12 @@ def fixed_side_bounds(cfg):
 
 def threshold_vector(shape, threshold):
     return [
-        threshold if path[-1] == "red_threshold" else bound.low
+        threshold if path[-1] == "drawdown_ratio_threshold" else bound.low
         for (_, path), bound in zip(shape.key_paths, shape.bounds)
     ]
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_candidate_threshold_reaches_native_hsl_signal(mode):
     cfg, markets, _ = inputs(mode)
     fixed_side_bounds(cfg)
@@ -37,7 +37,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"] = {"red_threshold": [0.01, 0.9]}
+    target["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["hard_stop_triggers"]
     cfg["optimize"]["limits"] = []
     shape = build_optimization_shape(cfg)
@@ -80,7 +80,7 @@ def test_unified_rejects_inactive_side_signal_objectives(metric):
         validate_optimizer_metrics(cfg, [metric])
     for side in ["long", "short"]:
         cfg["bot"][side]["hsl"]["enabled"] = True
-    for mode in ["coin", "pside"]:
+    for mode in ["coin", "position_side"]:
         cfg["bot"]["global"]["hsl"]["scope"] = mode
         validate_optimizer_metrics(cfg, [metric])
     cfg["live"]["hsl_engine"] = "legacy"
@@ -112,7 +112,7 @@ def test_hsl_runtime_boundary_rejects_removed_metrics(tier):
 def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
     cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
-    cfg["optimize"]["bounds"].setdefault("global", {})["hsl"] = {"red_threshold": [0.01, 0.9]}
+    cfg["optimize"]["bounds"].setdefault("global", {})["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["drawdown_worst_ema_hsl_long"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)
@@ -124,7 +124,7 @@ def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
 @pytest.mark.parametrize("section", ["scoring", "limits"])
 @pytest.mark.parametrize("scenario", ["side", "portfolio", None])
 def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scenario):
-    cfg, _, _ = inputs("pside")
+    cfg, _, _ = inputs("position_side")
     cfg["optimize"]["scoring"] = ["drawdown_worst_strategy_eq"]
     cfg["optimize"]["limits"] = []
     cfg["optimize"][section] = [
@@ -190,7 +190,7 @@ def test_gpu_preparation_rejects_coarse_hsl_candles_before_torch_probe(
         preflight(cfg, {"enabled": False})
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside"])
+@pytest.mark.parametrize("mode", ["coin", "position_side"])
 @pytest.mark.parametrize(
     "metric",
     [
@@ -254,7 +254,7 @@ def test_coin_policy_metric_check_uses_same_alias_resolution_as_payload(monkeypa
 
 
 def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
-    cfg, _, _ = inputs("pside")
+    cfg, _, _ = inputs("position_side")
     fixed_side_bounds(cfg)
     cfg["optimize"]["scoring"] = ["hard_stop_triggers_short"]
     cfg["optimize"]["limits"] = []
@@ -264,7 +264,7 @@ def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
     assert evaluator.shared_hlcvs_np == {}
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize(
     "metric",
     [

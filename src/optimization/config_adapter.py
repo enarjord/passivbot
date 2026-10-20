@@ -96,7 +96,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
 
             name = resolved[-1]
             constraints = {
-                "red_threshold": dict(minimum=0, maximum=1, strict=True),
+                "drawdown_ratio_threshold": dict(minimum=0, maximum=1, strict=True),
                 "memory_ema_span_minutes": dict(minimum=1),
                 "drawdown_ratio_ema_span_minutes": dict(minimum=1),
                 "cooldown_minutes_after_red": dict(minimum=0),

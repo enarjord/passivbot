@@ -114,7 +114,7 @@ def build_coin_override_parameters(
             ("enabled", "unstuck_enabled"),
             ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
             ("close_pct", "unstuck_close_pct"),
-            ("ema_dist", "unstuck_ema_dist"),
+            ("ema_distance_fraction", "unstuck_ema_dist"),
             ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
             ("exposure_trigger_ratio", "unstuck_threshold"),
         )

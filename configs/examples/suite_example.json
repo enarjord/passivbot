@@ -83,7 +83,7 @@
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.2,
+                "drawdown_ratio_threshold": 0.2,
                 "scale_budget_with_excess_allowance": false,
                 "scope": "portfolio"
             },
@@ -118,7 +118,7 @@
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.2,
+                "drawdown_ratio_threshold": 0.2,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
@@ -170,7 +170,7 @@
             },
             "unstuck": {
                 "close_pct": 0.078,
-                "ema_dist": -0.07,
+                "ema_distance_fraction": -0.07,
                 "ema_gating_enabled": true,
                 "ema_span_0": 770.0,
                 "ema_span_1": 210.0,
@@ -204,7 +204,7 @@
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.2,
+                "drawdown_ratio_threshold": 0.2,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
@@ -253,7 +253,7 @@
             "universe": {"approved_coins": [], "ignored_coins": []},
             "unstuck": {
                 "close_pct": 0.05,
-                "ema_dist": -0.2,
+                "ema_distance_fraction": -0.2,
                 "ema_gating_enabled": true,
                 "ema_span_0": 100.0,
                 "ema_span_1": 100.0,
@@ -349,7 +349,7 @@
                     "cooldown_minutes_after_red": [1, 2880, 10],
                     "drawdown_ratio_ema_span_minutes": [1, 2880, 10],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "red_threshold": [0.01, 0.12, 0.001]
+                    "drawdown_ratio_threshold": [0.01, 0.12, 0.001]
                 },
                 "loss_gate": {"memory_ema_span_minutes": [43200.0, 43200.0]},
                 "unstuck": {"memory_ema_span_minutes": [43200.0, 43200.0]}
@@ -411,7 +411,7 @@
                 },
                 "unstuck": {
                     "close_pct": [0.05, 0.12, 0.001],
-                    "ema_dist": [-0.2, -0.07, 0.0001],
+                    "ema_distance_fraction": [-0.2, -0.07, 0.0001],
                     "ema_span_0": [770, 770],
                     "ema_span_1": [210, 210],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],
@@ -475,7 +475,7 @@
                 },
                 "unstuck": {
                     "close_pct": [0.05, 0.12, 0.001],
-                    "ema_dist": [-0.2, -0.07, 0.0001],
+                    "ema_distance_fraction": [-0.2, -0.07, 0.0001],
                     "ema_span_0": [100, 100],
                     "ema_span_1": [100, 100],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],

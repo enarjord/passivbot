@@ -139,13 +139,13 @@ _SHARED_SIDE_FIELDS = {
         forager.score_weights.volatility forager.score_weights.volume
         forager.unilateralness_ema_span_1m forager.volatility_ema_span_1m
         forager.volume_ema_span_1m hsl.memory_ema_span_minutes
-        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.red_threshold
+        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
         risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
-        unstuck.close_pct unstuck.ema_dist unstuck.ema_span_0 unstuck.ema_span_1
+        unstuck.close_pct unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
         unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
@@ -222,7 +222,7 @@ def get_field_registry() -> FieldRegistry:
     for name in ("enabled", "scale_budget_with_excess_allowance"):
         add(f"bot.global.hsl.{name}", FieldType.BOOLEAN)
     add("bot.global.hsl.panic_close_order_type", FieldType.STRING)
-    for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
+    for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_minutes_after_red"):
         add(f"bot.global.hsl.{name}", FieldType.FLOAT)
 

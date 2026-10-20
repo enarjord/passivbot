@@ -152,15 +152,15 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 
 ### Equity Hard Stop Loss
 
-HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/pside modes,
+HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/position_side modes,
 and explicit `bot.global.hsl` for portfolio mode. Supported leaves are `enabled`,
-`red_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
+`drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
 `cooldown_minutes_after_red`, and `panic_close_order_type`. Coin scope also supports
 `scale_budget_with_excess_allowance`.
 HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
 
-`bot.global.hsl.scope` selects `coin` (default), `pside`, or `portfolio` signal construction.
+`bot.global.hsl.scope` selects `coin` (default), `position_side`, or `portfolio` signal construction.
 
 For parameter definitions, RED handling, cooldown/restart rules, per-coin overrides, and
 backtest behavior, see [Equity Hard Stop Loss](equity_hard_stop_loss.md) and the
@@ -275,10 +275,10 @@ allowance: `effective_wel = wallet_exposure_limit * (1 + effective_we_excess_all
   - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
   - Before quantity rounding and other constraints, `close_qty_abs = balance * effective_wel * close_pct / (close_price * c_mult)`.
   - Rust applies quantity-step rounding, exchange minimums, remaining-position sizing and loss-allowance scaling. There is no additional cap to stop precisely at `unstuck.exposure_trigger_ratio`.
-- **unstuck.ema_dist**:
+- **unstuck.ema_distance_fraction**:
   - Offset for the EMA eligibility trigger, not the submitted order price:
-    - Long: current price must reach `upper_EMA_band * (1 + ema_dist)`, rounded up to the price tick.
-    - Short: current price must reach `lower_EMA_band * (1 - ema_dist)`, rounded down to the price tick.
+    - Long: current price must reach `upper_EMA_band * (1 + ema_distance_fraction)`, rounded up to the price tick.
+    - Short: current price must reach `lower_EMA_band * (1 - ema_distance_fraction)`, rounded down to the price tick.
   - Once eligible, the close uses current price rounded up for longs or down for shorts.
 - **unstuck.ema_gating_enabled**:
   - Fixed boolean toggle for the auto-unstuck EMA trigger. Default is `true`.
@@ -355,9 +355,9 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         hsl.drawdown_ratio_ema_span_minutes,
         hsl.enabled,
         hsl.panic_close_order_type,
-        hsl.red_threshold,
+        hsl.drawdown_ratio_threshold,
         unstuck.close_pct,
-        unstuck.ema_dist,
+        unstuck.ema_distance_fraction,
         unstuck.ema_gating_enabled,
         unstuck.enabled,
         unstuck.loss_allowance_pct,
@@ -509,7 +509,7 @@ command. Retired `--live...` policy paths are rejected.
   equivalence from an old rolling duration.
 - **risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
 - **position_exposure_enforcer.threshold**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer.threshold`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
-- **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+pside. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
+- **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+position_side. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
   This field may be overridden per coin+side as
   `coin_overrides.<coin>.bot.<side>.entry_cooldown.base_duration_minutes`.
   Normal loading requires this canonical path and rejects `risk.entry_cooldown_minutes`.
@@ -643,8 +643,8 @@ In this example:
 - `forager.score_weights.volume`: Values 0.0, 0.01, 0.02, ..., 1.0
 - `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
 
-HSL bounds use `optimize.bounds.<side>.hsl` in coin and pside modes, with
-`red_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`, and
+HSL bounds use `optimize.bounds.<side>.hsl` in coin and position_side modes, with
+`drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`, and
 `cooldown_minutes_after_red` leaves. Portfolio HSL uses `optimize.bounds.global.hsl`.
 Independent slow spans use their canonical consumer-owned bound blocks. There is no
 restart-policy field. Use independent ordinary account-equity definitions for cross-version
@@ -836,8 +836,8 @@ V9 requires `config_version="v9.0.0"` and the explicit
 v8 file does not convert its policy. Main configs reject retired fields in root, CLI,
 coin/scenario overrides and optimizer policy. There is no engine selector or restart policy.
 
-Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`pside` modes. `portfolio` requires an
-explicit `bot.global.hsl` block with `enabled`, `red_threshold`, `drawdown_ratio_ema_span_minutes`,
+Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`position_side` modes. `portfolio` requires an
+explicit `bot.global.hsl` block with `enabled`, `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`,
 `memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_minutes_after_red`. Side policy is never silently
 promoted to portfolio authority. `scale_budget_with_excess_allowance` defaults to `false`
 and may vary per coin in coin scope.

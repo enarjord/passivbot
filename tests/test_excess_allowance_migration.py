@@ -98,7 +98,7 @@ def test_coin_scaling_switch_is_local_and_preserves_base_policy():
     assert source == original
 
 
-@pytest.mark.parametrize("mode", ["pside", "portfolio"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_scaling_rejects_aggregate_scopes(mode):
     from config.hsl import generated_template
 

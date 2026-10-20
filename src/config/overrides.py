@@ -79,7 +79,7 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
         "hsl.scale_budget_with_excess_allowance",
         "hsl.enabled",
         "hsl.panic_close_order_type",
-        "hsl.red_threshold",
+        "hsl.drawdown_ratio_threshold",
     }
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
@@ -93,7 +93,7 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "risk.position_exposure_enforcer.threshold",
         "risk.we_excess_allowance_pct",
         "unstuck.close_pct",
-        "unstuck.ema_dist",
+        "unstuck.ema_distance_fraction",
         "unstuck.ema_span_0",
         "unstuck.ema_span_1",
         "unstuck.ema_gating_enabled",

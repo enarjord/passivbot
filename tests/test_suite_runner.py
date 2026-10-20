@@ -665,7 +665,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
         "live": {},
         "bot": {
             "long": {
-                "hsl": {"red_threshold": 0.3},
+                "hsl": {"drawdown_ratio_threshold": 0.3},
                 "entry_cooldown": {"base_duration_minutes": 0.0},
                 "universe": {"approved_coins": [], "ignored_coins": []},
             },
@@ -679,7 +679,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
         coins=["BTC"],
         ignored_coins=[],
         overrides={
-            "bot.long.hsl.red_threshold": 1.0,
+            "bot.long.hsl.drawdown_ratio_threshold": 1.0,
             "bot.long.entry_cooldown.base_duration_minutes": 2.5,
         },
     )
@@ -694,7 +694,7 @@ def test_apply_scenario_overrides_use_canonical_paths():
         base_coin_sources={"BTC": "binance"},
     )
 
-    assert cfg["bot"]["long"]["hsl"]["red_threshold"] == pytest.approx(1.0)
+    assert cfg["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(1.0)
     assert cfg["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
     assert "hsl_red_threshold" not in cfg["bot"]["long"]
     assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
