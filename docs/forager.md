@@ -158,7 +158,7 @@ default to `[0.0, 0.0]` for the weight and `[60.0, 60.0]` for the span. Template
 leave these bounds absent until parsing derives them from the bot values. These
 bounds are visible but fixed; widen them explicitly to include unilateralness in the
 optimizer search. Explicit ranges are preserved. Canonical exports use
-`optimize.bounds.<side>.forager.score_weights_unilateralness` and
+`optimize.bounds.<side>.forager.score_weights.unilateralness` and
 `optimize.bounds.<side>.forager.unilateralness_ema_span_1m`.
 
 Important: these weights only rank candidates for available initial-entry slots. They do not force

@@ -26,6 +26,8 @@ since the latest release tag; these features may already be available when insta
   Add `tool optimizer-bounds` for explicit recommended ranges, preserve released-v8 inherited ranges
   during migration, and reject partial normalized-weight searches that would move fixed weights.
   Explicit optimizer relationships retain authority over their derived effective values.
+  Validate mirrored weight domains against runtime and scenario pins, preserve groups fixed at
+  zero, and keep local override references valid when preset output files move.
 
 - Pin released-v8 migration defaults independently of the current schema, distinguish omitted
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.

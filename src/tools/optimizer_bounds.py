@@ -9,6 +9,40 @@ from copy import deepcopy
 from pathlib import Path
 
 
+def _anchor_file_references(config, *, base_config_path):
+    """Retain file authority without depending on the exported config's location."""
+    from config.overrides import _resolve_override_config_path
+    from utils import _resolve_coins_file_path
+
+    base = base_config_path or config.get("live", {}).get("base_config_path", "")
+
+    def visit(node, prefix=()):
+        if isinstance(node, list):
+            for item in node:
+                visit(item, prefix)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                parts = (*prefix, *key.split("."))
+                if parts[-1] == "override_config_path" and "coin_overrides" in parts:
+                    context = {
+                        "live": {"base_config_path": base},
+                        "coin_overrides": {"source": {"override_config_path": value}},
+                    }
+                    node[key] = _resolve_override_config_path(context, "source")
+                elif (len(parts) >= 4 and parts[-4] == "bot"
+                      and parts[-3] in ("long", "short") and parts[-2] == "universe"
+                      and parts[-1] in ("approved_coins", "ignored_coins")):
+                    candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
+                    if isinstance(candidate, str):
+                        resolved = _resolve_coins_file_path(candidate)
+                        if resolved is not None:
+                            node[key] = [str(resolved)] if isinstance(value, list) else str(resolved)
+                else:
+                    visit(value, parts)
+
+    visit(config)
+
+
 def apply_recommended_bounds(source, *, base_config_path=""):
     from config import prepare_config
     from config.authored import validate_authored_config
@@ -30,6 +64,7 @@ def apply_recommended_bounds(source, *, base_config_path=""):
         weights = result.get("bot", {}).get(side, {}).get("forager", {}).get("score_weights", {})
         if weights.get("unilateralness", 0.0) > 0:
             result["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
+    _anchor_file_references(result, base_config_path=base_config_path)
     result = prepare_config(result, base_config_path=base_config_path, verbose=False)
     result = strip_config_metadata(result)
     result["live"].pop("base_config_path", None)

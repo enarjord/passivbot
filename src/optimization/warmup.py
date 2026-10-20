@@ -9,7 +9,11 @@ from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path
 from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side, get_grouped_path
-from optimizer_overrides import optimizer_overrides, materialize_coupled_scenario_spans
+from optimizer_overrides import (
+    optimizer_overrides,
+    materialize_coupled_scenario_spans,
+    optimizer_numeric_group_source_side,
+)
 from optimization.bounds import Bound, enforce_bounds
 from optimization.config_adapter import (
     extract_bounds_tuple_list_from_config,
@@ -142,7 +146,7 @@ def canonicalize_dead_optimizer_params(config: dict) -> None:
             _set_path(config, path, value)
 
 
-def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict:
+def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixed_paths=()) -> dict:
     # Internal templates may retain derived aliases while genes and anchors
     # update canonical leaves. Consume aliases before pins and mirroring, with
     # existing canonical values taking precedence over stale transport copies.
@@ -156,10 +160,11 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
                 side_cfg.pop(flat_key, None)
         canonicalize_shared_bot_side(side_cfg, path_prefix=("bot", pside))
     config.pop(ANCHOR_PLAN_KEY, None)
-    _apply_config_overrides(
-        config,
-        config.get("optimize", {}).get("fixed_runtime_overrides", {}),
-    )
+    runtime_overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {})
+    _apply_config_overrides(config, runtime_overrides)
+    fixed_value_paths = set(fixed_paths) | {
+        require_existing_config_path(config, selector) for selector in runtime_overrides
+    }
     if overrides_list is None:
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
     config = optimizer_overrides(overrides_list or [], config, None)
@@ -177,12 +182,17 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
             config.get("optimize", {}).get("bounds", {}),
             strategy_kind=config["bot"]["global"]["strategy_kind"],
         )
+        source_side = optimizer_numeric_group_source_side(
+            config, pside, "forager", overrides_list=overrides_list,
+        )
         # A deliberately fixed all-zero group disables score components. Only
-        # an explicitly searched group may reach the normalization fallback.
+        # an explicitly searched source group may reach the normalization fallback.
+        # Mirrored targets inherit that source's domain, including at all-low.
         if not any(weights.values()) and all(
-            (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
+            ("bot", source_side, "forager", "score_weights", name) in fixed_value_paths
+            or (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
             for name in weights
-            if (key := f"{pside}_forager_score_weights_{name}") in flat_bounds
+            if (key := f"{source_side}_forager_score_weights_{name}") in flat_bounds
         ):
             continue
         forager_cfg["score_weights"] = normalize_forager_score_weights(
@@ -218,11 +228,14 @@ def _build_anchored_optimizer_vector_config(
     anchor = anchors[anchor_id]
     config = deepcopy(template)
     config.pop(ANCHOR_PLAN_KEY, None)
+    # Carry the selected plan's fixed leaf authority through finalization.
+    fixed_paths = set()
     for item in anchor.get("fixed_values") or []:
         path = tuple(item.get("path") or ())
         if not path:
             continue
         _set_path(config, path, deepcopy(item.get("value")))
+        fixed_paths.add(path)
     for value, path in zip(vector[1:], key_paths):
         _set_path(config, path, value)
     config["_optimizer_anchor"] = {
@@ -231,7 +244,9 @@ def _build_anchored_optimizer_vector_config(
         "tunable_keys": list(plan.get("tunable_keys") or []),
         "fixed_keys": list(plan.get("fixed_keys") or []),
     }
-    return _finalize_optimizer_vector_config(config, overrides_list=overrides_list)
+    return _finalize_optimizer_vector_config(
+        config, overrides_list=overrides_list, fixed_paths=fixed_paths,
+    )
 
 
 def build_optimizer_vector_config(
