@@ -1401,7 +1401,7 @@ def test_gpu_proxy_rejects_all_internal_gaps():
     ("mode", "scale_budget"), [("unscaled", 0.0), ("scaled", 1.0)]
 )
 def test_single_coin_exposure_policy_packs_rust_inputs(mode, scale_budget):
-    packed = _single_coin_exposure_params({"we_excess_allowance_pct": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer_threshold": 0.8}, side="long", scale_hsl_budget=bool(scale_budget))
+    packed = _single_coin_exposure_params({"we_excess_allowance_pct": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {"threshold": 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
     assert packed == {"we_excess_allowance_pct": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold": 0.8}
 
 
@@ -1414,8 +1414,7 @@ def test_single_coin_hsl_budget_scaling_defaults_off():
 def test_tm_position_exposure_repair_packs_exact_rust_inputs():
     assert _position_exposure_enforcer_params(
         {
-            "position_exposure_enforcer_enabled": True,
-            "position_exposure_enforcer_threshold": 0.8,
+            "position_exposure_enforcer": {"enabled": True, "threshold": 0.8},
         },
         side="short",
     ) == {
@@ -1426,8 +1425,7 @@ def test_tm_position_exposure_repair_packs_exact_rust_inputs():
     with pytest.raises(ValueError, match="finite positive"):
         _position_exposure_enforcer_params(
             {
-                "position_exposure_enforcer_enabled": True,
-                "position_exposure_enforcer_threshold": 0.0,
+                "position_exposure_enforcer": {"enabled": True, "threshold": 0.0},
             },
             side="long",
         )
@@ -1440,8 +1438,7 @@ def test_tm_position_exposure_repair_packs_exact_rust_inputs():
 def test_tm_total_exposure_repair_packs_exact_rust_inputs(policy, reduce_portfolio):
     assert _total_exposure_enforcer_params(
         {
-            "total_exposure_enforcer_enabled": True,
-            "total_exposure_enforcer_policy": policy,
+            "total_exposure_enforcer": {"enabled": True, "policy": policy},
         },
         side="long",
     ) == {
@@ -1449,9 +1446,9 @@ def test_tm_total_exposure_repair_packs_exact_rust_inputs(policy, reduce_portfol
         "twel_enforcer_reduce_portfolio": reduce_portfolio,
     }
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_policy"):
+    with pytest.raises(ValueError, match=r"risk\.total_exposure_enforcer\.policy"):
         _total_exposure_enforcer_params(
-            {"total_exposure_enforcer_policy": "largest_loss"},
+            {"total_exposure_enforcer": {"policy": "largest_loss"}},
             side="short",
         )
 
