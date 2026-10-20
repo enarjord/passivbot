@@ -293,6 +293,9 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "clean-config": CommandSpec(
         "tools.clean_config", "clean/export configs or format JSON with explicit output paths"
     ),
+    "config-schema": CommandSpec(
+        "tools.config_schema", "print/check the authored-config JSON Schema or field metadata"
+    ),
     "trailing-inspect": CommandSpec(
         "tools.trailing_inspect",
         "explain trailing_martingale entry and close thresholds",

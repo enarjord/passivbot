@@ -11,90 +11,11 @@ from .strategy_spec import (
     strategy_optimize_key_path_map,
 )
 
-OPTIMIZABLE_BOT_KEY_PATHS = {
-    "unstuck_memory_ema_span_minutes": ("bot", "global", "unstuck", "memory_ema_span_minutes"),
-    "loss_gate_memory_ema_span_minutes": ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
-    "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
-    "long_forager_volatility_ema_span_1m": (
-        "bot",
-        "long",
-        "forager",
-        "volatility_ema_span_1m",
-    ),
-    "long_forager_score_weights_volume": (
-        "bot",
-        "long",
-        "forager",
-        "score_weights",
-        "volume",
-    ),
-    "long_forager_score_weights_ema_readiness": (
-        "bot",
-        "long",
-        "forager",
-        "score_weights",
-        "ema_readiness",
-    ),
-    "long_forager_score_weights_volatility": (
-        "bot",
-        "long",
-        "forager",
-        "score_weights",
-        "volatility",
-    ),
-    "short_forager_score_weights_volume": (
-        "bot",
-        "short",
-        "forager",
-        "score_weights",
-        "volume",
-    ),
-    "short_forager_score_weights_ema_readiness": (
-        "bot",
-        "short",
-        "forager",
-        "score_weights",
-        "ema_readiness",
-    ),
-    "short_forager_score_weights_volatility": (
-        "bot",
-        "short",
-        "forager",
-        "score_weights",
-        "volatility",
-    ),
-    "short_forager_volume_ema_span_1m": (
-        "bot",
-        "short",
-        "forager",
-        "volume_ema_span_1m",
-    ),
-    "short_forager_volatility_ema_span_1m": (
-        "bot",
-        "short",
-        "forager",
-        "volatility_ema_span_1m",
-    ),
-}
+# Keep the historical special-validation set exact; other shared numeric fields
+# still pass through the ordinary optimizer value/domain validators.
+from .field_registry import get_special_optimizer_bindings
 
-for _side in BOT_POSITION_SIDES:
-    for _key, _path in {
-        "forager_score_weights_unilateralness": ("forager", "score_weights", "unilateralness"),
-        "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_1m"),
-        # The fixed ceiling may be null even when its search endpoints are numeric.
-        "entry_cooldown_max_duration_minutes": ("entry_cooldown", "max_duration_minutes"),
-        "entry_cooldown_weights_minutes_exposure_ratio": (
-            "entry_cooldown",
-            "weights_minutes",
-            "exposure_ratio",
-        ),
-        "entry_cooldown_weights_minutes_adverse_directionality": (
-            "entry_cooldown",
-            "weights_minutes",
-            "adverse_directionality",
-        ),
-    }.items():
-        OPTIMIZABLE_BOT_KEY_PATHS[f"{_side}_{_key}"] = ("bot", _side, *_path)
+OPTIMIZABLE_BOT_KEY_PATHS = get_special_optimizer_bindings()
 
 
 DEPRECATED_OPTIMIZE_BOUND_ALIASES = {}

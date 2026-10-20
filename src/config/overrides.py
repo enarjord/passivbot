@@ -14,6 +14,12 @@ from .load import load_input_config, prepare_config
 from .log_output import log_config_message
 from .schema import get_template_config
 from .coerce import normalize_hsl_signal_mode
+from .field_policies import (
+    CONDITIONAL_HSL_OVERRIDE_PATHS,
+    OVERRIDABLE_SHARED_BOT_PATHS,
+    OVERRIDABLE_STANDALONE_BOT_KEYS,
+    get_live_coin_override_paths,
+)
 from .shared_bot import BOT_GROUP_FIELD_MAP, canonicalize_shared_bot_side
 from .strategy import (
     TRAILING_GRID_V7_FLAT_ONLY_KEYS,
@@ -71,45 +77,10 @@ def apply_allowed_modifications(
     return result
 
 
-CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
-    {
-        "hsl.cooldown_minutes_after_red",
-        "hsl.drawdown_ratio_ema_span_minutes",
-        "hsl.memory_ema_span_minutes",
-        "hsl.scale_budget_with_excess_allowance",
-        "hsl.enabled",
-        "hsl.panic_close_order_type",
-        "hsl.drawdown_ratio_threshold",
-    }
-)
-OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
-    {
-        "entry_cooldown.base_duration_minutes",
-        "entry_cooldown.min_duration_minutes",
-        "entry_cooldown.max_duration_minutes",
-        "entry_cooldown.weights_minutes.exposure_ratio",
-        "entry_cooldown.weights_minutes.adverse_directionality",
-        "risk.position_exposure_enforcer.enabled",
-        "risk.position_exposure_enforcer.threshold",
-        "risk.we_excess_allowance_pct",
-        "unstuck.close_pct",
-        "unstuck.ema_distance_fraction",
-        "unstuck.ema_span_0",
-        "unstuck.ema_span_1",
-        "unstuck.ema_gating_enabled",
-        "unstuck.enabled",
-        "unstuck.loss_allowance_pct",
-        "unstuck.exposure_trigger_ratio",
-    }
-    | CONDITIONAL_HSL_OVERRIDE_PATHS
-)
-OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
-
-
 def _active_shared_bot_override_paths(hsl_signal_mode: str) -> frozenset[str]:
-    if normalize_hsl_signal_mode(hsl_signal_mode) == "coin":
-        return OVERRIDABLE_SHARED_BOT_PATHS
-    return OVERRIDABLE_SHARED_BOT_PATHS - CONDITIONAL_HSL_OVERRIDE_PATHS
+    from .field_registry import get_coin_override_paths
+
+    return get_coin_override_paths(normalize_hsl_signal_mode(hsl_signal_mode))
 
 
 def _flat_bot_side_modification_policy(
@@ -214,12 +185,18 @@ def _allowed_bot_side_modifications(*, hsl_signal_mode: str = "coin") -> dict:
 
 
 def get_allowed_modifications(*, hsl_signal_mode: str = "coin"):
+    live = {}
+    for path in get_live_coin_override_paths():
+        owner = live
+        for part in path[1:-1]:
+            owner = owner.setdefault(part, {})
+        owner[path[-1]] = True
     return {
         "bot": {
             "long": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
             "short": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
         },
-        "live": {"modes": {"long": True, "short": True}, "account": {"leverage": True}},
+        "live": live,
     }
 
 

@@ -7,10 +7,71 @@ does not introduce configuration aliases or alter loading/override policy.
 """
 
 from copy import deepcopy
+from dataclasses import replace
 
 from .field_spec import CoinOverridePolicy, FieldDomain, FieldRegistry, FieldSpec, FieldType, NO_DEFAULT
 
 
+def get_special_optimizer_bindings():
+    """Preserve the existing optimizer special-validation membership exactly."""
+    from .field_policies import SPECIAL_OPTIMIZER_KEY_PATHS
+
+    return dict(SPECIAL_OPTIMIZER_KEY_PATHS)
+
+
+def get_shared_optimizer_bindings():
+    """Project existing shared bound adapters into canonical parameter paths."""
+    from .optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY, _shared_bound_local_path
+
+    paths = get_special_optimizer_bindings()
+    for side in ("long", "short"):
+        for group, keys in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.items():
+            for local, flat in keys.items():
+                paths[f"{side}_{flat}"] = ("bot", side, group, *_shared_bound_local_path(group, local))
+    for local, native in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].items():
+        paths[native] = ("bot", "global", "hsl", local)
+    return paths
+
+
+def get_coin_override_paths(hsl_signal_mode="coin"):
+    """Registry-led view of the existing shared per-coin permission policy."""
+    from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, OVERRIDABLE_SHARED_BOT_PATHS
+
+    if hsl_signal_mode not in {"coin", "position_side", "portfolio"}:
+        raise ValueError("invalid HSL scope for coin override policy")
+    return (OVERRIDABLE_SHARED_BOT_PATHS if hsl_signal_mode == "coin" else
+            OVERRIDABLE_SHARED_BOT_PATHS - CONDITIONAL_HSL_OVERRIDE_PATHS)
+
+
+def describe_field(path):
+    """Serializable metadata report for explain/editor consumers; never policy."""
+    from dataclasses import asdict
+
+    parts = tuple(path.split(".")) if isinstance(path, str) else tuple(path)
+    registry = get_field_registry()
+    field = registry.find(parts)
+    sparse = parts[:1] == ("coin_overrides",)
+    if field is None and sparse and len(parts) > 2:
+        inherited = registry.find(parts[2:])
+        if inherited is not None and inherited.coin_override in {
+            CoinOverridePolicy.ALLOWED, CoinOverridePolicy.COIN_HSL_ONLY,
+        }:
+            field = inherited
+    if field is None:
+        raise KeyError("unknown declared configuration field: " + ".".join(map(str, parts)))
+    return {
+        "path": ".".join(map(str, parts)), "types": [kind.value for kind in field.types],
+        "nullable": field.nullable,
+        "default": {"declared": not sparse and field.default is not NO_DEFAULT,
+                    **({"value": deepcopy(field.default)} if not sparse and field.default is not NO_DEFAULT else {})},
+        "scope": field.scope, "consumers": list(field.consumers),
+        "unit": field.unit, "denominator": field.denominator,
+        "domain": asdict(field.domain) if field.domain else None,
+        "description": field.description, "source": field.source,
+        "optimizer": {"eligible": False if sparse else field.optimizable, "key": field.optimize_key,
+                      "when": field.optimize_when, "recommended_bounds": field.recommended_bounds},
+        "coin_override": field.coin_override.value if field.coin_override else None,
+    }
 # One structural definition for operational field identities, current paths and
 # their released-v8 origins. Internal live-value APIs address these identities;
 # authored configuration accepts only the returned canonical paths.
@@ -271,6 +332,7 @@ def get_field_registry() -> FieldRegistry:
         # This setting exists only inside coin patches, never as a root bot field.
         add(f"coin_overrides.*.bot.{side}.wallet_exposure_limit", FieldType.FLOAT,
             coin_override=CoinOverridePolicy.ALLOWED)
+    for side in ("long", "short"):
         add(f"bot.{side}.forager.always_include.*", FieldType.STRING,
             description="Persistent selection identifier; order is retained and duplicates are removed.")
     add("coin_overrides.*.override_config_path", FieldType.STRING)
@@ -308,6 +370,9 @@ def get_field_registry() -> FieldRegistry:
         for side in ("long", "short"):
             add(f"bot.{side}.universe.{name}", (FieldType.ARRAY, FieldType.STRING), nullable=True)
     add("backtest.reducer.*", FieldType.STRING)
+    for path in ("backtest.coin_sources.*", "backtest.market_settings_sources.*",
+                 "backtest.scenarios.*.coin_sources.*"):
+        add(path, FieldType.STRING, nullable=True)
 
     # Dynamic records are typed by field, independent of example count/order.
     for prefix in ("backtest.market_settings.overrides.*",
@@ -343,4 +408,6 @@ def get_field_registry() -> FieldRegistry:
     for name in ("elapsed_ms", "since_previous_ms"):
         add(f"live.startup_phase_budgets.*.{name}", FieldType.INTEGER,
             unit="milliseconds", domain=FieldDomain(minimum=0))
-    return FieldRegistry(fields)
+    from .field_metadata import enrich_fields
+
+    return FieldRegistry(enrich_fields(fields))

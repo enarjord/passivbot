@@ -1,5 +1,10 @@
 # Passivbot Parameters Explanation
 
+For editor completion and early structure/type checks, see the generated
+[v9 JSON Schema](../schemas/config-v9.schema.json) and the
+[editor setup guide](config_editor.md). Runtime validators still enforce context-dependent
+trading, dataset and optimizer rules.
+
 This document explains the canonical config schema used by Passivbot.
 
 - The source of truth for defaults is `src/config/schema.py`.

@@ -17,6 +17,11 @@ since the latest release tag; these features may already be available when insta
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently
   of template spelling, while preserving values, sparse overrides, and integer counts.
+- Add a generated v9 JSON Schema and VS Code completion for intentional config examples,
+  with closed objects, sparse overrides and canonical nested optimizer bounds. Field metadata
+  now documents shared optimizer bindings, coin permissions, units and validator domains;
+  `passivbot tool config-schema` prints/checks the schema or describes one field, including
+  from installed wheels. Fixed-runtime editor pins require dotted leaf keys, matching runtime.
 - Freeze independent optimizer genes omitted from authored v9 bounds at their configured values.
   Add `tool optimizer-bounds` for explicit recommended ranges, preserve released-v8 inherited ranges
   during migration, and reject partial normalized-weight searches that would move fixed weights.
