@@ -307,6 +307,10 @@ since the latest release tag; these features may already be available when insta
   when every effective candidate, coin override and active side disables it;
   shared realized-loss and HSL consumers remain independently enabled.
 
+- Compare automatic GPU batch widths using actual candidate counts and observed batch
+  frequencies, smoothing durations within each count to avoid misranking mixed partial
+  batches. Keep cold-shape exclusion, bounds, cooldowns and rollback.
+
 - Assess native GPU optimizer batch-width trials after six successful warm observations and
   three seconds of completed work, retaining cold-shape exclusion, prepared work and scratch
   limits, demand and memory checks, cooldowns and rollback.

@@ -235,7 +235,9 @@ def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budg
         rates = [*controller.samples, count / seconds][-controller.samples.maxlen:] if seconds > 0 else []
         completed = original_observe(controller, count, seconds, **kwargs)
         if completed:
-            tuning_windows.append(dict(elapsed_seconds=time.perf_counter() - started, previous_width=previous_width, next_width=controller.width, candidates_per_second=statistics.median(rates), baseline=controller.baseline))
+            tuning_windows.append(dict(elapsed_seconds=time.perf_counter() - started, previous_width=previous_width, next_width=controller.width,
+                candidates_per_second=getattr(controller, "last_window_rate", None) or statistics.median(rates),
+                rate_aggregation=getattr(controller, "rate_aggregation", "median"), baseline=controller.baseline))
         return completed
     BatchController.observe = observed_window
     prepared = time.perf_counter()

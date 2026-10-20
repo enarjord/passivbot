@@ -242,6 +242,8 @@ def _observe_batches(policy, batches):
             evidence["completed_windows"].append(dict(
                 width=width, samples=len(rates), seconds=window_seconds,
                 median_candidates_per_second=statistics.median(rates),
+                candidates_per_second=getattr(controller, "last_window_rate", None) or statistics.median(rates),
+                rate_aggregation=getattr(controller, "rate_aggregation", "median"),
                 resulting_width=controller.width))
 
     policy.observe = observe

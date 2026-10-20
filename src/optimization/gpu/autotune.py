@@ -84,6 +84,7 @@ class BatchController:
         allow_partial_batches=False,
         window_samples=None,
         min_seconds=None,
+        rate_aggregation="median",
     ):
         window_samples = WINDOW if window_samples is None else window_samples
         min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
@@ -92,6 +93,8 @@ class BatchController:
         if (isinstance(min_seconds, bool) or not isinstance(min_seconds, (int, float))
                 or not math.isfinite(min_seconds) or min_seconds < 0):
             raise ValueError("batch evidence duration must be finite and non-negative")
+        if not isinstance(rate_aggregation, str) or rate_aggregation not in {"median", "per_count"}:
+            raise ValueError("batch rate aggregation must be median or per_count")
         self.ceiling = max(1, int(ceiling))
         self.width = max(1, min(int(initial), self.ceiling))
         self.save = save
@@ -100,7 +103,13 @@ class BatchController:
         self.allow_partial_batches = allow_partial_batches
         self.window_samples = window_samples
         self.min_seconds = min_seconds
+        self.rate_aggregation = rate_aggregation
+        self.last_window_rate = None
         self.samples = deque(maxlen=window_samples)
+        # Only execution tuning groups actual integer batch sizes. Frequencies
+        # cover the complete window; retained durations stay bounded per count.
+        self._durations_by_count = {}
+        self._count_frequencies = {}
         self.seconds = 0.0
         self.seen = set()
         self.baseline = None
@@ -119,12 +128,27 @@ class BatchController:
             self.seen.add(count)
             return
         self.samples.append(count / seconds)
+        if self.rate_aggregation == "per_count":
+            durations = self._durations_by_count.get(count)
+            if durations is None:
+                durations = self._durations_by_count[count] = deque(maxlen=self.window_samples)
+            durations.append(seconds)
+            self._count_frequencies[count] = self._count_frequencies.get(count, 0) + 1
         self.seconds += seconds if evidence_seconds is None else evidence_seconds
         if len(self.samples) < self.window_samples or self.seconds < self.min_seconds:
             return
-        rate = statistics.median(self.samples)
+        if self.rate_aggregation == "per_count":
+            candidates = sum(count * frequency for count, frequency in self._count_frequencies.items())
+            duration = math.fsum(statistics.median(self._durations_by_count[count]) * frequency
+                                 for count, frequency in self._count_frequencies.items())
+            rate = candidates / duration
+        else:
+            rate = statistics.median(self.samples)
+        self.last_window_rate = rate
         evidence_seconds = self.seconds
         self.samples.clear()
+        self._durations_by_count.clear()
+        self._count_frequencies.clear()
         self.seconds = 0.0
         if self.baseline is not None:
             old_width, old_rate = self.baseline

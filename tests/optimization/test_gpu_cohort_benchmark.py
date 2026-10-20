@@ -276,7 +276,8 @@ def test_tuning_report_retains_consumed_windows_and_incomplete_remainder():
     assert evidence["seconds"] == WINDOW * 2.0
     assert evidence["completed_windows"] == [dict(
         width=2, samples=WINDOW, seconds=WINDOW * 2.0,
-        median_candidates_per_second=1.0, resulting_width=1)]
+        median_candidates_per_second=1.0, candidates_per_second=1.0,
+        rate_aggregation="per_count", resulting_width=1)]
     # The smaller trial loses throughput and rolls back; its window is retained too.
     # Count one was already seen before the initial width-two evidence window.
     for _ in range(WINDOW):
@@ -305,7 +306,8 @@ def test_tuning_report_counts_warm_partial_shapes_and_their_consumed_window():
     assert evidence["seconds"] == WINDOW * 2
     assert evidence["completed_windows"] == [dict(
         width=64, samples=WINDOW, seconds=WINDOW * 2,
-        median_candidates_per_second=31.5, resulting_width=32)]
+        median_candidates_per_second=31.5, candidates_per_second=31.5,
+        rate_aggregation="per_count", resulting_width=32)]
     assert len(batches) == WINDOW + 1
 
 

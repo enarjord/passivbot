@@ -49,6 +49,7 @@ class ExecutionBatchTuner:
                 allow_partial_batches=True,
                 window_samples=EVIDENCE_SAMPLES,
                 min_seconds=EVIDENCE_SECONDS,
+                rate_aggregation="per_count",
                 can_grow=lambda: (
                     self._demand[dataset_id] >= min(controller.ceiling, controller.width * 2)
                     and self.headroom()
