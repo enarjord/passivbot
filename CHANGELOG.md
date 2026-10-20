@@ -9,6 +9,10 @@ since the latest release tag; these features may already be available when insta
 - Declare configuration field types explicitly and publish a generated field reference.
   Config exports use float spelling for balances and fractional durations independently
   of template spelling, while preserving values, sparse overrides, and integer counts.
+- Add a generated v9 JSON Schema and VS Code completion for intentional config examples,
+  with closed objects, sparse overrides and canonical nested optimizer bounds. Field metadata
+  now documents shared optimizer bindings, coin permissions, units and validator domains;
+  `passivbot tool config-schema` prints/checks the schema or describes one field.
 
 - Pin released-v8 migration defaults independently of the current schema, distinguish omitted
   minimum-cost filtering from explicit inheritance, and preserve that inheritance in migrated exports.

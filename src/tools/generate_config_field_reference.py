@@ -24,6 +24,35 @@ def _default_label(field):
     return "`" + json.dumps(value, ensure_ascii=False).replace("|", "\\|") + "`"
 
 
+def _metadata_labels(field):
+    unit = field.unit or "—"
+    if field.denominator:
+        unit += " / " + field.denominator
+    scope = field.scope or "—"
+    if field.consumers:
+        scope += "; " + ", ".join(field.consumers)
+    optimizer = "—" if field.optimizable is None else ("Eligible" if field.optimizable else "No")
+    if field.optimize_key:
+        optimizer += f" (`{field.optimize_key}`)"
+    if field.optimize_when:
+        optimizer += "; " + field.optimize_when
+    if field.recommended_bounds is not None:
+        optimizer += "; recommended `" + json.dumps(field.recommended_bounds) + "`"
+    domain = []
+    if field.domain:
+        value = field.domain
+        if value.minimum is not None:
+            domain.append(("> " if value.exclusive_minimum else ">= ") + str(value.minimum))
+        if value.maximum is not None:
+            domain.append(("< " if value.exclusive_maximum else "<= ") + str(value.maximum))
+        if value.finite:
+            domain.append("finite")
+        if value.choices:
+            domain.append(", ".join(f"`{choice}`" for choice in value.choices))
+    return [unit, scope, optimizer, field.coin_override.value if field.coin_override else "—",
+            "; ".join(domain) or "—"]
+
+
 def render_reference():
     registry = get_field_registry()
     parts = [
@@ -53,12 +82,13 @@ def render_reference():
     for name, fields in sorted(groups.items()):
         parts.extend([
             f"## {name}\n\n",
-            "| Field | Type | Default | Source |\n",
-            "| --- | --- | --- | --- |\n",
+            "| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |\n",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n",
         ])
         for field in sorted(fields, key=lambda field: field.path):
             types = field.type_label.replace("|", "\\|")
-            parts.append(f"| `{'.'.join(field.path)}` | {types} | {_default_label(field)} | {field.source} |\n")
+            metadata = " | ".join(value.replace("|", "\\|") for value in _metadata_labels(field))
+            parts.append(f"| `{'.'.join(field.path)}` | {types} | {_default_label(field)} | {metadata} | {field.source} |\n")
         parts.append("\n")
     return "".join(parts)
 

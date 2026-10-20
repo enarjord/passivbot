@@ -54,6 +54,8 @@ class FieldSpec:
     unit: str | None = None
     description: str = ""
     optimize_key: str | None = None
+    optimizable: bool | None = None
+    optimize_when: str | None = None
     scope: str | None = None
     consumers: tuple[str, ...] = ()
     domain: FieldDomain | None = None

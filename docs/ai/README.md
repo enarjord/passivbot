@@ -57,8 +57,10 @@ Run documentation checks with:
 PYTHONPATH=src python src/tools/check_ai_docs.py
 PYTHONPATH=src python src/tools/generate_live_event_registry.py --check
 PYTHONPATH=src python src/tools/generate_config_field_reference.py --check
+PYTHONPATH=src python src/tools/config_schema.py --check
 pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
 pytest tests/test_config_field_registry.py
+pytest tests/test_config_json_schema.py
 ```
 
 The mandatory-context ceiling is 1,500 words and is warning-only. Missing routed files and stale

@@ -12,395 +12,400 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 ## backtest
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `backtest.balance_sample_divider` | integer | `60` | python |
-| `backtest.base_dir` | string | `"backtests"` | python |
-| `backtest.btc_collateral_cap` | float | `0.0` | python |
-| `backtest.btc_collateral_ltv_cap` | float \| null | `null` | python |
-| `backtest.candle_interval_minutes` | integer | `1` | python |
-| `backtest.coin_sources` | object | `{}` | python |
-| `backtest.compress_cache` | boolean | `true` | python |
-| `backtest.dynamic_wel_by_tradability` | boolean | `true` | python |
-| `backtest.end_date` | string | `"now"` | python |
-| `backtest.equity_floor_ratio` | float | `0.05` | python |
-| `backtest.ew_half_life_days` | float \| null | `null` | python |
-| `backtest.exchanges` | array | 2 items (see template) | python |
-| `backtest.filter_by_min_effective_cost` | boolean \| null | `false` | python |
-| `backtest.gap_tolerance_ohlcvs_minutes` | float | `120.0` | python |
-| `backtest.hlcvs_data_dir` | string \| null | `null` | python |
-| `backtest.hlcvs_data_override_mode` | string | `"intersection"` | python |
-| `backtest.hsl_detailed_report` | boolean | `false` | python |
-| `backtest.limit_order_fill_buffer_pct` | float | `0.0` | python |
-| `backtest.maker_fee_override` | float \| null | `0.0004` | python |
-| `backtest.market_order_slippage_pct` | float | `0.0005` | python |
-| `backtest.market_settings.overrides` | object | `{}` | python |
-| `backtest.market_settings.overrides.*.c_mult` | float | Not declared | python |
-| `backtest.market_settings.overrides.*.min_cost` | float | Not declared | python |
-| `backtest.market_settings.overrides.*.min_qty` | float | Not declared | python |
-| `backtest.market_settings.overrides.*.price_step` | float | Not declared | python |
-| `backtest.market_settings.overrides.*.qty_step` | float | Not declared | python |
-| `backtest.market_settings.overrides_by_exchange` | object | `{}` | python |
-| `backtest.market_settings.overrides_by_exchange.*.*.c_mult` | float | Not declared | python |
-| `backtest.market_settings.overrides_by_exchange.*.*.min_cost` | float | Not declared | python |
-| `backtest.market_settings.overrides_by_exchange.*.*.min_qty` | float | Not declared | python |
-| `backtest.market_settings.overrides_by_exchange.*.*.price_step` | float | Not declared | python |
-| `backtest.market_settings.overrides_by_exchange.*.*.qty_step` | float | Not declared | python |
-| `backtest.market_settings_sources` | object | `{}` | python |
-| `backtest.offline` | boolean | `false` | python |
-| `backtest.ohlcv_source_dir` | string \| null | `null` | python |
-| `backtest.organillo_csv` | string \| null | `null` | python |
-| `backtest.organillo_sha256` | string \| null | `null` | python |
-| `backtest.reducer.*` | string | Not declared | python |
-| `backtest.scenarios` | array | 7 items (see template) | python |
-| `backtest.scenarios.*.coin_sources` | object \| null | Not declared | python |
-| `backtest.scenarios.*.coins` | array \| string \| object \| null | Not declared | python |
-| `backtest.scenarios.*.end_date` | string \| null | Not declared | python |
-| `backtest.scenarios.*.exchanges` | array \| string \| null | Not declared | python |
-| `backtest.scenarios.*.ignored_coins` | array \| string \| object \| null | Not declared | python |
-| `backtest.scenarios.*.label` | string \| null | Not declared | python |
-| `backtest.scenarios.*.overrides` | object | Not declared | python |
-| `backtest.scenarios.*.start_date` | string \| null | Not declared | python |
-| `backtest.start_date` | string | `"2021-04-20"` | python |
-| `backtest.starting_balance` | float | `100000.0` | python |
-| `backtest.suite_enabled` | boolean | `false` | python |
-| `backtest.taker_fee_override` | float \| null | `0.00055` | python |
-| `backtest.visible_metrics` | array | 12 items (see template) | python |
-| `backtest.volume_normalization` | boolean | `true` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `backtest.balance_sample_divider` | integer | `60` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.base_dir` | string | `"backtests"` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.btc_collateral_cap` | float | `0.0` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.btc_collateral_ltv_cap` | float \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.candle_interval_minutes` | integer | `1` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.coin_sources` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.coin_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.compress_cache` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.dynamic_wel_by_tradability` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.end_date` | string | `"now"` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.equity_floor_ratio` | float | `0.05` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.ew_half_life_days` | float \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.exchanges` | array | 2 items (see template) | — | —; backtest, optimize | — | — | — | python |
+| `backtest.filter_by_min_effective_cost` | boolean \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.gap_tolerance_ohlcvs_minutes` | float | `120.0` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.hlcvs_data_dir` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.hlcvs_data_override_mode` | string | `"intersection"` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.hsl_detailed_report` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.limit_order_fill_buffer_pct` | float | `0.0` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.maker_fee_override` | float \| null | `0.0004` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_order_slippage_pct` | float | `0.0005` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides.*.c_mult` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides.*.min_cost` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides.*.min_qty` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides.*.price_step` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides.*.qty_step` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides_by_exchange` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides_by_exchange.*.*.c_mult` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides_by_exchange.*.*.min_cost` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides_by_exchange.*.*.min_qty` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides_by_exchange.*.*.price_step` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings.overrides_by_exchange.*.*.qty_step` | float | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings_sources` | object | `{}` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.market_settings_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.offline` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.ohlcv_source_dir` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.organillo_csv` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.organillo_sha256` | string \| null | `null` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.reducer.*` | string | Not declared | — | —; backtest, optimize | — | — | `max`, `mean`, `median`, `min`, `std` | python |
+| `backtest.scenarios` | array | 7 items (see template) | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.coin_sources` | object \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.coin_sources.*` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.coins` | array \| string \| object \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.end_date` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.exchanges` | array \| string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.ignored_coins` | array \| string \| object \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.label` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.overrides` | object | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.scenarios.*.start_date` | string \| null | Not declared | — | —; backtest, optimize | — | — | — | python |
+| `backtest.start_date` | string | `"2021-04-20"` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.starting_balance` | float | `100000.0` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.suite_enabled` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.taker_fee_override` | float \| null | `0.00055` | — | —; backtest, optimize | — | — | — | python |
+| `backtest.visible_metrics` | array | 12 items (see template) | — | —; backtest, optimize | — | — | — | python |
+| `backtest.volume_normalization` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
 
 ## bot
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `bot.global.hsl.cooldown_minutes_after_red` | float | Not declared | python |
-| `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | python |
-| `bot.global.hsl.enabled` | boolean | Not declared | python |
-| `bot.global.hsl.memory_ema_span_minutes` | float | Not declared | python |
-| `bot.global.hsl.panic_close_order_type` | string | Not declared | python |
-| `bot.global.hsl.red_threshold` | float | Not declared | python |
-| `bot.global.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | python |
-| `bot.global.hsl.scope` | string | `"coin"` | python |
-| `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | python |
-| `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | python |
-| `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | python |
-| `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | python |
-| `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | python |
-| `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | python |
-| `bot.long.entry_cooldown.weights_minutes.adverse_directionality` | float | `0.0` | python |
-| `bot.long.entry_cooldown.weights_minutes.exposure_ratio` | float | `0.0` | python |
-| `bot.long.forager.score_weights.ema_readiness` | float | `0.21` | python |
-| `bot.long.forager.score_weights.unilateralness` | float | `0.0` | python |
-| `bot.long.forager.score_weights.volatility` | float | `0.61` | python |
-| `bot.long.forager.score_weights.volume` | float | `0.18` | python |
-| `bot.long.forager.unilateralness_ema_span_1m` | float | `60.0` | python |
-| `bot.long.forager.volatility_ema_span_1m` | float | `2274.0` | python |
-| `bot.long.forager.volume_ema_span_1m` | float | `310.0` | python |
-| `bot.long.hsl.cooldown_minutes_after_red` | float | `2160.0` | python |
-| `bot.long.hsl.drawdown_ratio_ema_span_minutes` | float | `720.0` | python |
-| `bot.long.hsl.enabled` | boolean | `false` | python |
-| `bot.long.hsl.memory_ema_span_minutes` | float | `43200.0` | python |
-| `bot.long.hsl.panic_close_order_type` | string | `"limit"` | python |
-| `bot.long.hsl.red_threshold` | float | `0.15` | python |
-| `bot.long.hsl.scale_budget_with_excess_allowance` | boolean | `false` | python |
-| `bot.long.risk.max_positions` | integer | `7` | python |
-| `bot.long.risk.position_exposure_enforcer.enabled` | boolean | `false` | python |
-| `bot.long.risk.position_exposure_enforcer.threshold` | float | `1.0` | python |
-| `bot.long.risk.total_exposure_enforcer.enabled` | boolean | `false` | python |
-| `bot.long.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | python |
-| `bot.long.risk.total_exposure_enforcer.threshold` | float | `1.0` | python |
-| `bot.long.risk.total_wallet_exposure_limit` | float | `1.5` | python |
-| `bot.long.risk.we_excess_allowance_pct` | float | `0.37` | python |
-| `bot.long.strategy.ema_anchor.base_qty_pct` | float | `0.01` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.ema_span_0` | float | `200.0` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.ema_span_1` | float | `800.0` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.entry_double_down_factor` | float | `0.0` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.offset` | float | `0.002` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.offset_psize_weight` | float | `0.1` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.offset_volatility_1h_weight` | float | `0.0` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.offset_volatility_1m_weight` | float | `0.0` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.offset_volatility_ema_span_1h` | float | `24.0` | rust strategy metadata |
-| `bot.long.strategy.ema_anchor.offset_volatility_ema_span_1m` | float | `60.0` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.qty_pct` | float | `0.84` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.retracement_base_pct` | float | `0.0005` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.retracement_volatility_1h_weight` | float | `22.95` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.retracement_volatility_1m_weight` | float | `52.34` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.threshold_base_pct` | float | `-0.0027` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.threshold_volatility_1h_weight` | float | `0.48` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.threshold_volatility_1m_weight` | float | `3.22` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.close.threshold_we_weight` | float | `-0.0001` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.double_down_factor` | float | `0.94` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.ema_gate_mode` | string | `"all"` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.ema_span_0` | float | `790.0` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.ema_span_1` | float | `1080.0` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.initial_ema_dist` | float | `0.0028` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.initial_qty_pct` | float | `0.0081` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.retracement_base_pct` | float | `0.0008` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.retracement_volatility_1h_weight` | float | `15.5` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.retracement_volatility_1m_weight` | float | `50.42` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.retracement_we_weight` | float | `0.334` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.threshold_base_pct` | float | `0.019` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight` | float | `4.58` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.threshold_volatility_1m_weight` | float | `17.68` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.entry.threshold_we_weight` | float | `1.007` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.volatility_ema_span_1h` | float | `683.0` | rust strategy metadata |
-| `bot.long.strategy.trailing_martingale.volatility_ema_span_1m` | float | `604.0` | rust strategy metadata |
-| `bot.long.unstuck.close_pct` | float | `0.041` | python |
-| `bot.long.unstuck.ema_dist` | float | `-0.0269` | python |
-| `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | python |
-| `bot.long.unstuck.ema_span_0` | float | `790.0` | python |
-| `bot.long.unstuck.ema_span_1` | float | `1080.0` | python |
-| `bot.long.unstuck.enabled` | boolean | `true` | python |
-| `bot.long.unstuck.exposure_trigger_ratio` | float | `0.466` | python |
-| `bot.long.unstuck.loss_allowance_pct` | float | `0.0052` | python |
-| `bot.short.entry_cooldown.base_duration_minutes` | float | `0.0` | python |
-| `bot.short.entry_cooldown.max_duration_minutes` | float \| null | `null` | python |
-| `bot.short.entry_cooldown.min_duration_minutes` | float | `0.0` | python |
-| `bot.short.entry_cooldown.weights_minutes.adverse_directionality` | float | `0.0` | python |
-| `bot.short.entry_cooldown.weights_minutes.exposure_ratio` | float | `0.0` | python |
-| `bot.short.forager.score_weights.ema_readiness` | float | `0.0` | python |
-| `bot.short.forager.score_weights.unilateralness` | float | `0.0` | python |
-| `bot.short.forager.score_weights.volatility` | float | `0.0` | python |
-| `bot.short.forager.score_weights.volume` | float | `0.0` | python |
-| `bot.short.forager.unilateralness_ema_span_1m` | float | `60.0` | python |
-| `bot.short.forager.volatility_ema_span_1m` | float | `10.0` | python |
-| `bot.short.forager.volume_ema_span_1m` | float | `60.0` | python |
-| `bot.short.hsl.cooldown_minutes_after_red` | float | `1.0` | python |
-| `bot.short.hsl.drawdown_ratio_ema_span_minutes` | float | `1.0` | python |
-| `bot.short.hsl.enabled` | boolean | `false` | python |
-| `bot.short.hsl.memory_ema_span_minutes` | float | `43200.0` | python |
-| `bot.short.hsl.panic_close_order_type` | string | `"limit"` | python |
-| `bot.short.hsl.red_threshold` | float | `0.01` | python |
-| `bot.short.hsl.scale_budget_with_excess_allowance` | boolean | `false` | python |
-| `bot.short.risk.max_positions` | integer | `1` | python |
-| `bot.short.risk.position_exposure_enforcer.enabled` | boolean | `true` | python |
-| `bot.short.risk.position_exposure_enforcer.threshold` | float | `0.8` | python |
-| `bot.short.risk.total_exposure_enforcer.enabled` | boolean | `true` | python |
-| `bot.short.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | python |
-| `bot.short.risk.total_exposure_enforcer.threshold` | float | `0.8` | python |
-| `bot.short.risk.total_wallet_exposure_limit` | float | `0.0` | python |
-| `bot.short.risk.we_excess_allowance_pct` | float | `0.0` | python |
-| `bot.short.strategy.ema_anchor.base_qty_pct` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.ema_span_0` | float | `200.0` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.ema_span_1` | float | `800.0` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.entry_double_down_factor` | float | `0.0` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.offset` | float | `0.002` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.offset_psize_weight` | float | `0.1` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.offset_volatility_1h_weight` | float | `0.0` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.offset_volatility_1m_weight` | float | `0.0` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.offset_volatility_ema_span_1h` | float | `24.0` | rust strategy metadata |
-| `bot.short.strategy.ema_anchor.offset_volatility_ema_span_1m` | float | `60.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.qty_pct` | float | `0.05` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.retracement_base_pct` | float | `0.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.retracement_volatility_1h_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.retracement_volatility_1m_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.threshold_base_pct` | float | `-0.02` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.threshold_volatility_1h_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.threshold_volatility_1m_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.close.threshold_we_weight` | float | `-0.1` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.double_down_factor` | float | `0.2` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.ema_gate_mode` | string | `"all"` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.ema_span_0` | float | `60.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.ema_span_1` | float | `60.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.initial_ema_dist` | float | `-0.1` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.initial_qty_pct` | float | `0.005` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.retracement_base_pct` | float | `-0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.retracement_volatility_1h_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.retracement_volatility_1m_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.retracement_we_weight` | float | `0.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.threshold_base_pct` | float | `0.001` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.threshold_volatility_1h_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.threshold_volatility_1m_weight` | float | `0.01` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.entry.threshold_we_weight` | float | `0.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.volatility_ema_span_1h` | float | `672.0` | rust strategy metadata |
-| `bot.short.strategy.trailing_martingale.volatility_ema_span_1m` | float | `5.0` | rust strategy metadata |
-| `bot.short.unstuck.close_pct` | float | `0.01` | python |
-| `bot.short.unstuck.ema_dist` | float | `-0.2` | python |
-| `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | python |
-| `bot.short.unstuck.ema_span_0` | float | `60.0` | python |
-| `bot.short.unstuck.ema_span_1` | float | `60.0` | python |
-| `bot.short.unstuck.enabled` | boolean | `true` | python |
-| `bot.short.unstuck.exposure_trigger_ratio` | float | `0.3` | python |
-| `bot.short.unstuck.loss_allowance_pct` | float | `0.005` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `bot.global.execution.market_order_near_touch_threshold` | float | `0.001` | fraction / market price | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.execution.market_orders_allowed` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
+| `bot.global.forager.score_hysteresis_pct` | float | `0.02` | fraction / incumbent selection score | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.hedge_mode` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
+| `bot.global.hsl.cooldown_minutes_after_red` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_cooldown_minutes_after_red`); portfolio HSL scope; recommended `[2160, 2160, 10]` | forbidden | >= 0.0; finite | python |
+| `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_drawdown_ratio_ema_span_minutes`); portfolio HSL scope; recommended `[720, 720, 1]` | forbidden | >= 1.0; finite | python |
+| `bot.global.hsl.enabled` | boolean | Not declared | — | global; live, backtest, optimize | No | forbidden | — | python |
+| `bot.global.hsl.memory_ema_span_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_memory_ema_span_minutes`); portfolio HSL scope | forbidden | >= 1.0; finite | python |
+| `bot.global.hsl.panic_close_order_type` | string | Not declared | — | global; live, backtest, optimize | No | forbidden | `limit`, `market` | python |
+| `bot.global.hsl.red_threshold` | float | Not declared | fraction / scope equity plus remembered drawdown | global; live, backtest, optimize | Eligible (`hsl_red_threshold`); portfolio HSL scope; recommended `[0.15, 0.15, 0.001]` | forbidden | > 0.0; <= 1.0; finite | python |
+| `bot.global.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | — | global; live, backtest, optimize | No | forbidden | — | python |
+| `bot.global.hsl.scope` | string | `"coin"` | — | global; live, backtest, optimize | No | forbidden | `coin`, `pside`, `portfolio` | python |
+| `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | fraction / raw balance plus loss-gate remembered drawdown | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
+| `bot.global.strategy_kind` | string | `"trailing_martingale"` | — | global; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
+| `bot.global.universe.filter_by_min_effective_cost` | boolean | `true` | — | global; live, backtest, optimize | No | forbidden | — | python |
+| `bot.global.universe.minimum_coin_age_days` | float | `60.0` | days | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
+| `bot.global.warmup.max_minutes` | float | `0.0` | minutes | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.warmup.ratio` | float | `0.3` | fraction / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | long; live, backtest, optimize | Eligible (`long_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
+| `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
+| `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |
+| `bot.long.entry_cooldown.weights_minutes.adverse_directionality` | float | `0.0` | minutes / adverse directionality score | long; live, backtest, optimize | Eligible (`long_entry_cooldown_weights_minutes_adverse_directionality`) | allowed | >= 0.0; finite | python |
+| `bot.long.entry_cooldown.weights_minutes.exposure_ratio` | float | `0.0` | minutes / position wallet exposure / effective wallet exposure limit | long; live, backtest, optimize | Eligible (`long_entry_cooldown_weights_minutes_exposure_ratio`) | allowed | >= 0.0; finite | python |
+| `bot.long.forager.always_include` | array | `[]` | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.forager.always_include.*` | string | Not declared | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.forager.score_weights.ema_readiness` | float | `0.21` | relative weight / sum of authored forager weights | long; live, backtest, optimize | Eligible (`long_forager_score_weights_ema_readiness`); recommended `[0, 1, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.long.forager.score_weights.unilateralness` | float | `0.0` | relative weight / sum of authored forager weights | long; live, backtest, optimize | Eligible (`long_forager_score_weights_unilateralness`) | forbidden | >= 0.0; finite | python |
+| `bot.long.forager.score_weights.volatility` | float | `0.61` | relative weight / sum of authored forager weights | long; live, backtest, optimize | Eligible (`long_forager_score_weights_volatility`); recommended `[0, 1, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.long.forager.score_weights.volume` | float | `0.18` | relative weight / sum of authored forager weights | long; live, backtest, optimize | Eligible (`long_forager_score_weights_volume`); recommended `[0, 1, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.long.forager.unilateralness_ema_span_1m` | float | `60.0` | one-minute candles | long; live, backtest, optimize | Eligible (`long_unilateralness_ema_span_1m`) | forbidden | >= 1.0; <= 100000.0; finite | python |
+| `bot.long.forager.volatility_ema_span_1m` | float | `2274.0` | one-minute candles | long; live, backtest, optimize | Eligible (`long_forager_volatility_ema_span_1m`); recommended `[10, 2880, 1]` | forbidden | — | python |
+| `bot.long.forager.volume_ema_span_1m` | float | `310.0` | one-minute candles | long; live, backtest, optimize | Eligible (`long_forager_volume_ema_span_1m`); recommended `[180, 2880, 1]` | forbidden | — | python |
+| `bot.long.hsl.cooldown_minutes_after_red` | float | `2160.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_cooldown_minutes_after_red`); coin or pside HSL scope; recommended `[2160, 2160, 10]` | coin HSL scope only | >= 0.0; finite | python |
+| `bot.long.hsl.drawdown_ratio_ema_span_minutes` | float | `720.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_drawdown_ratio_ema_span_minutes`); coin or pside HSL scope; recommended `[720, 720, 1]` | coin HSL scope only | >= 1.0; finite | python |
+| `bot.long.hsl.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | coin HSL scope only | — | python |
+| `bot.long.hsl.memory_ema_span_minutes` | float | `43200.0` | minutes | long; live, backtest, optimize | Eligible (`long_hsl_memory_ema_span_minutes`); coin or pside HSL scope | coin HSL scope only | >= 1.0; finite | python |
+| `bot.long.hsl.panic_close_order_type` | string | `"limit"` | — | long; live, backtest, optimize | No | coin HSL scope only | `limit`, `market` | python |
+| `bot.long.hsl.red_threshold` | float | `0.15` | fraction / scope equity plus remembered drawdown | long; live, backtest, optimize | Eligible (`long_hsl_red_threshold`); coin or pside HSL scope; recommended `[0.15, 0.15, 0.001]` | coin HSL scope only | > 0.0; <= 1.0; finite | python |
+| `bot.long.hsl.scale_budget_with_excess_allowance` | boolean | `false` | — | long; live, backtest, optimize | No | coin HSL scope only | — | python |
+| `bot.long.risk.max_positions` | integer | `7` | positions | long; live, backtest, optimize | Eligible (`long_n_positions`); recommended `[7, 7, 1]` | forbidden | >= 0; finite | python |
+| `bot.long.risk.position_exposure_enforcer.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | allowed | — | python |
+| `bot.long.risk.position_exposure_enforcer.threshold` | float | `1.0` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_wel_enforcer_threshold`); recommended `[1, 1, 0.001]` | allowed | finite | python |
+| `bot.long.risk.total_exposure_enforcer.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | — | long; live, backtest, optimize | No | forbidden | `reduce_overweight`, `reduce_portfolio` | python |
+| `bot.long.risk.total_exposure_enforcer.threshold` | float | `1.0` | ratio / side total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_twel_enforcer_threshold`); recommended `[1, 1, 0.001]` | forbidden | > 0.0; finite | python |
+| `bot.long.risk.total_wallet_exposure_limit` | float | `1.5` | ratio / raw balance | long; live, backtest, optimize | Eligible (`long_total_wallet_exposure_limit`); recommended `[1.5, 1.5, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.long.risk.we_excess_allowance_pct` | float | `0.37` | fraction / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_we_excess_allowance_pct`); recommended `[0, 0.4, 0.01]` | allowed | >= 0.0; finite | python |
+| `bot.long.strategy.ema_anchor.base_qty_pct` | float | `0.01` | — | long; live, backtest, optimize | Eligible (`long_base_qty_pct`); ema_anchor is the active strategy; recommended `[0.001, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.ema_span_0` | float | `200.0` | — | long; live, backtest, optimize | Eligible (`long_ema_span_0`); ema_anchor is the active strategy; recommended `[20.0, 1440.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.ema_span_1` | float | `800.0` | — | long; live, backtest, optimize | Eligible (`long_ema_span_1`); ema_anchor is the active strategy; recommended `[20.0, 1440.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.entry_double_down_factor` | float | `0.0` | — | long; live, backtest, optimize | Eligible (`long_entry_double_down_factor`); ema_anchor is the active strategy; recommended `[0.0, 2.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.offset` | float | `0.002` | — | long; live, backtest, optimize | Eligible (`long_offset`); ema_anchor is the active strategy; recommended `[0.0, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.offset_psize_weight` | float | `0.1` | — | long; live, backtest, optimize | Eligible (`long_offset_psize_weight`); ema_anchor is the active strategy; recommended `[0.0, 2.0, 0.001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.offset_volatility_1h_weight` | float | `0.0` | — | long; live, backtest, optimize | Eligible (`long_offset_volatility_1h_weight`); ema_anchor is the active strategy; recommended `[0.0, 40.0, 0.1]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.offset_volatility_1m_weight` | float | `0.0` | — | long; live, backtest, optimize | Eligible (`long_offset_volatility_1m_weight`); ema_anchor is the active strategy; recommended `[0.0, 40.0, 0.1]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.offset_volatility_ema_span_1h` | float | `24.0` | — | long; live, backtest, optimize | Eligible (`long_offset_volatility_ema_span_1h`); ema_anchor is the active strategy; recommended `[1.0, 672.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.ema_anchor.offset_volatility_ema_span_1m` | float | `60.0` | — | long; live, backtest, optimize | Eligible (`long_offset_volatility_ema_span_1m`); ema_anchor is the active strategy; recommended `[5.0, 720.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.qty_pct` | float | `0.84` | — | long; live, backtest, optimize | Eligible (`long_close_qty_pct`); trailing_martingale is the active strategy; recommended `[0.05, 1.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.retracement_base_pct` | float | `0.0005` | — | long; live, backtest, optimize | Eligible (`long_close_retracement_base_pct`); trailing_martingale is the active strategy; recommended `[0.0001, 0.01, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.retracement_volatility_1h_weight` | float | `22.95` | — | long; live, backtest, optimize | Eligible (`long_close_retracement_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.retracement_volatility_1m_weight` | float | `52.34` | — | long; live, backtest, optimize | Eligible (`long_close_retracement_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.threshold_base_pct` | float | `-0.0027` | — | long; live, backtest, optimize | Eligible (`long_close_threshold_base_pct`); trailing_martingale is the active strategy; recommended `[-0.005, 0.01, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.threshold_volatility_1h_weight` | float | `0.48` | — | long; live, backtest, optimize | Eligible (`long_close_threshold_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.threshold_volatility_1m_weight` | float | `3.22` | — | long; live, backtest, optimize | Eligible (`long_close_threshold_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.close.threshold_we_weight` | float | `-0.0001` | — | long; live, backtest, optimize | Eligible (`long_close_threshold_we_weight`); trailing_martingale is the active strategy; recommended `[-0.05, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.double_down_factor` | float | `0.94` | — | long; live, backtest, optimize | Eligible (`long_entry_double_down_factor`); trailing_martingale is the active strategy; recommended `[0.2, 1.2, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.ema_gate_mode` | string | `"all"` | — | long; live, backtest, optimize | No | allowed | `disabled`, `all`, `initial`, `reentry` | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.ema_span_0` | float | `790.0` | — | long; live, backtest, optimize | Eligible (`long_ema_span_0`); trailing_martingale is the active strategy; recommended `[100.0, 2880.0, 10.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.ema_span_1` | float | `1080.0` | — | long; live, backtest, optimize | Eligible (`long_ema_span_1`); trailing_martingale is the active strategy; recommended `[100.0, 2880.0, 10.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.initial_ema_dist` | float | `0.0028` | — | long; live, backtest, optimize | Eligible (`long_entry_initial_ema_dist`); trailing_martingale is the active strategy; recommended `[-0.05, 0.005, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.initial_qty_pct` | float | `0.0081` | — | long; live, backtest, optimize | Eligible (`long_entry_initial_qty_pct`); trailing_martingale is the active strategy; recommended `[0.005, 0.1, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.retracement_base_pct` | float | `0.0008` | — | long; live, backtest, optimize | Eligible (`long_entry_retracement_base_pct`); trailing_martingale is the active strategy; recommended `[0.0001, 0.01, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.retracement_volatility_1h_weight` | float | `15.5` | — | long; live, backtest, optimize | Eligible (`long_entry_retracement_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.retracement_volatility_1m_weight` | float | `50.42` | — | long; live, backtest, optimize | Eligible (`long_entry_retracement_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.retracement_we_weight` | float | `0.334` | — | long; live, backtest, optimize | Eligible (`long_entry_retracement_we_weight`); trailing_martingale is the active strategy; recommended `[0.0, 5.0, 0.001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.threshold_base_pct` | float | `0.019` | — | long; live, backtest, optimize | Eligible (`long_entry_threshold_base_pct`); trailing_martingale is the active strategy; recommended `[0.001, 0.035, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight` | float | `4.58` | — | long; live, backtest, optimize | Eligible (`long_entry_threshold_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.threshold_volatility_1m_weight` | float | `17.68` | — | long; live, backtest, optimize | Eligible (`long_entry_threshold_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 80.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.entry.threshold_we_weight` | float | `1.007` | — | long; live, backtest, optimize | Eligible (`long_entry_threshold_we_weight`); trailing_martingale is the active strategy; recommended `[0.0, 5.0, 0.001]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.volatility_ema_span_1h` | float | `683.0` | — | long; live, backtest, optimize | Eligible (`long_volatility_ema_span_1h`); trailing_martingale is the active strategy; recommended `[168.0, 2016.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.long.strategy.trailing_martingale.volatility_ema_span_1m` | float | `604.0` | — | long; live, backtest, optimize | Eligible (`long_volatility_ema_span_1m`); trailing_martingale is the active strategy; recommended `[5.0, 2880.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.long.universe.approved_coins` | array \| string \| null | 41 items (see template) | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.unstuck.close_pct` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
+| `bot.long.unstuck.ema_dist` | float | `-0.0269` | fraction / unstuck EMA band reference | long; live, backtest, optimize | Eligible (`long_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | > -1.0; finite | python |
+| `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
+| `bot.long.unstuck.ema_span_0` | float | `790.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_0`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.long.unstuck.ema_span_1` | float | `1080.0` | minutes | long; live, backtest, optimize | Eligible (`long_unstuck_ema_span_1`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.long.unstuck.enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
+| `bot.long.unstuck.exposure_trigger_ratio` | float | `0.466` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_threshold`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
+| `bot.long.unstuck.loss_allowance_pct` | float | `0.0052` | fraction / applicable total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_loss_allowance_pct`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
+| `bot.short.entry_cooldown.base_duration_minutes` | float | `0.0` | minutes | short; live, backtest, optimize | Eligible (`short_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
+| `bot.short.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
+| `bot.short.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |
+| `bot.short.entry_cooldown.weights_minutes.adverse_directionality` | float | `0.0` | minutes / adverse directionality score | short; live, backtest, optimize | Eligible (`short_entry_cooldown_weights_minutes_adverse_directionality`) | allowed | >= 0.0; finite | python |
+| `bot.short.entry_cooldown.weights_minutes.exposure_ratio` | float | `0.0` | minutes / position wallet exposure / effective wallet exposure limit | short; live, backtest, optimize | Eligible (`short_entry_cooldown_weights_minutes_exposure_ratio`) | allowed | >= 0.0; finite | python |
+| `bot.short.forager.always_include` | array | `[]` | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.forager.always_include.*` | string | Not declared | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.forager.score_weights.ema_readiness` | float | `0.0` | relative weight / sum of authored forager weights | short; live, backtest, optimize | Eligible (`short_forager_score_weights_ema_readiness`); recommended `[0, 1, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.short.forager.score_weights.unilateralness` | float | `0.0` | relative weight / sum of authored forager weights | short; live, backtest, optimize | Eligible (`short_forager_score_weights_unilateralness`) | forbidden | >= 0.0; finite | python |
+| `bot.short.forager.score_weights.volatility` | float | `0.0` | relative weight / sum of authored forager weights | short; live, backtest, optimize | Eligible (`short_forager_score_weights_volatility`); recommended `[0, 1, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.short.forager.score_weights.volume` | float | `0.0` | relative weight / sum of authored forager weights | short; live, backtest, optimize | Eligible (`short_forager_score_weights_volume`); recommended `[0, 1, 0.01]` | forbidden | >= 0.0; finite | python |
+| `bot.short.forager.unilateralness_ema_span_1m` | float | `60.0` | one-minute candles | short; live, backtest, optimize | Eligible (`short_unilateralness_ema_span_1m`) | forbidden | >= 1.0; <= 100000.0; finite | python |
+| `bot.short.forager.volatility_ema_span_1m` | float | `10.0` | one-minute candles | short; live, backtest, optimize | Eligible (`short_forager_volatility_ema_span_1m`); recommended `[10, 1440, 1]` | forbidden | — | python |
+| `bot.short.forager.volume_ema_span_1m` | float | `60.0` | one-minute candles | short; live, backtest, optimize | Eligible (`short_forager_volume_ema_span_1m`); recommended `[180, 2880, 1]` | forbidden | — | python |
+| `bot.short.hsl.cooldown_minutes_after_red` | float | `1.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_cooldown_minutes_after_red`); coin or pside HSL scope; recommended `[2160, 4320, 10]` | coin HSL scope only | >= 0.0; finite | python |
+| `bot.short.hsl.drawdown_ratio_ema_span_minutes` | float | `1.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_drawdown_ratio_ema_span_minutes`); coin or pside HSL scope; recommended `[1, 720, 1]` | coin HSL scope only | >= 1.0; finite | python |
+| `bot.short.hsl.enabled` | boolean | `false` | — | short; live, backtest, optimize | No | coin HSL scope only | — | python |
+| `bot.short.hsl.memory_ema_span_minutes` | float | `43200.0` | minutes | short; live, backtest, optimize | Eligible (`short_hsl_memory_ema_span_minutes`); coin or pside HSL scope | coin HSL scope only | >= 1.0; finite | python |
+| `bot.short.hsl.panic_close_order_type` | string | `"limit"` | — | short; live, backtest, optimize | No | coin HSL scope only | `limit`, `market` | python |
+| `bot.short.hsl.red_threshold` | float | `0.01` | fraction / scope equity plus remembered drawdown | short; live, backtest, optimize | Eligible (`short_hsl_red_threshold`); coin or pside HSL scope; recommended `[0.01, 0.15, 0.001]` | coin HSL scope only | > 0.0; <= 1.0; finite | python |
+| `bot.short.hsl.scale_budget_with_excess_allowance` | boolean | `false` | — | short; live, backtest, optimize | No | coin HSL scope only | — | python |
+| `bot.short.risk.max_positions` | integer | `1` | positions | short; live, backtest, optimize | Eligible (`short_n_positions`); recommended `[5, 5, 1]` | forbidden | >= 0; finite | python |
+| `bot.short.risk.position_exposure_enforcer.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
+| `bot.short.risk.position_exposure_enforcer.threshold` | float | `0.8` | ratio / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_wel_enforcer_threshold`); recommended `[0.8, 1.01, 0.001]` | allowed | finite | python |
+| `bot.short.risk.total_exposure_enforcer.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | — | short; live, backtest, optimize | No | forbidden | `reduce_overweight`, `reduce_portfolio` | python |
+| `bot.short.risk.total_exposure_enforcer.threshold` | float | `0.8` | ratio / side total wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_twel_enforcer_threshold`); recommended `[0.8, 1.01, 0.001]` | forbidden | > 0.0; finite | python |
+| `bot.short.risk.total_wallet_exposure_limit` | float | `0.0` | ratio / raw balance | short; live, backtest, optimize | Eligible (`short_total_wallet_exposure_limit`); recommended `[0, 0]` | forbidden | >= 0.0; finite | python |
+| `bot.short.risk.we_excess_allowance_pct` | float | `0.0` | fraction / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_we_excess_allowance_pct`); recommended `[0, 0.5, 0.01]` | allowed | >= 0.0; finite | python |
+| `bot.short.strategy.ema_anchor.base_qty_pct` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_base_qty_pct`); ema_anchor is the active strategy; recommended `[0.001, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.ema_span_0` | float | `200.0` | — | short; live, backtest, optimize | Eligible (`short_ema_span_0`); ema_anchor is the active strategy; recommended `[20.0, 1440.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.ema_span_1` | float | `800.0` | — | short; live, backtest, optimize | Eligible (`short_ema_span_1`); ema_anchor is the active strategy; recommended `[20.0, 1440.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.entry_double_down_factor` | float | `0.0` | — | short; live, backtest, optimize | Eligible (`short_entry_double_down_factor`); ema_anchor is the active strategy; recommended `[0.0, 2.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.offset` | float | `0.002` | — | short; live, backtest, optimize | Eligible (`short_offset`); ema_anchor is the active strategy; recommended `[0.0, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.offset_psize_weight` | float | `0.1` | — | short; live, backtest, optimize | Eligible (`short_offset_psize_weight`); ema_anchor is the active strategy; recommended `[0.0, 2.0, 0.001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.offset_volatility_1h_weight` | float | `0.0` | — | short; live, backtest, optimize | Eligible (`short_offset_volatility_1h_weight`); ema_anchor is the active strategy; recommended `[0.0, 40.0, 0.1]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.offset_volatility_1m_weight` | float | `0.0` | — | short; live, backtest, optimize | Eligible (`short_offset_volatility_1m_weight`); ema_anchor is the active strategy; recommended `[0.0, 40.0, 0.1]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.offset_volatility_ema_span_1h` | float | `24.0` | — | short; live, backtest, optimize | Eligible (`short_offset_volatility_ema_span_1h`); ema_anchor is the active strategy; recommended `[1.0, 672.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.ema_anchor.offset_volatility_ema_span_1m` | float | `60.0` | — | short; live, backtest, optimize | Eligible (`short_offset_volatility_ema_span_1m`); ema_anchor is the active strategy; recommended `[5.0, 720.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.qty_pct` | float | `0.05` | — | short; live, backtest, optimize | Eligible (`short_close_qty_pct`); trailing_martingale is the active strategy; recommended `[0.05, 1.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.retracement_base_pct` | float | `0.0` | — | short; live, backtest, optimize | Eligible (`short_close_retracement_base_pct`); trailing_martingale is the active strategy; recommended `[0.0001, 0.01, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.retracement_volatility_1h_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_close_retracement_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.retracement_volatility_1m_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_close_retracement_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.threshold_base_pct` | float | `-0.02` | — | short; live, backtest, optimize | Eligible (`short_close_threshold_base_pct`); trailing_martingale is the active strategy; recommended `[-0.05, 0.02, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.threshold_volatility_1h_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_close_threshold_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.threshold_volatility_1m_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_close_threshold_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.close.threshold_we_weight` | float | `-0.1` | — | short; live, backtest, optimize | Eligible (`short_close_threshold_we_weight`); trailing_martingale is the active strategy; recommended `[-0.1, 0.1, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.double_down_factor` | float | `0.2` | — | short; live, backtest, optimize | Eligible (`short_entry_double_down_factor`); trailing_martingale is the active strategy; recommended `[0.2, 2.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.ema_gate_mode` | string | `"all"` | — | short; live, backtest, optimize | No | allowed | `disabled`, `all`, `initial`, `reentry` | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.ema_span_0` | float | `60.0` | — | short; live, backtest, optimize | Eligible (`short_ema_span_0`); trailing_martingale is the active strategy; recommended `[100.0, 1440.0, 10.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.ema_span_1` | float | `60.0` | — | short; live, backtest, optimize | Eligible (`short_ema_span_1`); trailing_martingale is the active strategy; recommended `[100.0, 1440.0, 10.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.initial_ema_dist` | float | `-0.1` | — | short; live, backtest, optimize | Eligible (`short_entry_initial_ema_dist`); trailing_martingale is the active strategy; recommended `[-0.1, 0.02, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.initial_qty_pct` | float | `0.005` | — | short; live, backtest, optimize | Eligible (`short_entry_initial_qty_pct`); trailing_martingale is the active strategy; recommended `[0.005, 0.1, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.retracement_base_pct` | float | `-0.01` | — | short; live, backtest, optimize | Eligible (`short_entry_retracement_base_pct`); trailing_martingale is the active strategy; recommended `[0.0001, 0.015, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.retracement_volatility_1h_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_entry_retracement_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.retracement_volatility_1m_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_entry_retracement_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.retracement_we_weight` | float | `0.0` | — | short; live, backtest, optimize | Eligible (`short_entry_retracement_we_weight`); trailing_martingale is the active strategy; recommended `[0.0, 5.0, 0.001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.threshold_base_pct` | float | `0.001` | — | short; live, backtest, optimize | Eligible (`short_entry_threshold_base_pct`); trailing_martingale is the active strategy; recommended `[0.0, 0.04, 0.0001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.threshold_volatility_1h_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_entry_threshold_volatility_1h_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.threshold_volatility_1m_weight` | float | `0.01` | — | short; live, backtest, optimize | Eligible (`short_entry_threshold_volatility_1m_weight`); trailing_martingale is the active strategy; recommended `[0.01, 70.0, 0.01]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.entry.threshold_we_weight` | float | `0.0` | — | short; live, backtest, optimize | Eligible (`short_entry_threshold_we_weight`); trailing_martingale is the active strategy; recommended `[0.0, 5.0, 0.001]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.volatility_ema_span_1h` | float | `672.0` | — | short; live, backtest, optimize | Eligible (`short_volatility_ema_span_1h`); trailing_martingale is the active strategy; recommended `[672.0, 2016.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.short.strategy.trailing_martingale.volatility_ema_span_1m` | float | `5.0` | — | short; live, backtest, optimize | Eligible (`short_volatility_ema_span_1m`); trailing_martingale is the active strategy; recommended `[5.0, 720.0, 1.0]` | allowed | — | rust strategy metadata |
+| `bot.short.universe.approved_coins` | array \| string \| null | 41 items (see template) | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.unstuck.close_pct` | float | `0.01` | fraction / raw balance times effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
+| `bot.short.unstuck.ema_dist` | float | `-0.2` | fraction / unstuck EMA band reference | short; live, backtest, optimize | Eligible (`short_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | < 1.0; finite | python |
+| `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
+| `bot.short.unstuck.ema_span_0` | float | `60.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_0`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.short.unstuck.ema_span_1` | float | `60.0` | minutes | short; live, backtest, optimize | Eligible (`short_unstuck_ema_span_1`); recommended `[60, 2880, 10]` | allowed | > 0.0; finite | python |
+| `bot.short.unstuck.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
+| `bot.short.unstuck.exposure_trigger_ratio` | float | `0.3` | ratio / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_threshold`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
+| `bot.short.unstuck.loss_allowance_pct` | float | `0.005` | fraction / applicable total wallet exposure limit | short; live, backtest, optimize | Eligible (`short_unstuck_loss_allowance_pct`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
 
 ## coin_overrides
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `coin_overrides` | object | `{}` | python |
-| `coin_overrides.*.bot.long.wallet_exposure_limit` | float | Not declared | python |
-| `coin_overrides.*.bot.short.wallet_exposure_limit` | float | Not declared | python |
-| `coin_overrides.*.override_config_path` | string | Not declared | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `coin_overrides` | object | `{}` | — | — | No | — | — | python |
+| `coin_overrides.*.bot.long.wallet_exposure_limit` | float | Not declared | ratio / raw balance | long; live, backtest, optimize | No | allowed | — | python |
+| `coin_overrides.*.bot.short.wallet_exposure_limit` | float | Not declared | ratio / raw balance | short; live, backtest, optimize | No | allowed | — | python |
+| `coin_overrides.*.override_config_path` | string | Not declared | — | — | No | — | — | python |
 
 ## config_version
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `config_version` | string | `"v9.0.0"` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `config_version` | string | `"v9.0.0"` | — | — | — | — | — | python |
 
 ## live
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `live.approved_coins` | array \| string \| object \| null | 2 members (see template) | python |
-| `live.approved_coins.long` | array \| string \| null | 41 items (see template) | python |
-| `live.approved_coins.short` | array \| string \| null | 41 items (see template) | python |
-| `live.balance_hysteresis_snap_pct` | float | `0.01` | python |
-| `live.balance_override` | float \| null | `null` | python |
-| `live.candle_lock_timeout_seconds` | float | `10.0` | python |
-| `live.custom_endpoints_path` | string \| null | `null` | python |
-| `live.defer_broad_candle_warmup` | boolean | `true` | python |
-| `live.disapproved_position_mode` | string | `"graceful_stop"` | python |
-| `live.enable_archive_candle_fetch` | boolean | `false` | python |
-| `live.enable_forager_ws_candles` | boolean | `true` | python |
-| `live.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | python |
-| `live.execution_delay_seconds` | float | `2.0` | python |
-| `live.fee_conversion_max_age_ms` | integer | `86400000` | python |
-| `live.fee_pct_fallback` | float | `0.0002` | python |
-| `live.fee_pct_sanity_abs_max` | float | `0.001` | python |
-| `live.fills_confirmation_overlap_minutes` | float | `60.0` | python |
-| `live.fills_recent_overlap_minutes` | float | `10.0` | python |
-| `live.filter_by_min_effective_cost` | boolean | `true` | python |
-| `live.forager_score_hysteresis_pct` | float | `0.02` | python |
-| `live.forager_ws_candle_rest_audit_minutes` | float | `30.0` | python |
-| `live.force_cold_startup` | boolean | `false` | python |
-| `live.forced_mode_long` | string | `""` | python |
-| `live.forced_mode_short` | string | `""` | python |
-| `live.hedge_mode` | boolean | `false` | python |
-| `live.ignored_coins` | array \| string \| object \| null | 2 members (see template) | python |
-| `live.ignored_coins.long` | array \| string \| null | `[]` | python |
-| `live.ignored_coins.short` | array \| string \| null | `[]` | python |
-| `live.inactive_coin_candle_ttl_minutes` | float | `10.0` | python |
-| `live.leverage` | integer | `10` | python |
-| `live.limit_order_create_max_market_dist_pct` | float | `0.8` | python |
-| `live.margin_mode_preference` | string | `"cross"` | python |
-| `live.market_order_near_touch_threshold` | float | `0.001` | python |
-| `live.market_orders_allowed` | boolean | `false` | python |
-| `live.market_snapshot_ticker_strategy` | string | `"auto"` | python |
-| `live.max_active_candle_tail_gap_minutes` | float | `10.0` | python |
-| `live.max_concurrent_api_requests` | integer \| null | `null` | python |
-| `live.max_disk_candles_per_symbol_per_tf` | integer | `2000000` | python |
-| `live.max_forager_candle_refresh_seconds` | float | `45.0` | python |
-| `live.max_forager_candle_staleness_minutes` | float \| null | `null` | python |
-| `live.max_memory_candles_per_symbol` | integer | `200000` | python |
-| `live.max_n_cancellations_per_batch` | integer | `5` | python |
-| `live.max_n_creations_per_batch` | integer | `3` | python |
-| `live.max_n_restarts_per_day` | integer | `10` | python |
-| `live.max_ohlcv_fetches_per_minute` | integer | `30` | python |
-| `live.max_warmup_minutes` | integer | `0` | python |
-| `live.minimum_coin_age_days` | float | `60.0` | python |
-| `live.order_match_tolerance_pct` | float | `0.0002` | python |
-| `live.order_replacement_churn_gate_activation_count` | integer | `10` | python |
-| `live.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | python |
-| `live.order_replacement_churn_gate_stability_minutes` | float | `2.0` | python |
-| `live.order_replacement_churn_gate_window_minutes` | float | `10.0` | python |
-| `live.recv_window_ms` | integer | `5000` | python |
-| `live.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | python |
-| `live.startup_phase_budgets` | object | `{}` | python |
-| `live.startup_phase_budgets.*` | object | Not declared | python |
-| `live.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | python |
-| `live.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | python |
-| `live.strategy_kind` | string | `"trailing_martingale"` | python |
-| `live.time_in_force` | string | `"good_till_cancelled"` | python |
-| `live.user` | string | `"bybit_01"` | python |
-| `live.warmup_concurrency` | integer | `0` | python |
-| `live.warmup_jitter_seconds` | float | `30.0` | python |
-| `live.warmup_ratio` | float | `0.3` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `live.balance_hysteresis_snap_pct` | float | `0.01` | — | — | — | forbidden | — | python |
+| `live.balance_override` | float \| null | `null` | — | — | — | forbidden | — | python |
+| `live.candle_lock_timeout_seconds` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.custom_endpoints_path` | string \| null | `null` | — | — | — | forbidden | — | python |
+| `live.defer_broad_candle_warmup` | boolean | `true` | — | — | — | forbidden | — | python |
+| `live.disapproved_position_mode` | string | `"graceful_stop"` | — | — | — | forbidden | — | python |
+| `live.enable_archive_candle_fetch` | boolean | `false` | — | — | — | forbidden | — | python |
+| `live.enable_forager_ws_candles` | boolean | `true` | — | — | — | forbidden | — | python |
+| `live.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | — | —; live | — | forbidden | — | python |
+| `live.execution_delay_seconds` | float | `2.0` | — | — | — | forbidden | — | python |
+| `live.fee_conversion_max_age_ms` | integer | `86400000` | — | —; live | — | forbidden | — | python |
+| `live.fee_pct_fallback` | float | `0.0002` | — | —; live, backtest, optimize | — | forbidden | — | python |
+| `live.fee_pct_sanity_abs_max` | float | `0.001` | — | —; live, backtest, optimize | — | forbidden | — | python |
+| `live.fills_confirmation_overlap_minutes` | float | `60.0` | — | — | — | forbidden | — | python |
+| `live.fills_recent_overlap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.forager_ws_candle_rest_audit_minutes` | float | `30.0` | — | — | — | forbidden | — | python |
+| `live.force_cold_startup` | boolean | `false` | — | — | — | forbidden | — | python |
+| `live.forced_mode_long` | string | `""` | — | — | — | allowed | — | python |
+| `live.forced_mode_short` | string | `""` | — | — | — | allowed | — | python |
+| `live.inactive_coin_candle_ttl_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.leverage` | integer | `10` | — | — | — | allowed | — | python |
+| `live.limit_order_create_max_market_dist_pct` | float | `0.8` | — | —; live | — | forbidden | — | python |
+| `live.margin_mode_preference` | string | `"cross"` | — | — | — | forbidden | — | python |
+| `live.market_snapshot_ticker_strategy` | string | `"auto"` | — | — | — | forbidden | — | python |
+| `live.max_active_candle_tail_gap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
+| `live.max_concurrent_api_requests` | integer \| null | `null` | — | — | — | forbidden | — | python |
+| `live.max_disk_candles_per_symbol_per_tf` | integer | `2000000` | — | — | — | forbidden | — | python |
+| `live.max_forager_candle_refresh_seconds` | float | `45.0` | — | — | — | forbidden | — | python |
+| `live.max_forager_candle_staleness_minutes` | float \| null | `null` | — | — | — | forbidden | — | python |
+| `live.max_memory_candles_per_symbol` | integer | `200000` | — | — | — | forbidden | — | python |
+| `live.max_n_cancellations_per_batch` | integer | `5` | — | — | — | forbidden | — | python |
+| `live.max_n_creations_per_batch` | integer | `3` | — | — | — | forbidden | — | python |
+| `live.max_n_restarts_per_day` | integer | `10` | — | — | — | forbidden | — | python |
+| `live.max_ohlcv_fetches_per_minute` | integer | `30` | — | — | — | forbidden | — | python |
+| `live.order_match_tolerance_pct` | float | `0.0002` | — | — | — | forbidden | — | python |
+| `live.order_replacement_churn_gate_activation_count` | integer | `10` | — | —; live | — | forbidden | — | python |
+| `live.order_replacement_churn_gate_market_dist_pct` | float | `0.005` | — | —; live | — | forbidden | — | python |
+| `live.order_replacement_churn_gate_stability_minutes` | float | `2.0` | — | —; live | — | forbidden | — | python |
+| `live.order_replacement_churn_gate_window_minutes` | float | `10.0` | — | —; live | — | forbidden | — | python |
+| `live.recv_window_ms` | integer | `5000` | — | — | — | forbidden | — | python |
+| `live.risk_bootstrap_max_lookback_minutes` | float | `129600.0` | — | —; live | — | forbidden | — | python |
+| `live.startup_phase_budgets` | object | `{}` | — | — | — | forbidden | — | python |
+| `live.startup_phase_budgets.*` | object | Not declared | — | — | — | — | — | python |
+| `live.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | milliseconds | — | — | — | >= 0 | python |
+| `live.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | milliseconds | — | — | — | >= 0 | python |
+| `live.time_in_force` | string | `"good_till_cancelled"` | — | — | — | forbidden | — | python |
+| `live.user` | string | `"bybit_01"` | — | — | — | forbidden | — | python |
+| `live.warmup_concurrency` | integer | `0` | — | — | — | forbidden | — | python |
+| `live.warmup_jitter_seconds` | float | `30.0` | — | — | — | forbidden | — | python |
 
 ## logging
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `logging.backup_count` | integer | `5` | python |
-| `logging.dir` | string | `"logs"` | python |
-| `logging.level` | integer | `1` | python |
-| `logging.live_event_debug_profiles` | array | `[]` | python |
-| `logging.max_bytes_mb` | float | `10.0` | python |
-| `logging.memory_snapshot_interval_minutes` | float | `30.0` | python |
-| `logging.persist_to_file` | boolean | `true` | python |
-| `logging.rotation` | boolean | `true` | python |
-| `logging.volume_refresh_info_threshold_seconds` | float | `30.0` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `logging.backup_count` | integer | `5` | — | — | — | — | — | python |
+| `logging.dir` | string | `"logs"` | — | — | — | — | — | python |
+| `logging.level` | integer | `1` | — | — | — | — | — | python |
+| `logging.live_event_debug_profiles` | array | `[]` | — | — | — | — | — | python |
+| `logging.max_bytes_mb` | float | `10.0` | — | — | — | — | — | python |
+| `logging.memory_snapshot_interval_minutes` | float | `30.0` | — | — | — | — | — | python |
+| `logging.persist_to_file` | boolean | `true` | — | — | — | — | — | python |
+| `logging.rotation` | boolean | `true` | — | — | — | — | — | python |
+| `logging.volume_refresh_info_threshold_seconds` | float | `30.0` | — | — | — | — | — | python |
 
 ## monitor
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `monitor.checkpoint_interval_minutes` | float | `10.0` | python |
-| `monitor.compress_rotated_segments` | boolean | `true` | python |
-| `monitor.emit_completed_candles` | boolean | `true` | python |
-| `monitor.enabled` | boolean | `true` | python |
-| `monitor.event_rotation_mb` | float | `128.0` | python |
-| `monitor.event_rotation_minutes` | float | `60.0` | python |
-| `monitor.include_raw_fill_payloads` | boolean | `false` | python |
-| `monitor.max_total_bytes` | integer | `1073741824` | python |
-| `monitor.price_tick_min_interval_ms` | integer | `500` | python |
-| `monitor.retain_candles` | boolean | `true` | python |
-| `monitor.retain_days` | float | `7.0` | python |
-| `monitor.retain_fills` | boolean | `true` | python |
-| `monitor.retain_price_ticks` | boolean | `true` | python |
-| `monitor.root_dir` | string | `"monitor"` | python |
-| `monitor.snapshot_interval_seconds` | float | `1.0` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `monitor.checkpoint_interval_minutes` | float | `10.0` | — | — | — | — | — | python |
+| `monitor.compress_rotated_segments` | boolean | `true` | — | — | — | — | — | python |
+| `monitor.emit_completed_candles` | boolean | `true` | — | — | — | — | — | python |
+| `monitor.enabled` | boolean | `true` | — | — | — | — | — | python |
+| `monitor.event_rotation_mb` | float | `128.0` | — | — | — | — | — | python |
+| `monitor.event_rotation_minutes` | float | `60.0` | — | — | — | — | — | python |
+| `monitor.include_raw_fill_payloads` | boolean | `false` | — | — | — | — | — | python |
+| `monitor.max_total_bytes` | integer | `1073741824` | — | — | — | — | — | python |
+| `monitor.price_tick_min_interval_ms` | integer | `500` | — | — | — | — | — | python |
+| `monitor.retain_candles` | boolean | `true` | — | — | — | — | — | python |
+| `monitor.retain_days` | float | `7.0` | — | — | — | — | — | python |
+| `monitor.retain_fills` | boolean | `true` | — | — | — | — | — | python |
+| `monitor.retain_price_ticks` | boolean | `true` | — | — | — | — | — | python |
+| `monitor.root_dir` | string | `"monitor"` | — | — | — | — | — | python |
+| `monitor.snapshot_interval_seconds` | float | `1.0` | — | — | — | — | — | python |
 
 ## optimize
 
-| Field | Type | Default | Source |
-| --- | --- | --- | --- |
-| `optimize.backend` | string | `"pymoo"` | python |
-| `optimize.compress_results_file` | boolean | `true` | python |
-| `optimize.enable_overrides` | array | `[]` | python |
-| `optimize.fixed_params` | array | `[]` | python |
-| `optimize.fixed_runtime_overrides` | object | `{}` | python |
-| `optimize.gpu.batch_size` | integer \| string \| null | `null` | python |
-| `optimize.gpu.checkpoint_interval_seconds` | float | `5.0` | python |
-| `optimize.gpu.max_dispatch_candidate_bars` | integer \| string \| null | `null` | python |
-| `optimize.gpu.screening.min_survivors` | integer | `64` | python |
-| `optimize.gpu.screening.scenarios` | array | `[]` | python |
-| `optimize.gpu.screening.survival_fraction` | float | `0.1` | python |
-| `optimize.gpu.tuning_mode` | string | `"auto"` | python |
-| `optimize.iters` | integer | `200000` | python |
-| `optimize.limits` | array | 2 items (see template) | python |
-| `optimize.limits.*.enabled` | boolean | Not declared | python |
-| `optimize.limits.*.metric` | string | Not declared | python |
-| `optimize.limits.*.penalize_if` | string | Not declared | python |
-| `optimize.limits.*.range` | array | Not declared | python |
-| `optimize.limits.*.range.*` | float | Not declared | python |
-| `optimize.limits.*.reducer` | string | Not declared | python |
-| `optimize.limits.*.scenario` | string \| null | Not declared | python |
-| `optimize.limits.*.value` | float | Not declared | python |
-| `optimize.n_cpus` | integer | `4` | python |
-| `optimize.objective_scenario` | string \| null | `null` | python |
-| `optimize.pareto_max_size` | integer | `1000` | python |
-| `optimize.population_size` | integer \| null | `null` | python |
-| `optimize.prefilter.adverse_directionality` | float | `0.0` | python |
-| `optimize.prefilter.checks` | array | `[]` | python |
-| `optimize.prefilter.checks.*.enabled` | boolean | Not declared | python |
-| `optimize.prefilter.checks.*.max` | float \| null | Not declared | python |
-| `optimize.prefilter.checks.*.metric` | string | Not declared | python |
-| `optimize.prefilter.checks.*.min` | float \| null | Not declared | python |
-| `optimize.prefilter.checks.*.scale` | float | Not declared | python |
-| `optimize.prefilter.checks.*.sides` | array | Not declared | python |
-| `optimize.prefilter.checks.*.weight` | float | Not declared | python |
-| `optimize.prefilter.exposure_ratios` | array | 4 items (see template) | python |
-| `optimize.prefilter.exposure_ratios.*` | float | Not declared | python |
-| `optimize.prefilter.grid_max_entries` | integer | `1024` | python |
-| `optimize.prefilter.penalty_weight` | float | `1000000.0` | python |
-| `optimize.prefilter.volatility_ema_1h` | float | `0.0` | python |
-| `optimize.prefilter.volatility_ema_1m` | float | `0.0` | python |
-| `optimize.pymoo.algorithm` | string | `"auto"` | python |
-| `optimize.pymoo.algorithms.nsga2` | object | `{}` | python |
-| `optimize.pymoo.algorithms.nsga3.ref_dirs.method` | string | `"das_dennis"` | python |
-| `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions` | integer \| string | `"auto"` | python |
-| `optimize.pymoo.shared.crossover_eta` | float | `20.0` | python |
-| `optimize.pymoo.shared.crossover_prob_var` | float | `0.5` | python |
-| `optimize.pymoo.shared.eliminate_duplicates` | boolean | `true` | python |
-| `optimize.pymoo.shared.mutation_eta` | float | `20.0` | python |
-| `optimize.pymoo.shared.mutation_prob` | float \| string | `"auto"` | python |
-| `optimize.pymoo.shared.mutation_prob_per_variable` | float \| string | `"auto"` | python |
-| `optimize.round_to_n_significant_digits` | integer | `3` | python |
-| `optimize.scoring` | array | 10 items (see template) | python |
-| `optimize.scoring.*.goal` | string | Not declared | python |
-| `optimize.scoring.*.metric` | string | Not declared | python |
-| `optimize.scoring.*.reducer` | string | Not declared | python |
-| `optimize.scoring.*.scenario` | string \| null | Not declared | python |
-| `optimize.seed` | integer \| null | `null` | python |
-| `optimize.write_all_results` | boolean | `true` | python |
+| Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `optimize.backend` | string | `"pymoo"` | — | —; optimize | — | — | — | python |
+| `optimize.compress_results_file` | boolean | `true` | — | —; optimize | — | — | — | python |
+| `optimize.enable_overrides` | array | `[]` | — | —; optimize | — | — | — | python |
+| `optimize.fixed_params` | array | `[]` | — | —; optimize | — | — | — | python |
+| `optimize.fixed_runtime_overrides` | object | `{}` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.batch_size` | integer \| string \| null | `null` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.checkpoint_interval_seconds` | float | `5.0` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.max_dispatch_candidate_bars` | integer \| string \| null | `null` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.screening.min_survivors` | integer | `64` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.screening.scenarios` | array | `[]` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.screening.survival_fraction` | float | `0.1` | — | —; optimize | — | — | — | python |
+| `optimize.gpu.tuning_mode` | string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.iters` | integer | `200000` | — | —; optimize | — | — | — | python |
+| `optimize.limits` | array | 2 items (see template) | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.enabled` | boolean | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.metric` | string | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.penalize_if` | string | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.range` | array | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.range.*` | float | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.reducer` | string | Not declared | — | —; optimize | — | — | `max`, `mean`, `median`, `min`, `std` | python |
+| `optimize.limits.*.scenario` | string \| null | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.limits.*.value` | float | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.n_cpus` | integer | `4` | — | —; optimize | — | — | — | python |
+| `optimize.objective_scenario` | string \| null | `null` | — | —; optimize | — | — | — | python |
+| `optimize.pareto_max_size` | integer | `1000` | — | —; optimize | — | — | — | python |
+| `optimize.population_size` | integer \| null | `null` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.adverse_directionality` | float | `0.0` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks` | array | `[]` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.enabled` | boolean | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.max` | float \| null | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.metric` | string | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.min` | float \| null | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.scale` | float | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.sides` | array | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.checks.*.weight` | float | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.exposure_ratios` | array | 4 items (see template) | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.exposure_ratios.*` | float | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.grid_max_entries` | integer | `1024` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.penalty_weight` | float | `1000000.0` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.volatility_ema_1h` | float | `0.0` | — | —; optimize | — | — | — | python |
+| `optimize.prefilter.volatility_ema_1m` | float | `0.0` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.algorithm` | string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.algorithms.nsga2` | object | `{}` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.algorithms.nsga3.ref_dirs.method` | string | `"das_dennis"` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions` | integer \| string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.crossover_eta` | float | `20.0` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.crossover_prob_var` | float | `0.5` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.eliminate_duplicates` | boolean | `true` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.mutation_eta` | float | `20.0` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.mutation_prob` | float \| string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.pymoo.shared.mutation_prob_per_variable` | float \| string | `"auto"` | — | —; optimize | — | — | — | python |
+| `optimize.round_to_n_significant_digits` | integer | `3` | — | —; optimize | — | — | — | python |
+| `optimize.scoring` | array | 10 items (see template) | — | —; optimize | — | — | — | python |
+| `optimize.scoring.*.goal` | string | Not declared | — | —; optimize | — | — | `max`, `min` | python |
+| `optimize.scoring.*.metric` | string | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.scoring.*.reducer` | string | Not declared | — | —; optimize | — | — | `max`, `mean`, `median`, `min`, `std` | python |
+| `optimize.scoring.*.scenario` | string \| null | Not declared | — | —; optimize | — | — | — | python |
+| `optimize.seed` | integer \| null | `null` | — | —; optimize | — | — | — | python |
+| `optimize.write_all_results` | boolean | `true` | — | —; optimize | — | — | — | python |
 

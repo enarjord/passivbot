@@ -7,8 +7,72 @@ does not introduce configuration aliases or alter loading/override policy.
 """
 
 from copy import deepcopy
+from dataclasses import replace
 
 from .field_spec import CoinOverridePolicy, FieldDomain, FieldRegistry, FieldSpec, FieldType, NO_DEFAULT
+
+
+def get_special_optimizer_bindings():
+    """Preserve the existing optimizer special-validation membership exactly."""
+    from .field_policies import SPECIAL_OPTIMIZER_KEY_PATHS
+
+    return dict(SPECIAL_OPTIMIZER_KEY_PATHS)
+
+
+def get_shared_optimizer_bindings():
+    """Project existing shared bound adapters into canonical parameter paths."""
+    from .optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY, _shared_bound_local_path
+
+    paths = get_special_optimizer_bindings()
+    for side in ("long", "short"):
+        for group, keys in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.items():
+            for local, flat in keys.items():
+                paths[f"{side}_{flat}"] = ("bot", side, group, *_shared_bound_local_path(group, local))
+    for name in ("red_threshold", "drawdown_ratio_ema_span_minutes",
+                 "memory_ema_span_minutes", "cooldown_minutes_after_red"):
+        paths[f"hsl_{name}"] = ("bot", "global", "hsl", name)
+    return paths
+
+
+def get_coin_override_paths(hsl_signal_mode="coin"):
+    """Registry-led view of the existing shared per-coin permission policy."""
+    from .field_policies import CONDITIONAL_HSL_OVERRIDE_PATHS, OVERRIDABLE_SHARED_BOT_PATHS
+
+    if hsl_signal_mode not in {"coin", "pside", "portfolio"}:
+        raise ValueError("invalid HSL scope for coin override policy")
+    return (OVERRIDABLE_SHARED_BOT_PATHS if hsl_signal_mode == "coin" else
+            OVERRIDABLE_SHARED_BOT_PATHS - CONDITIONAL_HSL_OVERRIDE_PATHS)
+
+
+def describe_field(path):
+    """Serializable metadata report for explain/editor consumers; never policy."""
+    from dataclasses import asdict
+
+    parts = tuple(path.split(".")) if isinstance(path, str) else tuple(path)
+    registry = get_field_registry()
+    field = registry.find(parts)
+    sparse = parts[:1] == ("coin_overrides",)
+    if field is None and sparse and len(parts) > 2:
+        inherited = registry.find(parts[2:])
+        if inherited is not None and inherited.coin_override in {
+            CoinOverridePolicy.ALLOWED, CoinOverridePolicy.COIN_HSL_ONLY,
+        }:
+            field = inherited
+    if field is None:
+        raise KeyError("unknown declared configuration field: " + ".".join(map(str, parts)))
+    return {
+        "path": ".".join(map(str, parts)), "types": [kind.value for kind in field.types],
+        "nullable": field.nullable,
+        "default": {"declared": not sparse and field.default is not NO_DEFAULT,
+                    **({"value": deepcopy(field.default)} if not sparse and field.default is not NO_DEFAULT else {})},
+        "scope": field.scope, "consumers": list(field.consumers),
+        "unit": field.unit, "denominator": field.denominator,
+        "domain": asdict(field.domain) if field.domain else None,
+        "description": field.description, "source": field.source,
+        "optimizer": {"eligible": False if sparse else field.optimizable, "key": field.optimize_key,
+                      "when": field.optimize_when, "recommended_bounds": field.recommended_bounds},
+        "coin_override": field.coin_override.value if field.coin_override else None,
+    }
 
 
 # These declarations describe the current public schema. Keep numeric types
@@ -20,7 +84,7 @@ _FIELDS_BY_TYPE = {
             fee_conversion_max_age_ms leverage max_disk_candles_per_symbol_per_tf
             max_memory_candles_per_symbol max_n_cancellations_per_batch
             max_n_creations_per_batch max_n_restarts_per_day max_ohlcv_fetches_per_minute
-            max_warmup_minutes order_replacement_churn_gate_activation_count
+            order_replacement_churn_gate_activation_count
             recv_window_ms warmup_concurrency
         """,
         "logging": "backup_count level",
@@ -39,14 +103,14 @@ _FIELDS_BY_TYPE = {
             balance_hysteresis_snap_pct candle_lock_timeout_seconds execution_delay_seconds
             exchange_symbol_unavailable_cooldown_hours fee_pct_fallback fee_pct_sanity_abs_max
             fills_confirmation_overlap_minutes fills_recent_overlap_minutes
-            forager_score_hysteresis_pct forager_ws_candle_rest_audit_minutes
+            forager_ws_candle_rest_audit_minutes
             inactive_coin_candle_ttl_minutes limit_order_create_max_market_dist_pct
-            market_order_near_touch_threshold max_active_candle_tail_gap_minutes
-            max_forager_candle_refresh_seconds minimum_coin_age_days order_match_tolerance_pct
+            max_active_candle_tail_gap_minutes
+            max_forager_candle_refresh_seconds order_match_tolerance_pct
             order_replacement_churn_gate_market_dist_pct
             order_replacement_churn_gate_stability_minutes
             order_replacement_churn_gate_window_minutes risk_bootstrap_max_lookback_minutes
-            warmup_jitter_seconds warmup_ratio
+            warmup_jitter_seconds
         """,
         "logging": "max_bytes_mb memory_snapshot_interval_minutes volume_refresh_info_threshold_seconds",
         "monitor": """
@@ -59,6 +123,10 @@ _FIELDS_BY_TYPE = {
         "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
         "bot.global.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
         "bot.global.unstuck": "memory_ema_span_minutes",
+        "bot.global.universe": "minimum_coin_age_days",
+        "bot.global.execution": "market_order_near_touch_threshold",
+        "bot.global.forager": "score_hysteresis_pct",
+        "bot.global.warmup": "ratio max_minutes",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -67,7 +135,7 @@ _FIELDS_BY_TYPE = {
         """,
         "live": """
             defer_broad_candle_warmup enable_archive_candle_fetch enable_forager_ws_candles
-            filter_by_min_effective_cost force_cold_startup hedge_mode market_orders_allowed
+            force_cold_startup
         """,
         "logging": "persist_to_file rotation",
         "monitor": """
@@ -76,13 +144,16 @@ _FIELDS_BY_TYPE = {
         """,
         "optimize": "compress_results_file write_all_results",
         "optimize.pymoo.shared": "eliminate_duplicates",
+        "bot.global": "hedge_mode",
+        "bot.global.universe": "filter_by_min_effective_cost",
+        "bot.global.execution": "market_orders_allowed",
     },
     FieldType.STRING: {
         "": "config_version",
         "backtest": "base_dir end_date hlcvs_data_override_mode start_date",
         "live": """
             disapproved_position_mode forced_mode_long forced_mode_short margin_mode_preference
-            market_snapshot_ticker_strategy strategy_kind time_in_force user
+            market_snapshot_ticker_strategy time_in_force user
         """,
         "logging": "dir",
         "monitor": "root_dir",
@@ -91,6 +162,7 @@ _FIELDS_BY_TYPE = {
         "optimize.pymoo": "algorithm",
         "optimize.pymoo.algorithms.nsga3.ref_dirs": "method",
         "bot.global.hsl": "scope",
+        "bot.global": "strategy_kind",
     },
     FieldType.ARRAY: {
         "backtest": "exchanges scenarios visible_metrics",
@@ -125,6 +197,7 @@ _NULLABLE_FIELDS = {
 
 _SHARED_SIDE_FIELDS = {
     FieldType.INTEGER: "risk.max_positions",
+    FieldType.ARRAY: "forager.always_include",
     FieldType.FLOAT: """
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
         forager.score_weights.volatility forager.score_weights.volume
@@ -205,6 +278,9 @@ def get_field_registry() -> FieldRegistry:
         # This setting exists only inside coin patches, never as a root bot field.
         add(f"coin_overrides.*.bot.{side}.wallet_exposure_limit", FieldType.FLOAT,
             coin_override=CoinOverridePolicy.ALLOWED)
+    for side in ("long", "short"):
+        add(f"bot.{side}.forager.always_include.*", FieldType.STRING,
+            description="Persistent selection identifier; order is retained and duplicates are removed.")
     add("coin_overrides.*.override_config_path", FieldType.STRING)
 
     # Portfolio HSL authority is explicitly optional; no default is synthesized.
@@ -237,10 +313,12 @@ def get_field_registry() -> FieldRegistry:
     for name in ("mutation_prob", "mutation_prob_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
-        add(f"live.{name}", (FieldType.ARRAY, FieldType.STRING, FieldType.OBJECT), nullable=True)
         for side in ("long", "short"):
-            add(f"live.{name}.{side}", (FieldType.ARRAY, FieldType.STRING), nullable=True)
+            add(f"bot.{side}.universe.{name}", (FieldType.ARRAY, FieldType.STRING), nullable=True)
     add("backtest.reducer.*", FieldType.STRING)
+    for path in ("backtest.coin_sources.*", "backtest.market_settings_sources.*",
+                 "backtest.scenarios.*.coin_sources.*"):
+        add(path, FieldType.STRING, nullable=True)
 
     # Dynamic records are typed by field, independent of example count/order.
     for prefix in ("backtest.market_settings.overrides.*",
@@ -276,4 +354,6 @@ def get_field_registry() -> FieldRegistry:
     for name in ("elapsed_ms", "since_previous_ms"):
         add(f"live.startup_phase_budgets.*.{name}", FieldType.INTEGER,
             unit="milliseconds", domain=FieldDomain(minimum=0))
-    return FieldRegistry(fields)
+    from .field_metadata import enrich_fields
+
+    return FieldRegistry(enrich_fields(fields))

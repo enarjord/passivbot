@@ -1,5 +1,11 @@
 # Tools
 
+### Config schema
+
+`passivbot tool config-schema` prints the generated authored-v9 JSON Schema. Use `--check` for a
+read-only freshness check, `--output PATH` to export it, or `--field DOTTED_PATH` for a separate
+field metadata report. See [editor setup and validation boundaries](config_editor.md).
+
 Most tools below require the full install profile:
 
 ```shell
