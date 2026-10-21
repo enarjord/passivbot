@@ -254,24 +254,24 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             risk.get('position_exposure_enforcer', {}).get('enabled', False)
         ),
         "position_exposure_enforcer_threshold": _finite_float(
-            risk.get('position_exposure_enforcer', {}).get('threshold', 0.0),
-            f"bot.{pside}.risk.position_exposure_enforcer.threshold",
+            risk.get('position_exposure_enforcer', {}).get('threshold_ratio', 0.0),
+            f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_enabled": bool(
             risk.get('total_exposure_enforcer', {}).get('enabled', False)
         ),
         "total_exposure_enforcer_threshold": _finite_float(
-            risk.get('total_exposure_enforcer', {}).get('threshold', 0.0),
-            f"bot.{pside}.risk.total_exposure_enforcer.threshold",
+            risk.get('total_exposure_enforcer', {}).get('threshold_ratio', 0.0),
+            f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_policy": str(
             risk.get('total_exposure_enforcer', {}).get('policy', 'unknown')
         ),
         "unstuck_enabled": bool(unstuck.get("enabled", False)),
-        "unstuck_close_pct": _finite_float(
+        "unstuck_close_fraction": _finite_float(
             unstuck.get("close_fraction", 0.0), f"bot.{pside}.unstuck.close_fraction"
         ),
-        "unstuck_loss_allowance_pct": _finite_float(
+        "unstuck_loss_allowance_fraction": _finite_float(
             unstuck.get("loss_allowance_fraction", 0.0),
             f"bot.{pside}.unstuck.loss_allowance_fraction",
         ),
@@ -284,16 +284,16 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "entry_cooldown_minutes": None if state_dependent else clamped_base,
         "entry_cooldown": deepcopy(cooldown),
         "entry_ema_gate_mode": str(entry.get("ema_gate_mode", "unknown")),
-        "entry_initial_ema_dist": _finite_float(
+        "entry_initial_ema_distance_fraction": _finite_float(
             entry.get("initial_ema_dist", 0.0), "entry.initial_ema_dist"
         ),
-        "entry_initial_qty_pct": _finite_float(
+        "entry_initial_qty_fraction": _finite_float(
             entry.get("initial_qty_pct", 0.0), "entry.initial_qty_pct"
         ),
         "entry_double_down_factor": _finite_float(
             entry.get("double_down_factor", 0.0), "entry.double_down_factor"
         ),
-        "close_qty_pct": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
+        "close_qty_fraction": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
         "volatility_ema_span_1m": _finite_float(
             strategy.get("volatility_ema_span_1m", 0.0), "volatility_ema_span_1m"
         ),
@@ -683,8 +683,8 @@ def _unstuck_active(context: Mapping[str, Any] | None) -> bool:
     return bool(
         context
         and context.get("unstuck_enabled", False)
-        and context.get("unstuck_close_pct", 0.0) > 0.0
-        and context.get("unstuck_loss_allowance_pct", 0.0) > 0.0
+        and context.get("unstuck_close_fraction", 0.0) > 0.0
+        and context.get("unstuck_loss_allowance_fraction", 0.0) > 0.0
         and context.get("unstuck_exposure_trigger_ratio", 0.0) > 0.0
     )
 
@@ -950,7 +950,7 @@ def _classify_side(
         else:
             overall.append(
                 "Each strategy close starts from the allowed full-position size × "
-                f"{context['close_qty_pct'] * 100.0:.2f}%, adds any current position size above "
+                f"{context['close_qty_fraction'] * 100.0:.2f}%, adds any current position size above "
                 "that allowed full size, then caps at the remaining position and applies "
                 "minimum-quantity, rounding, and dust-remainder rules."
             )
@@ -1004,8 +1004,8 @@ def _classify_side(
             )
             overall.append(
                 "Auto-unstuck is active with close quantity "
-                f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
-                f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
+                f"{context['unstuck_close_fraction'] * 100.0:g}%, loss allowance "
+                f"{context['unstuck_loss_allowance_fraction'] * 100.0:g}%, and position threshold "
                 f"{context['unstuck_exposure_trigger_ratio'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
                 "WE / effective WEL threshold are marked unstuck-dependent: "
                 "Rust may contribute a globally selected unstuck candidate based on realized PnL and "

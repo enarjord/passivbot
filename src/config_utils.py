@@ -303,7 +303,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.global.execution.market_order_near_touch_threshold": {
+    "bot.global.execution.market_order_near_touch_fraction": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -1133,9 +1133,9 @@ RESERVED_CLI_ARGS = {
             "Disabled by default; live exchange slippage controls apply."
         ),
     },
-    "bot.global.execution.market_order_near_touch_threshold": {
-        "visible": ["--market-order-near-touch-threshold", "-montt"],
-        "hidden": ["--bot_global_execution_market_order_near_touch_threshold"],
+    "bot.global.execution.market_order_near_touch_fraction": {
+        "visible": ["--market-order-near-touch-fraction", "-montf"],
+        "hidden": ["--bot_global_execution_market_order_near_touch_fraction"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1545,7 +1545,7 @@ RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 # optimizer projects these settings separately from its numeric search genes.
 for _path, _group in (
     ("bot.global.strategy_kind", "Behavior"),
-    ("bot.global.warmup.ratio", "Backtest Runtime"),
+    ("bot.global.warmup.span_multiplier", "Backtest Runtime"),
     ("bot.global.warmup.max_minutes", "Backtest Runtime"),
     ("bot.global.universe.filter_by_min_effective_cost", "Coin Selection"),
 ):
@@ -1718,7 +1718,7 @@ CLI_HELP_OVERRIDES = {
     ),
     'bot.global.warmup.max_minutes': (
         "Hard cap on calculated EMA/history warmup minutes for backtests and "
-        "live. 0 disables the cap."
+        "live. null leaves the cap unbounded; otherwise use a positive number."
     ),
     "backtest.base_dir": "Directory where standalone backtest results are written.",
     "backtest.volume_normalization": (
@@ -1781,7 +1781,7 @@ for _pside in ("long", "short"):
                 "Allowed values: reduce_overweight or reduce_portfolio. Controls "
                 f"which managed {_pside} positions TWEL auto-reduce may trim."
             ),
-            f"bot.{_pside}.risk.total_exposure_enforcer.threshold": (
+            f"bot.{_pside}.risk.total_exposure_enforcer.threshold_ratio": (
                 f"Fraction of {_pside} TWEL used by entry gating and TWEL "
                 "auto-reduce repair."
             ),
@@ -1978,6 +1978,7 @@ def classify_config_argument(
 
 def project_template_config_for_cli(config: dict, command: Optional[str]) -> dict:
     result = deepcopy(config)
+    omitted = object()
 
     def fixed_policy(node, prefix):
         if field_cli_exposed_on(prefix, command):
@@ -1988,21 +1989,24 @@ def project_template_config_for_cli(config: dict, command: Optional[str]) -> dic
                 for key, value in node.items()
             }
             return {
-                key: value for key, value in retained.items() if value is not None
-            } or None
-        return None
+                key: value for key, value in retained.items() if value is not omitted
+            } or omitted
+        return omitted
 
     if command == "backtest":
         result.pop("optimize", None)
         live_cfg = result.get("live")
         if isinstance(live_cfg, dict):
-            result["live"] = fixed_policy(live_cfg, "live") or {}
+            projected = fixed_policy(live_cfg, "live")
+            result["live"] = {} if projected is omitted else projected
         return result
     if command == "optimize":
-        result["bot"] = fixed_policy(result.get("bot", {}), "bot")
+        projected = fixed_policy(result.get("bot", {}), "bot")
+        result["bot"] = {} if projected is omitted else projected
         live_cfg = result.get("live")
         if isinstance(live_cfg, dict):
-            result["live"] = fixed_policy(live_cfg, "live") or {}
+            projected = fixed_policy(live_cfg, "live")
+            result["live"] = {} if projected is omitted else projected
         return result
     return result
 
@@ -2207,7 +2211,9 @@ def add_arguments_recursively(
             nullable_float_override = full_name in {
                 *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
                 "backtest.ew_half_life_days",
+                "bot.global.warmup.max_minutes",
             }
+            nullable_mode_override = full_name in {"live.modes.long", "live.modes.short"}
             type_ = type(value)
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
@@ -2237,6 +2243,18 @@ def add_arguments_recursively(
                 )
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
+            elif full_name == "live.startup.warmup_concurrency":
+                from config.control_sentinels import warmup_concurrency_cli
+
+                type_ = warmup_concurrency_cli
+            elif nullable_mode_override:
+                from config.control_sentinels import forced_mode_cli
+
+                type_ = forced_mode_cli
+            elif full_name == "bot.global.warmup.max_minutes":
+                from config.control_sentinels import warmup_cap_cli
+
+                type_ = warmup_cap_cli
             elif nullable_float_override:
                 type_ = optional_float
             elif value is None:
@@ -2272,7 +2290,7 @@ def add_arguments_recursively(
                 dest=full_name,
                 required=False,
                 # Omitted nullable settings must differ from an explicit null.
-                default=argparse.SUPPRESS if nullable_float_override else None,
+                default=argparse.SUPPRESS if nullable_float_override or nullable_mode_override else None,
                 metavar=_argument_metavar(type_, full_name, value),
                 help=(
                     _argument_help_text(full_name, appendix)
@@ -2353,12 +2371,13 @@ def update_config_with_args(
     transform_root = config
     config = effective_config_payload(config)
     from config.hsl import validate_override_paths
-    nullable_float_overrides = {
+    nullable_overrides = {
         *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
         "backtest.ew_half_life_days",
+        "bot.global.warmup.max_minutes", "live.modes.long", "live.modes.short",
     }
     supplied = {key: value for key, value in vars(args).items()
-                if (value is not None or key in nullable_float_overrides)
+                if (value is not None or key in nullable_overrides)
                 and (key in allowed_keys if allowed_keys is not None else "." in key or key in {"approved_coins", "ignored_coins"})}
     if "config_version" in supplied:
         raise ValueError(
@@ -2378,7 +2397,7 @@ def update_config_with_args(
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
-        if value is None and key not in nullable_float_overrides:
+        if value is None and key not in nullable_overrides:
             continue
         if allowed_keys is not None:
             if key not in allowed_keys:

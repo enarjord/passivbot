@@ -143,7 +143,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "market_order_near_touch_threshold" not in loaded["backtest"]
     assert "lookback_ema_span_minutes" not in loaded["backtest"]
     assert "market_orders_allowed" in loaded["bot"]["global"]["execution"]
-    assert "market_order_near_touch_threshold" in loaded["bot"]["global"]["execution"]
+    assert "market_order_near_touch_fraction" in loaded["bot"]["global"]["execution"]
     assert loaded["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "risk_input_max_attempts" not in loaded["live"]
 
@@ -1202,7 +1202,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
-        == config['bot']['long']['risk']['position_exposure_enforcer']['threshold']
+        == config['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
         compiled["bot"]["long"]["unstuck_threshold"]
@@ -1840,7 +1840,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(help_text, "--market-orders-allowed", "-moa", "Y/N")
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
@@ -1871,7 +1871,7 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
     assert "--bot.long.hsl.enabled Y/N" in help_text
@@ -1923,7 +1923,7 @@ def test_live_default_help_shows_curated_groups():
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
     assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
@@ -1948,7 +1948,7 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(help_text, "--market-orders-allowed", "-moa", "Y/N")
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
@@ -2263,7 +2263,7 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
 
     parsed_market = parser.parse_args(["-moa", "y"])
     parsed_hedge = parser.parse_args(["-hm", "n"])
-    parsed_near_touch = parser.parse_args(["-montt", "0.002"])
+    parsed_near_touch = parser.parse_args(["-montf", "0.002"])
     parsed_lookback = parser.parse_args(["--unstuck-memory-ema-span-minutes", "14.5"])
     parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-ratio", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fallback-fee-fraction", "0"])
@@ -2274,7 +2274,7 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(parsed_market, 'bot.global.execution.market_orders_allowed') is True
     assert getattr(parsed_hedge, 'bot.global.hedge_mode') is False
     assert getattr(
-        parsed_near_touch, 'bot.global.execution.market_order_near_touch_threshold'
+        parsed_near_touch, 'bot.global.execution.market_order_near_touch_fraction'
     ) == pytest.approx(0.002)
     assert getattr(parsed_lookback, "bot.global.unstuck.memory_ema_span_minutes") == pytest.approx(
         14.5
@@ -2299,7 +2299,7 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     help_text = _format_parser_help_with_config("backtest", config, help_all=False)
 
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--maker-fee-override FLOAT" in help_text
     assert "--taker-fee-override FLOAT" in help_text
@@ -2321,7 +2321,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
     config = project_template_config_for_cli(get_template_config(), "backtest")
 
     assert "market_orders_allowed" in config["bot"]["global"]["execution"]
-    assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
+    assert "market_order_near_touch_fraction" in config["bot"]["global"]["execution"]
     assert "max_minutes" in config["bot"]["global"]["warmup"]
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "user" not in config["live"].get("account", {})
@@ -2331,7 +2331,7 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
     config = project_template_config_for_cli(get_template_config(), "optimize")
 
     assert "market_orders_allowed" in config["bot"]["global"]["execution"]
-    assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
+    assert "market_order_near_touch_fraction" in config["bot"]["global"]["execution"]
     assert "max_minutes" in config["bot"]["global"]["warmup"]
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, config, command="optimize")

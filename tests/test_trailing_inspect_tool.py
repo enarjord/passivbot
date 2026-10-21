@@ -55,8 +55,8 @@ def _context(
     total_enforcer_threshold=0.9,
     total_enforcer_policy="reduce_portfolio",
     unstuck_enabled=False,
-    unstuck_close_pct=0.0,
-    unstuck_loss_allowance_pct=0.0,
+    unstuck_close_fraction=0.0,
+    unstuck_loss_allowance_fraction=0.0,
     unstuck_exposure_trigger_ratio=0.0,
     unstuck_ema_gating_enabled=False,
     loss_gate_max_drawdown_ratio=1.0,
@@ -82,16 +82,16 @@ def _context(
         "total_exposure_enforcer_threshold": total_enforcer_threshold,
         "total_exposure_enforcer_policy": total_enforcer_policy,
         "unstuck_enabled": unstuck_enabled,
-        "unstuck_close_pct": unstuck_close_pct,
-        "unstuck_loss_allowance_pct": unstuck_loss_allowance_pct,
+        "unstuck_close_fraction": unstuck_close_fraction,
+        "unstuck_loss_allowance_fraction": unstuck_loss_allowance_fraction,
         "unstuck_exposure_trigger_ratio": unstuck_exposure_trigger_ratio,
         "unstuck_ema_gating_enabled": unstuck_ema_gating_enabled,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
-        "entry_initial_ema_dist": 0.01,
-        "entry_initial_qty_pct": 0.02,
+        "entry_initial_ema_distance_fraction": 0.01,
+        "entry_initial_qty_fraction": 0.02,
         "entry_double_down_factor": 1.5,
-        "close_qty_pct": 0.25,
+        "close_qty_fraction": 0.25,
         "volatility_ema_span_1m": 100.0,
         "volatility_ema_span_1h": 200.0,
     }
@@ -338,11 +338,11 @@ def test_extract_side_context_includes_global_and_risk_paths():
                     "max_positions": 1,
                     "position_exposure_enforcer": {
                         "enabled": True,
-                        "threshold": 0.8,
+                        'threshold_ratio': 0.8,
                     },
                     "total_exposure_enforcer": {
                         "enabled": True,
-                        "threshold": 0.9,
+                        'threshold_ratio': 0.9,
                         "policy": "reduce_portfolio",
                     },
                 },
@@ -371,8 +371,8 @@ def test_extract_side_context_includes_global_and_risk_paths():
     assert context["total_exposure_enforcer_threshold"] == pytest.approx(0.9)
     assert context["total_exposure_enforcer_policy"] == "reduce_portfolio"
     assert context["unstuck_enabled"] is True
-    assert context["unstuck_close_pct"] == pytest.approx(0.1)
-    assert context["unstuck_loss_allowance_pct"] == pytest.approx(0.02)
+    assert context["unstuck_close_fraction"] == pytest.approx(0.1)
+    assert context["unstuck_loss_allowance_fraction"] == pytest.approx(0.02)
     assert context["unstuck_exposure_trigger_ratio"] == pytest.approx(0.7)
     assert context["unstuck_ema_gating_enabled"] is False
     assert context["loss_gate_max_drawdown_ratio"] == pytest.approx(0.05)
@@ -669,8 +669,8 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
                 "params": _params(),
                 "context": _context(
                     unstuck_enabled=True,
-                    unstuck_close_pct=0.1,
-                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_close_fraction=0.1,
+                    unstuck_loss_allowance_fraction=0.02,
                     unstuck_exposure_trigger_ratio=0.7,
                     loss_gate_max_drawdown_ratio=0.05,
                 ),
@@ -696,8 +696,8 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
 def test_unstuck_requires_positive_threshold():
     context = _context(
         unstuck_enabled=True,
-        unstuck_close_pct=0.1,
-        unstuck_loss_allowance_pct=0.02,
+        unstuck_close_fraction=0.1,
+        unstuck_loss_allowance_fraction=0.02,
         unstuck_exposure_trigger_ratio=0.0,
     )
     result = trailing_inspect.build_overview(
@@ -721,8 +721,8 @@ def test_unstuck_runtime_label_requires_exposure_strictly_above_threshold():
                 "params": _params(),
                 "context": _context(
                     unstuck_enabled=True,
-                    unstuck_close_pct=0.1,
-                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_close_fraction=0.1,
+                    unstuck_loss_allowance_fraction=0.02,
                     unstuck_exposure_trigger_ratio=0.7,
                 ),
             }
@@ -752,8 +752,8 @@ def test_unstuck_explanation_honors_ema_gating_toggle(ema_gating_enabled):
                 "params": _params(),
                 "context": _context(
                     unstuck_enabled=True,
-                    unstuck_close_pct=0.1,
-                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_close_fraction=0.1,
+                    unstuck_loss_allowance_fraction=0.02,
                     unstuck_exposure_trigger_ratio=0.7,
                     unstuck_ema_gating_enabled=ema_gating_enabled,
                 ),
@@ -1141,8 +1141,8 @@ def test_overview_explains_protective_reducer_consolidation():
                     enforcer_enabled=True,
                     total_enforcer=True,
                     unstuck_enabled=True,
-                    unstuck_close_pct=0.1,
-                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_close_fraction=0.1,
+                    unstuck_loss_allowance_fraction=0.02,
                     unstuck_exposure_trigger_ratio=0.7,
                 ),
             }

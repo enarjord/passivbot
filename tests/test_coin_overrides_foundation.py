@@ -147,7 +147,7 @@ def test_effective_config_cross_field_validation_fails_with_coin_context():
                             "risk": {
                                 "position_exposure_enforcer": {
                                     "enabled": True,
-                                    "threshold": 0.0,
+                                    'threshold_ratio': 0.0,
                                 },
                             }
                         }
@@ -402,8 +402,8 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                                 "enabled": side["risk"]["position_exposure_enforcer"][
                                     "enabled"
                                 ],
-                                "threshold": side["risk"]["position_exposure_enforcer"][
-                                    "threshold"
+                                'threshold_ratio': side["risk"]["position_exposure_enforcer"][
+                                    "threshold_ratio"
                                 ],
                             },
                         },
@@ -421,7 +421,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                     }
                 },
                 "live": {
-                    "modes": {"long": "", "short": "normal"},
+                    "modes": {"long": None, "short": "normal"},
                     "account": {"leverage": template["live"]["account"]["leverage"]},
                 },
             }

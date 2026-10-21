@@ -96,6 +96,9 @@ def validate_authored_config(config, template, *, policy_context=None):
     })
 
     def visit(value, expected, parts):
+        from .control_sentinels import validate_control_value
+
+        validate_control_value(parts, value)
         path = "config" + ("." + ".".join(parts) if parts else "")
         if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"long", "short"}
                 and parts[2] == "universe" and parts[3] in {"approved_coins", "ignored_coins"}):

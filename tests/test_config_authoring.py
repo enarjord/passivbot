@@ -44,7 +44,7 @@ def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
     assert source == before
     assert len(json.dumps(compact)) < len(json.dumps(source)) * 0.7
     assert "logging" not in compact
-    assert "warmup" not in compact["bot"].get("global", {})
+    assert compact["bot"]["global"]["warmup"] == {"max_minutes": None}
     assert effective(compact) == effective(source)
     assert compact_config(compact) == compact
 
@@ -382,8 +382,8 @@ def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
 
 def test_search_treatment_reports_runtime_and_scenario_shadowing():
     source = policy()
-    path = "bot.long.risk.total_exposure_enforcer.threshold"
-    source["optimize"]["bounds"]["long"]["risk"]["total_exposure_enforcer"]["threshold"] = [0.5, 1.0]
+    path = "bot.long.risk.total_exposure_enforcer.threshold_ratio"
+    source["optimize"]["bounds"]["long"]["risk"]["total_exposure_enforcer"]["threshold_ratio"] = [0.5, 1.0]
     source["optimize"]["fixed_runtime_overrides"] = {path: 0.8}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {path: 0.9}}]
     ordinary = explain_config(source, path)
@@ -400,7 +400,7 @@ def test_search_treatment_reports_runtime_and_scenario_shadowing():
         {"kind": "fixed_runtime_override", "path": path},
         {"kind": "scenario_override", "path": path},
     ]
-    bounds = explain_config(source, "optimize.bounds.long.risk.total_exposure_enforcer.threshold", optimize=True)
+    bounds = explain_config(source, "optimize.bounds.long.risk.total_exposure_enforcer.threshold_ratio", optimize=True)
     assert bounds["search"]["status"] == "fixed_runtime_override"
 
 
@@ -528,7 +528,7 @@ def test_authoring_tools_never_connect_to_network(monkeypatch):
 def test_explain_cli_prints_report_and_never_rewrites_input(tmp_path, capsys):
     path = write_json(tmp_path / "input.json", policy())
     before = path.read_bytes()
-    assert cli_main(["tool", "config-explain", str(path), "bot.global.warmup.ratio", "--json"]) == 0
+    assert cli_main(["tool", "config-explain", str(path), "bot.global.warmup.span_multiplier", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["value"] == 0.3
     assert report["context"]["scope"] == "offline_policy"

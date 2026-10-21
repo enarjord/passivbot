@@ -22,7 +22,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
     config['live'].update(hsl_signal_mode=mode)
     config['bot']['global']['strategy_kind'] = strategy_kind
     config['bot']['global']['execution']['market_orders_allowed'] = True
-    config['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.0
+    config['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.0
     config["backtest"].update(hsl_detailed_report=False, market_order_slippage_pct=0.,
                               maker_fee_override=0., taker_fee_override=0.)
     for direction in ("long", "short"):

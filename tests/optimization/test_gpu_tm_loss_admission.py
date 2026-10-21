@@ -99,11 +99,11 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
     config['bot']['global']['execution']['market_orders_allowed'] = market
-    config['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.01
+    config['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.01
     config["backtest"]["market_order_slippage_fraction"] = 0.001
     candles[:, :, :3] = (105.0, 95.0, 100.4)
     for side in sides:
-        config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': reducer == 'wel', 'threshold': 0.3}, 'total_exposure_enforcer': {'enabled': reducer == 'twel', 'threshold': 0.2, 'policy': 'reduce_portfolio'}})
+        config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': reducer == 'wel', 'threshold_ratio': 0.3}, 'total_exposure_enforcer': {'enabled': reducer == 'twel', 'threshold_ratio': 0.2, 'policy': 'reduce_portfolio'}})
         config["bot"][side]["strategy"]["trailing_martingale"]["close"].update(
             qty_pct=0.1, threshold_base_pct=0.005, threshold_we_weight=slope,
         )

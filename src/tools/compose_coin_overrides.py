@@ -509,17 +509,17 @@ def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
             for item in configs
         ]
         if all(wel_enforcer_disabled):
-            lower = _bound_lower(master, side, "risk", "position_exposure_enforcer.threshold")
+            lower = _bound_lower(master, side, "risk", "position_exposure_enforcer.threshold_ratio")
             for item in configs:
                 risk = item.config["bot"][side]["risk"]
                 risk['position_exposure_enforcer']['enabled'] = False
-                risk['position_exposure_enforcer']['threshold'] = lower
+                risk['position_exposure_enforcer']['threshold_ratio'] = lower
             actions.append(f"bot.{side}.risk.position_exposure_enforcer (disabled in every input)")
         else:
-            master_threshold = master['bot'][side]['risk']['position_exposure_enforcer']['threshold']
+            master_threshold = master['bot'][side]['risk']['position_exposure_enforcer']['threshold_ratio']
             for item, disabled in zip(configs, wel_enforcer_disabled):
                 if disabled:
-                    item.config['bot'][side]['risk']['position_exposure_enforcer']['threshold'] = master_threshold
+                    item.config['bot'][side]['risk']['position_exposure_enforcer']['threshold_ratio'] = master_threshold
 
         twel_enforcer_disabled = all(
             not bool(item.config['bot'][side]['risk']['total_exposure_enforcer']['enabled'])

@@ -70,7 +70,7 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     cfg['bot']['global']['strategy_kind'] = strategy_kind
     cfg['bot']['global']['warmup']['max_minutes'] = 1
     cfg['bot']['global']['execution']['market_orders_allowed'] = market_orders
-    cfg['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.01
+    cfg['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.01
     coins = ['BTC', 'ETH'][:coin_count]
     set_side_universe_sources(cfg, 'approved_coins', {s: coins if s == side else [] for s in ['long', 'short']})
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],

@@ -111,7 +111,7 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "entry_cooldown.weights_minutes.exposure_ratio",
         "entry_cooldown.weights_minutes.adverse_directionality",
         "risk.position_exposure_enforcer.enabled",
-        "risk.position_exposure_enforcer.threshold",
+        "risk.position_exposure_enforcer.threshold_ratio",
         "risk.we_excess_allowance_fraction",
         "unstuck.close_fraction",
         "unstuck.ema_distance_fraction",

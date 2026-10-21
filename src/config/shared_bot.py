@@ -16,10 +16,10 @@ BOT_GROUP_FIELD_MAP = {
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
         "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
-        "total_exposure_enforcer.threshold": "risk_twel_enforcer_threshold",
+        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold",
         "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
         "position_exposure_enforcer.enabled": "risk_wel_enforcer_enabled",
-        "position_exposure_enforcer.threshold": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold",
     },
     "forager": {
         "score_weights": "forager_score_weights",

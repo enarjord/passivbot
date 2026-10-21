@@ -87,6 +87,18 @@ def _sample_config() -> dict:
     }
 
 
+@pytest.mark.parametrize("cap,expected", [(None, None), (30.0, None), (0, "zero")])
+def test_preflight_recognizes_explicit_uncapped_warmup(tmp_path, cap, expected):
+    config = _sample_config()
+    config["bot"]["global"]["warmup"]["max_minutes"] = cap
+    path = tmp_path / "config.json"
+    _write_config(path, config)
+    report = live_config_preflight.build_live_config_preflight_report(path)
+    attention = report["cache"]["readiness"]["surfaces"]["candles"]["attention"]
+    codes = {row["code"] for row in attention if row["code"].startswith("max_warmup_minutes_")}
+    assert codes == ({f"max_warmup_minutes_{expected}"} if expected else set())
+
+
 def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tmp_path):
     config_path = tmp_path / "live.json"
     _write_config(config_path, _sample_config())
@@ -260,7 +272,7 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
     tmp_path,
 ):
     config = _sample_config()
-    config["bot"]["global"]["warmup"]["ratio"] = 0.3
+    config["bot"]["global"]["warmup"]["span_multiplier"] = 0.3
     config["live"].update(
         {
             "startup": {

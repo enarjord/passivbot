@@ -123,7 +123,7 @@ def validate_bot_config(result: dict) -> None:
                 bot_side, "risk_wel_enforcer_threshold"
             ),
             enabled_path=f"bot.{pside}.risk.position_exposure_enforcer.enabled",
-            threshold_path=f"bot.{pside}.risk.position_exposure_enforcer.threshold",
+            threshold_path=f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
@@ -131,13 +131,13 @@ def validate_bot_config(result: dict) -> None:
                 bot_side, "risk_twel_enforcer_threshold"
             ),
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer.enabled",
-            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold",
+            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=True,
             threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
             enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit",
-            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold",
+            threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
         normalize_twel_enforcer_policy(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),

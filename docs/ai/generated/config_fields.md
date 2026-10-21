@@ -75,7 +75,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `bot.global.execution.market_order_near_touch_threshold` | float | `0.001` | fraction / market price | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.execution.market_order_near_touch_fraction` | float | `0.001` | fraction / market price | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.execution.market_orders_allowed` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.forager.score_hysteresis_margin` | float | `0.02` | normalized score gap | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.hedge_mode` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
@@ -93,8 +93,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.universe.filter_by_min_effective_cost` | boolean | `true` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.universe.minimum_coin_age_days` | float | `60.0` | days | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
-| `bot.global.warmup.max_minutes` | float | `0.0` | minutes | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
-| `bot.global.warmup.ratio` | float | `0.3` | fraction / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.warmup.max_minutes` | float \| null | `null` | minutes | global; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
+| `bot.global.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | long; live, backtest, optimize | Eligible (`long_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |
@@ -118,10 +118,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.hsl.scale_budget_with_excess_allowance` | boolean | `false` | — | long; live, backtest, optimize | No | coin HSL scope only | — | python |
 | `bot.long.risk.max_positions` | integer | `7` | positions | long; live, backtest, optimize | Eligible (`long_n_positions`); recommended `[7, 7, 1]` | forbidden | >= 0; finite | python |
 | `bot.long.risk.position_exposure_enforcer.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | allowed | — | python |
-| `bot.long.risk.position_exposure_enforcer.threshold` | float | `1.0` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_wel_enforcer_threshold`); recommended `[1, 1, 0.001]` | allowed | finite | python |
+| `bot.long.risk.position_exposure_enforcer.threshold_ratio` | float | `1.0` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_wel_enforcer_threshold`); recommended `[1, 1, 0.001]` | allowed | finite | python |
 | `bot.long.risk.total_exposure_enforcer.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | — | long; live, backtest, optimize | No | forbidden | `reduce_overweight`, `reduce_portfolio` | python |
-| `bot.long.risk.total_exposure_enforcer.threshold` | float | `1.0` | ratio / side total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_twel_enforcer_threshold`); recommended `[1, 1, 0.001]` | forbidden | > 0.0; finite | python |
+| `bot.long.risk.total_exposure_enforcer.threshold_ratio` | float | `1.0` | ratio / side total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_twel_enforcer_threshold`); recommended `[1, 1, 0.001]` | forbidden | > 0.0; finite | python |
 | `bot.long.risk.total_wallet_exposure_limit` | float | `1.5` | ratio / raw balance | long; live, backtest, optimize | Eligible (`long_total_wallet_exposure_limit`); recommended `[1.5, 1.5, 0.01]` | forbidden | >= 0.0; finite | python |
 | `bot.long.risk.we_excess_allowance_fraction` | float | `0.37` | fraction / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_risk_we_excess_allowance_pct`); recommended `[0, 0.4, 0.01]` | allowed | >= 0.0; finite | python |
 | `bot.long.strategy.ema_anchor.base_qty_fraction` | float | `0.01` | fraction / raw balance times effective per-position wallet exposure limit, converted at order price | long; live, backtest, optimize | Eligible (`long_base_qty_pct`); ema_anchor is the active strategy; recommended `[0.001, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
@@ -191,10 +191,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.hsl.scale_budget_with_excess_allowance` | boolean | `false` | — | short; live, backtest, optimize | No | coin HSL scope only | — | python |
 | `bot.short.risk.max_positions` | integer | `1` | positions | short; live, backtest, optimize | Eligible (`short_n_positions`); recommended `[5, 5, 1]` | forbidden | >= 0; finite | python |
 | `bot.short.risk.position_exposure_enforcer.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |
-| `bot.short.risk.position_exposure_enforcer.threshold` | float | `0.8` | ratio / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_wel_enforcer_threshold`); recommended `[0.8, 1.01, 0.001]` | allowed | finite | python |
+| `bot.short.risk.position_exposure_enforcer.threshold_ratio` | float | `0.8` | ratio / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_wel_enforcer_threshold`); recommended `[0.8, 1.01, 0.001]` | allowed | finite | python |
 | `bot.short.risk.total_exposure_enforcer.enabled` | boolean | `true` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.risk.total_exposure_enforcer.policy` | string | `"reduce_overweight"` | — | short; live, backtest, optimize | No | forbidden | `reduce_overweight`, `reduce_portfolio` | python |
-| `bot.short.risk.total_exposure_enforcer.threshold` | float | `0.8` | ratio / side total wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_twel_enforcer_threshold`); recommended `[0.8, 1.01, 0.001]` | forbidden | > 0.0; finite | python |
+| `bot.short.risk.total_exposure_enforcer.threshold_ratio` | float | `0.8` | ratio / side total wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_twel_enforcer_threshold`); recommended `[0.8, 1.01, 0.001]` | forbidden | > 0.0; finite | python |
 | `bot.short.risk.total_wallet_exposure_limit` | float | `0.0` | ratio / raw balance | short; live, backtest, optimize | Eligible (`short_total_wallet_exposure_limit`); recommended `[0, 0]` | forbidden | >= 0.0; finite | python |
 | `bot.short.risk.we_excess_allowance_fraction` | float | `0.0` | fraction / effective per-position wallet exposure limit | short; live, backtest, optimize | Eligible (`short_risk_we_excess_allowance_pct`); recommended `[0, 0.5, 0.01]` | allowed | >= 0.0; finite | python |
 | `bot.short.strategy.ema_anchor.base_qty_fraction` | float | `0.01` | fraction / raw balance times effective per-position wallet exposure limit, converted at order price | short; live, backtest, optimize | Eligible (`short_base_qty_pct`); ema_anchor is the active strategy; recommended `[0.001, 0.05, 0.0001]` | allowed | — | rust strategy metadata |
@@ -297,8 +297,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.fills.fills_recent_overlap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
 | `live.fills.max_abs_fee_fraction` | float | `0.001` | fraction / absolute fill quote notional | —; live, backtest, optimize | — | forbidden | — | python |
 | `live.modes.disapproved_position` | string | `"graceful_stop"` | — | — | — | forbidden | — | python |
-| `live.modes.long` | string | `""` | — | — | — | allowed | — | python |
-| `live.modes.short` | string | `""` | — | — | — | allowed | — | python |
+| `live.modes.long` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only` | python |
+| `live.modes.short` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only` | python |
 | `live.recovery.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | — | —; live | — | forbidden | — | python |
 | `live.recovery.max_n_restarts_per_day` | integer | `10` | — | — | — | forbidden | — | python |
 | `live.startup.defer_broad_candle_warmup` | boolean | `true` | — | — | — | forbidden | — | python |
@@ -308,7 +308,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.startup.startup_phase_budgets.*` | object | Not declared | — | — | — | forbidden | — | python |
 | `live.startup.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | milliseconds | — | — | forbidden | >= 0 | python |
 | `live.startup.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | milliseconds | — | — | forbidden | >= 0 | python |
-| `live.startup.warmup_concurrency` | integer | `0` | — | — | — | forbidden | — | python |
+| `live.startup.warmup_concurrency` | integer \| string | `"auto"` | — | — | — | forbidden | >= 1; `auto` | python |
 | `live.startup.warmup_jitter_seconds` | float | `30.0` | — | — | — | forbidden | — | python |
 
 ## logging

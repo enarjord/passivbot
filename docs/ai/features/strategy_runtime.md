@@ -269,7 +269,7 @@ values or ratios outside `[0, 1)` before order construction.
 must not read or forward it; live callers intentionally omit `market_order_slippage_fraction` and rely
 on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
 current bid/ask snapshot plus exchange-side behavior, controlled by `bot.global.execution.market_orders_allowed`
-and `bot.global.execution.market_order_near_touch_threshold`.
+and `bot.global.execution.market_order_near_touch_fraction`.
 
 ## Close Recursion Contract
 

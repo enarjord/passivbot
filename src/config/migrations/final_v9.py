@@ -600,13 +600,16 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         if path.endswith(".risk"):
             rename(node, "n_positions", "max_positions", path)
             for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+                if isinstance(node.get(owner), dict):
+                    rename(node[owner], "threshold", "threshold_ratio", f"{path}.{owner}")
                 for leaf in ("enabled", "threshold", "policy"):
                     old = f"{owner}_{leaf}"
                     if old in node:
                         value = node.pop(old)
-                        put(node, (owner, leaf), value, f"{path}.{old}")
+                        target = "threshold_ratio" if leaf == "threshold" else leaf
+                        put(node, (owner, target), value, f"{path}.{old}")
                         record(
-                            f"{path}.{old}", value, {f"{owner}.{leaf}": value},
+                            f"{path}.{old}", value, {f"{owner}.{target}": value},
                             "explicit released-v8 exposure-enforcer object conversion",
                         )
         if path.endswith(".unstuck"):
@@ -645,6 +648,9 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         migrate_entry_ema_tree(result)
         move_shared_policy(result, record=record)
         move_operational_live(result, record=record)
+        from .control_sentinels import migrate_control_sentinels
+
+        migrate_control_sentinels(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
         rewrite_released_public_names(result, record=record)
@@ -673,6 +679,9 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
     move_operational_live(result, record=record)
+    from .control_sentinels import migrate_control_sentinels
+
+    migrate_control_sentinels(result, record=record)
     preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
         canonicalize_shared_bot_side(result.get("bot", {}).get(side))

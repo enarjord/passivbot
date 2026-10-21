@@ -68,6 +68,14 @@ def enrich_fields(fields):
                                           if command in rule["consumed_by"])
             data["coin_override"] = (CoinOverridePolicy.ALLOWED if path in get_live_coin_override_paths()
                                      else CoinOverridePolicy.FORBIDDEN)
+            if path in {("live", "modes", side) for side in ("long", "short")}:
+                from .control_sentinels import FORCED_MODES
+
+                data.update(domain=FieldDomain(choices=FORCED_MODES),
+                            description="Null leaves the mode unforced; per-coin null clears a root forced mode.")
+            elif path == ("live", "startup", "warmup_concurrency"):
+                data.update(domain=FieldDomain(minimum=1, choices=("auto",)),
+                            description="Auto uses the existing context/exchange concurrency policy; a positive integer is explicit.")
             data.update(_operational_fraction_metadata(path))
         if path == ("optimize", "scoring", "*", "goal"):
             from .scoring import OBJECTIVE_GOALS
@@ -131,14 +139,14 @@ def _bot_metadata(path):
     elif local == "forager.score_hysteresis_margin":
         data.update(unit="normalized score gap", domain=FieldDomain(minimum=0.0, finite=True),
                     description="Absolute challenger-minus-incumbent ranking score margin required for replacement.")
-    elif local in {"warmup.ratio", "execution.market_order_near_touch_threshold"}:
-        denominators = {"warmup.ratio": "indicator span",
-                        "execution.market_order_near_touch_threshold": "market price"}
-        data.update(unit="fraction", denominator=denominators[local],
+    elif local in {"warmup.span_multiplier", "execution.market_order_near_touch_fraction"}:
+        denominators = {"warmup.span_multiplier": "indicator span",
+                        "execution.market_order_near_touch_fraction": "market price"}
+        data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "warmup.max_minutes":
-        data.update(unit="minutes", domain=FieldDomain(minimum=0.0, finite=True),
-                    description="Zero disables the history warmup cap; acquisition and activation retain their existing formulas.")
+        data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
+                    description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")
     elif local == "forager.always_include":
         data["description"] = "Persistent side selection within the eligible universe; operational modes and risk gates retain priority."
     elif local in {"universe.approved_coins", "universe.ignored_coins"}:
@@ -186,12 +194,12 @@ def _bot_metadata(path):
     elif local == "risk.we_excess_allowance_fraction":
         data.update(unit="fraction", denominator="effective per-position wallet exposure limit",
                     domain=FieldDomain(minimum=0.0, finite=True))
-    elif local in {"risk.position_exposure_enforcer.threshold", "risk.total_exposure_enforcer.threshold"}:
+    elif local in {"risk.position_exposure_enforcer.threshold_ratio", "risk.total_exposure_enforcer.threshold_ratio"}:
         data.update(unit="ratio", domain=FieldDomain(finite=True),
                     denominator=("effective per-position wallet exposure limit" if "position_exposure_enforcer" in path
                                  else "side total wallet exposure limit"),
                     description="A positive threshold is required when its exposure enforcer is enabled.")
-        if local == "risk.total_exposure_enforcer.threshold":
+        if local == "risk.total_exposure_enforcer.threshold_ratio":
             data.update(domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
                         description="Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.")
     elif local == "risk.total_exposure_enforcer.policy":

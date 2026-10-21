@@ -324,6 +324,18 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     ))
             canonicalize_shared_bot_side(values)
             risk = values.get("risk", {})
+            for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+                block = risk.get(owner)
+                if isinstance(block, dict) and "threshold" in block:
+                    value = block.pop("threshold")
+                    if "threshold_ratio" in block and block["threshold_ratio"] != value:
+                        raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{owner}.threshold conflicts with threshold_ratio")
+                    block["threshold_ratio"] = deepcopy(value)
+                    changes.append(dict(
+                        path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{owner}.threshold",
+                        old=deepcopy(value), new={"threshold_ratio": deepcopy(value)},
+                        reason="explicit released-v8 ratio rename before file/inline merge",
+                    ))
             for owner, leaf in (
                 ("position_exposure_enforcer", "enabled"),
                 ("position_exposure_enforcer", "threshold"),
@@ -336,12 +348,13 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     continue
                 value = risk.pop(old)
                 block = risk.setdefault(owner, {})
-                if not isinstance(block, dict) or (leaf in block and block[leaf] != value):
-                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{leaf}")
-                block[leaf] = deepcopy(value)
+                target = "threshold_ratio" if leaf == "threshold" else leaf
+                if not isinstance(block, dict) or (target in block and block[target] != value):
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{target}")
+                block[target] = deepcopy(value)
                 changes.append(dict(
                     path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{old}",
-                    old=deepcopy(value), new={f"{owner}.{leaf}": deepcopy(value)},
+                    old=deepcopy(value), new={f"{owner}.{target}": deepcopy(value)},
                     reason="explicit released-v8 enforcer conversion before file/inline merge",
                 ))
             for group, old, new in (

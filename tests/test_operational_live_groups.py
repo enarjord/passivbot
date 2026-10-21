@@ -71,17 +71,30 @@ def test_released_operational_fields_move_with_exact_values_and_reports():
     original = deepcopy(source)
     result = migrate_v8_to_v9(source, memory_span_minutes=100.0)
     assert source == original
+    converted_sentinels = {
+        "warmup_concurrency": "auto",
+        "forced_mode_long": None,
+        "forced_mode_short": None,
+    }
     for old, path in LIVE_OPERATIONAL_PATHS.items():
         if old in source["live"]:
             assert (
                 require_config_value(result.config, ".".join(path))
-                == source["live"][old]
+                == converted_sentinels.get(old, source["live"][old])
             )
             assert any(
                 change["path"] == f"live.{old}"
                 and change["reason"] == "grouped released operational live field"
                 for change in result.changes
             )
+            if old in converted_sentinels:
+                assert any(
+                    change["path"] == ".".join(path)
+                    and change["old"] == source["live"][old]
+                    and change["new"] == converted_sentinels[old]
+                    and change["reason"] == "explicit released-v8 control sentinel conversion"
+                    for change in result.changes
+                )
     assert result.config["live"]["modes"]["disapproved_position"] == "graceful_stop"
     assert (
         prepare_config(result.config, verbose=False)["live"]["modes"]

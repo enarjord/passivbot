@@ -10,6 +10,16 @@ since the latest release tag; these features may already be available when insta
   sizing, unstuck allowances, simulated fills and live fee/execution policy. Name the absolute
   Forager score gap `score_hysteresis_margin`. Values, native optimizer IDs and trading packets
   are unchanged; explicit released-v8 migration reports the new paths in every authored layer.
+
+- Use explicit control values: `null` leaves long/short modes unforced and warmup uncapped;
+  `live.startup.warmup_concurrency: "auto"` retains automatic scheduling. CLI, coin patches
+  and scenario/fixed overrides share the strict domains; released-v8 migration reports
+  replacement of the old empty-string and zero sentinels.
+
+- Make public units explicit with exposure-enforcer `threshold_ratio`, warmup
+  `span_multiplier` and `market_order_near_touch_fraction`. Preserve numeric values,
+  native parameter identifiers and search authority; convert released v8 inputs directly.
+
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.

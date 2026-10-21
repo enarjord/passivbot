@@ -107,7 +107,9 @@ def validate_config(
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
     from .prefilter import resolve_prefilter, prefilter_enabled
     from .policy import validate_shared_bot_policy
+    from .control_sentinels import normalize_control_values
 
+    normalize_control_values(config)
     validate_shared_bot_policy(config)
 
     backend = str(config["optimize"]["backend"] or "pymoo").strip().lower()

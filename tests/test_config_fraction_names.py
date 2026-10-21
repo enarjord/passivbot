@@ -147,8 +147,15 @@ def test_trailing_inspection_reads_authored_unstuck_fractions(side, close, allow
             source["bot"][side]["unstuck"][name] = value
     original = deepcopy(source)
     report = _extract_side_context(source, side)
-    assert report["unstuck_close_pct"] == (close or 0.0)
-    assert report["unstuck_loss_allowance_pct"] == (allowance or 0.0)
+    assert report["unstuck_close_fraction"] == (close or 0.0)
+    assert report["unstuck_loss_allowance_fraction"] == (allowance or 0.0)
+    for old in ("unstuck_close_pct", "unstuck_loss_allowance_pct", "entry_initial_qty_pct",
+                "entry_initial_ema_dist", "close_qty_pct"):
+        assert old not in report
+    entry = source["bot"][side]["strategy"]["trailing_martingale"]["entry"]
+    assert report["entry_initial_qty_fraction"] == entry["initial_qty_fraction"]
+    assert report["entry_initial_ema_distance_fraction"] == entry["initial_ema_distance_fraction"]
+    assert report["close_qty_fraction"] == source["bot"][side]["strategy"]["trailing_martingale"]["close"]["qty_fraction"]
     assert source == original
 
 

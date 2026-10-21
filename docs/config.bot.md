@@ -267,15 +267,15 @@ Each side groups its control flag and numeric policy together:
 
 ```json
 "risk": {
-  "position_exposure_enforcer": {"enabled": true, "threshold": 1.0},
+  "position_exposure_enforcer": {"enabled": true, "threshold_ratio": 1.0},
   "total_exposure_enforcer": {
-    "enabled": true, "threshold": 1.0, "policy": "reduce_overweight"
+    "enabled": true, "threshold_ratio": 1.0, "policy": "reduce_overweight"
   }
 }
 ```
 
 Optimizer bounds follow the same path, for example
-`optimize.bounds.long.risk.position_exposure_enforcer.threshold`. The thresholds
+`optimize.bounds.long.risk.position_exposure_enforcer.threshold_ratio`. The thresholds
 retain their existing units and denominators; this grouping does not rescale values.
 
 ## Position Exposure Enforcer
@@ -288,7 +288,7 @@ if not position_exposure_enforcer.enabled:
     disabled
 
 allowed_i    = wel_base_i * (1 + we_excess_effective_i)
-target_i     = allowed_i * position_exposure_enforcer.threshold
+target_i     = allowed_i * position_exposure_enforcer.threshold_ratio
 ```
 
 If `exposure_i > target_i`, the bot submits a reduce-only order sized just large
@@ -297,12 +297,12 @@ enough (with step rounding and minimum-qty guards) to bring the position back to
 returned directly from `calc_next_close_*`/`calc_closes_*`.
 
 Setting `position_exposure_enforcer.enabled = false` disables this enforcer. When
-it is enabled, `position_exposure_enforcer.threshold` must be finite and greater
+it is enabled, `position_exposure_enforcer.threshold_ratio` must be finite and greater
 than zero. Values below `1.0` force continuous trimming; values above `1.0`
 create an additional grace margin.
 
 This is both a risk control and a possible strategy mechanism. For example, a
-user may deliberately set `position_exposure_enforcer.threshold = 0.95` with
+user may deliberately set `position_exposure_enforcer.threshold_ratio = 0.95` with
 aggressive entries. The strategy can refill toward the per-position limit, and
 the enforcer can repeatedly trim back to `95%` of that limit. Unlike auto
 unstuck, this trim is not gated by EMA distance or loss allowance.
@@ -311,7 +311,7 @@ unstuck, this trim is not gated by EMA distance or loss allowance.
 
 The total exposure enforcer repairs same-side portfolio exposure when the sum of
 all open same-side exchange positions exceeds
-`total_wallet_exposure_limit * total_exposure_enforcer.threshold`. Manual and
+`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`. Manual and
 panic positions count toward this same-side exposure measurement, but they are
 not repair candidates and never receive TWEL auto-reduce orders. For each
 position:
@@ -321,7 +321,7 @@ if not total_exposure_enforcer.enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
-overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer.threshold
+overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio
                      / max_positions
 overweight_psize_i = overweight_i * balance / (price_i * c_mult_i)
 ```
@@ -358,7 +358,7 @@ repair target. Exchange min-qty, min-cost, rounding, or a lack of managed
 candidates can leave the account above target.
 
 Setting `total_exposure_enforcer.enabled = false` disables this enforcer. When it
-is enabled, `total_exposure_enforcer.threshold` must be finite and greater than
+is enabled, `total_exposure_enforcer.threshold_ratio` must be finite and greater than
 zero.
 
 Manual and panic positions are outside normal bot management: the bot does not
@@ -408,8 +408,8 @@ intervention:
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
-| `position_exposure_enforcer.threshold`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
-| `total_exposure_enforcer.threshold`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |
+| `position_exposure_enforcer.threshold_ratio`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
+| `total_exposure_enforcer.threshold_ratio`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.

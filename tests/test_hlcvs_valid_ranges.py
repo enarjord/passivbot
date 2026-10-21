@@ -125,7 +125,7 @@ def test_compute_per_coin_warmup_minutes_handles_overrides():
         "bot": {
             "long": {"ema_span_0": 50},
             "short": {},
-            "global": {"warmup": {"ratio": 0.1, "max_minutes": 0.0}},
+            "global": {"warmup": {"span_multiplier": 0.1, "max_minutes": None}},
         },
         "coin_overrides": {"ALTC": {"bot": {"long": {"ema_span_0": 200}}}},
     }
