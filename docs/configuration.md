@@ -455,6 +455,11 @@ rebase retained source references; `--mode format` only formats the original JSO
 Prepared optimizer datasets separately freeze effective per-side memberships for replay. Their
 identity includes those memberships; changing a source file requires fresh data preparation,
 rather than changing an already prepared search's eligibility midway through execution.
+Suite scenarios retain those effective prepared approvals when no approval source is replaced.
+Changing an ignored source may exclude more members; clearing it cannot reconstruct a previously
+excluded approval or acquire another scenario's preloaded coins. Wider eligibility requires an
+explicit scenario coin/approval replacement and preparation of that context. Source bindings
+remain reloadable policy in saved configs, separately from the frozen execution membership.
 
 
 - **bot.global.universe.minimum_coin_age_days**: Disallows coins younger than a given number of days.

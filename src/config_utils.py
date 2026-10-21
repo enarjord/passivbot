@@ -795,6 +795,13 @@ def clean_config(config: dict) -> dict:
     cleaned["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
         source.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
     )
+    # Coin sources are scalar/list policy, not list-valued template defaults.
+    # Keep their authored binding when exporting a prepared membership view.
+    for side in ("long", "short"):
+        universe = source.get("bot", {}).get(side, {}).get("universe", {})
+        for field in ("approved_coins", "ignored_coins"):
+            if field in universe:
+                cleaned["bot"][side]["universe"][field] = deepcopy(universe[field])
     # Derive fixed weight bounds from the same normalized weights the loader
     # will consume, while preserving the cleaner's authored bot values.
     bound_config = {**cleaned, "bot": deepcopy(cleaned["bot"])}
