@@ -338,6 +338,95 @@ def test_replacement_ignored_source_subtracts_without_rereading_approvals(
     }
 
 
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("replacement", ["shared", "pin", "scenario", "parent"])
+def test_equal_source_assignment_is_explicit_preparation_authority(
+    tmp_path, kind, replacement
+):
+    config, data, _, allowed = prepared(tmp_path, kind, "all")
+    overrides = {f"bot.{side}.universe.ignored_coins": [] for side in ("long", "short")}
+    if replacement in {"pin", "scenario"}:
+        for side in ("long", "short"):
+            config["bot"][side]["universe"]["approved_coins"] = data[-1]
+        materialize_side_universe_sources(
+            config, "approved_coins", {side: allowed for side in ("long", "short")}
+        )
+    if replacement == "shared":
+        overrides["bot.global.universe.approved_coins"] = "all"
+    elif replacement == "parent":
+        overrides["bot.global.universe"] = deepcopy(config["bot"]["global"]["universe"])
+    elif replacement == "pin":
+        overrides.update(
+            {
+                f"bot.{side}.universe.approved_coins": data[-1]
+                for side in ("long", "short")
+            }
+        )
+    result, _ = scenario(
+        config,
+        data,
+        overrides=overrides,
+        coins=data[-1] if replacement == "scenario" else None,
+        ignored=[] if replacement == "scenario" else None,
+    )
+    assert masks(result, data) == {
+        side: [True, True, True] for side in ("long", "short")
+    }
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_equal_file_rebind_is_read_once_and_unavailable_rebind_fails_closed(
+    tmp_path, monkeypatch, kind
+):
+    config, data, files, _ = prepared(tmp_path, kind, "file")
+    selected = universe_source_view(config)["bot"]["global"]["universe"][
+        "approved_coins"
+    ]
+    files[0].write_text('["COIN00"]')
+    original_open = Path.open
+    reads = []
+
+    def read(path, *args, **kwargs):
+        if path == files[0]:
+            reads.append(path)
+        if path == files[1]:
+            raise AssertionError("untouched ignored file was reread")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", read)
+    result, _ = scenario(
+        config, data, overrides={"bot.global.universe.approved_coins": selected}
+    )
+    assert reads == [files[0]]
+    assert masks(result, data) == {
+        side: [True, False, False] for side in ("long", "short")
+    }
+    files[0].unlink()
+    with pytest.raises(FileNotFoundError):
+        scenario(
+            config, data, overrides={"bot.global.universe.approved_coins": selected}
+        )
+
+
+def test_equal_shared_rebind_does_not_read_unused_source_with_independent_pins(
+    tmp_path, monkeypatch
+):
+    config, data, files, allowed = prepared(tmp_path, "ema_anchor", "file")
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["approved_coins"] = allowed
+    materialize_side_universe_sources(
+        config, "approved_coins", {side: allowed for side in ("long", "short")}
+    )
+    selected = config["bot"]["global"]["universe"]["approved_coins"]
+    mutate_sources(files, "deleted")
+    result, _ = scenario(
+        config, data, overrides={"bot.global.universe.approved_coins": selected}
+    )
+    assert masks(result, data) == {
+        side: [True, False, True] for side in ("long", "short")
+    }
+
+
 def stub_suite_sources(monkeypatch, module, data):
     """Keep real source reads/materialization; replace only market network I/O."""
     from config.universe import resolve_universe_sources

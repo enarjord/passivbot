@@ -460,6 +460,10 @@ Changing an ignored source may exclude more members; clearing it cannot reconstr
 excluded approval or acquire another scenario's preloaded coins. Wider eligibility requires an
 explicit scenario coin/approval replacement and preparation of that context. Source bindings
 remain reloadable policy in saved configs, separately from the frozen execution membership.
+An explicit source assignment replaces authority even when equal to its previous value. In a new
+scenario context it resolves that source again; an unavailable explicitly rebound file fails,
+while untouched prepared files are not reopened. Independent side pins do not read an unused
+shared source.
 
 
 - **bot.global.universe.minimum_coin_age_days**: Disallows coins younger than a given number of days.

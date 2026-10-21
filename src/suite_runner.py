@@ -1223,7 +1223,7 @@ def apply_scenario_overrides(config, overrides, tracker=None):
 
 
 def _materialize_scenario_universe(
-    config, prepared_base, *, available_coins, exchanges, columns=None
+    config, prepared_base, *, available_coins, exchanges, columns=None, replacement_paths=()
 ):
     """Keep unchanged prepared memberships; resolve only replacement sources."""
     from config.universe import (
@@ -1233,6 +1233,12 @@ def _materialize_scenario_universe(
         raw_side_universe_sources,
         resolve_universe_sources,
     )
+
+    def replaced(path):
+        return any(
+            selected[:len(path)] == path or path[:len(selected)] == selected
+            for selected in replacement_paths
+        )
 
     shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
     base_shared = (
@@ -1253,9 +1259,13 @@ def _materialize_scenario_universe(
         for side in ("long", "short"):
             default = None if field == "approved_coins" else []
             source = sources.get(side, default)
-            same = source == old_sources.get(side, default)
+            same = source == old_sources.get(side, default) and not replaced(
+                ("bot", side, "universe", field)
+            )
             if field == "approved_coins" and source is None:
-                same = same and shared == base_shared
+                same = same and shared == base_shared and not replaced(
+                    ("bot", "global", "universe", "approved_coins")
+                )
             previous = base_values.get(side)
             if same and type(previous) is ResolvedCoinList:
                 values[side] = list(previous)
@@ -1416,9 +1426,13 @@ def apply_scenario(
         backtest_section["coin_sources"] = resolved_sources
 
     apply_scenario_overrides(cfg, scenario.overrides, tracker)
+    replacement_paths = [tuple(path.split(".")) for path in scenario.overrides or ()]
+    for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
+        if value is not None:
+            replacement_paths.extend(("bot", side, "universe", field) for side in ("long", "short"))
     _materialize_scenario_universe(
         cfg, prepared_base, available_coins=available_coins,
-        exchanges=scenario_exchanges, columns=set(filtered_coins),
+        exchanges=scenario_exchanges, columns=set(filtered_coins), replacement_paths=replacement_paths,
     )
     validate_suite_side_coin_lists(cfg, scenario_exchanges)
 
