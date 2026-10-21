@@ -221,7 +221,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         cfg = get_template_config()
         close = {"retracement_volatility_1h_weight": number(0)}
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["close"].update(close)
-        cfg["bot"]["long"]["unstuck"]["ema_span_0"] = number(60)
+        cfg["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = number(60)
         cfg["bot"]["long"]["risk"]["max_positions"] = number(7)
         cfg["backtest"]["balance_sample_divider"] = number(60)
         cfg["backtest"]["starting_balance"] = 1000.25
@@ -242,11 +242,11 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         cfg["backtest"]["scenarios"] = [
             {
                 "label": "base",
-                "overrides": {"bot.long.unstuck.ema_span_0": number(60)},
+                "overrides": {"bot.long.unstuck.ema_span_0_minutes": number(60)},
             }
         ]
         cfg["optimize"]["fixed_runtime_overrides"] = {
-            "bot.long.unstuck.ema_span_0": number(60)
+            "bot.long.unstuck.ema_span_0_minutes": number(60)
         }
         cfg["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
             "retracement_volatility_1h_weight"
@@ -267,7 +267,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         outputs.append(output)
     assert outputs[0] == outputs[1]
     result = json.loads(outputs[0])
-    assert type(result["bot"]["long"]["unstuck"]["ema_span_0"]) is float
+    assert type(result["bot"]["long"]["unstuck"]["ema_span_0_minutes"]) is float
     assert type(result["bot"]["long"]["risk"]["max_positions"]) is int
     patch = result["coin_overrides"]["BTC"]
     assert patch["bot"]["long"]["entry_cooldown"] == {
@@ -284,10 +284,10 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         assert type(result["backtest"]["balance_sample_divider"]) is int
         assert result["backtest"]["starting_balance"] == 1000.25
         overrides = result["backtest"]["scenarios"][0]["overrides"]
-        assert type(overrides["bot.long.unstuck.ema_span_0"]) is float
+        assert type(overrides["bot.long.unstuck.ema_span_0_minutes"]) is float
     if "optimize" in result:
         pins = result["optimize"]["fixed_runtime_overrides"]
-        assert type(pins["bot.long.unstuck.ema_span_0"]) is float
+        assert type(pins["bot.long.unstuck.ema_span_0_minutes"]) is float
         bounds = result["optimize"]["bounds"]["long"]
         weight_bounds = bounds["strategy"]["trailing_martingale"]["close"][
             "retracement_volatility_1h_weight"
@@ -322,12 +322,12 @@ def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
 @pytest.mark.parametrize(
     "selector,value,expected_type",
     [
-        ("bot.long.unstuck.ema_span_0", 60, float),
+        ("bot.long.unstuck.ema_span_0_minutes", 60, float),
         ("bot.global.unstuck.memory_ema_span_minutes", 60, float),
         ("bot.global.loss_gate.memory_ema_span_minutes", 60, float),
         ("bot.long.risk.max_positions", 7, int),
-        ("bot.long.strategy.trailing_martingale.entry.ema_span_0", 60, float),
-        ("coin_overrides.BTC.bot.long.unstuck.ema_span_0", 60, float),
+        ("bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", 60, float),
+        ("coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes", 60, float),
         ("coin_overrides.BTC.live.account.leverage", 3, int),
     ],
 )
@@ -339,7 +339,7 @@ def test_cleanup_resolves_override_selector_numeric_types(
         cfg = get_template_config()
         cfg["coin_overrides"] = {
             "BTC": {
-                "bot": {"long": {"unstuck": {"ema_span_0": 60.25}}},
+                "bot": {"long": {"unstuck": {"ema_span_0_minutes": 60.25}}},
                 "live": {"account": {"leverage": 3}},
             }
         }
@@ -457,7 +457,7 @@ def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field
 @pytest.mark.parametrize("mode", ["full", "optimize"])
 @pytest.mark.parametrize("field", [
     "drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes", "memory_ema_span_minutes",
-    "cooldown_minutes_after_red",
+    "cooldown_after_red_minutes",
 ])
 def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
     outputs = []
@@ -476,7 +476,7 @@ def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
 
 def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
     cfg = {
-        "bot": {"long": {"unstuck": {"ema_span_0": 60.25, "enabled": False}}},
+        "bot": {"long": {"unstuck": {"ema_span_0_minutes": 60.25, "enabled": False}}},
         "backtest": {"starting_balance": 1000.25, "end_date": "now"},
         "monitor": {"max_total_bytes": 2**60 + 1},
         "coin_overrides": {"BTC": {"live": {"modes": {"long": "0.0"}}}},
@@ -491,8 +491,8 @@ def test_export_numeric_normalization_preserves_values_and_non_numeric_leaves():
 
 @pytest.mark.parametrize("value", [2**53 + 1, 10**400])
 def test_export_numeric_normalization_rejects_lossy_float_conversion(value):
-    with pytest.raises(ValueError, match="bot.long.unstuck.ema_span_0.*float"):
-        normalize_export_numbers({"bot": {"long": {"unstuck": {"ema_span_0": value}}}})
+    with pytest.raises(ValueError, match="bot.long.unstuck.ema_span_0_minutes.*float"):
+        normalize_export_numbers({"bot": {"long": {"unstuck": {"ema_span_0_minutes": value}}}})
 
 
 @pytest.mark.parametrize("mode", ["full", "live", "backtest", "optimize"])
@@ -514,10 +514,10 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     for side in ("long", "short"):
         cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = rng.uniform(0.1, 2.0)
         cfg["bot"][side]["risk"]["max_positions"] = rng.randint(1, 10)
-        cfg["bot"][side]["hsl"].update(enabled=True, cooldown_minutes_after_red=17.5)
-        cfg["bot"][side]["unstuck"]["ema_span_0"] = rng.uniform(5.1, 1000.9)
+        cfg["bot"][side]["hsl"].update(enabled=True, cooldown_after_red_minutes=17.5)
+        cfg["bot"][side]["unstuck"]["ema_span_0_minutes"] = rng.uniform(5.1, 1000.9)
     if hsl_mode == "portfolio":
-        cfg["bot"]["global"]["hsl"].update(enabled=True, cooldown_minutes_after_red=23.5)
+        cfg["bot"]["global"]["hsl"].update(enabled=True, cooldown_after_red_minutes=23.5)
     target = "canonical" if mode == "full" else mode
     projected = project_config(cfg, target, record_step=False)
     expected = project_config(
@@ -534,13 +534,13 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     policies = [result["bot"][side]["hsl"] for side in ("long", "short")]
     if hsl_mode == "portfolio":
         policies.append(result["bot"]["global"]["hsl"])
-        assert result["bot"]["global"]["hsl"]["cooldown_minutes_after_red"] == 23.5
-    assert all(policy["cooldown_minutes_after_red"] == 17.5 for policy in policies[:2])
+        assert result["bot"]["global"]["hsl"]["cooldown_after_red_minutes"] == 23.5
+    assert all(policy["cooldown_after_red_minutes"] == 17.5 for policy in policies[:2])
     assert all("restart_after_red_policy" not in policy for policy in policies)
-    assert all(policy["cooldown_minutes_after_red"] >= 0.0 for policy in policies)
+    assert all(policy["cooldown_after_red_minutes"] >= 0.0 for policy in policies)
     assert (
-        result["bot"]["long"]["unstuck"]["ema_span_0"]
-        == cfg["bot"]["long"]["unstuck"]["ema_span_0"]
+        result["bot"]["long"]["unstuck"]["ema_span_0_minutes"]
+        == cfg["bot"]["long"]["unstuck"]["ema_span_0_minutes"]
     )
     if mode == "live":
         assert set(result) == {

@@ -39,13 +39,13 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert cleaned["bot"]["long"]["risk"]["max_positions"] == 5
     assert cleaned["bot"]["short"]["risk"]["max_positions"] == 3
     assert (
-        cleaned["bot"]["long"]["forager"]["volume_ema_span_1m"]
-        == template["bot"]["long"]["forager"]["volume_ema_span_1m"]
+        cleaned["bot"]["long"]["forager"]["volume_ema_span_minutes"]
+        == template["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
+        cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"]
         == template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-            "ema_span_0"
+            "ema_span_0_minutes"
         ]
     )
     assert "BTC" in cleaned["coin_overrides"]

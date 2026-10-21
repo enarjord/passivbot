@@ -3178,7 +3178,7 @@ def _format_starting_seed_bot(bot, live=None):
     defaults = template["bot"]["long"]["hsl"]
     numeric_fields = (
         "drawdown_ratio_threshold", "memory_ema_span_minutes",
-        "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red",
+        "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes",
     )
     numeric_seeds = {}
 

@@ -25,19 +25,19 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
             enabled=True, ema_gating_enabled=True, exposure_trigger_ratio=0.0, loss_allowance_pct=0.1,
         )
         config["optimize"]["bounds"][side]["strategy"] = {strategy: {}}
-    strategy_bounds = {"ema_span_0": [2.0, 20.0]}
+    strategy_bounds = {"ema_span_0_minutes": [2.0, 20.0]}
     if strategy == "trailing_martingale":
         strategy_bounds = {"entry": strategy_bounds}
     config["optimize"]["bounds"]["long"]["strategy"][strategy] = strategy_bounds
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"] if coupled else []
     config["coin_overrides"] = {"COIN01": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}}}
     if pinned:
-        pin = {"ema_span_0": 7.5}
+        pin = {"ema_span_0_minutes": 7.5}
         if strategy == "trailing_martingale":
             pin = {"entry": pin}
         config["coin_overrides"]["COIN02"] = {"bot": {"long": {"strategy": {strategy: pin}}}}
     if not coupled:
-        config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0"] = 9.0
+        config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 9.0
     return optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                               config, timestamps=original.timestamps)
 
@@ -47,7 +47,7 @@ def candidate(base, value):
     strategy = config["bot"]["long"]["strategy"][config['bot']['global']['strategy_kind']]
     if config['bot']['global']['strategy_kind'] == "trailing_martingale":
         strategy = strategy["entry"]
-    strategy["ema_span_0"] = value
+    strategy["ema_span_0_minutes"] = value
     return optimize.config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
 
 
@@ -57,7 +57,7 @@ def registry_for(base, suite):
         prepared = contexts(base, base.timestamps["binance"], lazy=True)
         kind = base.config['bot']['global']['strategy_kind']
         entry = "entry." if kind == "trailing_martingale" else ""
-        prepared[1].overrides = {f"bot.long.strategy.{kind}.{entry}ema_span_1": 3.5}
+        prepared[1].overrides = {f"bot.long.strategy.{kind}.{entry}ema_span_1_minutes": 3.5}
         evaluator = optimize.SuiteEvaluator(base, prepared, {"default": "mean"})
     return NativeDatasetRegistry(evaluator, standalone_candle_coins={
         "binance": ("COIN00", "COIN01", "COIN02"),
@@ -88,15 +88,15 @@ def test_coupled_coin_spans_reuse_views_but_preserve_request_identity(monkeypatc
                 runtime = json.loads(dataset.config_json)
                 assert "optimize" not in runtime and "_optimizer_anchor" not in runtime
                 inherited = runtime["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]
-                assert "ema_span_0" not in inherited and "ema_span_1" not in inherited
+                assert "ema_span_0_minutes" not in inherited and "ema_span_1_minutes" not in inherited
                 if pinned:
                     pin = runtime["coin_overrides"]["COIN02"]["bot"]["long"]["unstuck"]
-                    assert pin["ema_span_0"] == 7.5 and "ema_span_1" not in pin
+                    assert pin["ema_span_0_minutes"] == 7.5 and "ema_span_1_minutes" not in pin
             if pinned:
                 pin = base.config["coin_overrides"]["COIN02"]["bot"]["long"]["strategy"][strategy]
                 if strategy == "trailing_martingale":
                     pin = pin["entry"]
-                pin["ema_span_0"] = 8.5
+                pin["ema_span_0_minutes"] = 8.5
                 with pytest.raises(ValueError, match="dataset-owned execution inputs"):
                     registry.planner.prepare("changed-pin", candidate(base, 2.0))
 
@@ -108,7 +108,7 @@ def test_uncoupled_coin_spans_remain_dataset_owned(monkeypatch, strategy):
         base = coupled_inputs(manager, strategy, coupled=False)
         with registry_for(base, False) as registry:
             registry.planner.prepare("original", candidate(base, 2.0))
-            base.config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0"] = 10.0
+            base.config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 10.0
             with pytest.raises(ValueError, match="dataset-owned execution inputs"):
                 registry.planner.prepare("changed", candidate(base, 2.0))
 

@@ -2315,7 +2315,7 @@ class Passivbot:
                     options["recvWindow"] = recv_int
             except (TypeError, ValueError):
                 logging.warning(
-                    "Unable to parse live.api.recv_window_ms=%r; ignoring", recv_window
+                    "Unable to parse live.api.recv_window_milliseconds=%r; ignoring", recv_window
                 )
         if overrides:
             options.update(overrides)
@@ -3529,8 +3529,8 @@ class Passivbot:
             phase_budgets = startup_phase_budgets.get(label)
             if isinstance(phase_budgets, dict):
                 for config_key, event_key in (
-                    ("elapsed_ms", "elapsed_budget_ms"),
-                    ("since_previous_ms", "since_previous_budget_ms"),
+                    ("elapsed_milliseconds", "elapsed_budget_ms"),
+                    ("since_previous_milliseconds", "since_previous_budget_ms"),
                 ):
                     value = phase_budgets.get(config_key)
                     if (

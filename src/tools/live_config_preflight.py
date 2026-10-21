@@ -320,8 +320,8 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     forager_values = {
         key: get_grouped_bot_value(side_config, flat_key, default=None)
         for key, flat_key in (
-            ("volatility_ema_span_1m", "forager_volatility_ema_span_1m"),
-            ("volume_ema_span_1m", "forager_volume_ema_span_1m"),
+            ("volatility_ema_span_minutes", "forager_volatility_ema_span_1m"),
+            ("volume_ema_span_minutes", "forager_volume_ema_span_1m"),
         )
     }
     report = {

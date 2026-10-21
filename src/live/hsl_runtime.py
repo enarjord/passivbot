@@ -677,7 +677,7 @@ def capture(
             memory_ema_span_minutes=policy["memory_ema_span_minutes"],
             drawdown_ratio_ema_span_minutes=policy["drawdown_ratio_ema_span_minutes"],
             threshold=policy["drawdown_ratio_threshold"],
-            cooldown_ms=math.floor(policy["cooldown_minutes_after_red"] * 60_000 + 0.5),
+            cooldown_ms=math.floor(policy["cooldown_after_red_minutes"] * 60_000 + 0.5),
         )
         payload["scale_budget_with_excess_allowance"] = policy[
             "scale_budget_with_excess_allowance"

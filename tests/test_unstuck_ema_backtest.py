@@ -164,8 +164,8 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
         for key in ("ema_span_0", "ema_span_1"):
             explicit["bot"][side]["unstuck"][key] = strategy[key]
     explicit["coin_overrides"]["ETH"]["bot"]["long"]["unstuck"] = {
-        "ema_span_0": 21.5,
-        "ema_span_1": 110.25,
+        "ema_span_0_minutes": 21.5,
+        "ema_span_1_minutes": 110.25,
     }
     explicit = parse_overrides(
         _prepare_released_replay(explicit),

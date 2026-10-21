@@ -11,7 +11,7 @@ Allowed fields are intentionally limited:
 - **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
   selected risk fields (position-exposure enforcer settings and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_distance_fraction`,
-  `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `exposure_trigger_ratio`); and
+  `ema_gating_enabled`, `ema_span_0_minutes`, `ema_span_1_minutes`, `enabled`, `loss_allowance_pct`, and `exposure_trigger_ratio`); and
   every HSL field when the global `bot.global.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
@@ -47,7 +47,7 @@ The complete conditional HSL override group is:
 - `hsl.drawdown_ratio_threshold`
 - `hsl.memory_ema_span_minutes`
 - `hsl.drawdown_ratio_ema_span_minutes`
-- `hsl.cooldown_minutes_after_red`
+- `hsl.cooldown_after_red_minutes`
 - `hsl.panic_close_order_type`
 
 These fields are per `coin+side` only when the main config selects
@@ -98,7 +98,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
             "enabled": true,
             "drawdown_ratio_threshold": 0.08,
             "drawdown_ratio_ema_span_minutes": 10.0,
-            "cooldown_minutes_after_red": 60.0,
+            "cooldown_after_red_minutes": 60.0,
             "panic_close_order_type": "market"
           },
           "wallet_exposure_limit": 0.18

@@ -611,14 +611,14 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.long.hsl.cooldown_minutes_after_red": 60.0,
-    "bot.short.hsl.cooldown_minutes_after_red": 60.0
+    "bot.long.hsl.cooldown_after_red_minutes": 60.0,
+    "bot.short.hsl.cooldown_after_red_minutes": 60.0
   }
 }
 ```
 
 These overrides set the finite cooldown after a qualifying flatten during optimizer
-evaluations. Portfolio mode uses `bot.global.hsl.cooldown_minutes_after_red` instead of side
+evaluations. Portfolio mode uses `bot.global.hsl.cooldown_after_red_minutes` instead of side
 paths. There is no permanent restart selector. Inspect strategy-equity drawdown and
 recovery with `drawdown_worst_strategy_eq`, `drawdown_worst_mean_1pct_strategy_eq`,
 and `strategy_eq_recovery_days_max`. The `drawdown_worst_ema_strategy_eq` and

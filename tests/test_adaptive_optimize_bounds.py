@@ -193,7 +193,7 @@ def test_direct_cleaning_freezes_effective_weight_without_mutating_source():
     source["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 1.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 2.0,
     }
-    source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
+    source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 42.5
     freeze_other_score_weights(source)
     snapshot = deepcopy(source)
     cleaned = clean_config(source)
@@ -212,7 +212,7 @@ def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, frac
     omit_unilateralness_bounds(source)
     omit_cooldown_bounds(source)
     source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = weight
-    source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 75.25
+    source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 75.25
     source["bot"]["long"]["entry_cooldown"].update(
         min_duration_minutes=2.5, max_duration_minutes=90.25,
         weights_minutes={"exposure_ratio": 3.25, "adverse_directionality": 2.5},

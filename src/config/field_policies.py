@@ -9,12 +9,12 @@ from .strategy_spec import BOT_POSITION_SIDES
 SPECIAL_OPTIMIZER_KEY_PATHS = {
     "unstuck_memory_ema_span_minutes": ("bot", "global", "unstuck", "memory_ema_span_minutes"),
     "loss_gate_memory_ema_span_minutes": ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
-    "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
+    "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_minutes"),
     "long_forager_volatility_ema_span_1m": (
         "bot",
         "long",
         "forager",
-        "volatility_ema_span_1m",
+        "volatility_ema_span_minutes",
     ),
     "long_forager_score_weights_volume": (
         "bot",
@@ -62,20 +62,20 @@ SPECIAL_OPTIMIZER_KEY_PATHS = {
         "bot",
         "short",
         "forager",
-        "volume_ema_span_1m",
+        "volume_ema_span_minutes",
     ),
     "short_forager_volatility_ema_span_1m": (
         "bot",
         "short",
         "forager",
-        "volatility_ema_span_1m",
+        "volatility_ema_span_minutes",
     ),
 }
 
 for _side in BOT_POSITION_SIDES:
     for _key, _path in {
         "forager_score_weights_unilateralness": ("forager", "score_weights", "unilateralness"),
-        "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_1m"),
+        "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_minutes"),
         # The fixed ceiling may be null even when its search endpoints are numeric.
         "entry_cooldown_max_duration_minutes": ("entry_cooldown", "max_duration_minutes"),
         "entry_cooldown_weights_minutes_exposure_ratio": (
@@ -94,7 +94,7 @@ for _side in BOT_POSITION_SIDES:
 
 CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
     {
-        "hsl.cooldown_minutes_after_red",
+        "hsl.cooldown_after_red_minutes",
         "hsl.drawdown_ratio_ema_span_minutes",
         "hsl.memory_ema_span_minutes",
         "hsl.scale_budget_with_excess_allowance",
@@ -115,8 +115,8 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "risk.we_excess_allowance_pct",
         "unstuck.close_pct",
         "unstuck.ema_distance_fraction",
-        "unstuck.ema_span_0",
-        "unstuck.ema_span_1",
+        "unstuck.ema_span_0_minutes",
+        "unstuck.ema_span_1_minutes",
         "unstuck.ema_gating_enabled",
         "unstuck.enabled",
         "unstuck.loss_allowance_pct",

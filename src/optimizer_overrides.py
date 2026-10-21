@@ -131,7 +131,7 @@ def couple_unstuck_ema_spans(config, pside, *, trace=None):
         targets.append((coin, side_patch, effective,
                         ("coin_overrides", coin, "bot", pside), set(patch_strategy)))
     for coin, target, source, target_path, patched_spans in targets:
-        for key in ("ema_span_0", "ema_span_1"):
+        for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
             value = source[key]
             if not math.isfinite(float(value)) or float(value) <= 0:
                 raise ValueError(
@@ -145,7 +145,7 @@ def couple_unstuck_ema_spans(config, pside, *, trace=None):
                 trace("couple_unstuck_ema_spans", (*target_path, "unstuck", key),
                       (source_path,), value, "copy")
             # Refresh transport aliases only when this config already carries them.
-            alias = f"unstuck_{key}"
+            alias = f"unstuck_{key.removesuffix('_minutes')}"
             if alias in target:
                 target[alias] = value
     return config
@@ -192,7 +192,7 @@ def materialize_coupled_scenario_spans(config):
         if "coin_overrides" in effective:
             saved["coin_overrides"] = effective["coin_overrides"]
         for side in ("long", "short"):
-            for key in ("ema_span_0", "ema_span_1"):
+            for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
                 saved[f"bot.{side}.unstuck.{key}"] = effective["bot"][side]["unstuck"][
                     key
                 ]

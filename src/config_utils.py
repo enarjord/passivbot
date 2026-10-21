@@ -330,7 +330,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "live.fills.fee_conversion_max_age_ms": {
+    "live.fills.fee_conversion_max_age_milliseconds": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
@@ -1191,11 +1191,11 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Absolute fee/notional sanity threshold; outliers are replaced with live.fills.fee_pct_fallback.",
     },
-    "live.fills.fee_conversion_max_age_ms": {
-        "visible": ["--fee-conversion-max-age-ms"],
+    "live.fills.fee_conversion_max_age_milliseconds": {
+        "visible": ["--fee-conversion-max-age-milliseconds"],
         "hidden": [
-            "--live.fills.fee_conversion_max_age_ms",
-            "--live_fills_fee_conversion_max_age_ms",
+            "--live.fills.fee_conversion_max_age_milliseconds",
+            "--live_fills_fee_conversion_max_age_milliseconds",
         ],
         "type": int,
         "metavar": "INT",
@@ -1765,7 +1765,7 @@ for _pside in ("long", "short"):
             f"bot.{_pside}.hsl.drawdown_ratio_ema_span_minutes": (
                 f"EMA span, in minutes, for the {_pside} HSL drawdown signal."
             ),
-            f"bot.{_pside}.hsl.cooldown_minutes_after_red": (
+            f"bot.{_pside}.hsl.cooldown_after_red_minutes": (
                 f"Minutes to wait after {_pside} HSL RED is flattened before "
                 "restart is allowed."
             ),
@@ -1821,7 +1821,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
     }
     behavior = {
         "bot.global.universe.filter_by_min_effective_cost",
-        "live.fills.fee_conversion_max_age_ms",
+        "live.fills.fee_conversion_max_age_milliseconds",
         "live.fills.fee_pct_fallback",
         "live.fills.fee_pct_sanity_abs_max",
         "live.modes.long",
@@ -1843,7 +1843,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.api.max_concurrent_api_requests",
         "live.recovery.max_n_restarts_per_day",
         "live.candles.max_ohlcv_fetches_per_minute",
-        "live.api.recv_window_ms",
+        "live.api.recv_window_milliseconds",
         "live.execution.time_in_force",
         "live.account.user",
     }

@@ -99,7 +99,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 "drawdown_ratio_threshold": dict(minimum=0, maximum=1, strict=True),
                 "memory_ema_span_minutes": dict(minimum=1),
                 "drawdown_ratio_ema_span_minutes": dict(minimum=1),
-                "cooldown_minutes_after_red": dict(minimum=0),
+                "cooldown_after_red_minutes": dict(minimum=0),
             }
             if name in constraints:
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
@@ -112,7 +112,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                             endpoint, field=f"optimize.bounds.{bound_key}"
                         )
         adaptive_domain = {
-            ("forager", "unilateralness_ema_span_1m"): (1.0, 100_000.0),
+            ("forager", "unilateralness_ema_span_minutes"): (1.0, 100_000.0),
             ("forager", "score_weights", "unilateralness"): (0.0, math.inf),
             ("entry_cooldown", "weights_minutes", "exposure_ratio"): (0.0, math.inf),
             ("entry_cooldown", "weights_minutes", "adverse_directionality"): (0.0, math.inf),

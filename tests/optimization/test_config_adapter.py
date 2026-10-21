@@ -144,7 +144,7 @@ class TestConfigAdapter:
             spec["optimize_bounds"]["long_ema_span_0"]
             == template["optimize"]["bounds"]["long"]["strategy"][
                 "trailing_martingale"
-            ]["entry"]["ema_span_0"]
+            ]["entry"]["ema_span_0_minutes"]
         )
         assert any(
             param["config_path"] == ["strategy", "long", "entry", "ema_span_0"]

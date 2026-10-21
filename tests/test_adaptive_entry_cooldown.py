@@ -262,7 +262,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
         "adverse_directionality": [0.0, 20.0]
     }
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
     paths = dict(get_optimization_key_paths(cfg))
     assert paths["long_entry_cooldown_weights_minutes_adverse_directionality"] == (
@@ -329,7 +329,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
         assert original[f"{side}_entry_cooldown_min_duration_minutes"] == [0.0, 0.0]
         assert f"{side}_entry_cooldown_max_duration_minutes" not in original
     cfg["optimize"]["bounds"]["long"]["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [20.0, 80.5]
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [20.0, 80.5]
     cfg = clean_config(prepare_config(cfg, verbose=False))
     bounds = flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']['global']['strategy_kind']
@@ -820,7 +820,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']['global']['warmup']['ratio'] = 0.0
-    cfg["bot"]["long"]["forager"]["volume_ema_span_1m"] = 5000.0
+    cfg["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -1052,7 +1052,7 @@ def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 60.0
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 60.0
     if consumer == "forager":
         cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:

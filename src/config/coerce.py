@@ -49,7 +49,7 @@ def normalize_monitor_config(config: dict) -> None:
         ("event_rotation_minutes", float, lambda x: x > 0.0, "must be > 0"),
         ("retain_days", float, lambda x: x >= 0.0, "must be >= 0"),
         ("max_total_bytes", int, lambda x: x > 0, "must be > 0"),
-        ("price_tick_min_interval_ms", int, lambda x: x >= 0, "must be >= 0"),
+        ("price_tick_min_interval_milliseconds", int, lambda x: x >= 0, "must be >= 0"),
     )
     for key, caster, predicate, message in numeric_rules:
         try:

@@ -648,7 +648,7 @@ def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_pat
     cfg = source(enabled=False)
     if version != "v9.0.0":
         as_legacy(cfg, version)
-    hsl = {"bot": {"long": {"hsl": {"enabled": True, "cooldown_minutes_after_red": 2.5}}}}
+    hsl = {"bot": {"long": {"hsl": {"enabled": True, "cooldown_after_red_minutes": 2.5}}}}
     (tmp_path / "coin.json").write_text(json.dumps(hsl))
     patches = {
         "inline": hsl,
@@ -736,7 +736,7 @@ async def test_cli_current_external_suite_reaches_preparation(
                         "label": "external",
                         "overrides": {
                             "bot.long.hsl.enabled": True,
-                            "bot.long.hsl.cooldown_minutes_after_red": 2.5,
+                            "bot.long.hsl.cooldown_after_red_minutes": 2.5,
                         },
                     }
                 ]

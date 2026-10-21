@@ -60,8 +60,8 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     ] = 0.02
     first["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 1.0
     second["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.0
-    first["bot"]["long"]["forager"]["volatility_ema_span_1m"] = 100.0
-    second["bot"]["long"]["forager"]["volatility_ema_span_1m"] = 200.0
+    first["bot"]["long"]["forager"]["volatility_ema_span_minutes"] = 100.0
+    second["bot"]["long"]["forager"]["volatility_ema_span_minutes"] = 200.0
     first["live"]["account"]["leverage"] = 3
     second["live"]["account"]["leverage"] = 5
 
@@ -110,7 +110,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     assert eth["live"]["account"]["leverage"] == 5
     assert "hsl" not in eth["bot"]["long"]
     assert "position_exposure_enforcer_threshold" not in eth["bot"]["long"].get("risk", {})
-    assert "bot.long.forager.volatility_ema_span_1m" in report.account_wide_conflicts
+    assert "bot.long.forager.volatility_ema_span_minutes" in report.account_wide_conflicts
 
     prepared = prepare_config(composed, verbose=False, log_config_transforms=False)
     parse_overrides(prepared, verbose=False)
@@ -119,8 +119,8 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
 def test_selected_master_supplies_globals_and_optional_sections(tmp_path: Path):
     first = _single_coin_config("BTC")
     selected = _single_coin_config("ETH")
-    first["bot"]["long"]["forager"]["volume_ema_span_1m"] = 300.0
-    selected["bot"]["long"]["forager"]["volume_ema_span_1m"] = 600.0
+    first["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 300.0
+    selected["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 600.0
     first["backtest"]["start_date"] = "2020-01-01"
     selected["backtest"]["start_date"] = "2021-01-01"
     first["optimize"]["iters"] = 100
@@ -137,7 +137,7 @@ def test_selected_master_supplies_globals_and_optional_sections(tmp_path: Path):
 
     assert report.master_path == selected_path.resolve()
     assert report.master_was_selected is True
-    assert composed["bot"]["long"]["forager"]["volume_ema_span_1m"] == 600.0
+    assert composed["bot"]["long"]["forager"]["volume_ema_span_minutes"] == 600.0
     assert composed["backtest"]["start_date"] == "2021-01-01"
     assert composed["optimize"]["iters"] == 200
 
@@ -287,7 +287,7 @@ def test_external_master_supplies_baseline_without_adding_coins(
     master['bot']["long"]['universe']['approved_coins'].append("XRP")
     master['bot']["long"]['universe']['ignored_coins'] = ["BTC", "DOGE"]
     master["live"]["account"]["leverage"] = 7
-    master["bot"]["long"]["forager"]["volume_ema_span_1m"] = 777.0
+    master["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 777.0
     master["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 12.0
     master["optimize"]["iters"] = 321
     master["optimize"]["backend"] = "gpu"
@@ -317,7 +317,7 @@ def test_external_master_supplies_baseline_without_adding_coins(
     }
     assert composed['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
     assert composed["live"]["account"]["leverage"] == 7
-    assert composed["bot"]["long"]["forager"]["volume_ema_span_1m"] == 777.0
+    assert composed["bot"]["long"]["forager"]["volume_ema_span_minutes"] == 777.0
     assert composed["bot"]["long"]["risk"]["max_positions"] == 2.0
     assert composed["optimize"]["backend"] == "gpu"
     assert composed["optimize"]["iters"] == 321

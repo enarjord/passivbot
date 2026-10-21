@@ -25,7 +25,7 @@ consistent one-way movement. Upward and downward trends receive the same Forager
 penalty. Small two-way moves cancel; isolated shocks receive less penalty than
 consistent trends. This is directionality, not absolute price-move magnitude.
 
-`bot.<side>.forager.unilateralness_ema_span_1m` is the shared floating-point span,
+`bot.<side>.forager.unilateralness_ema_span_minutes` is the shared floating-point span,
 default 60. Both consumers on that side use it. The supported range is 1–100000.
 For deterministic restart reconstruction, both runtimes use exactly
 `ceil(20 * span)` returns, requiring one more completed close, with exponential

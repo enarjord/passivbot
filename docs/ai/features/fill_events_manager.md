@@ -26,7 +26,7 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    fees need no ticker when their net amount is zero.
    Coalescing preserves missing or malformed fee amounts for fallback resolution.
    A zero non-quote fee needs no ticker and records `fee_conversion_source=zero_amount`.
-   Cached conversion quotes remain subject to `live.fills.fee_conversion_max_age_ms` against the
+   Cached conversion quotes remain subject to `live.fills.fee_conversion_max_age_milliseconds` against the
    current time, fetch time, and each fill timestamp. Failed conversion lookups retry after
    at most one minute, bounded further by that same configured age. A batch reuses an identical
    pair/fill-time lookup, including an unavailable result. A quote rejected only for one fill

@@ -192,7 +192,7 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
                 "short": {
                     "hsl": {
                         "panic_close_order_type": "limit",
-                        "cooldown_minutes_after_red": 17.5,
+                        "cooldown_after_red_minutes": 17.5,
                     }
                 },
             }

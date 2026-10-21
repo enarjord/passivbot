@@ -7,7 +7,20 @@ paths are projected; this module does not authorize alternate config spellings.
 from copy import deepcopy
 
 
-STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]]] = {}
+STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]]] = {
+    "trailing_martingale": {
+        ("entry", "ema_span_0"): ("entry", "ema_span_0_minutes"),
+        ("entry", "ema_span_1"): ("entry", "ema_span_1_minutes"),
+        ("volatility_ema_span_1m",): ("volatility_ema_span_minutes",),
+        ("volatility_ema_span_1h",): ("volatility_ema_span_1h_candles",),
+    },
+    "ema_anchor": {
+        ("ema_span_0",): ("ema_span_0_minutes",),
+        ("ema_span_1",): ("ema_span_1_minutes",),
+        ("offset_volatility_ema_span_1m",): ("offset_volatility_ema_span_minutes",),
+        ("offset_volatility_ema_span_1h",): ("offset_volatility_ema_span_1h_candles",),
+    },
+}
 
 
 def native_strategy_path_to_public(strategy_kind, path):

@@ -117,7 +117,7 @@ def test_adaptive_optimizer_rejects_invalid_domains_before_sampling(key, bound, 
 
 def test_prepare_config_rejects_nested_invalid_search_domain():
     cfg = get_template_config()
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [0.0, 60.0]
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [0.0, 60.0]
     with pytest.raises(ValueError, match="optimize.bounds"):
         prepare_config(cfg, verbose=False)
 
@@ -271,7 +271,7 @@ def test_active_rms_consumer_uses_larger_span_bound_and_zero_consumers_need_no_r
 
     cfg = get_template_config()
     cfg['bot']['global']['warmup']['max_minutes'] = 1
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
     assert compute_backtest_warmup_minutes(cfg) == 1
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0

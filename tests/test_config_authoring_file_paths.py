@@ -45,7 +45,7 @@ def policy():
 
 def coin_patch(span):
     return {"bot": {"long": {"strategy": {"trailing_martingale": {
-        "entry": {"ema_span_0": span},
+        "entry": {"ema_span_0_minutes": span},
     }}}}}
 
 
@@ -54,7 +54,7 @@ def coin_span(path):
     parsed = parse_overrides(loaded, verbose=False)
     return parsed["coin_overrides"]["BTC"]["bot"]["long"]["strategy"][
         "trailing_martingale"
-    ]["entry"]["ema_span_0"]
+    ]["entry"]["ema_span_0_minutes"]
 
 
 def symlink_source(tmp_path, monkeypatch, *, decoy):
@@ -162,7 +162,7 @@ def test_compact_parent_symlink_dotdot_uses_filesystem_directory_resolution(
 
 
 def explain_args(config_path, *, direct):
-    path = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
+    path = "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes"
     return ["tool", "config-explain", str(config_path),
             f"coin_overrides.BTC.{path}" if direct else path,
             *([] if direct else ["--coin", "BTC"]), "--json"]
@@ -223,13 +223,13 @@ def test_explain_optimizer_transform_keeps_selected_relative_coin_file_context(
             tmp_path, monkeypatch, decoy=source_kind == "symlink-decoy",
         )
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
-    source["bot"]["long"]["unstuck"]["ema_span_0"] = 42.5
+    source["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 42.5
     write_json(actual, source)
     before = deepcopy(source)
     source_bytes = actual.read_bytes()
     link_identity = (selected.lstat().st_ino, os.readlink(selected)) if selected.is_symlink() else None
-    path = ("bot.long.unstuck.ema_span_0" if query == "transformed" else
-            "bot.long.strategy.trailing_martingale.entry.ema_span_0")
+    path = ("bot.long.unstuck.ema_span_0_minutes" if query == "transformed" else
+            "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes")
     if entrypoint == "programmatic":
         report = explain_config(source, path, coin="BTC", optimize=True,
                                 base_config_path=str(selected))
@@ -243,7 +243,7 @@ def test_explain_optimizer_transform_keeps_selected_relative_coin_file_context(
         assert transforms[-1]["name"] == "couple_unstuck_ema_spans"
         assert transforms[-1]["dependencies"][0]["path_parts"] == [
             "coin_overrides", "BTC", "bot", "long", "strategy",
-            "trailing_martingale", "entry", "ema_span_0",
+            "trailing_martingale", "entry", "ema_span_0_minutes",
         ]
     else:
         files = [event["file"] for event in report["sources"] if event["kind"] == "override_file"]
@@ -280,7 +280,7 @@ def test_explain_canonical_alias_scenario_matches_suite_file_resolution_order(
             if origin == "symlink-decoy":
                 decoy = write_json(actual.parent / "coin.json", coin_patch(777.5))
                 protected[decoy] = decoy.read_bytes()
-    path = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
+    path = "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes"
     selector = f"coin_overrides.SHIB.{path}"
     source["backtest"]["scenarios"] = [{"label": "canonical", "overrides": {selector: 314.5}}]
     write_json(actual, source)
@@ -296,7 +296,7 @@ def test_explain_canonical_alias_scenario_matches_suite_file_resolution_order(
     apply_scenario_overrides(control, control["backtest"]["scenarios"][0]["overrides"])
     expected = control["coin_overrides"]["SHIB"]["bot"]["long"]["strategy"][
         "trailing_martingale"
-    ]["entry"]["ema_span_0"]
+    ]["entry"]["ema_span_0_minutes"]
     assert expected == 314.5
     if entrypoint == "programmatic":
         report = explain_config(source, path, coin="SHIB", scenario="canonical",

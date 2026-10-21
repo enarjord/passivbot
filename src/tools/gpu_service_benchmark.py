@@ -250,7 +250,7 @@ def main(argv=None):
                         bot["initial_qty_pct"] = .01 + index * .001
                     else:
                         bot["base_qty_pct"] = .01 + index * .001
-                    bot["ema_span_0"] = 5. + index * 1.25
+                    bot["ema_span_0_minutes"] = 5. + index * 1.25
                 rows.append(prepare_candidate_parameters(candidate, markets, "binance"))
             candidates[name] = rows
             report["prepared"].append(dict(name=name, coins=selected, rows=span))

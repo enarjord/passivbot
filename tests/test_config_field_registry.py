@@ -46,11 +46,11 @@ def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
 
     template = get_template_config()
     template["bot"]["long"]["risk"]["max_positions"] = 7.0
-    template["bot"]["long"]["unstuck"]["ema_span_0"] = 60
+    template["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 60
     monkeypatch.setattr(config.schema, "get_template_config", lambda: deepcopy(template))
     registry = get_field_registry()
     assert registry.find(("bot", "long", "risk", "max_positions")).numeric_type is int
-    assert registry.find(("bot", "long", "unstuck", "ema_span_0")).numeric_type is float
+    assert registry.find(("bot", "long", "unstuck", "ema_span_0_minutes")).numeric_type is float
 
 
 @pytest.mark.parametrize(

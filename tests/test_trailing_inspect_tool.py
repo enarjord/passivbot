@@ -355,8 +355,8 @@ def test_extract_side_context_includes_global_and_risk_paths():
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_1m": 100.0,
-                        "volatility_ema_span_1h": 200.0,
+                        "volatility_ema_span_minutes": 100.0,
+                        "volatility_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -430,8 +430,8 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_1m": 100.0,
-                        "volatility_ema_span_1h": 200.0,
+                        "volatility_ema_span_minutes": 100.0,
+                        "volatility_ema_span_1h_candles": 200.0,
                     },
                 },
             },
@@ -542,8 +542,8 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
                 "strategy": {
                     "trailing_martingale": {
                         **_params(),
-                        "volatility_ema_span_1m": 100.0,
-                        "volatility_ema_span_1h": 200.0,
+                        "volatility_ema_span_minutes": 100.0,
+                        "volatility_ema_span_1h_candles": 200.0,
                     },
                 },
             },

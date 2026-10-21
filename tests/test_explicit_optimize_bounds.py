@@ -61,7 +61,7 @@ def test_omitted_dimensions_freeze_effective_values_through_exports(omission, st
 def test_candidate_vectors_vary_only_the_authored_dimension(fraction):
     source = get_template_config()
     source["optimize"]["bounds"] = {
-        "long": {"strategy": {"trailing_martingale": {"entry": {"ema_span_0": [100.5, 200.5, 0.5]}}}}
+        "long": {"strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": [100.5, 200.5, 0.5]}}}}
     }
     prepared = prepare_config(source, verbose=False)
     bounds = gene_bounds(prepared)
@@ -429,12 +429,12 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
 def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missing):
     source = released_v8_policy()
     if missing == "leaf":
-        del source["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
+        del source["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"]
     elif missing == "bounds":
         source["optimize"]["bounds"] = {}
     else:
         source["optimize"].pop("bounds")
-    source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
+    source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 42.5
     migrated = migrate(source, memory_span_minutes=123.5)
     bounds = flattened(migrated.config)
     assert bounds["long_ema_span_0"] == [100.0, 2880.0, 10.0]

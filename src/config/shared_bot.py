@@ -23,12 +23,12 @@ BOT_GROUP_FIELD_MAP = {
     },
     "forager": {
         "score_weights": "forager_score_weights",
-        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
-        "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-        "volume_ema_span_1m": "forager_volume_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
+        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
-        "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
+        "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
         "drawdown_ratio_ema_span_minutes": "hsl_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "enabled": "hsl_enabled",
@@ -39,8 +39,8 @@ BOT_GROUP_FIELD_MAP = {
     "unstuck": {
         "close_pct": "unstuck_close_pct",
         "ema_distance_fraction": "unstuck_ema_dist",
-        "ema_span_0": "unstuck_ema_span_0",
-        "ema_span_1": "unstuck_ema_span_1",
+        "ema_span_0_minutes": "unstuck_ema_span_0",
+        "ema_span_1_minutes": "unstuck_ema_span_1",
         "ema_gating_enabled": "unstuck_ema_gating_enabled",
         "enabled": "unstuck_enabled",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",

@@ -103,7 +103,7 @@ def test_scenario_coin_files_keep_their_scope_and_fixed_scalar_pins(tmp_path, mo
     selector = "coin_overrides.BTC" if atomic_coin else "coin_overrides"
     overrides = {selector: patch if atomic_coin else {"BTC": patch}}
     config["backtest"]["scenarios"] = [{"label": "coin-file", "overrides": overrides}]
-    fixed = {"bot.long.strategy.trailing_martingale.entry.ema_span_1": 505.5}
+    fixed = {"bot.long.strategy.trailing_martingale.entry.ema_span_1_minutes": 505.5}
     config["optimize"]["fixed_runtime_overrides"] = fixed
     source_path = write_json(source_dir / "source.json", config)
     source_bytes = source_path.read_bytes()

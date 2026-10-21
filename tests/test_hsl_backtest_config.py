@@ -268,7 +268,7 @@ def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
 def test_fractional_finite_cooldown_deadline_survives_flat_green_observations():
     cfg, markets, _ = inputs()
     cooldown_minutes = 2.5
-    cfg["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = cooldown_minutes
+    cfg["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = cooldown_minutes
     args = payload(cfg=cfg, mss=markets)
     args[-1]["hsl_detailed_report"] = True
     report = run(args)[4]["hsl"]

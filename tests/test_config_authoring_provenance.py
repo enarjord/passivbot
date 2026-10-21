@@ -130,7 +130,7 @@ def test_coin_layer_sources_match_fixed_and_scenario_authority(tmp_path, coin, f
 
 
 @pytest.mark.parametrize("coin", COINS)
-@pytest.mark.parametrize("field,value", [("close_pct", 0.11), ("ema_span_0", 17.5)])
+@pytest.mark.parametrize("field,value", [("close_pct", 0.11), ("ema_span_0_minutes", 17.5)])
 def test_direct_coin_file_query_reports_the_same_source_as_selected_coin(tmp_path, coin, field, value):
     override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {field: value}}}})
     source = policy()
@@ -159,11 +159,11 @@ def test_direct_coin_file_query_reports_the_same_source_as_selected_coin(tmp_pat
 def test_coin_selection_does_not_invent_a_pin_for_an_inherited_root_default(coin):
     source = {"config_version": "v9.0.0", "bot": {"long": {}}, "live": {},
               "coin_overrides": {coin: coin_patch(0.2)}}
-    report = explain_config(source, "bot.long.unstuck.ema_span_0", coin=coin)
-    assert report["sources"] == [{"kind": "default_or_derived", "path": "bot.long.unstuck.ema_span_0"}]
+    report = explain_config(source, "bot.long.unstuck.ema_span_0_minutes", coin=coin)
+    assert report["sources"] == [{"kind": "default_or_derived", "path": "bot.long.unstuck.ema_span_0_minutes"}]
     assert report["search"]["status"] == "omitted_fixed"
     with pytest.raises(KeyError, match="unknown or inactive"):
-        explain_config(source, f"coin_overrides.{coin}.bot.long.unstuck.ema_span_0")
+        explain_config(source, f"coin_overrides.{coin}.bot.long.unstuck.ema_span_0_minutes")
 
 
 @pytest.mark.parametrize("coin", COINS)
@@ -249,13 +249,13 @@ def test_explain_preserves_strict_fixed_runtime_alias_selector_authority(tmp_pat
 @pytest.mark.parametrize("authored_coin,canonical_coin", [("BTC", "BTC"), ("1000SHIB", "SHIB")])
 @pytest.mark.parametrize("form", ["selected", "direct"])
 @pytest.mark.parametrize("origin", ["file", "inline"])
-@pytest.mark.parametrize("field", ["close_pct", "ema_span_0"])
+@pytest.mark.parametrize("field", ["close_pct", "ema_span_0_minutes"])
 def test_coupling_keeps_untouched_sources_and_identifies_its_generated_span(
     tmp_path, authored_coin, canonical_coin, form, origin, field,
 ):
     source = policy()
-    patch = {"bot": {"long": {"unstuck": {"close_pct": 0.12, "ema_span_0": 17.5},
-                              "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 321.5}}}}}}
+    patch = {"bot": {"long": {"unstuck": {"close_pct": 0.12, "ema_span_0_minutes": 17.5},
+                              "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 321.5}}}}}}
     override = write_json(tmp_path / "coupled.json", patch)
     source["coin_overrides"] = {authored_coin: {"override_config_path": str(override)}
                                 if origin == "file" else patch}
@@ -267,14 +267,14 @@ def test_coupling_keeps_untouched_sources_and_identifies_its_generated_span(
     assert report["value"] == expected["coin_overrides"][canonical_coin]["bot"]["long"]["unstuck"][field]
     event = report["sources"][-1]
     assert event["path"] == f"coin_overrides.{canonical_coin}.bot.long.unstuck.{field}"
-    if field == "ema_span_0":
+    if field == "ema_span_0_minutes":
         assert report["value"] == 321.5
         assert event["kind"] == "optimizer_transform"
         assert event["name"] == "couple_unstuck_ema_spans"
         assert event["dependencies"] == [{
-            "path": f"coin_overrides.{canonical_coin}.bot.long.strategy.trailing_martingale.entry.ema_span_0",
+            "path": f"coin_overrides.{canonical_coin}.bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes",
             "path_parts": ["coin_overrides", canonical_coin, "bot", "long", "strategy",
-                           "trailing_martingale", "entry", "ema_span_0"],
+                           "trailing_martingale", "entry", "ema_span_0_minutes"],
         }]
         assert report["search"]["status"] == "optimizer_transform"
         assert report["search"]["gene_status"] == "not_in_genome"
@@ -298,7 +298,7 @@ def test_coupling_scenario_replacement_does_not_reuse_an_earlier_file_source(tmp
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     patch = (coin_patch(0.31) if replacement == "inline" else
              {"override_config_path": str(new_file)} if replacement == "file" else
-             {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}})
+             {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5}}}})
     selector = "coin_overrides.SHIB" if scope == "coin" else "coin_overrides"
     value = patch if scope == "coin" else {"SHIB": patch}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {selector: value}}]
@@ -366,7 +366,7 @@ def test_duplicate_authored_aliases_remain_rejected_by_suite_and_explain(tmp_pat
 def test_whole_coin_alias_queries_report_the_aggregate_authored_and_file_sources(tmp_path, selected, origin):
     source = policy()
     override = write_json(tmp_path / "container.json", {"bot": {"long": {"unstuck": {
-        "close_pct": 0.12, "ema_span_0": 17.5,
+        "close_pct": 0.12, "ema_span_0_minutes": 17.5,
     }}}})
     patch = (coin_patch(0.31) if origin == "inline" else {"override_config_path": str(override)})
     if origin == "mixed":

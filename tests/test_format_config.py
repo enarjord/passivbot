@@ -345,8 +345,8 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
         trailing_martingale["entry"].pop(key)
     for key in ("threshold_volatility_1h_weight", "retracement_base_pct"):
         trailing_martingale["close"].pop(key)
-    current["bot"]["long"]["forager"].pop("volatility_ema_span_1m")
-    current["bot"]["long"]["forager"].pop("volume_ema_span_1m")
+    current["bot"]["long"]["forager"].pop("volatility_ema_span_minutes")
+    current["bot"]["long"]["forager"].pop("volume_ema_span_minutes")
     current["bot"]["long"]["hsl"].pop("panic_close_order_type")
     current["bot"]["long"]["risk"]["total_exposure_enforcer"].pop("threshold")
     current["bot"]["long"]["risk"].pop("we_excess_allowance_pct")

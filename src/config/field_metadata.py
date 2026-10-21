@@ -85,6 +85,11 @@ def _bot_metadata(path):
     name = path[-1]
     data = {}
     if local.startswith("strategy."):
+        if name in {"ema_span_0_minutes", "ema_span_1_minutes", "volatility_ema_span_minutes",
+                    "offset_volatility_ema_span_minutes"}:
+            data["unit"] = "minutes"
+        elif name in {"volatility_ema_span_1h_candles", "offset_volatility_ema_span_1h_candles"}:
+            data["unit"] = "one-hour candles"
         return data  # Native metadata owns strategy recommendations and choices.
     if local == "strategy_kind":
         from .strategy_spec import get_supported_strategy_kinds
@@ -121,9 +126,9 @@ def _bot_metadata(path):
         data.update(unit="relative weight", domain=FieldDomain(minimum=0.0, finite=True),
                     denominator="sum of authored forager weights",
                     description="Nonnegative relative ranking weight, normalized by the loader; all-zero vectors use the documented fallback.")
-    elif local.startswith("forager.") and name.endswith("ema_span_1m"):
-        data["unit"] = "one-minute candles"
-        if name == "unilateralness_ema_span_1m":
+    elif local.startswith("forager.") and name.endswith("ema_span_minutes"):
+        data["unit"] = "minutes"
+        if name == "unilateralness_ema_span_minutes":
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."
@@ -131,7 +136,7 @@ def _bot_metadata(path):
         data.update(unit="fraction", denominator="scope equity plus remembered drawdown",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_minimum=True, finite=True),
                     description="RED requires both current and smoothed drawdown ratios to exceed this threshold.")
-    elif local == "hsl.cooldown_minutes_after_red":
+    elif local == "hsl.cooldown_after_red_minutes":
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "hsl.panic_close_order_type":
         data["domain"] = FieldDomain(choices=("limit", "market"))
@@ -174,6 +179,6 @@ def _bot_metadata(path):
         data.update(unit="fraction", denominator="unstuck EMA band reference",
                     domain=FieldDomain(minimum=-1.0, exclusive_minimum=True, finite=True) if path[1] == "long"
                     else FieldDomain(maximum=1.0, exclusive_maximum=True, finite=True))
-    elif local in {"unstuck.ema_span_0", "unstuck.ema_span_1"}:
+    elif local in {"unstuck.ema_span_0_minutes", "unstuck.ema_span_1_minutes"}:
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True))
     return data

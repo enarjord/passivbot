@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Give authored EMA horizons explicit `_minutes` or `_1h_candles` units, spell
+  millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
+  Preserve floating values, native identifiers and candle-interval behavior;
+  explicit released-v8 conversion reports the new paths.
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.

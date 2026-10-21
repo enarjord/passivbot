@@ -35,11 +35,11 @@ def _worker_config(config):
                 strategy_patch = side_patch.get("strategy", {}).get(kind, {})
                 if kind == "trailing_martingale":
                     strategy_patch = strategy_patch.get("entry", {})
-                for name in ("ema_span_0", "ema_span_1"):
+                for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
                     if name not in strategy_patch:
                         # No coin strategy pin: inherit the explicit request value.
                         side_patch.get("unstuck", {}).pop(name, None)
-                        side_patch.pop(f"unstuck_{name}", None)
+                        side_patch.pop(f"unstuck_{name.removesuffix('_minutes')}", None)
     return result
 
 

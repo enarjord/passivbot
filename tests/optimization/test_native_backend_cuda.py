@@ -106,7 +106,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         config["coin_overrides"] = {
             "COIN01": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}},
             "COIN02": {"bot": {"long": {"strategy": {"trailing_martingale": {
-                "entry": {"ema_span_0": 7.5},
+                "entry": {"ema_span_0_minutes": 7.5},
             }}}}},
         }
     if scaled_hsl:
@@ -136,7 +136,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         if anchors:
             seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
         if coupled:
-            seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 2 if index == 0 else 20
+            seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] = 2 if index == 0 else 20
         (seeds_path / f"{index}.json").write_text(json.dumps(seed_config))
     def forbidden(*_args, **_kwargs):
         pytest.fail("native optimizer CLI must never call a CPU simulation or create a CPU worker pool")

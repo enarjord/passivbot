@@ -12,6 +12,7 @@ from ..strategy_spec import (
     normalize_strategy_kind,
 )
 from ..shared_bot import canonicalize_shared_bot_side
+from ..strategy_paths import lower_runtime_strategy_side
 from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 
 
@@ -48,7 +49,7 @@ def migrate_unstuck_ema_spans(
 ) -> None:
     kind = normalize_strategy_kind(config.get("bot", {}).get("global", {}).get("strategy_kind"))
     defaults = {
-        side: _price_spans(value, kind)
+        side: _price_spans(lower_runtime_strategy_side(kind, value), kind)
         for side, value in get_strategy_defaults(kind).items()
     }
     migrated = {}
@@ -163,7 +164,7 @@ def migrate_unstuck_ema_spans(
     coupled_search = []
     if isinstance(bounds, dict):
         default_strategy_bounds = {
-            side: _price_spans(value, kind)
+            side: _price_spans(lower_runtime_strategy_side(kind, value), kind)
             for side, value in get_strategy_optimize_bounds(kind).items()
         }
         for side, keys in migrated.items():

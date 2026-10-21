@@ -1746,7 +1746,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                 "bot": {
                     "long": {
                         "strategy": {
-                            "ema_anchor": {"offset": 0.25, "ema_span_0": 90.0}
+                            "ema_anchor": {"offset": 0.25, "ema_span_0_minutes": 90.0}
                         },
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
@@ -1754,8 +1754,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         },
                         "wallet_exposure_limit": 0.4,
                         "unstuck": {
-                            "ema_span_0": 17.25,
-                            "ema_span_1": 211.75,
+                            "ema_span_0_minutes": 17.25,
+                            "ema_span_1_minutes": 211.75,
                             "enabled": True,
                             "ema_gating_enabled": False,
                             "close_pct": 0.125,
