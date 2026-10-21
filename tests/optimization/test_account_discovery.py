@@ -294,7 +294,7 @@ def test_canonical_identity_ignores_export_noise_but_preserves_every_policy_diff
     ("live", "account", "leverage"),
     ("live", "account", "balance_override"),
     ("bot", "long", "risk", "total_wallet_exposure_limit"),
-    ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0"),
+    ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
 ])
 def test_grouped_account_user_is_operational_while_economic_settings_remain_distinct(path):
     from config.schema import get_template_config

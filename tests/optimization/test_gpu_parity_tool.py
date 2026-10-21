@@ -38,7 +38,7 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
         assert policy["drawdown_ratio_threshold"] == .002
         assert policy["drawdown_ratio_ema_span_minutes"] == 2.5
         assert policy["memory_ema_span_minutes"] == 3600.0
-        assert policy["cooldown_minutes_after_red"] == 10000
+        assert policy["cooldown_after_red_minutes"] == 10000
     expected = original[1].copy()
     expected[64:, 0, :3] *= .7
     expected[96:, 0, :3] *= 1.3

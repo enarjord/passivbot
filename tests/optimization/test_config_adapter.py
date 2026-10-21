@@ -135,7 +135,7 @@ class TestConfigAdapter:
         assert (
             spec["defaults"]["long"]["ema_span_0"]
             == bot_template["long"]["strategy"]["trailing_martingale"]["entry"][
-                "ema_span_0"
+                "ema_span_0_minutes"
             ]
         )
         assert spec["defaults"]["short"]["entry_threshold_base_pct"] == bot_template[
@@ -148,7 +148,7 @@ class TestConfigAdapter:
             ]["entry"]["ema_span_0_minutes"]
         )
         assert any(
-            param["config_path"] == ["strategy", "long", "entry", "ema_span_0"]
+            param["config_path"] == ["strategy", "long", "entry", "ema_span_0_minutes"]
             and param["legacy_config_paths"] == []
             for param in spec["parameters"]
         )
@@ -182,7 +182,7 @@ class TestConfigAdapter:
     def test_get_optimization_key_paths_routes_strategy_fields_to_strategy_section(self):
         config = _canonical_config_with_bounds({
             "long": {"strategy": {"trailing_martingale": {"entry": {
-                "ema_span_0": [200.0, 1440.0, 10.0],
+                "ema_span_0_minutes": [200.0, 1440.0, 10.0],
             }}}, "hsl": {"drawdown_ratio_threshold": [0.15, 0.35, 0.01]}},
             "short": {"strategy": {"trailing_martingale": {"entry": {
                 "threshold_base_fraction": [0.01, 0.04, 1e-5],
@@ -193,7 +193,7 @@ class TestConfigAdapter:
 
         assert (
             "long_ema_span_0",
-            ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0"),
+            ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
         ) in key_paths
         assert (
             "short_entry_threshold_base_pct",
