@@ -756,7 +756,10 @@
               ]
             },
             "visible_metrics": {
-              "type": "array",
+              "type": [
+                "array",
+                "null"
+              ],
               "default": [
                 "adg_strategy_eq",
                 "mdg_strategy_eq",

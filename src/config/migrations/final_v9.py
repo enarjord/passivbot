@@ -6,6 +6,27 @@ import re
 
 
 _RETIRED_WEIGHTED_METRIC = re.compile(r"_w(?:_|$)", re.IGNORECASE)
+_IGNORED_BACKTEST_WARMUP_REASON = (
+    "removed unused released-v8 backtest warmup cap; live.max_warmup_minutes owned the shared cap"
+)
+_BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
+
+
+def _released_fee_override(value, path):
+    """Write released fees in the target's nullable numeric representation."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{path} must be a numeric fee or null, not a boolean; supply an explicit number if intended"
+        )
+    try:
+        fee = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{path} must be a finite number or null") from exc
+    if not math.isfinite(fee):
+        raise ValueError(f"{path} must be finite")
+    return fee if isinstance(value, str) else value
 
 
 def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_effort=False):
@@ -504,6 +525,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         for key, value in values.items():
             authored_value = deepcopy(value)
             reject_retired_gpu_selector(key, value, context=path)
+            if key == "backtest.max_warmup_minutes":
+                record(f"{path}.{key}", value, None, _IGNORED_BACKTEST_WARMUP_REASON)
+                continue
+            if key in {f"backtest.{name}" for name in _BACKTEST_FEE_OVERRIDES}:
+                value = _released_fee_override(value, f"{path}.{key}")
             if key.endswith(".live") and isinstance(value, dict):
                 # A dotted object is replacement authority, not a flattened
                 # list of fields. Convert its sparse contents in place.
@@ -617,6 +643,14 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             rename(node, "threshold", "exposure_trigger_ratio", path)
         for key in list(node):
             current = f"{path}.{key}" if path else key
+            if path == "backtest" and key == "max_warmup_minutes":
+                record(current, node.pop(key), None, _IGNORED_BACKTEST_WARMUP_REASON)
+                continue
+            if path == "backtest" and key in _BACKTEST_FEE_OVERRIDES:
+                value = node[key]
+                node[key] = _released_fee_override(value, current)
+                if isinstance(value, str):
+                    record(current, value, node[key], "explicit released-v8 numeric fee representation")
             if path.endswith(".strategy") and key == "trailing_grid_v7":
                 if result.get("live", {}).get("strategy_kind") == key:
                     raise ValueError("trailing_grid_v7 is retired; choose a retained strategy explicitly before v9 conversion")

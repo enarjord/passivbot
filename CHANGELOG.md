@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve released-v8 example migration by discarding reported, unused backtest warmup caps
+  without changing the shared live cap.
+  Convert numeric fee strings to the same finite numeric values. Editor validation now accepts
+  the existing `visible_metrics: null` policy for derived metrics.
+
 - Give EMA horizon fields and inspection context explicit `_minutes` or `_1h_candles` units, spell
   millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
   Preserve floating values, native identifiers and candle-interval behavior;
