@@ -241,13 +241,11 @@ Minimal test config for stock perps:
     "bot": {
         "global": {
             "strategy_kind": "trailing_martingale",
-            "hedge_mode": false,
-            "universe": {
-                "filter_by_min_effective_cost": false
-            }
+            "hedge_mode": false
         },
         "long": {
             "universe": {
+                "filter_by_min_effective_cost": false,
                 "minimum_coin_age_days": 0.0,
                 "approved_coins": [
                     "TSLA"
