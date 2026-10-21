@@ -92,7 +92,7 @@ def test_bot_only_old_policy_cannot_bypass_migration():
 def test_current_numeric_seed_clamps_under_the_main_finite_policy(tmp_path):
     from optimize import individual_to_config
     base=prepare_config(generated_template(get_template_config()),verbose=False)
-    base['bot']['long']['hsl'].update(enabled=True,cooldown_minutes_after_red=12.5)
+    base['bot']['long']['hsl'].update(enabled=True,cooldown_after_red_minutes=12.5)
     cfg=deepcopy(base);cfg['bot']['long']['hsl'].update(enabled=False,drawdown_ratio_threshold=2.0)
     seeds=extract_configs(str(save(tmp_path,cfg,'json')))
     keys=[('long_hsl_red_threshold',('bot','long','hsl','drawdown_ratio_threshold'))]
@@ -100,11 +100,11 @@ def test_current_numeric_seed_clamps_under_the_main_finite_policy(tmp_path):
     assert count==1 and values==[(0.4,)]
     result=individual_to_config(values[0],{},[],base,key_paths=keys)
     assert result['bot']['long']['hsl']['enabled'] is True
-    assert result['bot']['long']['hsl']['cooldown_minutes_after_red']==12.5
+    assert result['bot']['long']['hsl']['cooldown_after_red_minutes']==12.5
     assert result['bot']['long']['hsl']['drawdown_ratio_threshold']==0.4
 
 
-@pytest.mark.parametrize('field',['drawdown_ratio_threshold','memory_ema_span_minutes','drawdown_ratio_ema_span_minutes','cooldown_minutes_after_red'])
+@pytest.mark.parametrize('field',['drawdown_ratio_threshold','memory_ema_span_minutes','drawdown_ratio_ema_span_minutes','cooldown_after_red_minutes'])
 @pytest.mark.parametrize('value',[float('nan'),float('inf'),float('-inf'),'NaN'])
 @pytest.mark.parametrize('artifact',['json','pareto'])
 def test_nonfinite_current_numeric_seed_is_skipped(field,value,artifact,tmp_path,caplog):

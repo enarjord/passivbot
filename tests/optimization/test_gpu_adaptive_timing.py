@@ -149,7 +149,7 @@ def test_gpu_adaptive_cooldown_changes_fills_with_exact_parity(
     for s in ("long", "short"):
         cfg["bot"][s]["risk"].pop("entry_cooldown_minutes", None)
         cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
-        cfg["bot"][s]["forager"]["unilateralness_ema_span_1m"] = 3.25
+        cfg["bot"][s]["forager"]["unilateralness_ema_span_minutes"] = 3.25
     for key in mss:
         if not key.startswith("__"):
             mss[key]["last_valid_index"] = count - 1

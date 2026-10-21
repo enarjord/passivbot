@@ -246,7 +246,7 @@ def test_retired_unified_report_mode_requires_fresh_v9_replay():
 def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
     cfg, markets, _ = inputs(mode)
     policy = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
-    policy["cooldown_minutes_after_red"] = 0
+    policy["cooldown_after_red_minutes"] = 0
     data = run(payload(mode, cfg=cfg, mss=markets))[4]
     report = data["hsl"]
     sequences = [r["sequence"] for r in report["samples"] + report["events"]]

@@ -62,7 +62,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
             prepared = contexts(base, base.timestamps["binance"], lazy=True)
             kind = base.config['bot']['global']['strategy_kind']
             entry = "entry." if kind == "trailing_martingale" else ""
-            prepared[1].overrides = {f"bot.long.strategy.{kind}.{entry}ema_span_1": 3.5}
+            prepared[1].overrides = {f"bot.long.strategy.{kind}.{entry}ema_span_1_minutes": 3.5}
             evaluator = optimize.SuiteEvaluator(base, prepared, {"default": "mean"})
         vector = [(bound.low + bound.high) / 2 for bound in base.bounds]
         if policy == "anchor":

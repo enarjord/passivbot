@@ -134,8 +134,8 @@ def test_cli_projection_keeps_nested_simulation_fee_settings():
         projected = project_template_config_for_cli(get_template_config(), command)
         assert set(projected["live"]) == {"fills"}
         assert set(projected["live"]["fills"]) == {
-            "fee_pct_fallback",
-            "fee_pct_sanity_abs_max",
+            "fallback_fee_fraction",
+            "max_abs_fee_fraction",
         }
 
 

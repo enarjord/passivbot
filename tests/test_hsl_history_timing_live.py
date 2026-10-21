@@ -42,7 +42,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         enabled=True,
         drawdown_ratio_threshold=0.9,
         drawdown_ratio_ema_span_minutes=1.0,
-        cooldown_minutes_after_red=1.0,
+        cooldown_after_red_minutes=1.0,
         panic_close_order_type="market",
     )
     set_risk_memory_spans(cfg, 288.0)

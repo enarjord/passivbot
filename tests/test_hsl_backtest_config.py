@@ -42,7 +42,7 @@ def inputs(mode="coin"):
         enabled=True,
         drawdown_ratio_threshold=0.01,
         drawdown_ratio_ema_span_minutes=1.5,
-        cooldown_minutes_after_red=10,
+        cooldown_after_red_minutes=10,
         panic_close_order_type="market",
     )
     cfg = prepare_config(cfg, verbose=False, target="canonical", runtime=None)
@@ -497,14 +497,14 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
     cfg["bot"]["long"]["risk"].update(
         max_positions=slots,
         total_wallet_exposure_limit=2.5,
-        we_excess_allowance_pct=0.44,
+        we_excess_allowance_fraction=0.44,
     )
     cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=0.2, drawdown_ratio_ema_span_minutes=1)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
-        initial_qty_pct=1,
-        initial_ema_dist=0,
-        ema_span_0=2,
-        ema_span_1=3,
+        initial_qty_fraction=1,
+        initial_ema_distance_fraction=0,
+        ema_span_0_minutes=2,
+        ema_span_1_minutes=3,
     )
     if slots > 1:
         cfg["coin_overrides"] = {

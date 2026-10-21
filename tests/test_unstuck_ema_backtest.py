@@ -9,11 +9,11 @@ from config.overrides import parse_overrides
 from config.migrations.v9 import migrate_v8_to_v9
 from backtest import run_backtest
 from hsl_reporting import hsl_report as collect_hsl_report
+from released_v8_fixtures import released_v8_policy
 
 
 def _legacy_replay_config():
-    c = get_template_config()
-    c["config_version"] = "v8.2.0"
+    c = released_v8_policy()
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.
     for side in ("long", "short"):
@@ -40,13 +40,17 @@ def _legacy_replay_config():
         suite_enabled=False,
         candle_interval_minutes=1,
     )
-    set_side_universe_sources(c, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
-    set_side_universe_sources(c, 'ignored_coins', {'long': [], 'short': []})
-    c['bot']['global']['warmup']['span_multiplier'] = 1
-    c['bot']['global']['warmup']['max_minutes'] = 100
+    c["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": []}
+    c["live"]["ignored_coins"] = {"long": [], "short": []}
+    c["live"]["warmup_ratio"] = 1
+    c["live"]["max_warmup_minutes"] = 100
     for side in ("long", "short"):
         b = c["bot"][side]
-        b['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0 if side == 'long' else 0.0, 'we_excess_allowance_pct': 0, 'position_exposure_enforcer': {**b['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**b['risk']['total_exposure_enforcer'], 'enabled': False}})
+        b["risk"].update(
+            n_positions=2, total_wallet_exposure_limit=1.0 if side == "long" else 0.0,
+            we_excess_allowance_pct=0, position_exposure_enforcer_enabled=False,
+            total_exposure_enforcer_enabled=False,
+        )
         b["entry_cooldown"]["base_duration_minutes"] = 0
         b["hsl"]["enabled"] = False
         b["forager"].update(volume_ema_span_1m=10, volatility_ema_span_1m=10)
@@ -79,9 +83,9 @@ def _legacy_replay_config():
             enabled=True,
             ema_gating_enabled=True,
             close_pct=0.1,
-            ema_distance_fraction=-0.005,
+            ema_dist=-0.005,
             loss_allowance_pct=0.02,
-            exposure_trigger_ratio=0.3,
+            threshold=0.3,
         )
     c["coin_overrides"] = {
         "ETH": {
@@ -164,8 +168,8 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
         for key in ("ema_span_0", "ema_span_1"):
             explicit["bot"][side]["unstuck"][key] = strategy[key]
     explicit["coin_overrides"]["ETH"]["bot"]["long"]["unstuck"] = {
-        "ema_span_0_minutes": 21.5,
-        "ema_span_1_minutes": 110.25,
+        "ema_span_0": 21.5,
+        "ema_span_1": 110.25,
     }
     explicit = parse_overrides(
         _prepare_released_replay(explicit),
@@ -177,7 +181,7 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
     np.testing.assert_array_equal(old_equity, expected_equity)
     assert sum(row[13] == "close_unstuck_long" for row in old_fills) > 100
     independent = deepcopy(migrated)
-    independent["bot"]["long"]["unstuck"].update(ema_span_0=3.5, ema_span_1=5.5)
+    independent["bot"]["long"]["unstuck"].update(ema_span_0_minutes=3.5, ema_span_1_minutes=5.5)
     independent["coin_overrides"]["ETH"]["bot"]["long"].pop("unstuck")
     new_fills, _, _ = _replay(independent)
     assert not np.array_equal(new_fills, old_fills)
@@ -210,7 +214,7 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
     raw["bot"][active_side]["hsl"].update(
         enabled=hsl_enabled,
         drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.001,
-        cooldown_minutes_after_red=7.0,
+        cooldown_after_red_minutes=7.0,
     )
     config = parse_overrides(prepare_config(raw, verbose=False), verbose=False)
     monkeypatch.chdir(tmp_path)

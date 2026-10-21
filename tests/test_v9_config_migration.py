@@ -374,7 +374,7 @@ def test_equal_released_entry_aliases_preserve_referenced_hsl_authority_audits(
             "bot.long.strategy.trailing_martingale.ema_span_0": 91.5,
             "long.strategy.entry.ema_span_0": 91.5,
         }
-        canonical = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
+        canonical = "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes"
         expected = 91.5
     overrides["bot.long.hsl.enabled"] = enabled
     scenarios = [{"label": "entry-alias-audit", "overrides": overrides}]
@@ -872,7 +872,7 @@ def test_explicit_v8_converter_canonicalizes_inline_shared_coin_leaves(location)
         output = output["backtest"]["scenarios"][0]["overrides"]
     side = output["coin_overrides"]["AAA"]["bot"]["long"]
     assert side["hsl"]["enabled"] is False
-    assert side["unstuck"]["ema_span_0"] == 51.25
+    assert side["unstuck"]["ema_span_0_minutes"] == 51.25
     assert "hsl_enabled" not in side and "unstuck_ema_span_0" not in side
     assert any("unstuck_ema_span_0" in row["path"] or
                "unstuck_ema_span_0" in json.dumps(row["old"])
@@ -1367,7 +1367,7 @@ def test_live_rejects_cooldown_longer_than_reconstructible_history_cap():
     cfg = get_template_config()
     cfg["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 1.0
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
-    cfg["bot"]["long"]["hsl"].update(enabled=True, cooldown_minutes_after_red=200.0)
+    cfg["bot"]["long"]["hsl"].update(enabled=True, cooldown_after_red_minutes=200.0)
     prepared = prepare_config(cfg, verbose=False)
     # This is a live history capability boundary, not an offline-model limit.
     assert compile_runtime_config(prepared, runtime="backtest")
@@ -1384,7 +1384,7 @@ def test_live_history_cap_checks_effective_coin_policy_and_disabled_policies():
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     assert require_live_runtime_support(cfg) == 0.0
     cfg["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": {
-        "enabled": True, "cooldown_minutes_after_red": 101.0}}}}}
+        "enabled": True, "cooldown_after_red_minutes": 101.0}}}}}
     with pytest.raises(ValueError, match="coin_overrides.AAA"):
         require_live_runtime_support(cfg)
 

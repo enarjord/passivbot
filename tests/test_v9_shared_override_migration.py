@@ -54,10 +54,10 @@ def test_shared_position_selector_converts_without_changing_authored_value(owner
 @pytest.mark.parametrize("owner", ["scenario", "suite", "fixed"])
 @pytest.mark.parametrize("old,new,value", [
     ("total_wallet_exposure_limit", "risk.total_wallet_exposure_limit", 1.25),
-    ("risk_we_excess_allowance_pct", "risk.we_excess_allowance_pct", 0.125),
+    ("risk_we_excess_allowance_pct", "risk.we_excess_allowance_fraction", 0.125),
     ("forager_score_weights.volume", "forager.score_weights.volume", 0.375),
-    ("forager_volume_ema_span_1m", "forager.volume_ema_span_1m", 37.5),
-    ("hsl_cooldown_minutes_after_red", "hsl.cooldown_minutes_after_red", 17.5),
+    ("forager_volume_ema_span_1m", "forager.volume_ema_span_minutes", 37.5),
+    ("hsl_cooldown_minutes_after_red", "hsl.cooldown_after_red_minutes", 17.5),
     ("hsl_ema_span_minutes", "hsl.drawdown_ratio_ema_span_minutes", 6.25),
     ("unstuck_threshold", "unstuck.exposure_trigger_ratio", 0.625),
     ("risk_entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", 9.5),
@@ -104,8 +104,8 @@ def test_canonical_strategy_leaves_and_grouped_shared_leaves_are_not_realiased(o
     source = legacy()
     if owner == "fixed":
         source["optimize"]["fixed_params"] = ["bot.long.forager.score_weights"]
-    patch = {"bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.125,
-             "bot.long.strategy.trailing_martingale.entry.threshold_base_pct": 0.025,
+    patch = {"bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.125,
+             "bot.long.strategy.trailing_martingale.entry.threshold_base_fraction": 0.025,
              "bot.long.risk.max_positions": 4,
              "bot.long.forager.score_weights.volume": 0.375}
     put_patch(source, owner, patch)
@@ -167,7 +167,7 @@ def test_fixed_parameter_selectors_use_same_context_aware_shared_conversion():
         "bot.long.strategy.trailing_martingale.entry.initial_qty_pct"]
     result = migrate(source, memory_span_minutes=123.5)
     assert result.config["optimize"]["fixed_params"] == ["bot.long.risk.max_positions",
-        "bot.short.risk.max_positions", "bot.long.strategy.trailing_martingale.entry.initial_qty_pct"]
+        "bot.short.risk.max_positions", "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"]
 
 
 @pytest.mark.parametrize("owner", ["scenario", "suite", "fixed"])

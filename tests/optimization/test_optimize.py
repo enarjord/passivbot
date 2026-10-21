@@ -1716,7 +1716,7 @@ class TestIndividualToConfig:
             result["bot"]["short"]["strategy"]["trailing_martingale"]
             == result["bot"]["long"]["strategy"]["trailing_martingale"]
         )
-        assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
+        assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0_minutes": 123.0}
 
     @pytest.mark.parametrize(
         ("strategy_kind", "bound_key", "expected_path", "new_value"),

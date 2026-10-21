@@ -864,7 +864,7 @@ def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scop
         assert policy["memory_ema_span_minutes"] == 10.5
         assert policy["panic_close_order_type"] == "market"
         assert policy["scale_budget_with_excess_allowance"] is True
-        assert policy["cooldown_minutes_after_red"] == 0.0
+        assert policy["cooldown_after_red_minutes"] == 0.0
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 1440.0
     assert config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 1440.0
     assert config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == .001

@@ -323,7 +323,7 @@ def test_live_owner_admits_after_estimated_cooldown_and_rechecks_repaired_histor
         if mode == "portfolio"
         else value.config["bot"][side]["hsl"]
     )
-    policy["cooldown_minutes_after_red"] = 5.0
+    policy["cooldown_after_red_minutes"] = 5.0
     value.get_exchange_time = lambda: NOW
     value.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
     value.approved_coins_minus_ignored_coins[side].add(SYMBOL)
