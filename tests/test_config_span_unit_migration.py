@@ -110,3 +110,30 @@ def test_released_span_selector_suffixes_preserve_native_gene_membership(prefix)
     assert set(selected) == {f"{side}_forager_volume_ema_span_1m" for side in sides}
     assert config["optimize"]["fixed_params"] == [f"{prefix}volume_ema_span_minutes"]
     assert any(item["path"].startswith("optimize.fixed_params") for item in result.changes)
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_released_flat_span_does_not_acquire_a_second_inferred_legacy_value(kind):
+    from config.migrations.shared_policy import move_shared_policy
+    from config.migrations.unstuck_ema import migrate_unstuck_ema_spans
+
+    source = released_source(kind)
+    source["bot"]["long"]["unstuck"].pop("ema_span_0")
+    source["bot"]["long"]["unstuck_ema_span_0"] = 123.75
+    move_shared_policy(source, record=lambda *_: None)
+    migrate_unstuck_ema_spans(source, verbose=False)
+    unstuck = source["bot"]["long"]["unstuck"]
+    assert unstuck["ema_span_0_minutes"] == 123.75
+    assert "ema_span_0" not in unstuck
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_released_flat_unstuck_span_retains_its_explicit_value_and_report(kind):
+    source = released_source(kind)
+    source["bot"]["long"]["unstuck"].pop("ema_span_0")
+    source["bot"]["long"]["unstuck_ema_span_0"] = 123.75
+    original = deepcopy(source)
+    result = migrate(source, memory_span_minutes=123.5)
+    assert result.config["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 123.75
+    assert any(item["path"] == "bot.long.unstuck_ema_span_0" for item in result.changes)
+    assert source == original

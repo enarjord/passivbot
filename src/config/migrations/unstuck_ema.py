@@ -11,13 +11,20 @@ from ..strategy_spec import (
     get_strategy_optimize_bounds,
     normalize_strategy_kind,
 )
-from ..shared_bot import canonicalize_shared_bot_side
+from ..shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
 from ..strategy_paths import lower_runtime_strategy_side
 from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 
 
 def _price_spans(strategy, kind):
     return strategy.get("entry", {}) if kind == "trailing_martingale" else strategy
+
+
+def _has_unstuck_span(mapping, legacy_key):
+    # Flat released aliases may already have been grouped through the public
+    # field map. They remain explicit inputs, never missing values to infer.
+    public_key = FLAT_BOT_KEY_TO_GROUP_PATH[f"unstuck_{legacy_key}"][-1]
+    return legacy_key in mapping or public_key in mapping
 
 
 def _migrate_inactive_zero_span(value, bot, default, path):
@@ -60,7 +67,7 @@ def migrate_unstuck_ema_spans(
         unstuck = bot.setdefault("unstuck", {})
         strategy = _price_spans(bot.get("strategy", {}).get(kind, {}), kind)
         for key in ("ema_span_0", "ema_span_1"):
-            if key in unstuck:
+            if _has_unstuck_span(unstuck, key):
                 continue
             # Missing strategy leaves have always been populated from strategy defaults.
             value = deepcopy(strategy.get(key, defaults[side][key]))
@@ -135,7 +142,7 @@ def migrate_unstuck_ema_spans(
             patch_unstuck = patch_side.get("unstuck", {})
             strategy = _price_spans(patch_side.get("strategy", {}).get(kind, {}), kind)
             for key in keys:
-                if key in patch_unstuck or key not in strategy:
+                if _has_unstuck_span(patch_unstuck, key) or key not in strategy:
                     continue
                 target = (
                     override.setdefault("bot", {})
@@ -180,7 +187,7 @@ def migrate_unstuck_ema_spans(
                 )
                 supplied_bounds = bounds if explicit_bounds is None else explicit_bounds
                 supplied_unstuck = supplied_bounds.get(side, {}).get("unstuck", {})
-                if key not in supplied_unstuck:
+                if not _has_unstuck_span(supplied_unstuck, key):
                     value = config["bot"][side]["unstuck"][key]
                     if old_bound.low == old_bound.high:
                         value = _migrate_inactive_zero_span(

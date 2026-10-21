@@ -164,6 +164,9 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         strategies.get(STRATEGY_KIND),
         f"bot.{pside}.strategy.{STRATEGY_KIND}",
     )
+    from config.strategy_paths import lower_runtime_strategy_side
+
+    strategy = lower_runtime_strategy_side(STRATEGY_KIND, strategy)
     entry = _require_mapping(strategy.get("entry"), "strategy.entry")
     close = _require_mapping(strategy.get("close"), "strategy.close")
     total_wallet_exposure_limit = _finite_float(
@@ -287,11 +290,13 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             entry.get("double_down_factor", 0.0), "entry.double_down_factor"
         ),
         "close_qty_pct": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
-        "volatility_ema_span_1m": _finite_float(
-            strategy.get("volatility_ema_span_1m", 0.0), "volatility_ema_span_1m"
+        "volatility_ema_span_minutes": _finite_float(
+            strategy.get("volatility_ema_span_1m", 0.0),
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_minutes"
         ),
-        "volatility_ema_span_1h": _finite_float(
-            strategy.get("volatility_ema_span_1h", 0.0), "volatility_ema_span_1h"
+        "volatility_ema_span_1h_candles": _finite_float(
+            strategy.get("volatility_ema_span_1h", 0.0),
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_1h_candles"
         ),
     }
 
@@ -1606,8 +1611,8 @@ def render_overview(result: Mapping[str, Any]) -> str:
         if context:
             lines.append(
                 "  Volatility EMA spans: "
-                f"1m {context['volatility_ema_span_1m']:g}, "
-                f"1h {context['volatility_ema_span_1h']:g}."
+                f"{context['volatility_ema_span_minutes']:g} minutes, "
+                f"{context['volatility_ema_span_1h_candles']:g} one-hour candles."
             )
         if side["overridden_parameters"]:
             lines.append("  Overrides: " + ", ".join(side["overridden_parameters"]))
