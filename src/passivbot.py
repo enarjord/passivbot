@@ -4886,7 +4886,7 @@ class Passivbot:
             except Exception:
                 longest_span = wmax
             logging.debug(
-                "[warmup] target | longest_span=%dm warmup_ratio=%.3g max_warmup_minutes=%s",
+                "[warmup] target | longest_span=%dm span_multiplier=%.3g max_minutes=%s",
                 int(longest_span),
                 float(warmup_ratio),
                 "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),

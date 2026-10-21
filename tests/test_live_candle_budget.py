@@ -2676,7 +2676,9 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     assert warmup_records
     assert all(record.levelno == logging.DEBUG for record in warmup_records)
     assert any("trading-ready warmup" in record.message for record in warmup_records)
-    assert any("target" in record.message for record in warmup_records)
+    target = next(record.message for record in warmup_records if "target" in record.message)
+    assert "span_multiplier=" in target and "max_minutes=" in target
+    assert "warmup_ratio=" not in target and "max_warmup_minutes=" not in target
     assert any("slot view" in record.message for record in warmup_records)
     assert any("windows" in record.message for record in warmup_records)
     assert any("candles:" in record.message for record in warmup_records)
