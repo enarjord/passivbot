@@ -423,7 +423,15 @@ Coin lists contain literal identifiers, including singleton lists. Use explicit 
 `"./coinlist"`, `"coins.json"`, or an absolute path when wrapping a file reference in a singleton
 list. A bare scalar string may select an existing file during initial preparation; otherwise it
 becomes a literal token list. Later file creation cannot reinterpret those prepared tokens.
-The released-v8 converter anchors historical singleton-list file bindings explicitly.
+Initial file selection checks the config directory before project/CWD and legacy-alias fallbacks.
+Prepared configurations retain the selected absolute location, including an unavailable explicit
+reference's intended location; refresh or re-preparation cannot switch to a fallback file later.
+Lossless format mode keeps the authored spelling. The released-v8 converter also anchors historical
+singleton-list file bindings explicitly.
+
+The `--symbols`/`-s` and `--ignored-coins`/`-ic` conveniences accept JSON/HJSON objects containing
+only `long`/`short` keys; side-specific flags win in the same command. Canonical source paths keep
+their literal rules.
 
 ```json
 "bot": {

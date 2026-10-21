@@ -65,7 +65,7 @@ def test_released_directional_file_remains_reloadable_and_explicit(tmp_path,kind
     c=released(kind);old_source=[filename] if wrapped else filename;c['live']['approved_coins']=old_source;before=deepcopy(c);bytes_before=p.read_bytes()
     out=migrate(c,memory_span_minutes=123.5,base_config_path=str(tmp_path/'config.json')).config
     assert out['bot']['global']['universe']['approved_coins']==[]
-    expected_file = str(p) if not Path(filename).suffix else filename
+    expected_file = str(p)
     expected_source = [expected_file] if wrapped else expected_file
     assert all(out['bot'][side]['universe']['approved_coins']==expected_source for side in ('long','short'))
     effective=prepare_config(out,base_config_path=str(tmp_path/'config.json'),verbose=False)
@@ -289,5 +289,31 @@ def test_released_fallback_coin_file_binding_preserves_reloadable_symlink(tmp_pa
     selected.unlink()
     selected.symlink_to(second.name)
     effective = prepare_config(exported, base_config_path=str(tmp_path/'moved.json'), verbose=False)
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}
+    assert raw == before
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('fallback', ['repo', 'cwd', 'legacy_alias'])
+def test_released_explicit_file_fallback_preserves_directional_authority(tmp_path, monkeypatch, wrapped, fallback):
+    import utils
+    repo, cwd, inputs = (tmp_path/name for name in ('repo','cwd','inputs'))
+    for folder in (repo, cwd, inputs):
+        folder.mkdir()
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    monkeypatch.chdir(cwd)
+    selected = (cwd if fallback == 'cwd' else repo)/'configs'/'approved_coins.json'
+    selected.parent.mkdir()
+    selected.write_text('["BTC"]')
+    name = 'configs/approved_coins_topmcap.json' if fallback == 'legacy_alias' else 'configs/approved_coins.json'
+    raw = released('trailing_martingale')
+    raw['live']['approved_coins'] = [name] if wrapped else name
+    before = deepcopy(raw)
+    exported = migrate(raw, base_config_path=str(inputs/'config.json'), memory_span_minutes=123.5).config
+    assert exported['bot']['global']['universe']['approved_coins'] == []
+    for side in ('long','short'):
+        assert exported['bot'][side]['universe']['approved_coins'] == ([str(selected)] if wrapped else str(selected))
+    selected.write_text('["ETH"]')
+    effective = prepare_config(exported, base_config_path=str(tmp_path/'output.json'), verbose=False)
     assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}
     assert raw == before

@@ -494,7 +494,7 @@ def test_shared_file_members_remain_literal_tokens_not_json_shorthand(tmp_path, 
     values, _ = resolve_universe_sources(config, 'approved_coins')
     assert values['long'] == values['short']
     assert 'BTC' not in values['long']  # An encoded structure grants no membership to its contents.
-    assert universe_source_view(config)['bot']['global']['universe']['approved_coins'] == 'coins.json'
+    assert universe_source_view(config)['bot']['global']['universe']['approved_coins'] == str(tmp_path/'coins.json')
 
 
 def test_literal_source_owner_does_not_change_legacy_jsonish_helper_default():
@@ -537,3 +537,148 @@ def test_shared_file_never_demotes_malformed_mapping_to_plain_coins(tmp_path, co
     selected.write_text(content)
     with pytest.raises(ValueError, match='one coin list'):
         prepare_config(source(str(selected)), verbose=False)
+
+
+@pytest.mark.parametrize('fallback', ['repo', 'cwd', 'legacy_alias'])
+def test_initial_explicit_file_fallback_is_bound_before_refresh_and_export(tmp_path, monkeypatch, fallback):
+    import utils
+    from config_utils import dump_config
+    repo, cwd, inputs = (tmp_path/name for name in ('repo','cwd','inputs'))
+    for folder in (repo, cwd, inputs):
+        folder.mkdir()
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    monkeypatch.chdir(cwd)
+    selected = (cwd if fallback == 'cwd' else repo)/'configs'/'approved_coins.json'
+    selected.parent.mkdir()
+    selected.write_text('["BTC"]')
+    name = 'configs/approved_coins_topmcap.json' if fallback == 'legacy_alias' else 'configs/approved_coins.json'
+    input_file = inputs/'config.json'
+    text = json.dumps(source(name))
+    input_file.write_text(text)
+    prepared = prepare_config(json.loads(text), base_config_path=str(input_file), verbose=False)
+    assert universe_source_view(prepared)['bot']['global']['universe']['approved_coins'] == str(selected)
+    selected.unlink()
+    decoy = inputs/name
+    decoy.parent.mkdir()
+    decoy.write_text('["SOL"]')
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(prepared, 'approved_coins')
+    selected.write_text('["ETH"]')
+    destination = tmp_path/'output'/'config.json'
+    destination.parent.mkdir()
+    dump_config(prepared, str(destination), clean=True)
+    reloaded = prepare_config(json.loads(destination.read_text()), base_config_path=str(destination), verbose=False)
+    assert resolve_universe_sources(reloaded, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}
+    assert input_file.read_text() == text
+
+
+@pytest.mark.parametrize('command', ['live', 'backtest', 'optimize'])
+@pytest.mark.parametrize('flag,field', [('--symbols','approved_coins'), ('--ignored-coins','ignored_coins')])
+@pytest.mark.parametrize('encoded', ['{"long":["BTC"],"short":["ETH"]}', '{long: ["BTC"], short: ["ETH"]}'])
+def test_convenience_cli_decodes_directional_sources_and_side_flag_wins(command, flag, field, encoded):
+    from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(parser, project_template_config_for_cli(get_template_config(), command), command=command)
+    config = prepare_config(source(['SOL']), live_only=True, verbose=False)
+    args = parser.parse_args([f'--bot.short.universe.{field}', 'XRP', flag, encoded])
+    update_config_with_args(config, args, allowed_keys=keys)
+    assert resolve_universe_sources(config, field)[0] == {'long':['BTC'],'short':['XRP']}
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_missing_absolute_bound_file_does_not_fall_through_to_legacy_alias(tmp_path, monkeypatch, wrapped):
+    import utils
+    repo = tmp_path/'repo'
+    (repo/'configs').mkdir(parents=True)
+    (repo/'configs'/'approved_coins.json').write_text('["SOL"]')
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    selected = tmp_path/'selected'/'approved_coins_topmcap.json'
+    selected.parent.mkdir()
+    selected.write_text('["BTC"]')
+    prepared = prepare_config(source([str(selected)] if wrapped else str(selected)), verbose=False)
+    selected.unlink()
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(prepared, 'approved_coins')
+
+
+@pytest.mark.parametrize('command', ['live', 'backtest', 'optimize'])
+@pytest.mark.parametrize('flag', ['--symbols', '--ignored-coins'])
+def test_convenience_cli_rejects_unknown_directional_keys_before_mutation(command, flag):
+    from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(parser, project_template_config_for_cli(get_template_config(), command), command=command)
+    config = prepare_config(source(['BTC']), live_only=True, verbose=False)
+    before = deepcopy(config)
+    args = parser.parse_args([flag, '{long: ["ETH"], both: ["SOL"]}'])
+    with pytest.raises(ValueError, match='long/short'):
+        update_config_with_args(config, args, allowed_keys=keys)
+    assert config == before
+
+
+@pytest.mark.parametrize('path', ['bot.global.universe.approved_coins',
+                                  'bot.long.universe.approved_coins', 'bot.long.universe.ignored_coins'])
+def test_canonical_coin_cli_values_do_not_gain_convenience_object_decoding(path):
+    from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(parser, project_template_config_for_cli(get_template_config(), 'live'), command='live')
+    config = prepare_config(source(['SOL']), live_only=True, verbose=False)
+    args = parser.parse_args([f'--{path}', '{"long":["BTC"],"short":["ETH"]}'])
+    update_config_with_args(config, args, allowed_keys=keys)
+    values, _ = resolve_universe_sources(config, path.split('.')[-1])
+    assert all('BTC' not in coins and 'ETH' not in coins for coins in values.values())
+
+
+@pytest.mark.parametrize('owner', ['shared', 'long'])
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_config_relative_binding_survives_reprepare_deletion_and_export(tmp_path, monkeypatch, owner, wrapped):
+    import utils
+    from config_utils import dump_config
+    from tools.clean_config import render_source
+    repo, inputs = tmp_path/'repo', tmp_path/'inputs'
+    repo.mkdir()
+    inputs.mkdir()
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    (repo/'coins.json').write_text('["ETH"]')
+    selected = inputs/'coins.json'
+    selected.write_text('["BTC"]')
+    value = ['coins.json'] if wrapped else 'coins.json'
+    raw = source(value) if owner == 'shared' else source([], value, [])
+    input_file = inputs/'config.json'
+    text = json.dumps(raw)
+    input_file.write_text(text)
+    prepared = prepare_config(raw, base_config_path=str(input_file), live_only=True, verbose=False)
+    assert resolve_universe_sources(prepared, 'approved_coins')[0]['long'] == ['BTC']
+    selected.unlink()
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(prepared, 'approved_coins')
+    again = prepare_config(prepared, base_config_path=str(input_file), live_only=True, verbose=False)
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(again, 'approved_coins')
+    selected.write_text('["XRP"]')
+    output = tmp_path/'output.json'
+    dump_config(again, str(output), clean=True)
+    reloaded = prepare_config(json.loads(output.read_text()), base_config_path=str(output), live_only=True, verbose=False)
+    assert resolve_universe_sources(reloaded, 'approved_coins')[0]['long'] == ['XRP']
+    selected.unlink()
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(prepare_config(reloaded, live_only=True, verbose=False), 'approved_coins')
+    assert json.loads(render_source(text, source=input_file, mode='format', destination=output)) == raw
+    assert input_file.read_text() == text
+
+
+@pytest.mark.parametrize('value', ['coins.json', ' coins.json '])
+def test_initially_missing_explicit_source_cannot_bind_a_later_fallback_decoy(tmp_path, monkeypatch, value):
+    import utils
+    repo, inputs = tmp_path/'repo', tmp_path/'inputs'
+    repo.mkdir()
+    inputs.mkdir()
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    prepared = prepare_config(source(value), base_config_path=str(inputs/'config.json'), live_only=True, verbose=False)
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(prepared, 'approved_coins')
+    (repo/'coins.json').write_text('["BTC"]')
+    again = prepare_config(prepared, base_config_path=str(inputs/'config.json'), live_only=True, verbose=False)
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(again, 'approved_coins')
+    (inputs/'coins.json').write_text('["ETH"]')
+    assert resolve_universe_sources(again, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}

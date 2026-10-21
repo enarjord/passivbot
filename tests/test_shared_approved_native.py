@@ -66,7 +66,12 @@ def test_dataset_policy_identity_and_native_masks_survive_file_change_and_deleti
         (other/'coins.json').write_text('["COIN00","COIN02"]')
         other_base = deepcopy(config)
         other_base['live']['base_config_path'] = str(other/'input.json')
-        assert execution_key(other_base) != execution_key(config)  # Same name and masks, different file authority.
+        assert execution_key(other_base) == execution_key(config)  # Context cannot retarget a bound file.
+        other_base['bot']['global']['universe']['approved_coins'] = str(other/'coins.json')
+        with pytest.raises(ValueError, match='prepared long approved_coins membership'):
+            execution_key(other_base)
+        materialize_side_universe_sources(other_base, 'approved_coins', {'long':['COIN00','COIN02'],'short':['COIN01']})
+        assert execution_key(other_base) != execution_key(config)  # Equal masks, different selected file.
 
 
 @pytest.mark.parametrize('kind',['all','file'])
@@ -92,6 +97,11 @@ def test_actual_registry_and_candidate_planner_keep_prepared_universe(tmp_path, 
                 other.mkdir()
                 (other/'coins.json').write_text('["COIN00","COIN02"]')
                 evaluator.config['live']['base_config_path'] = str(other/'input.json')
+                assert registry.planner.prepare('same-selected-file-new-context', vector).requests
+                evaluator.config['bot']['global']['universe']['approved_coins'] = str(other/'coins.json')
+                with pytest.raises(ValueError, match='prepared long approved_coins membership'):
+                    registry.planner.prepare('unprepared-source-edit', vector)
+                materialize_side_universe_sources(evaluator.config, 'approved_coins', {'long':['COIN00','COIN02'],'short':['COIN01']})
                 with pytest.raises(ValueError, match='dataset-owned execution inputs'):
                     registry.planner.prepare('different-file-base', vector)
     finally:

@@ -78,3 +78,19 @@ async def test_download_cli_applies_side_sources_before_offline_preparation(monk
     assert config["bot"]["long"]["universe"]["approved_coins"] == ["BTC"]
     assert config["bot"]["short"]["universe"]["approved_coins"] == ["ETH"]
     assert config["bot"]["global"]["universe"]["minimum_coin_age_days"] == 5.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('flag,field', [('--symbols','approved_coins'), ('--ignored-coins','ignored_coins')])
+async def test_download_cli_decodes_directional_convenience_sources(monkeypatch, flag, field):
+    import ohlcv_download
+    source = get_template_config()
+    captured = []
+    monkeypatch.setattr(ohlcv_download, 'load_input_config', lambda _path: (source, '', deepcopy(source)))
+    async def prepared_only(config):
+        captured.append(config)
+    monkeypatch.setattr(ohlcv_download, 'warm_ohlcv_caches', prepared_only)
+    monkeypatch.setattr('sys.argv', ['download', flag, '{long: ["BTC"], short: ["ETH"]}'])
+    await ohlcv_download.main()
+    assert len(captured) == 1
+    assert {side:captured[0]['bot'][side]['universe'][field] for side in ('long','short')} == {'long':['BTC'],'short':['ETH']}
