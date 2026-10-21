@@ -134,6 +134,7 @@ from hlcvs_manifest import (
     manifest_has_required_schema,
     save_numpy_artifact_with_hash,
     verify_hlcvs_manifest,
+    verify_hlcvs_manifest_metadata,
     write_hlcvs_manifest,
 )
 from hlcvs_override import load_hlcvs_data_override
@@ -1908,6 +1909,49 @@ def _automatic_cache_unresolved_inception_coins(
             if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
 
 
+def _preserve_cached_inception_facts(config, exchange, mss):
+    """Carry matching, verified facts through independent candle-cache rebuilds.
+
+    A transient lookup cannot erase a known fact. New positive facts win; only
+    unknown values on the same coin, venue and source identity may be repaired.
+    Read JSON independently of candle warmup/array validity and never mutate the
+    acquisition result or a caller-owned metadata dictionary.
+    """
+    unresolved = [coin for coin, settings in mss.items() if not coin.startswith("__")
+                  and inception_timestamp_ms(settings.get("inception_timestamp_ms")) is None]
+    if not unresolved:
+        return mss
+    cache_hash = get_cache_hash(config, exchange)
+    cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
+    if cache_dir is None:
+        return mss
+    try:
+        cached = verify_hlcvs_manifest_metadata(
+            cache_dir, expected_cache_hash=cache_hash, expected_exchange=exchange,
+        )
+        old_mss = cached["market_specific_settings"]
+        old_coins = set(cached["coins"])
+        retained = {}
+        for coin in unresolved:
+            old = old_mss.get(coin, {})
+            new = mss[coin]
+            if (coin not in old_coins or not new.get("exchange")
+                    or any(old.get(key) != new.get(key) for key in ("exchange", "symbol", "ohlcv_source"))):
+                continue
+            fact = inception_timestamp_ms(old.get("inception_timestamp_ms"))
+            if fact is not None:
+                retained[coin] = fact
+    except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
+        logging.info("[hlcvs] cannot retain unverified inception facts from %s: %s", cache_dir, exc)
+        return mss
+    if not retained:
+        return mss
+    preserved = deepcopy(mss)
+    for coin, fact in retained.items():
+        preserved[coin]["inception_timestamp_ms"] = fact
+    return preserved
+
+
 def load_coins_hlcvs_from_cache(
     config, exchange, warmup_minutes=0, *, require_inception_facts=None,
 ):
@@ -1927,11 +1971,9 @@ def load_coins_hlcvs_from_cache(
                 cache_dir,
             )
             return None
-        else:
-            # Collect the arrays the verifier already decompressed so we don't
-            # pay a second multi-GB decompression below.
-            verified_arrays: dict = {}
-            verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
+        metadata = verify_hlcvs_manifest_metadata(
+            cache_dir, manifest, expected_cache_hash=cache_hash, expected_exchange=exchange,
+        )
         # Check warmup sufficiency: cached data must cover at least the needed warmup
         meta_path = cache_dir / "cache_meta.json"
         if meta_path.exists():
@@ -1948,14 +1990,18 @@ def load_coins_hlcvs_from_cache(
                 f"needed={warmup_minutes} min. Will re-fetch."
             )
             return None
-        coins = json.load(open(cache_dir / "coins.json"))
-        mss = json.load(open(cache_dir / "market_specific_settings.json"))
+        coins = metadata["coins"]
+        mss = metadata["market_specific_settings"]
         unresolved = _automatic_cache_unresolved_inception_coins(
             config, coins, mss, require_inception_facts=require_inception_facts,
         )
         if unresolved:
             logging.info("[hlcvs] cache has unresolved inception for %s; rebuilding", unresolved)
             return None
+        # Only reusable caches materialize arrays. Full integrity validation is
+        # still required, and its arrays are reused instead of decompressed twice.
+        verified_arrays: dict = {}
+        verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
         # verify_hlcvs_manifest hard-fails unless all three array artifacts
         # exist and match their recorded hashes, so the verified arrays are
         # authoritative here — no re-read needed.
@@ -1983,6 +2029,7 @@ def save_coins_hlcvs_to_cache(
     *,
     require_inception_facts=None,
 ):
+    mss = _preserve_cached_inception_facts(config, exchange, mss)
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _get_hlcvs_cache_dir_for_save(
         config,
@@ -2003,14 +2050,18 @@ def save_coins_hlcvs_to_cache(
             if existing_warmup >= warmup_minutes and manifest_has_required_schema(
                 existing_manifest
             ):
-                verify_hlcvs_manifest(cache_dir, existing_manifest)
-                existing_coins = json.load(open(cache_dir / "coins.json"))
-                existing_mss = json.load(open(cache_dir / "market_specific_settings.json"))
+                metadata = verify_hlcvs_manifest_metadata(
+                    cache_dir, existing_manifest, expected_cache_hash=cache_hash,
+                    expected_exchange=exchange,
+                )
+                existing_coins = metadata["coins"]
+                existing_mss = metadata["market_specific_settings"]
                 unresolved = _automatic_cache_unresolved_inception_coins(
                     config, existing_coins, existing_mss,
                     require_inception_facts=require_inception_facts,
                 )
                 if not unresolved:
+                    verify_hlcvs_manifest(cache_dir, existing_manifest)
                     return cache_dir
                 logging.info("[hlcvs] replacing cache with unresolved inception for %s", unresolved)
         except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
@@ -2485,6 +2536,7 @@ async def prepare_hlcvs_mss(
             "for the requested range"
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
+    mss = _preserve_cached_inception_facts(config, exchange, mss)
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     _validate_hlcvs_valid_windows_from_mss(
         hlcvs,

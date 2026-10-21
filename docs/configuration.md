@@ -480,6 +480,10 @@ shared source.
   a positive gate, including a dormant side that an optimizer candidate can activate. This
   acquisition requirement leaves the configured ages and cache identity unchanged. Explicit
   dataset overrides remain immutable; unknown inception in them still fails a positive gate.
+  Live acquisition requests only approved markets on enabled sides with positive ages. Automatic
+  cache rebuilds retain verified known inception for the same market when a fresh lookup is
+  unresolved; a fresh positive fact wins. Metadata is checked before large cache arrays load,
+  and unused combined suite datasets do not inherit individual scenarios' fact requirements.
 
 - **bot.global.forager.score_hysteresis_margin**: Absolute normalized-score margin for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 

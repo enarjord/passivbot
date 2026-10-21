@@ -12,6 +12,8 @@ since the latest release tag; these features may already be available when insta
   static and forced-normal selection, with exact threshold equality and unknown inception
   failing positive gates while live lookups and automatic prepared caches retry unresolved facts,
   including positive gates enabled by assigned suite scenarios after shared data preparation.
+  Live lookups cover only enabled positive-age sides; verified known inception survives unrelated
+  candle-cache rebuilds, and rejected caches do not materialize large arrays first.
   Held-position management remains available. Shared history retains
   pre-eligibility warmup rather than adding age and warmup delays. Direct released-v8 migration
   copies the old live age to both sides and reports the changed admission semantics.

@@ -180,3 +180,39 @@ async def test_suite_unknown_cache_reuse_and_explicit_dataset_boundaries(tmp_pat
         )
     assert config == original
     assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == original_files
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_ages", [(0.0, 0.0), (60.0, 0.0)])
+async def test_individual_only_scenarios_do_not_require_facts_for_unused_combined_dataset(tmp_path, monkeypatch, base_ages):
+    import backtest as bt
+    config = _cache_config(tmp_path, base_ages)
+    config["backtest"]["exchanges"] = ["binance", "bybit"]
+    scenarios, _ = build_scenarios({"scenarios": [
+        {"label": "single", "exchanges": ["binance"], "coins": ["AAA"], "overrides": {
+            "bot.short.universe.minimum_coin_age_days": 7.25}},
+    ]}, config["backtest"]["exchanges"])
+    calls = {}
+    async def prepare(effective, exchange, **kwargs):
+        calls[exchange] = kwargs.get("require_inception_facts")
+        return (["AAA"], np.ones((2, 1, 4)), {"AAA": {"exchange": "binance"}}, "", "cache",
+                np.ones(2), np.array([BASE, BASE + 60_000], dtype=np.int64))
+    monkeypatch.setattr(bt, "prepare_hlcvs_mss", prepare)
+    await prepare_master_datasets(config, config["backtest"]["exchanges"],
+                                  scenarios=scenarios, needed_individual_exchanges={"binance"})
+    assert calls == {"combined": False, "binance": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenarios,expected", [(None, {}), ([], {"require_inception_facts": False})])
+async def test_unassigned_base_preload_retains_default_age_inference(tmp_path, monkeypatch, scenarios, expected):
+    import backtest as bt
+    config = _cache_config(tmp_path, (60.0, 0.0))
+    calls = []
+    async def prepare(effective, exchange, **kwargs):
+        calls.append(kwargs)
+        return (["AAA"], np.ones((2, 1, 4)), {"AAA": {"exchange": exchange}}, "", "cache",
+                np.ones(2), np.array([BASE, BASE + 60_000], dtype=np.int64))
+    monkeypatch.setattr(bt, "prepare_hlcvs_mss", prepare)
+    await prepare_master_datasets(config, ["binance"], scenarios=scenarios)
+    assert calls == [expected]

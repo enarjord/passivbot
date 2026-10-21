@@ -5268,15 +5268,34 @@ class Passivbot:
             elapsed_s,
         )
 
-    async def update_first_timestamps(self, symbols=[]):
-        """Fetch and cache first trade timestamps for the provided symbols."""
+    async def update_first_timestamps(self, symbols=None):
+        """Acquire required inception facts, or exactly the explicitly requested symbols."""
         if not hasattr(self, "first_timestamps"):
             self.first_timestamps = {}
-        symbols = sorted(
-            set(symbols + flatten(self.approved_coins_minus_ignored_coins.values()))
-        )
+
+        def repair_symbol_aliases():
+            for symbol in sorted(self.first_timestamps):
+                symbolf = self.coin_to_symbol(symbol, verbose=False)
+                if symbolf not in self.markets_dict:
+                    continue
+                if (
+                    inception_timestamp_ms(self.first_timestamps[symbol]) is not None
+                    and inception_timestamp_ms(self.first_timestamps.get(symbolf)) is None
+                ):
+                    self.first_timestamps[symbolf] = self.first_timestamps[symbol]
+
+        repair_symbol_aliases()
+        if symbols is None:
+            symbols = {
+                symbol
+                for side in ("long", "short")
+                if self.is_pside_enabled(side)
+                and minimum_coin_age_days(self.config, side) > 0
+                for symbol in self.approved_coins_minus_ignored_coins[side]
+            }
         symbols = [
-            symbol for symbol in symbols
+            symbol
+            for symbol in sorted(set(symbols))
             if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
         ]
         if not symbols:
@@ -5305,13 +5324,7 @@ class Passivbot:
             if (inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
                     and inception_timestamp_ms(value) is not None):
                 self.first_timestamps[symbol] = value
-        for symbol in sorted(self.first_timestamps):
-            symbolf = self.coin_to_symbol(symbol, verbose=False)
-            if symbolf not in self.markets_dict:
-                continue
-            if (inception_timestamp_ms(self.first_timestamps[symbol]) is not None
-                    and inception_timestamp_ms(self.first_timestamps.get(symbolf)) is None):
-                self.first_timestamps[symbolf] = self.first_timestamps[symbol]
+        repair_symbol_aliases()
         for symbol in symbols:
             if symbol not in self.first_timestamps:
                 logging.info(

@@ -931,7 +931,7 @@ def _dataset_requires_inception_facts(base_config, scenarios):
     """
     from config.age_policy import minimum_coin_age_days
 
-    if not scenarios:
+    if scenarios is None:
         return None  # An unassigned base preload uses the ordinary configured pair.
     for scenario in scenarios:
         effective = deepcopy(base_config)
@@ -1059,8 +1059,10 @@ async def prepare_master_datasets(
         combined_window = dataset_windows["combined"]
         _log_dataset_window("combined", combined_window)
         combined_config = _config_for_dataset_window(base_config, combined_window)
-        assigned_combined = combined_scenarios or list(scenarios or [])
-        combined_config = _config_for_dataset_coins(combined_config, assigned_combined)
+        assigned_combined = None if scenarios is None else combined_scenarios
+        combined_config = _config_for_dataset_coins(
+            combined_config, combined_scenarios or list(scenarios or []),
+        )
         (
             coins,
             hlcvs,
@@ -1130,7 +1132,8 @@ async def prepare_master_datasets(
                     ex_btc_usd_prices,
                     ex_timestamps,
                 ) = await _prepare_dataset(
-                    exchange_config, exchange, individual_scenarios.get(str(exchange), []),
+                    exchange_config, exchange,
+                    None if scenarios is None else individual_scenarios.get(str(exchange), []),
                 )
                 prepared_ex_hlcvs = ex_hlcvs
                 if candle_interval_minutes > 1:
@@ -1185,7 +1188,9 @@ async def prepare_master_datasets(
                 cache_dir,
                 btc_usd_prices,
                 timestamps,
-            ) = await _prepare_dataset(exchange_config, exchange, exchange_scenarios)
+            ) = await _prepare_dataset(
+                exchange_config, exchange, None if scenarios is None else exchange_scenarios,
+            )
             prepared_hlcvs = hlcvs
             if candle_interval_minutes > 1:
                 hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
