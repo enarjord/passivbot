@@ -93,7 +93,7 @@ def optimizer_dead_param_values(
             fixed_paths.add(tuple(require_existing_config_path(config, dotted_path)))
     for pside in ("long", "short"):
         close_root = ("bot", pside, "strategy", strategy_kind, "close")
-        retracement_base_path = (*close_root, "retracement_base_pct")
+        retracement_base_path = (*close_root, "retracement_base_fraction")
         try:
             retracement_base = float(_try_get_path(config, retracement_base_path))
         except (TypeError, ValueError):

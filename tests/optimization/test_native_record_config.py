@@ -46,7 +46,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
             config = deepcopy(previous.config)
             if policy == "fixed":
                 config["optimize"]["fixed_runtime_overrides"] = {
-                    "bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.025,
+                    "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
                 }
             elif policy == "mirror":
                 config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
@@ -128,7 +128,7 @@ def test_out_of_order_and_cached_anchor_duplicates_record_each_owned_config(monk
     with managed_arrays() as manager:
         previous = inputs(manager)
         config = deepcopy(previous.config)
-        path = ["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_pct"]
+        path = ["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_fraction"]
         config[ANCHOR_PLAN_KEY] = dict(
             anchors=[dict(fixed_values=[], source=name) for name in ("first", "second")],
             key_paths=[path], tunable_keys=["long_entry_initial_qty_pct"], fixed_keys=[],
@@ -169,14 +169,14 @@ def test_out_of_order_and_cached_anchor_duplicates_record_each_owned_config(monk
             assert search._record_configs == {}
             assert session.active_candidate_ids == ()
             actual = [(row["optimizer_anchor"]["id"],
-                       row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"])
+                       row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"])
                       for row in records]
             assert actual[:2] == [(1, 0.04), (0, 0.02)]
             assert sorted(actual) == sorted((int(anchor), value) for anchor, value in vectors)
             assert search.state["completed"] == len(vectors)
             for row in records:
                 vector = [float(row["optimizer_anchor"]["id"]),
-                          row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"]]
+                          row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"]]
                 expected = build_pymoo_record_entry(**{**record_kwargs(base, vector), "metrics": row["metrics"]})
                 assert row == expected
 
@@ -196,7 +196,7 @@ def test_changed_completion_vector_or_custom_builder_uses_existing_record_path(m
             def builder(*args):
                 calls.append(args[0])
                 result = optimize.individual_to_config(*args)
-                result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.033
+                result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.033
                 return result
             records = []
             search = search_for(base, registry, SimpleNamespace(max_candidates=1), [plan.vector], records,
@@ -204,7 +204,7 @@ def test_changed_completion_vector_or_custom_builder_uses_existing_record_path(m
             payload = dict(fitness=[0.1, 0.2], constraint_violation=0,
                            evaluation_vector=list(plan.vector) if custom_builder else changed, metrics={})
             search.apply_terminal(0, payload, prepared=(plan.vector, plan.record_config))
-            assert records[0]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] == (
+            assert records[0]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == (
                 0.033 if custom_builder else 0.035
             )
             assert len(calls) == int(custom_builder)

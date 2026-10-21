@@ -77,8 +77,8 @@ DIFF_SETTING_PATHS = (
     ),
     (
         "forager",
-        "bot.global.forager.score_hysteresis_pct",
-        ("bot", "global", "forager", "score_hysteresis_pct"),
+        "bot.global.forager.score_hysteresis_margin",
+        ("bot", "global", "forager", "score_hysteresis_margin"),
     ),
     (
         "cache",
@@ -477,7 +477,7 @@ def _balance_hysteresis_report(
     live: dict[str, Any],
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    raw_value = live.get("account", {}).get("balance_hysteresis_snap_pct", _MISSING)
+    raw_value = live.get("account", {}).get("balance_hysteresis_snap_fraction", _MISSING)
     report: dict[str, Any] = {
         "present": raw_value is not _MISSING,
         "default_value": 0.02,
@@ -498,8 +498,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid_bool",
-                "live.account.balance_hysteresis_snap_pct should be a non-negative number, not a boolean",
-                path="live.account.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative number, not a boolean",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -512,8 +512,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.account.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.account.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -524,8 +524,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.account.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.account.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -536,9 +536,9 @@ def _balance_hysteresis_report(
                 "warning",
                 "balance_hysteresis_snap_pct_high",
                 (
-                    "live.account.balance_hysteresis_snap_pct is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
+                    "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
                 ),
-                path="live.account.balance_hysteresis_snap_pct",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
     else:
@@ -1209,7 +1209,7 @@ def build_live_config_preflight_report(
         "forager": {
             "live_settings": _selected_live_values(live, FORAGER_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("global", {}).get("forager", {}), ("score_hysteresis_pct",)
+                bot.get("global", {}).get("forager", {}), ("score_hysteresis_margin",)
             ),
             "sides": forager_by_side,
             "total_configured_max_positions": sum(
@@ -1217,7 +1217,7 @@ def build_live_config_preflight_report(
             ),
         },
         "risk": {
-            "balance_hysteresis_snap_pct": balance_hysteresis_report,
+            "balance_hysteresis_snap_fraction": balance_hysteresis_report,
         },
         "cache": {
             "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),

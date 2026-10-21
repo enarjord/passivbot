@@ -29,7 +29,10 @@ before backtesting a proposed replacement.
 | Shared market-order policy | `bot.global.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
 | `live.warmup_ratio` | `bot.global.warmup.span_multiplier`, with the same value |
 | Exposure-enforcer numeric thresholds | `bot.<side>.risk.<enforcer>.threshold_ratio`, with the same value |
-| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_pct`, `bot.global.warmup` |
+| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_margin`, `bot.global.warmup` |
+| Scale-one sizing, allowance, fee, fill and execution `_pct` fields | Public `_fraction` names; values are unchanged |
+| `fee_pct_fallback`, `fee_pct_sanity_abs_max` | `live.fills.fallback_fee_fraction`, `live.fills.max_abs_fee_fraction` |
+| TM `entry.initial_ema_dist`, EMA-anchor `offset` | `entry.initial_ema_distance_fraction`, `offset_fraction` |
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |
 | Empty forced modes, zero warmup cap, zero warmup concurrency | `null` modes, `bot.global.warmup.max_minutes: null`, and `live.startup.warmup_concurrency: "auto"`; each conversion is reported in every authored layer |

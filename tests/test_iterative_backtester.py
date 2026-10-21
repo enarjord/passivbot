@@ -145,8 +145,8 @@ def test_apply_cli_overrides_updates_nested_config_paths():
     config = {
         "backtest": {"start_date": "2023-01-01", "end_date": "2024-01-01"},
         "bot": {
-            "long": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset": 0.003}}},
-            "short": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset": 0.003}}},
+            "long": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset_fraction": 0.003}}},
+            "short": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset_fraction": 0.003}}},
         },
     }
 
@@ -155,14 +155,14 @@ def test_apply_cli_overrides_updates_nested_config_paths():
         [
             "backtest.start_date=2022-01-01",
             "backtest.end_date=now",
-            "bot.long.strategy.ema_anchor.offset=0.01",
+            "bot.long.strategy.ema_anchor.offset_fraction=0.01",
             "bot.short.risk.n_positions=0",
         ],
     )
 
     assert overridden["backtest"]["start_date"] == "2022-01-01"
     assert overridden["backtest"]["end_date"] == "now"
-    assert overridden["bot"]["long"]["strategy"]["ema_anchor"]["offset"] == pytest.approx(0.01)
+    assert overridden["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] == pytest.approx(0.01)
     assert overridden["bot"]["short"]["risk"]["n_positions"] == 0
     assert config["backtest"]["start_date"] == "2023-01-01"
 
@@ -266,7 +266,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                         "ema_span_0": 48,
                         "ema_span_1": 60,
                         "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.003,
+                        "offset_fraction": 0.003,
                     }
                 },
                 "universe": {"approved_coins": ["BTC"]},
@@ -277,7 +277,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                         "ema_span_0": 48,
                         "ema_span_1": 60,
                         "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.003,
+                        "offset_fraction": 0.003,
                     }
                 },
                 "universe": {"approved_coins": []},
@@ -304,7 +304,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
     warmup_changed = deepcopy(base)
     warmup_changed["bot"]["global"]["warmup"]["max_minutes"] = 720
     bot_quote_changed = deepcopy(base)
-    bot_quote_changed["bot"]["long"]["strategy"]["ema_anchor"]["offset"] = 0.01
+    bot_quote_changed["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] = 0.01
     universe_changed = deepcopy(base)
     universe_changed["bot"]["long"]["universe"]["approved_coins"] = ["BTC", "SOL"]
     optimize_changed = {

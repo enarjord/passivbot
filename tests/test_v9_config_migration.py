@@ -253,7 +253,7 @@ def test_v8_equal_released_section_aliases_preserve_authored_value(section, old,
     elif new == "inactive_coin_candle_ttl_minutes":
         assert result.config["live"]["candles"][new] == value
     else:
-        assert result.config[section][new] == value
+        assert result.config[section]["market_order_slippage_fraction" if new == "market_order_slippage_pct" else new] == value
     assert old not in result.config[section]
 
 

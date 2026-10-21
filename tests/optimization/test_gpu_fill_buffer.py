@@ -24,7 +24,7 @@ def test_buffered_ticks_match_strict_float64_order_predicate(buffer, step):
 
 @pytest.mark.parametrize('buffer', [-1, 1, float('nan'), float('inf'), True, None])
 def test_buffered_ticks_reject_invalid_buffer(buffer):
-    with pytest.raises(ValueError, match='limit_order_fill_buffer_pct'):
+    with pytest.raises(ValueError, match='limit_order_fill_buffer_fraction'):
         _strict_fill_tick_boundaries([100.0], [99.0], 0.01, buffer)
 
 
@@ -120,7 +120,7 @@ def test_buffered_gpu_matches_rust_marginal_entries(side, strategy_kind, coin_co
     cfg, candles, mss, btc, ts = _fixture(side, strategy_kind, 0.0015, coin_count, market_orders)
     proxy_cls = SharedAccountReplay
     for buffer in [0.0, 0.0015]:
-        cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
+        cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = proxy_cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
                           exchange='bybit', batch_size=1, needed_metrics={'fills_per_day'})
         result = proxy.evaluate([{}])[0]
@@ -156,7 +156,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
         candles[21, :, 1] = 98.7
     cls = SharedAccountReplay
     for buffer in [0.0, 0.0015]:
-        cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
+        cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
                     exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_usd'})
         result = proxy.evaluate([{}])[0]
@@ -187,7 +187,7 @@ def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
         scenario = SuiteScenario(
             label=label, start_date=None, end_date=None,
             coins=["BTC", "ETH"], ignored_coins=[],
-            overrides={"backtest.limit_order_fill_buffer_pct": buffer},
+            overrides={"backtest.limit_order_fill_buffer_fraction": buffer},
         )
         effective, _ = apply_scenario(
             deepcopy(cfg), scenario, master_coins=["BTC", "ETH"], master_ignored=[],
@@ -209,7 +209,7 @@ def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
     assert results[1] == results[2]
     assert all(row["fills_per_day"] > 0.0 for row in results[0])
     assert all(row["fills_per_day"] == 0.0 for row in results[1])
-    assert cfg["backtest"]["limit_order_fill_buffer_pct"] == 0.0
+    assert cfg["backtest"]["limit_order_fill_buffer_fraction"] == 0.0
 
 
 @pytest.mark.parametrize("buffer", [0.0, 0.0015])
@@ -248,7 +248,7 @@ def test_gpu_large_buffer_with_representable_prices_matches_rust(side, coin_coun
     cfg["backtest"]["starting_balance"] = 1000000.0
     cls = SharedAccountReplay
     for buffer in [0.0, 0.999, np.nextafter(1.0, 0.0)]:
-        cfg["backtest"]["limit_order_fill_buffer_pct"] = buffer
+        cfg["backtest"]["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
                     exchange="bybit", batch_size=1, needed_metrics={"fills_per_day"})
         result = proxy.evaluate([{}])[0]

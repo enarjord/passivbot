@@ -2,6 +2,7 @@ import passivbot_rust as pbr
 import pytest
 
 import config.strategy_spec as strategy_spec
+from config.strategy_paths import native_strategy_path_to_public
 from config import prepare_config
 from config.schema import get_template_config
 from config.strategy_spec import get_supported_strategy_kinds
@@ -47,10 +48,10 @@ class TestConfigAdapter:
         config = _canonical_config_with_bounds({
             "long": {"risk": {"max_positions": [1.0, 1.0],
                               "total_wallet_exposure_limit": [0.1, 0.1]},
-                     "unstuck": {"close_pct": [0.01, 0.12]}},
+                     "unstuck": {"close_fraction": [0.01, 0.12]}},
             "short": {"risk": {"max_positions": [0.0, 0.0],
                                "total_wallet_exposure_limit": [0.0, 0.0]},
-                      "unstuck": {"close_pct": [0.01, 0.12]}},
+                      "unstuck": {"close_fraction": [0.01, 0.12]}},
         })
         bounds = extract_bounds_tuple_list_from_config(config)
         key_paths = get_optimization_key_paths(config)
@@ -139,7 +140,7 @@ class TestConfigAdapter:
         )
         assert spec["defaults"]["short"]["entry_threshold_base_pct"] == bot_template[
             "short"
-        ]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"]
+        ]["strategy"]["trailing_martingale"]["entry"]["threshold_base_fraction"]
         assert (
             spec["optimize_bounds"]["long_ema_span_0"]
             == template["optimize"]["bounds"]["long"]["strategy"][
@@ -156,7 +157,9 @@ class TestConfigAdapter:
         rust_spec = pbr.get_strategy_spec("trailing_martingale")
         cached_spec = get_strategy_spec("trailing_martingale")
 
-        assert rust_spec == cached_spec
+        from config.strategy_paths import project_strategy_spec
+
+        assert project_strategy_spec("trailing_martingale", rust_spec) == cached_spec
 
     def test_rust_strategy_kind_api_is_python_source_of_truth(self):
         assert tuple(pbr.get_strategy_kinds()) == get_supported_strategy_kinds()
@@ -171,7 +174,7 @@ class TestConfigAdapter:
         assert spec["optimize_bounds"]["long_offset"] == [0.0, 0.05, 0.0001]
         assert spec["optimize_bounds"]["long_offset_volatility_1m_weight"] == [0.0, 40.0, 0.1]
         assert any(
-            param["config_path"] == ["strategy", "long", "base_qty_pct"]
+            param["config_path"] == ["strategy", "long", "base_qty_fraction"]
             and param["legacy_config_paths"] == []
             for param in spec["parameters"]
         )
@@ -182,7 +185,7 @@ class TestConfigAdapter:
                 "ema_span_0": [200.0, 1440.0, 10.0],
             }}}, "hsl": {"drawdown_ratio_threshold": [0.15, 0.35, 0.01]}},
             "short": {"strategy": {"trailing_martingale": {"entry": {
-                "threshold_base_pct": [0.01, 0.04, 1e-5],
+                "threshold_base_fraction": [0.01, 0.04, 1e-5],
             }}}},
         })
 
@@ -200,7 +203,7 @@ class TestConfigAdapter:
                 "strategy",
                 "trailing_martingale",
                 "entry",
-                "threshold_base_pct",
+                "threshold_base_fraction",
             ),
         ) in key_paths
         assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_ratio_threshold")) in key_paths
@@ -208,20 +211,20 @@ class TestConfigAdapter:
     def test_get_optimization_key_paths_routes_ema_anchor_fields_to_strategy_section(self):
         config = _canonical_config_with_bounds({
             "long": {"strategy": {"ema_anchor": {
-                "base_qty_pct": [0.001, 0.05, 0.0001],
+                "base_qty_fraction": [0.001, 0.05, 0.0001],
                 "offset_volatility_1m_weight": [0.0, 10.0, 0.1],
             }}},
-            "short": {"strategy": {"ema_anchor": {"offset": [0.0, 0.05, 0.0001]}}},
+            "short": {"strategy": {"ema_anchor": {"offset_fraction": [0.0, 0.05, 0.0001]}}},
         }, strategy_kind="ema_anchor")
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_base_qty_pct", ("bot", "long", "strategy", "ema_anchor", "base_qty_pct")) in key_paths
+        assert ("long_base_qty_pct", ("bot", "long", "strategy", "ema_anchor", "base_qty_fraction")) in key_paths
         assert (
             "long_offset_volatility_1m_weight",
             ("bot", "long", "strategy", "ema_anchor", "offset_volatility_1m_weight"),
         ) in key_paths
-        assert ("short_offset", ("bot", "short", "strategy", "ema_anchor", "offset")) in key_paths
+        assert ("short_offset", ("bot", "short", "strategy", "ema_anchor", "offset_fraction")) in key_paths
 
     @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
     def test_strategy_optimizer_key_path_map_is_exhaustive_for_rust_spec(self, strategy_kind):
@@ -238,7 +241,7 @@ class TestConfigAdapter:
                 config_path[1],
                 "strategy",
                 strategy_kind,
-                *config_path[2:],
+                *native_strategy_path_to_public(strategy_kind, config_path[2:]),
             )
 
             resolved = resolve_optimization_bound_path(prepared, optimize_key)

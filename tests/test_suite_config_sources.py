@@ -194,7 +194,7 @@ def test_external_suite_canonical_coin_patch_uses_base_strategy_context(tmp_path
     base = get_template_config()
     base['bot']['global']['strategy_kind'] = "ema_anchor"
     section = {"scenarios": [{"label": "anchor", "overrides": {"coin_overrides": {
-        "BTC": {"bot": {"long": {"strategy": {"ema_anchor": {"offset": 0.013}}}}},
+        "BTC": {"bot": {"long": {"strategy": {"ema_anchor": {"offset_fraction": 0.013}}}}},
     }}}]}
     path = tmp_path / "suite.json"
     path.write_text(json.dumps(section))
@@ -238,7 +238,7 @@ def test_external_full_config_without_base_uses_its_own_policy_context(tmp_path)
     source = get_template_config()
     source['bot']['global']['strategy_kind'] = "ema_anchor"
     source["backtest"]["scenarios"] = [{"label": "anchor", "overrides": {"coin_overrides": {
-        "BTC": {"bot": {"long": {"strategy": {"ema_anchor": {"offset": 0.013}}}}},
+        "BTC": {"bot": {"long": {"strategy": {"ema_anchor": {"offset_fraction": 0.013}}}}},
     }}}]
     path = tmp_path / "suite.json"
     path.write_text(json.dumps(source))

@@ -478,7 +478,7 @@ def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog, bound):
     assert "optimize.bounds.short.unstuck.ema_span_0" in caplog.text
 
 
-@pytest.mark.parametrize("control", ["loss_allowance_pct", "close_pct", "exposure_trigger_ratio"])
+@pytest.mark.parametrize("control", ["loss_allowance_fraction", "close_fraction", "exposure_trigger_ratio"])
 def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(control):
     from warmup_utils import compute_backtest_warmup_minutes
 
@@ -526,7 +526,7 @@ def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bo
     c["bot"][opposite]["unstuck"]["enabled"] = False
     c["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0
     c["bot"][side]["unstuck"].update(
-        enabled=True, loss_allowance_pct=0.1, close_pct=0.1, exposure_trigger_ratio=0.9
+        enabled=True, loss_allowance_fraction=0.1, close_fraction=0.1, exposure_trigger_ratio=0.9
     )
     c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit"] = bound
     baseline = compute_backtest_warmup_minutes(c)

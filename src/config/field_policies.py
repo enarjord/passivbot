@@ -112,14 +112,14 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "entry_cooldown.weights_minutes.adverse_directionality",
         "risk.position_exposure_enforcer.enabled",
         "risk.position_exposure_enforcer.threshold_ratio",
-        "risk.we_excess_allowance_pct",
-        "unstuck.close_pct",
+        "risk.we_excess_allowance_fraction",
+        "unstuck.close_fraction",
         "unstuck.ema_distance_fraction",
         "unstuck.ema_span_0",
         "unstuck.ema_span_1",
         "unstuck.ema_gating_enabled",
         "unstuck.enabled",
-        "unstuck.loss_allowance_pct",
+        "unstuck.loss_allowance_fraction",
         "unstuck.exposure_trigger_ratio",
     }
     | CONDITIONAL_HSL_OVERRIDE_PATHS

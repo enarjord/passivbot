@@ -29,7 +29,7 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {
-                                "threshold_base_pct": 0.77,
+                                "threshold_base_fraction": 0.77,
                             },
                         },
                     },
@@ -41,7 +41,7 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
     override_cfg = config_utils.get_template_config()
     override_cfg["live"]["account"]["user"] = "tester"
     override_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = 0.99
     overrides_dir = tmp_path / "overrides"
     overrides_dir.mkdir()
@@ -57,11 +57,11 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
     xrp_ov = parsed["coin_overrides"]["XRP"]
     # allowed field from file
     assert xrp_ov["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] == pytest.approx(0.99)
     # inline override merged on top
     assert xrp_ov["bot"]["short"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] == pytest.approx(0.77)
     # Ordinary full-config fields are validated then excluded from the patch.
     assert set(xrp_ov) == {"bot", "live"}
@@ -177,7 +177,7 @@ def _prepare_file_config(config):
 def test_stored_scenario_file_is_not_a_cycle_in_effective_coin_validation(tmp_path, pside):
     from config.optimize_bounds import set_flat_optimize_bound
 
-    document = {"bot": {pside: {"unstuck": {"close_pct": 0.075}}}}
+    document = {"bot": {pside: {"unstuck": {"close_fraction": 0.075}}}}
     config, path = _config_with_file(tmp_path, document)
     scenario = {"label": "file-policy", "overrides": {
         "coin_overrides": {"BTC": {"override_config_path": str(path)}},

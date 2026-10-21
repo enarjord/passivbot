@@ -6,6 +6,8 @@ from typing import Any
 
 import passivbot_rust as pbr
 
+from .strategy_paths import project_strategy_spec
+
 
 BOT_POSITION_SIDES = ("long", "short")
 DEFAULT_STRATEGY_KIND = "trailing_martingale"
@@ -70,7 +72,7 @@ def get_strategy_spec(strategy_kind: str = DEFAULT_STRATEGY_KIND) -> dict:
             f"Rust strategy metadata for {normalized_kind!r} must be a dict; "
             f"got {type(spec).__name__}"
         )
-    return spec
+    return project_strategy_spec(normalized_kind, spec)
 
 
 def _strategy_leaf_path(param: dict) -> tuple[str, ...] | None:

@@ -330,7 +330,7 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
 def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hysteresis):
     config, candles, markets, _, timestamps = _fixture(side, 2, "initial")
     config['bot']['global']['execution']['market_orders_allowed'] = False
-    config['bot']['global']['forager']['score_hysteresis_pct'] = hysteresis
+    config['bot']['global']['forager']["score_hysteresis_margin"] = hysteresis
     config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
                              taker_fee_override=0.0, market_order_slippage_pct=0.0)
     bot = config["bot"][side]

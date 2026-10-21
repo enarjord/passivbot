@@ -18,7 +18,7 @@ def test_candidate_parameters_use_global_values_without_leaking_first_coin_overr
     ]))
     expected = prepare_candidate_parameters(config, markets, "binance")
     patched = deepcopy(config)
-    leaf = {"entry": {"initial_qty_pct": 0.5}} if strategy == "trailing_martingale" else {"base_qty_pct": 0.5}
+    leaf = {"entry": {"initial_qty_fraction": 0.5}} if strategy == "trailing_martingale" else {"base_qty_fraction": 0.5}
     patched["coin_overrides"] = {"COIN00": {"bot": {"long": {"strategy": {strategy: leaf}}}}}
     assert prepare_candidate_parameters(patched, markets, "binance") == expected
     assert patched["coin_overrides"]["COIN00"]["bot"]["long"]["strategy"][strategy] == leaf
@@ -49,9 +49,9 @@ def test_candidate_parameters_pack_global_scaled_hsl_budget_policy(strategy, sid
     ]))
     before = prepare_candidate_parameters(config, markets, "binance")
     config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
-    config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
+    config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.44
     config["coin_overrides"] = {"COIN00": {"bot": {side: {
-        "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_pct": 0.1},
+        "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
     }}}}
     from config.overrides import parse_overrides
     config = parse_overrides(config, verbose=False)

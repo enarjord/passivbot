@@ -44,11 +44,11 @@ def test_replaced_rust_metadata_rebuilds_defaults_and_paths(monkeypatch):
         with monkeypatch.context() as patch:
             patch.setattr(strategy_spec.pbr, "get_strategy_spec", changed)
             strategy_spec.get_strategy_spec.cache_clear()
-            assert schema.get_template_config()["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] == 0.123
+            assert schema.get_template_config()["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 0.123
             paths = strategy_spec.strategy_optimize_key_path_map("trailing_martingale")
             assert key not in paths
             assert paths["long_replacement_initial_qty"] == old_paths[key]
     finally:
         strategy_spec.get_strategy_spec.cache_clear()
     assert strategy_spec.strategy_optimize_key_path_map("trailing_martingale") == old_paths
-    assert schema.get_template_config()["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] == selected["default"]
+    assert schema.get_template_config()["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == selected["default"]

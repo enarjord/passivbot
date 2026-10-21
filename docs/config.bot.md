@@ -76,10 +76,10 @@ initial_qty(balance) =
         balance * wel_allowed * entry_initial_qty_pct / initial_price)
 
 effective_entry_threshold =
-    entry.threshold_base_pct * entry_threshold_multiplier
+    entry.threshold_base_fraction * entry_threshold_multiplier
 
 effective_entry_retracement =
-    max(0, entry.retracement_base_pct) * entry_retracement_multiplier
+    max(0, entry.retracement_base_fraction) * entry_retracement_multiplier
 
 next_entry_price(pside) =
     long  : pos.price * (1 - effective_entry_threshold)
@@ -98,8 +98,8 @@ next_entry_qty(last_fill_qty) =
 * `entry.double_down_factor > 0` multiplies each successive re-entry quantity; values
   `< 1` still increase size if the preceding fill was larger than the remaining gap to the
   exposure cap.
-* When `entry.retracement_base_pct <= 0`, re-entries are passive recursive limit orders.
-* When `entry.retracement_base_pct > 0`, the threshold condition must be reached first and the
+* When `entry.retracement_base_fraction <= 0`, re-entries are passive recursive limit orders.
+* When `entry.retracement_base_fraction > 0`, the threshold condition must be reached first and the
   order is emitted after retracement confirmation.
 * Re-entries are only normal or cropped. Near the effective exposure cap, the bot keeps the
   current order literal instead of pulling future size forward into an inflated terminal step.
@@ -116,7 +116,7 @@ state from 1m OHLCVs and does not use exchange-native trailing order types.
 
 ```text
 close_threshold =
-    close.threshold_base_pct
+    close.threshold_base_fraction
   + (wel / wel_base) * close.threshold_we_weight
   + volatility_ema_1h * close.threshold_volatility_1h_weight
   + volatility_ema_1m * close.threshold_volatility_1m_weight
@@ -128,11 +128,11 @@ close_retracement_multiplier =
       + volatility_ema_1m * close.retracement_volatility_1m_weight)
 
 close_retracement =
-    max(0, close.retracement_base_pct) * close_retracement_multiplier
+    max(0, close.retracement_base_fraction) * close_retracement_multiplier
 ```
 
 ```text
-if close.retracement_base_pct <= 0:
+if close.retracement_base_fraction <= 0:
     close_price(long)  = max(best_bid, pos.price * (1 + close_threshold))
     close_price(short) = min(best_ask, pos.price * (1 - close_threshold))
 else:
@@ -143,8 +143,8 @@ else:
 ```
 
 Close orders are recursive when `close.threshold_we_weight != 0`: compute a slice up to
-`close.qty_pct`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
-exhausted or the close ladder is complete. If `close.retracement_base_pct <= 0` and
+`close.qty_fraction`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
+exhausted or the close ladder is complete. If `close.retracement_base_fraction <= 0` and
 `close.threshold_we_weight == 0`, all recursive closes would have the same price, so Rust emits one
 full-position close instead of redundant same-price slices. The removed v7
 `close_grid_markup_start` / `close_grid_markup_end` linear TP grid is intentionally not part of the
@@ -199,7 +199,7 @@ boundaries. For each elapsed minute and then each ordered realized event:
 alpha = 2 / (bot.global.unstuck.memory_ema_span_minutes + 1)
 D_realized = (1 - alpha) * D_realized
 D_realized = max(0, D_realized - net_realized_PnL)
-p = unstuck.loss_allowance_pct * applicable_total_wallet_exposure_limit
+p = unstuck.loss_allowance_fraction * applicable_total_wallet_exposure_limit
 remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
 
@@ -210,11 +210,11 @@ create no negative loss credit. The global `bot.global.loss_gate` consumes the s
 once while the economic ledger records it once. Old rolling windows and loss percentages require
 explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
 
-If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
-coin+side uses the override percentage in this same account-wide allowance formula.
+If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_fraction` is set, that
+coin+side uses the override fraction in this same account-wide allowance formula.
 The override does not create a per-slot budget or separate per-coin realized-PnL tracking.
 
-With auto-unstuck enabled and positive `loss_allowance_pct`, `close_pct`, `exposure_trigger_ratio` and side
+With auto-unstuck enabled and positive `loss_allowance_fraction`, `close_fraction`, `exposure_trigger_ratio` and side
 TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
 
 ```text
@@ -231,7 +231,7 @@ For the selected candidate, Rust uses current price rounded up to the price tick
 close or down for a short close. Before quantity rounding and other constraints:
 
 ```text
-close_qty_abs = balance * effective_wel * unstuck.close_pct / (close_price * c_mult)
+close_qty_abs = balance * effective_wel * unstuck.close_fraction / (close_price * c_mult)
 ```
 
 This sizes a fraction of the effective exposure budget at the close price, not a fraction of
@@ -241,8 +241,8 @@ Minimum sizing can exceed the remaining allowance; see the
 [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
 
 At unchanged balance and effective WEL, the nominal reduction in `wallet_exposure / effective_wel`
-is `close_pct * position_price / close_price`, before rounding and other constraints. For example,
-a long at 100% of effective WEL with `threshold = 0.90`, `close_pct = 0.12`, entry price 110 and
+is `close_fraction * position_price / close_price`, before rounding and other constraints. For example,
+a long at 100% of effective WEL with `threshold = 0.90`, `close_fraction = 0.12`, entry price 110 and
 close price 100 would fall to about 86.8%, not 90%. Realized losses, fees or other balance changes
 also change the denominator of the post-fill exposure ratio.
 

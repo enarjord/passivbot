@@ -9,11 +9,11 @@ from config.overrides import parse_overrides
 from config.migrations.v9 import migrate_v8_to_v9
 from backtest import run_backtest
 from hsl_reporting import hsl_report as collect_hsl_report
+from released_v8_fixtures import released_v8_policy
 
 
 def _legacy_replay_config():
-    c = get_template_config()
-    c["config_version"] = "v8.2.0"
+    c = released_v8_policy()
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.
     for side in ("long", "short"):
@@ -40,13 +40,17 @@ def _legacy_replay_config():
         suite_enabled=False,
         candle_interval_minutes=1,
     )
-    set_side_universe_sources(c, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
-    set_side_universe_sources(c, 'ignored_coins', {'long': [], 'short': []})
-    c['bot']['global']['warmup']['span_multiplier'] = 1
-    c['bot']['global']['warmup']['max_minutes'] = 100
+    c["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": []}
+    c["live"]["ignored_coins"] = {"long": [], "short": []}
+    c["live"]["warmup_ratio"] = 1
+    c["live"]["max_warmup_minutes"] = 100
     for side in ("long", "short"):
         b = c["bot"][side]
-        b['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0 if side == 'long' else 0.0, 'we_excess_allowance_pct': 0, 'position_exposure_enforcer': {**b['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**b['risk']['total_exposure_enforcer'], 'enabled': False}})
+        b["risk"].update(
+            n_positions=2, total_wallet_exposure_limit=1.0 if side == "long" else 0.0,
+            we_excess_allowance_pct=0, position_exposure_enforcer_enabled=False,
+            total_exposure_enforcer_enabled=False,
+        )
         b["entry_cooldown"]["base_duration_minutes"] = 0
         b["hsl"]["enabled"] = False
         b["forager"].update(volume_ema_span_1m=10, volatility_ema_span_1m=10)
@@ -79,9 +83,9 @@ def _legacy_replay_config():
             enabled=True,
             ema_gating_enabled=True,
             close_pct=0.1,
-            ema_distance_fraction=-0.005,
+            ema_dist=-0.005,
             loss_allowance_pct=0.02,
-            exposure_trigger_ratio=0.3,
+            threshold=0.3,
         )
     c["coin_overrides"] = {
         "ETH": {

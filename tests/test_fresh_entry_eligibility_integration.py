@@ -482,7 +482,7 @@ async def test_pre_create_market_filter_records_exact_existing_gate_reasons():
 
     class MarketBot:
         config = {
-            "live": {"execution": {"limit_order_create_max_market_dist_pct": 0.1}}
+            "live": {"execution": {"limit_order_create_max_market_distance_fraction": 0.1}}
         }
 
         def __init__(self, invalid=None, snapshot_error=None):
@@ -572,7 +572,7 @@ async def test_pre_create_market_filter_records_exact_existing_gate_reasons():
 def test_disabled_generic_distance_guard_still_annotates_churn_distance():
     class Bot:
         config = {
-            "live": {"execution": {"limit_order_create_max_market_dist_pct": 0.0}}
+            "live": {"execution": {"limit_order_create_max_market_distance_fraction": 0.0}}
         }
 
     order = _initial("BTC/USDT:USDT", price=99.0)

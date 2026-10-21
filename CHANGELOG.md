@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name scale-one configuration shares and price offsets with `_fraction`, including strategy
+  sizing, unstuck allowances, simulated fills and live fee/execution policy. Name the absolute
+  Forager score gap `score_hysteresis_margin`. Values, native optimizer IDs and trading packets
+  are unchanged; explicit released-v8 migration reports the new paths in every authored layer.
+
 - Use explicit control values: `null` leaves long/short modes unforced and warmup uncapped;
   `live.startup.warmup_concurrency: "auto"` retains automatic scheduling. CLI, coin patches
   and scenario/fixed overrides share the strict domains; released-v8 migration reports

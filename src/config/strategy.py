@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Optional
 
 from .shared_bot import flatten_shared_bot_side
+from .strategy_paths import lower_runtime_strategy_side
 from .strategy_spec import (
     BOT_POSITION_SIDES,
     DEFAULT_STRATEGY_KIND,
@@ -205,7 +206,7 @@ def build_runtime_strategy_side(
                 ),
             )
             continue
-    return result
+    return lower_runtime_strategy_side(normalized_kind, result)
 
 
 def reject_legacy_flat_strategy_fields(config: dict) -> None:

@@ -26,7 +26,7 @@ def benchmark_inputs(*, bars: int, coins: int):
     config["bot"]["long"]["risk"].update(
         max_positions=min(7, coins - 1), total_wallet_exposure_limit=1.5
     )
-    config["backtest"]["limit_order_fill_buffer_pct"] = 0.0005
+    config["backtest"]["limit_order_fill_buffer_fraction"] = 0.0005
     config["backtest"]["ew_half_life_days"] = 180.0
     return config, candles, markets, btc, timestamps
 

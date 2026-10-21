@@ -10,8 +10,8 @@ Allowed fields are intentionally limited:
 
 - **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
   selected risk fields (position-exposure enforcer settings and
-  `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_distance_fraction`,
-  `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `exposure_trigger_ratio`); and
+  `we_excess_allowance_fraction`); selected unstuck fields (`close_fraction`, `ema_distance_fraction`,
+  `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_fraction`, and `exposure_trigger_ratio`); and
   every HSL field when the global `bot.global.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
@@ -23,7 +23,7 @@ ordinary non-override config fields; those fields are validated as part of that 
 filtered out. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected; use the
 nested v8 strategy path instead.
 
-`bot.<side>.risk.we_excess_allowance_pct` can vary per coin. Excess allowance is
+`bot.<side>.risk.we_excess_allowance_fraction` can vary per coin. Excess allowance is
 always bounded by side TWEL. `bot.<side>.hsl.scale_budget_with_excess_allowance`
 may vary per coin in coin scope, using that coin's effective allowance when enabled.
 
@@ -86,8 +86,8 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
     "XRP": {
       "bot": {
         "long": {
-          "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.05}}},
-          "unstuck": {"ema_gating_enabled": false, "loss_allowance_pct": 0.005},
+          "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.05}}},
+          "unstuck": {"ema_gating_enabled": false, "loss_allowance_fraction": 0.005},
           "entry_cooldown": {
             "base_duration_minutes": 0.05,
             "min_duration_minutes": 0.0,
@@ -104,7 +104,7 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           "wallet_exposure_limit": 0.18
         },
         "short": {
-          "strategy": {"trailing_martingale": {"entry": {"threshold_base_pct": 0.055}}}
+          "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.055}}}
         }
       },
       "live": {"modes": {"long": "normal"}}
@@ -142,8 +142,8 @@ Main config:
       "strategy": {
         "trailing_martingale": {
           "entry": {
-            "threshold_base_pct": 0.021,
-            "initial_ema_dist": 0.001
+            "threshold_base_fraction": 0.021,
+            "initial_ema_distance_fraction": 0.001
           }
         }
       },
@@ -153,10 +153,10 @@ Main config:
       "strategy": {
         "trailing_martingale": {
           "entry": {
-            "threshold_base_pct": 0.019
+            "threshold_base_fraction": 0.019
           },
           "close": {
-            "threshold_base_pct": 0.004
+            "threshold_base_fraction": 0.004
           }
         }
       }
@@ -178,7 +178,7 @@ Main config:
   filtered after the file is validated.
 - Don’t expect per-override approved coin lists to take effect; keep the master coin list in the
   main config.
-- A per-coin `unstuck.loss_allowance_pct` overrides only the selected coin+side's loss allowance
+- A per-coin `unstuck.loss_allowance_fraction` overrides only the selected coin+side's loss allowance
   percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit`;
   it does not create a separate per-coin realized-PnL tracker.
 - A per-coin `entry_cooldown.base_duration_minutes` gates only position-increasing entries for the selected
@@ -249,7 +249,7 @@ this selection produces the same patches.
 
 Selectors use the fine-tune dotted-path matcher: an optional `bot.` prefix, groups or individual
 leaves, full-segment prefix/suffix matching, and `*` as a one-segment wildcard. For example,
-`bot.long.strategy`, `long.strategy.entry.initial_qty_pct` (Trailing Martingale),
+`bot.long.strategy`, `long.strategy.entry.initial_qty_fraction` (Trailing Martingale),
 `*.entry_cooldown.base_duration_minutes`, and `live.account.leverage` are valid selections. A bare leaf such as
 `base_duration_minutes` selects both sides. Overlapping selectors are deduplicated. Group selectors
 include only fields allowed by the coin-override policy; `long.risk` does not override global

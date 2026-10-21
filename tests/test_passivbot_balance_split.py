@@ -4572,7 +4572,7 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     bot = _unit_bot()
     bot._pnls_manager = object()
     bot.coin_overrides = {
-        "HYPE/USDT:USDT": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.005}}}},
+        "HYPE/USDT:USDT": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.005}}}},
         "BTC/USDT:USDT": {"bot": {"long": {}}},
     }
     bot.get_raw_balance = lambda: 2_000.0
@@ -9359,7 +9359,7 @@ def _make_pre_create_distance_guard_bot(
 ):
     bot = _unit_bot()
     bot.config = _unit_config(
-        {"live": {"execution": {"limit_order_create_max_market_dist_pct": threshold}}}
+        {"live": {"execution": {"limit_order_create_max_market_distance_fraction": threshold}}}
     )
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)

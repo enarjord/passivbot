@@ -727,7 +727,7 @@ def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, 
             candidate = deepcopy(config)
             if index:
                 candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.1
-                candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.01
+                candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.01
             payload = backtest.build_backtest_payload(
                 candles, markets, candidate, "binance", btc, timestamps, metrics_only=True,
             )
@@ -875,7 +875,7 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
         config["optimize"]["bounds"][f"{side}_entry_initial_qty_pct"] = [0.01, 0.05]
     config["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.025,
+        "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
     }
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config["optimize"]["scoring"] = [
@@ -885,10 +885,10 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     config["optimize"]["limits"] = []
     scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}
     for label, value in scenario_configs.items():
-        value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.025
+        value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.025
         value["bot"]["short"] = deepcopy(value["bot"]["long"])
         if label == "stress":
-            value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.03
+            value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.03
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("CPU orchestration must never run a CPU simulation")
@@ -904,7 +904,7 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
         base = Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets}, config)
         contexts = [SimpleNamespace(
             label=label, exchanges=["binance"], config=deepcopy(config), msss={"binance": markets},
-            overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.03}
+            overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.03}
             if label == "stress" else {},
         ) for label in scenario_configs]
         suite = SuiteEvaluator(base, contexts, {"default": "mean"})

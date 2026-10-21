@@ -49,8 +49,8 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
             {
                 "ema_span_0": 2.0,
                 "ema_span_1": 3.0,
-                "base_qty_pct": 0.2,
-                "offset": 0.001,
+                "base_qty_fraction": 0.2,
+                "offset_fraction": 0.001,
                 "offset_psize_weight": 0.0,
                 "entry_double_down_factor": 0.0,
                 "offset_volatility_ema_span_1m": 2.0,

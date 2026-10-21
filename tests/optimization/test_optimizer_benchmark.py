@@ -466,7 +466,7 @@ def test_passive_baseline_and_trailing_variants_are_distinct(tmp_path, real_runt
             for side in ("long", "short"):
                 strategy = config["bot"][side]["strategy"]["trailing_martingale"]
                 for leg in ("entry", "close"):
-                    assert (strategy[leg]["retracement_base_pct"] > 0) == (name == f"{leg}_trailing")
+                    assert (strategy[leg]["retracement_base_fraction"] > 0) == (name == f"{leg}_trailing")
     assert not any("passive" in case.features for case in catalogue())
 
 
