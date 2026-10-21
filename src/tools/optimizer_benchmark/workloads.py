@@ -73,7 +73,7 @@ def apply_features(config, case, coins, markets, bars):
     for side in ("long", "short"):
         bot = config["bot"][side]
         slots = 1 if case.topology == "single" else max(1, len(coins) // 2) if case.topology == "forager" else len(coins)
-        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_pct': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold': 0.8}})
+        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_pct': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold_ratio': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold_ratio': 0.8}})
         bot["unstuck"].update(enabled=side in active and bool(flags & {"unstuck", "unstuck_no_ema"}),
                               ema_gating_enabled="unstuck_no_ema" not in flags)
         bot["entry_cooldown"].update(base_duration_minutes=5.0 if flags & {"cooldown", "adaptive_cooldown"} else 0.0)

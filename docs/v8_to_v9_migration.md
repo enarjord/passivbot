@@ -26,7 +26,9 @@ before backtesting a proposed replacement.
 | `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.global` |
 | `live.approved_coins`, `live.ignored_coins` | Separate `bot.<side>.universe` sources |
 | Shared minimum-age and minimum-cost filters | `bot.global.universe`; simulation minimum-cost override remains nullable |
-| Shared market-order policy | `bot.global.execution` |
+| Shared market-order policy | `bot.global.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
+| `live.warmup_ratio` | `bot.global.warmup.span_multiplier`, with the same value |
+| Exposure-enforcer numeric thresholds | `bot.<side>.risk.<enforcer>.threshold_ratio`, with the same value |
 | `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_pct`, `bot.global.warmup` |
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |

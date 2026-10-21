@@ -2520,9 +2520,9 @@ class Passivbot:
         if self._live_market_orders_allowed():
             logging.warning(
                 "[order] live market order execution is enabled | "
-                "market_order_near_touch_threshold=%s; crossing/near-touch orders may be "
+                "market_order_near_touch_fraction=%s; crossing/near-touch orders may be "
                 "submitted as market orders and live exchange slippage controls apply",
-                require_config_value(self.config, 'bot.global.execution.market_order_near_touch_threshold'),
+                require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction'),
             )
 
     def _format_duration(self, ms: int) -> str:
@@ -4815,7 +4815,7 @@ class Passivbot:
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -4886,7 +4886,7 @@ class Passivbot:
             except Exception:
                 longest_span = wmax
             logging.debug(
-                "[warmup] target | longest_span=%dm warmup_ratio=%.3g max_warmup_minutes=%s",
+                "[warmup] target | longest_span=%dm span_multiplier=%.3g max_minutes=%s",
                 int(longest_span),
                 float(warmup_ratio),
                 "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),
@@ -5378,7 +5378,7 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -5541,7 +5541,7 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -10074,7 +10074,7 @@ class Passivbot:
         )
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -17860,7 +17860,7 @@ class Passivbot:
                 ),
                 "market_orders_allowed": bool(require_config_value(self.config, 'bot.global.execution.market_orders_allowed')),
                 "market_order_near_touch_threshold": float(
-                    require_config_value(self.config, 'bot.global.execution.market_order_near_touch_threshold')
+                    require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction')
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
@@ -18935,7 +18935,7 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0) or 0.0
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0) or 0.0
             )
         except Exception:
             warmup_ratio = 0.0
@@ -19735,7 +19735,7 @@ class Passivbot:
         span = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0

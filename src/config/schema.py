@@ -96,12 +96,12 @@ def _get_shared_bot_defaults():
                 "we_excess_allowance_pct": 0.37,
                 "position_exposure_enforcer": {
                     "enabled": False,
-                    "threshold": 1.0,
+                    'threshold_ratio': 1.0,
                 },
                 "total_exposure_enforcer": {
                     "enabled": False,
                     "policy": "reduce_overweight",
-                    "threshold": 1.0,
+                    'threshold_ratio': 1.0,
                 },
             },
             "unstuck": {
@@ -149,12 +149,12 @@ def _get_shared_bot_defaults():
                 "we_excess_allowance_pct": 0.0,
                 "position_exposure_enforcer": {
                     "enabled": True,
-                    "threshold": 0.8,
+                    'threshold_ratio': 0.8,
                 },
                 "total_exposure_enforcer": {
                     "enabled": True,
                     "policy": "reduce_overweight",
-                    "threshold": 0.8,
+                    'threshold_ratio': 0.8,
                 },
             },
             "unstuck": {
@@ -366,10 +366,10 @@ def _build_template_config():
                     },
                     "execution": {
                         "market_orders_allowed": False,
-                        "market_order_near_touch_threshold": 0.001,
+                        "market_order_near_touch_fraction": 0.001,
                     },
                     "forager": {"score_hysteresis_pct": 0.02},
-                    "warmup": {"ratio": 0.3, "max_minutes": 0},
+                    "warmup": {'span_multiplier': 0.3, "max_minutes": 0},
                     "hsl": {"scope": "coin"},
                     "loss_gate": {
                         "max_drawdown_ratio": 1.0,

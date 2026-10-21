@@ -37,7 +37,7 @@ def deny_network(monkeypatch):
 
 def runtime_inputs(mode):
     cfg, markets, candles = inputs(mode)
-    cfg['bot']['global']['warmup']['ratio'] = 1.0
+    cfg['bot']['global']['warmup']['span_multiplier'] = 1.0
     cfg['bot']['global']['warmup']['max_minutes'] = 1
     cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0.0
     cfg["backtest"].update(start_date="2024-01-01", end_date="2024-01-01T02:40:00")

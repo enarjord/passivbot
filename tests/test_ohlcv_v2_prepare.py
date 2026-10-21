@@ -46,7 +46,7 @@ def _minimal_bot_config(approved_coins):
         "global": {
             "strategy_kind": "trailing_martingale",
             "universe": {"minimum_coin_age_days": 0.0},
-            "warmup": {"ratio": 0.0, "max_minutes": 0.0},
+            "warmup": {'span_multiplier': 0.0, "max_minutes": 0.0},
         },
         "long": {
             "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},

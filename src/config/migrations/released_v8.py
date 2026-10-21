@@ -1060,7 +1060,7 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
         shared["strategy"] = {kind: shared["strategy"][kind]}
         shared["risk"]["max_positions"] = shared["risk"].pop("n_positions")
         for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
-            shared["risk"][owner] = {"threshold": shared["risk"].pop(f"{owner}_threshold")}
+            shared["risk"][owner] = {"threshold_ratio": shared["risk"].pop(f"{owner}_threshold")}
         shared["unstuck"]["exposure_trigger_ratio"] = shared["unstuck"].pop("threshold")
         shared["unstuck"]["ema_distance_fraction"] = shared["unstuck"].pop("ema_dist")
         shared["forager"].pop("volume_drop_pct", None)

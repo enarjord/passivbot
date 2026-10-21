@@ -85,7 +85,7 @@ DIFF_SETTING_PATHS = (
         "bot.global.warmup.max_minutes",
         ("bot", "global", "warmup", "max_minutes"),
     ),
-    ("cache", "bot.global.warmup.ratio", ("bot", "global", "warmup", "ratio")),
+    ("cache", "bot.global.warmup.span_multiplier", ("bot", "global", "warmup", "span_multiplier")),
 )
 
 
@@ -588,7 +588,7 @@ def _cache_readiness_report(
 ) -> dict[str, Any]:
     checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
     warmup = config.get("bot", {}).get("global", {}).get("warmup", {})
-    checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "ratio")})
+    checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -656,18 +656,18 @@ def _cache_readiness_report(
     if max_minutes_status != "present":
         _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
                           f"bot.global.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
-    warmup_ratio_status = _numeric_status(_setting_value(warmup, "ratio"), allow_zero=True)
+    warmup_ratio_status = _numeric_status(_setting_value(warmup, "span_multiplier"), allow_zero=True)
     if warmup_ratio_status == "missing":
         _append_attention(
             candles,
             "warmup_ratio_missing",
-            "bot.global.warmup.ratio is missing; EMA warmup buffer intent is implicit",
+            "bot.global.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
         )
     elif warmup_ratio_status != "present":
         _append_attention(
             candles,
             f"warmup_ratio_{warmup_ratio_status}",
-            f"bot.global.warmup.ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"bot.global.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
         )
 
     archive_status = _bool_status(
@@ -1221,7 +1221,7 @@ def build_live_config_preflight_report(
         "cache": {
             "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("global", {}).get("warmup", {}), ("max_minutes", "ratio")
+                bot.get("global", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
             ),
             "readiness": _cache_readiness_report(
                 live,

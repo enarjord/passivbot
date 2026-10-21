@@ -46,7 +46,7 @@ def _base_config():
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0},
-                "warmup": {"ratio": 0.0, "max_minutes": 0},
+                "warmup": {'span_multiplier': 0.0, "max_minutes": 0},
             },
         },
         "live": {},

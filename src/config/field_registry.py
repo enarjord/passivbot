@@ -172,9 +172,9 @@ _FIELDS_BY_TYPE = {
         "bot.global.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
         "bot.global.unstuck": "memory_ema_span_minutes",
         "bot.global.universe": "minimum_coin_age_days",
-        "bot.global.execution": "market_order_near_touch_threshold",
+        "bot.global.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_pct",
-        "bot.global.warmup": "ratio max_minutes",
+        "bot.global.warmup": "span_multiplier max_minutes",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -255,7 +255,7 @@ _SHARED_SIDE_FIELDS = {
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
-        risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
+        risk.position_exposure_enforcer.threshold_ratio risk.total_exposure_enforcer.threshold_ratio
         risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
         unstuck.close_pct unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
         unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio

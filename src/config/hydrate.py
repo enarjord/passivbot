@@ -52,7 +52,7 @@ def reject_backtest_inherited_live_fields(result: dict) -> None:
             "fee_pct_fallback": "live.fills.fee_pct_fallback",
             "fee_pct_sanity_abs_max": "live.fills.fee_pct_sanity_abs_max",
             "market_orders_allowed": "bot.global.execution.market_orders_allowed",
-            "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_threshold",
+            "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_fraction",
         }
         owner_paths = ", ".join(owners.get(key, f"live.{key}") for key in invalid)
         raise ValueError(

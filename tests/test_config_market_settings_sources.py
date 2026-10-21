@@ -29,7 +29,7 @@ def _base_config():
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 30},
-                "warmup": {"ratio": 0.2, "max_minutes": 0},
+                "warmup": {'span_multiplier': 0.2, "max_minutes": 0},
             },
         },
         "live": {"account": {}, "candles": {}},
