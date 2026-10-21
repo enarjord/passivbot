@@ -82,3 +82,42 @@ def test_unreleased_strategy_span_spellings_are_not_runtime_aliases(kind):
         prepare_config(source, verbose=False)
     with pytest.raises((KeyError, TypeError, ValueError), match="unknown|Unknown|retired|unexpected"):
         migrate(source)
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_independent_coin_minute_span_pins_reach_unchanged_native_columns(kind, side):
+    from types import SimpleNamespace
+    import numpy as np
+
+    from backtest import prep_backtest_args
+    from config.overrides import parse_overrides
+    from optimization.gpu import model
+    from optimization.gpu.coin_parameters import build_coin_override_parameters
+    from tools.gpu_parity import build_parser, fixture_inputs
+
+    source, _candles, markets, _btc, _timestamps = fixture_inputs(build_parser().parse_args([
+        "--fixture", kind, "--sides", "both", "--coins", "2", "--bars", "128",
+        "--exchange", "binance", "--unstuck",
+    ]))
+    coins = source["backtest"]["coins"]["binance"]
+    source["coin_overrides"] = {
+        coins[0]: {"bot": {side: {"unstuck": {"ema_span_0_minutes": 123.75}}}},
+    }
+    original = deepcopy(source)
+    prepared = parse_overrides(source, verbose=False)
+    bots, strategies, _market_params, backtest = prep_backtest_args(prepared, markets, "binance")
+    payload = SimpleNamespace(bot_params_list=bots, strategy_params_list=strategies,
+                              backtest_params=backtest)
+    matrix, contract = build_coin_override_parameters(
+        config=prepared, mss=markets, exchange="binance", coins=coins, payload=payload,
+        side=side, strategy_kind=kind,
+    )
+    prefix = "TRAILING_MARTINGALE" if kind == "trailing_martingale" else "EMA_ANCHOR"
+    start = getattr(model, prefix + "_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN")
+    assert bots[0][side]["unstuck_ema_span_0"] == 123.75
+    assert matrix[0, start] == 123.75
+    assert np.isnan(matrix[0, start + 1])  # The other span still inherits the global value.
+    assert np.isnan(matrix[1, start:start + 2]).all()
+    assert contract["exact_overrides"][0]["bot"][side]["unstuck"] == {"ema_span_0_minutes": 123.75}
+    assert source == original
