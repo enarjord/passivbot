@@ -216,14 +216,18 @@ def anchored_universe_source_view(config):
     return normalize_universe_source_bindings(universe_source_view(config), anchor_all=True)
 
 
-def resolve_universe_sources(config, field, *, allow_partial=False):
+def resolve_universe_sources(config, field, *, allow_partial=False, position_sides=None):
     """Read each effective source in this context; shared sources are read once.
 
     Partial mode returns unavailable sides separately for the live entry gate;
     an unreadable source is never represented as a successful empty selection.
+    A prepared scenario may resolve only the sides whose source was replaced.
     """
     import hjson
     from utils import normalize_coins_source, read_external_coins_lists, _parse_plain_coins_list
+    positions = ("long", "short") if position_sides is None else tuple(position_sides)
+    if any(side not in {"long", "short"} for side in positions):
+        raise ValueError("position_sides must contain only long/short")
     sources = raw_side_universe_sources(config, field)
     shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
     base = config.get("live", {}).get("base_config_path", "")
@@ -277,7 +281,7 @@ def resolve_universe_sources(config, field, *, allow_partial=False):
         return normalize_coins_source(source, allow_all=field == "approved_coins", resolve_files=False, parse_jsonish=False)
 
     values, errors = {}, {}
-    inherited = [side for side in ("long", "short") if field == "approved_coins" and sources.get(side) is None]
+    inherited = [side for side in positions if field == "approved_coins" and sources.get(side) is None]
     if inherited:
         try:
             common = parse(shared, common=True)
@@ -287,7 +291,7 @@ def resolve_universe_sources(config, field, *, allow_partial=False):
         else:
             for side in inherited:
                 values[side] = common[side]
-    for side in ("long", "short"):
+    for side in positions:
         if side in inherited:
             continue
         try:
