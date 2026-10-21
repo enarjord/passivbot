@@ -97,8 +97,8 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
         "logging",
         "monitor",
     }
-    assert require_side_universe_sources(result, 'approved_coins') == {side: "missing-coin-list.json" for side in ('long', 'short')}
-    assert require_side_universe_sources(result, 'ignored_coins') == {side: "missing-ignored-list.json" for side in ('long', 'short')}
+    assert require_side_universe_sources(result, 'approved_coins') == {side: str(tmp_path / "missing-coin-list.json") for side in ('long', 'short')}
+    assert require_side_universe_sources(result, 'ignored_coins') == {side: str(tmp_path / "missing-ignored-list.json") for side in ('long', 'short')}
     assert result["backtest"]["end_date"] == "now"
     assert result["backtest"]["filter_by_min_effective_cost"] is None
     assert result["bot"]["long"]["risk"]["max_positions"] == 4
@@ -651,7 +651,7 @@ def test_full_cleanup_normalizes_optimizer_policy_without_resolving_inputs():
     cfg["optimize"]["limits"] = []
     result = cleanup_config(cfg)
     assert require_side_universe_sources(result, 'approved_coins') == {side: ["BTC", "ETH"] for side in ('long', 'short')}
-    assert require_side_universe_sources(result, 'ignored_coins') == {side: "unreadable-coins.json" for side in ('long', 'short')}
+    assert require_side_universe_sources(result, 'ignored_coins') == {side: str(Path.cwd() / "unreadable-coins.json") for side in ('long', 'short')}
     assert result["optimize"]["backend"] == "pymoo"
     assert result["optimize"]["population_size"] == 42
     assert result["optimize"]["seed"] == 123

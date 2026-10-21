@@ -70,7 +70,12 @@ def test_scenario_coin_forms_preserve_authored_form_and_suite_meaning(field_name
     source = get_template_config()
     source["backtest"]["scenarios"] = [{"label": "base", field_name: value}]
     exported = _roundtrip(source)
-    assert exported["backtest"]["scenarios"] == source["backtest"]["scenarios"]
+    canonical_scenarios = deepcopy(source["backtest"]["scenarios"])
+    if field_name == "ignored_coins" and isinstance(value, str):
+        canonical_scenarios[0][field_name] = expected
+    assert exported["backtest"]["scenarios"] == canonical_scenarios
+    formatted = json.loads(render_source(json.dumps(source), source=Path("input.json"), mode="format"))
+    assert formatted["backtest"]["scenarios"] == source["backtest"]["scenarios"]
     scenarios, _ = build_scenarios(extract_suite_config(exported, None))
     assert getattr(scenarios[0], field_name) == expected
 
