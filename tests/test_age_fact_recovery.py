@@ -52,6 +52,27 @@ async def test_live_unknown_inception_retries_then_admits_without_losing_known_f
         assert all(call.args[0] == [coin] for call in lookup.await_args_list)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unknown", [None, 0.0])
+async def test_live_resolved_alias_repairs_unknown_symbol_without_refetch(monkeypatch, unknown):
+    import passivbot as live
+    coin, symbol = "AAA", "AAA/USDT:USDT"
+    bot = object.__new__(live.Passivbot)
+    bot.config = get_template_config()
+    bot.exchange = "binance"
+    bot.first_timestamps = {coin: BASE, symbol: unknown}
+    bot.approved_coins_minus_ignored_coins = {"long": {coin}, "short": set()}
+    bot.markets_dict = {symbol: {}}
+    bot.coin_to_symbol = lambda value, **_kwargs: symbol if value == coin else value
+    bot.get_exchange_time = lambda: BASE + 61 * DAY
+    lookup = AsyncMock(side_effect=AssertionError("resolved aliases do not need a fetch"))
+    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    assert not bot.is_old_enough("long", symbol)
+    await bot.update_first_timestamps()
+    assert bot.is_old_enough("long", symbol)
+    lookup.assert_not_awaited()
+
+
 def _cache_config(tmp_path, ages):
     config = get_template_config()
     config["backtest"].update(
@@ -117,7 +138,8 @@ def test_zero_age_reuses_unknown_cache_and_explicit_override_remains_immutable(t
     assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == original_files
 
 
-@pytest.mark.parametrize("context", ["root", "scenario", "fixed_root_age", "inline_only"])
+@pytest.mark.parametrize("context", ["root", "scenario", "fixed_root_age", "inline_only",
+                                     "fixed_coin_leaf", "fixed_coin_object"])
 def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, context):
     from released_v8_fixtures import released_v8_policy
     from tools.migrate_config_v9 import migrate
@@ -134,7 +156,16 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
         source["backtest"]["scenarios"] = [{"label": "coin", "overrides": {"coin_overrides.AAA": inline}}]
     elif context == "fixed_root_age":
         source["optimize"]["fixed_runtime_overrides"] = {"live.minimum_coin_age_days": 5.5}
+    elif context == "fixed_coin_leaf":
+        source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA.bot.long.unstuck_close_pct": 0.25}
+    elif context == "fixed_coin_object":
+        source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA": inline}
     before, contents = deepcopy(source), file.read_bytes()
+    if context == "fixed_coin_object":
+        with pytest.raises(TypeError, match="must target leaf settings"):
+            migrate(source, memory_span_minutes=123.5, base_config_path=str(tmp_path / "input.json"))
+        assert source == before and file.read_bytes() == contents
+        return
     result = migrate(source, memory_span_minutes=123.5, base_config_path=str(tmp_path / "input.json"))
     assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.25
     assert all(result.config["bot"][side]["universe"]["minimum_coin_age_days"] == 60.0 for side in ("long", "short"))
@@ -144,4 +175,11 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
         assert any("override_config_path::" in item["path"] and "minimum_coin_age_days" in item["path"] and "ignored" in item["reason"] for item in result.changes)
     if context == "fixed_root_age":
         assert result.config["optimize"]["fixed_runtime_overrides"] == {f"bot.{side}.universe.minimum_coin_age_days": 5.5 for side in ("long", "short")}
+    elif context == "fixed_coin_leaf":
+        fixed = result.config["optimize"]["fixed_runtime_overrides"]
+        assert fixed == {"coin_overrides.AAA.bot.long.unstuck.close_fraction": 0.25}
+    elif context == "scenario":
+        patch = result.config["backtest"]["scenarios"][0]["overrides"]["coin_overrides.AAA"]
+        assert patch["bot"]["long"]["unstuck"]["close_fraction"] == 0.25
+        assert "minimum_coin_age_days" not in json.dumps(patch)
     assert source == before and file.read_bytes() == contents

@@ -5280,8 +5280,8 @@ class Passivbot:
             if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
         ]
         if not symbols:
-            return
-        if self.exchange == "fake":
+            first_timestamps = {}
+        elif self.exchange == "fake":
             first_timestamps = {}
             for symbol in symbols:
                 symbolf = self.coin_to_symbol(symbol, verbose=False)
