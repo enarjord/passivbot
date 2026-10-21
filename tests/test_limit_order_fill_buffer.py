@@ -79,6 +79,8 @@ def _native_args():
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
     cfg['bot']['global']['execution']['market_orders_allowed'] = False
     for side in ['long', 'short']:
+        # This synthetic replay isolates fill rules, without inception metadata.
+        cfg['bot'][side]['universe']['minimum_coin_age_days'] = 0.0
         cfg['bot'][side]['hsl']['enabled'] = False
         cfg['bot'][side]['unstuck']['enabled'] = False
         cfg['bot'][side]['risk']['max_positions'] = 1

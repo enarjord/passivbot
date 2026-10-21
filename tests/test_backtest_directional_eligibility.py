@@ -36,6 +36,8 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
         }
     )
     for pside in ("long", "short"):
+        # Directional masks are independent of age in this synthetic history.
+        config["bot"][pside]["universe"]["minimum_coin_age_days"] = 0.0
         config["bot"][pside]["risk"].update(
             {"max_positions": 1, "total_wallet_exposure_limit": 1.5}
         )

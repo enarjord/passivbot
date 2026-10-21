@@ -44,6 +44,8 @@ def _legacy_replay_config():
     c["live"]["ignored_coins"] = {"long": [], "short": []}
     c["live"]["warmup_ratio"] = 1
     c["live"]["max_warmup_minutes"] = 100
+    # The synthetic replay isolates EMA migration and has no inception facts.
+    c["live"]["minimum_coin_age_days"] = 0.0
     for side in ("long", "short"):
         b = c["bot"][side]
         b["risk"].update(
