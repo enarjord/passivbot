@@ -31,7 +31,7 @@ before backtesting a proposed replacement.
 | `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.global` |
 | `live.approved_coins`, `live.ignored_coins` | Separate `bot.<side>.universe` sources |
 | Shared minimum age | Copy `live.minimum_coin_age_days` to `bot.long.universe.minimum_coin_age_days` and `bot.short.universe.minimum_coin_age_days`; report consistent all-mode initial-entry admission |
-| Shared minimum-cost filter | `bot.global.universe`; simulation minimum-cost override remains nullable |
+| Shared minimum-cost filter | Copy to both `bot.<side>.universe.filter_by_min_effective_cost` leaves; simulation override remains nullable |
 | Shared market-order policy | `bot.global.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
 | `live.warmup_ratio` | `bot.global.warmup.span_multiplier`, with the same value |
 | Exposure-enforcer numeric thresholds | `bot.<side>.risk.<enforcer>.threshold_ratio`, with the same value |

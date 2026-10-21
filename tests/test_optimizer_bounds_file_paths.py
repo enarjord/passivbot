@@ -147,7 +147,11 @@ def test_retained_universe_files_use_original_resolver_in_scenarios_and_fixed_pi
     monkeypatch.chdir(source_dir)
     exported = apply_recommended_bounds(config, base_config_path=str(source_path))
     assert config == before
-    assert exported["bot"]["long"]["universe"] == {"approved_coins": ["bybit::BTCUSDT", "ETH"], "ignored_coins": ["SOL"]}
+    assert exported["bot"]["long"]["universe"] == {
+        "approved_coins": ["bybit::BTCUSDT", "ETH"], "ignored_coins": ["SOL"],
+        "filter_by_min_effective_cost": True,
+        "minimum_coin_age_days": 60.0,
+    }
     assert exported["optimize"]["fixed_runtime_overrides"] == {"bot.short.universe.approved_coins": str(short.resolve())}
     scenario = exported["backtest"]["scenarios"][0]["overrides"]
     assert scenario == {"bot.long.universe": {"approved_coins": str(approved.resolve()), "ignored_coins": [str(ignored.resolve())]}}

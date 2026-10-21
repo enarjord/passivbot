@@ -145,6 +145,8 @@ def _bot_metadata(path):
         from .strategy_spec import get_supported_strategy_kinds
 
         data["domain"] = FieldDomain(choices=get_supported_strategy_kinds())
+    elif local == "universe.filter_by_min_effective_cost":
+        data["description"] = "Side-specific flat initial-entry eligibility; simulation null inherits this flag, while exchange minima and held-position management remain authoritative."
     elif local == "universe.minimum_coin_age_days":
         data.update(unit="days", domain=FieldDomain(minimum=0.0, finite=True),
                     description="Initial-entry minimum age in every selection mode; zero bypasses the gate, unknown inception fails a positive gate, and held positions remain manageable.")

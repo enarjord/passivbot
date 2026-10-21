@@ -3383,7 +3383,7 @@ def _multicoin_exposure_fixture(
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
-            filter_by_min_effective_cost=filter_by_min_effective_cost,
+            filter_by_min_effective_cost={"long": filter_by_min_effective_cost, "short": filter_by_min_effective_cost},
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -3451,7 +3451,7 @@ def _multicoin_exposure_fixture(
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
-            filter_by_min_effective_cost=filter_by_min_effective_cost,
+            filter_by_min_effective_cost={"long": filter_by_min_effective_cost, "short": filter_by_min_effective_cost},
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -3610,7 +3610,8 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         btc_prices=30_000.0 + steps if features else None,
     )
     generic = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, **kwargs
+        run, data, pnl_lookback_bars=1440, **kwargs,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     # Include empty and early-finished candidates alongside a full replay. The
     # boundary crosses activation, hours, UTC days, and HSL episodes.
@@ -3627,6 +3628,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=batch_size * 2 * 47,
         **kwargs,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     for _ in range(2):
         actual = chunked.run(params, profile=True, end_steps=ends)
@@ -3668,6 +3670,7 @@ def test_tm_multicoin_temporal_replay_interrupt_does_not_leak_partial_state():
         side="long",
         max_dispatch_candidate_bars=2 * 7,
         interrupt_check=interrupt,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     with pytest.raises(InterruptedError, match="test interruption"):
         chunked.run(matrix)
@@ -3696,6 +3699,7 @@ def test_tm_multicoin_temporal_replay_preserves_unavailable_valuation():
         pnl_lookback_bars=1440,
         side="long",
         max_dispatch_candidate_bars=2 * 7,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     for runner in (generic, chunked):
         with pytest.raises(ValueError, match="unavailable held-position valuation"):
@@ -3737,6 +3741,7 @@ def test_tm_multicoin_temporal_replay_stops_on_fatal_marker(
         pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=2 * 7,
         interrupt_check=inject_failure,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     matrix = np.asarray([row], dtype=np.float64)
     with pytest.raises(error, match=message):
@@ -3861,6 +3866,7 @@ def test_mps_tm_multicoin_entry_intervals_remain_coin_and_side_local(topology):
             data,
             pnl_lookback_bars=1440,
             entry_interval_enabled=True,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         candidates = np.asarray([row + row], dtype=np.float64)
 
@@ -3903,11 +3909,12 @@ def test_mps_multicoin_retains_synchronized_btc_risk_surface(strategy_kind, topo
             else MpsTrailingMartingaleMulticoinRunner
         )
     if topology == "fused":
-        runner = runner_cls(run, data, pnl_lookback_bars=1440, btc_prices=btc_prices)
+        runner = runner_cls(run, data, pnl_lookback_bars=1440, btc_prices=btc_prices, filter_by_min_effective_cost={"long": False, "short": False})
         candidates = np.asarray([row + row], dtype=np.float64)
     else:
         runner = runner_cls(
-            run, data, pnl_lookback_bars=1440, side="long", btc_prices=btc_prices
+            run, data, pnl_lookback_bars=1440, side="long", btc_prices=btc_prices,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         candidates = np.asarray([row], dtype=np.float64)
 
@@ -3956,6 +3963,7 @@ def test_mps_multicoin_forced_normal_reserves_active_slots(strategy_kind, topolo
             pnl_lookback_bars=1440,
             collect_coin_fill_counts=True,
             hedge_mode=True,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         forced_runner = fused_runner_cls(
             run,
@@ -3965,6 +3973,7 @@ def test_mps_multicoin_forced_normal_reserves_active_slots(strategy_kind, topolo
             short_coin_overrides=forced,
             collect_coin_fill_counts=True,
             hedge_mode=True,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         parameters = np.asarray([row + row], dtype=np.float64)
     else:
@@ -4132,7 +4141,7 @@ def test_mps_ema_multicoin_aggregated_interval_fused_smoke(interval_minutes):
         interval_minutes=interval_minutes,
         return_context=True,
     )
-    runner = MpsEmaAnchorMulticoinFusedRunner(run, data, pnl_lookback_bars=0)
+    runner = MpsEmaAnchorMulticoinFusedRunner(run, data, pnl_lookback_bars=0, filter_by_min_effective_cost={"long": False, "short": False})
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
@@ -4171,7 +4180,7 @@ def test_mps_tm_multicoin_aggregated_interval_fused_smoke(interval_minutes):
         interval_minutes=interval_minutes,
         return_context=True,
     )
-    runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data, pnl_lookback_bars=0)
+    runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data, pnl_lookback_bars=0, filter_by_min_effective_cost={"long": False, "short": False})
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
@@ -4242,6 +4251,7 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
             pnl_lookback_bars=1440,
             long_coin_overrides=overrides,
             short_coin_overrides=overrides,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         short_row = list(row)
         qty_key = (
@@ -4351,7 +4361,7 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
         row[keys.index(key)] = value
 
     if topology == "fused":
-        runner = fused_runner_cls(run, data, pnl_lookback_bars=1440)
+        runner = fused_runner_cls(run, data, pnl_lookback_bars=1440, filter_by_min_effective_cost={"long": False, "short": False})
         params = np.asarray([row + row], dtype=np.float64)
     else:
         params = np.asarray([row], dtype=np.float64)
@@ -4436,6 +4446,7 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.asarray([long_row + short_row], dtype=np.float64))
     synchronize()
 
@@ -5108,7 +5119,7 @@ def test_mps_fused_min_cost_admits_funded_coins_with_both_account_modes(
         data,
         pnl_lookback_bars=1440,
         hedge_mode=hedge_mode,
-        filter_by_min_effective_cost=True,
+        filter_by_min_effective_cost={"long": True, "short": True},
     )
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
@@ -5258,7 +5269,7 @@ def test_mps_fused_one_way_min_cost_rejection_blocks_side_arbitration(strategy_k
         data,
         pnl_lookback_bars=1440,
         hedge_mode=False,
-        filter_by_min_effective_cost=True,
+        filter_by_min_effective_cost={"long": True, "short": True},
     )
 
     output = runner.run(np.asarray([long_row + short_row], dtype=np.float64))
@@ -5844,6 +5855,7 @@ def test_mps_fused_multicoin_fixed_wel_uses_each_configured_denominator(
         short_coin_overrides=overrides,
         hedge_mode=hedge_mode,
         dynamic_wel_by_tradability=False,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
@@ -6201,6 +6213,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         market_order_near_touch_threshold=0.003,
         hsl_raw_drawdown_enabled=True,
         recovery_distribution_enabled=True,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
     assert runner.settings.cpu()[5].item() <= 0.1
@@ -6242,6 +6255,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             pnl_lookback_bars=1440,
             side=side,
             forager_score_hysteresis_pct=-0.01,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
     with pytest.raises(ValueError, match="max_realized_loss_pct"):
         MpsEmaAnchorMulticoinRunner(
@@ -6250,6 +6264,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             pnl_lookback_bars=1440,
             side=side,
             max_realized_loss_pct=float("nan"),
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
     with pytest.raises(ValueError, match="market_order_near_touch_threshold"):
         MpsEmaAnchorMulticoinRunner(
@@ -6258,6 +6273,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             pnl_lookback_bars=1440,
             side=side,
             market_order_near_touch_threshold=float("nan"),
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
 
 
@@ -6266,7 +6282,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     )
     disabled[:, 11] = 0.0
     disabled_output = MpsEmaAnchorMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled
+        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.array([row], dtype=np.float64))
     synchronize()
     assert disabled_output["day_has_fill"].sum().item() == 0
@@ -6291,7 +6308,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         30.0,
     ]
     exact_last_output = MpsEmaAnchorMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last
+        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.array([row, changed_candidate], dtype=np.float64))
     synchronize()
     assert torch.equal(
@@ -6644,6 +6662,7 @@ def test_mps_tm_fused_coin_overrides_resolve_ema_gates_per_side():
         long_coin_overrides=long_overrides,
         short_coin_overrides=short_overrides,
         collect_coin_fill_counts=True,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
@@ -7536,6 +7555,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         collect_coin_fill_counts=True,
         hedge_mode=True,
         market_order_slippage_pct=0.01,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     market_runner = MpsEmaAnchorMulticoinFusedRunner(
         run,
@@ -7548,6 +7568,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         market_orders_allowed=True,
         market_order_near_touch_threshold=0.001,
         market_order_slippage_pct=0.01,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
 
     end_steps = np.asarray([count - 2, count - 1], dtype=np.int32)
@@ -7618,6 +7639,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         short_coin_overrides=overrides,
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     market_runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
@@ -7630,6 +7652,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         market_orders_allowed=True,
         market_order_near_touch_threshold=0.001,
         market_order_slippage_pct=0.01,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
 
     resting = resting_runner.run(params)
@@ -7704,6 +7727,7 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
         hedge_mode=hedge_mode,
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.001,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
 
     output = runner.run(params)
@@ -7785,6 +7809,7 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
         hedge_mode=hedge_mode,
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=0.1,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
 
     output = runner.run(params)
@@ -8045,6 +8070,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         hsl_raw_drawdown_enabled=True,
         hsl_raw_tail_enabled=True,
         recovery_distribution_enabled=True,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     torch.testing.assert_close(runner.settings, run_settings)
     for invalid_row in rows[3:5]:
@@ -8397,10 +8423,12 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
     params = np.asarray([side_row + side_row], dtype=np.float64)
 
     hedge_output = runner_cls(
-        runs[0], data, pnl_lookback_bars=1440, hedge_mode=True
+        runs[0], data, pnl_lookback_bars=1440, hedge_mode=True,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(params)
     one_way_output = runner_cls(
-        runs[0], data, pnl_lookback_bars=1440, hedge_mode=False
+        runs[0], data, pnl_lookback_bars=1440, hedge_mode=False,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(params)
     override_cols = (
         EMA_ANCHOR_COIN_OVERRIDE_COLS
@@ -8419,6 +8447,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
         long_coin_overrides=long_overrides,
         short_coin_overrides=short_overrides,
         hedge_mode=False,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(params)
     synchronize()
 
@@ -8699,6 +8728,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         hsl_raw_drawdown_enabled=True,
         hsl_raw_tail_enabled=True,
         recovery_distribution_enabled=True,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     torch.testing.assert_close(runner.settings, run_settings)
     for invalid_row in rows[3:5]:
@@ -8920,6 +8950,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
                 (coin_count, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS - 1),
                 dtype=np.float32,
             ),
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
     truncated = runner.run(
         np.asarray([rows[0]], dtype=np.float64),
@@ -9100,6 +9131,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         max_realized_loss_pct=0.1,
         hsl_raw_drawdown_enabled=True,
         recovery_distribution_enabled=True,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     assert runner.settings.cpu()[5].item() <= 0.1
     output = runner.run(np.array([row, row], dtype=np.float64))
@@ -9127,7 +9159,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     )
     disabled[:, 24] = 0.0
     disabled_output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled
+        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.array([row], dtype=np.float64))
     synchronize()
     assert disabled_output["day_has_fill"].sum().item() == 0
@@ -9168,7 +9201,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         1.0,
     ]
     exact_last_output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last
+        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.array([row, changed_candidate], dtype=np.float64))
     synchronize()
     assert torch.equal(
@@ -9657,6 +9691,7 @@ def _tm_multicoin_off_tick_reducer_case(
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
         collect_coin_fill_counts=collect_coin_fill_counts,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     return runner, candidate, market
 
@@ -10522,6 +10557,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=0.002,
             market_order_slippage_pct=0.01,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     else:
@@ -10532,6 +10568,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=0.002,
             market_order_slippage_pct=0.01,
+            filter_by_min_effective_cost={"long": False, "short": False},
         )
         param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
 
@@ -10582,6 +10619,7 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
         market_orders_allowed=True,
         market_order_near_touch_threshold=0.002,
         market_order_slippage_pct=0.01,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     baseline = list(baseline)
     baseline[
@@ -11115,7 +11153,8 @@ def test_mps_tm_multicoin_rejects_held_tails_before_twel_repair(side):
     ] = 0.0
     with pytest.raises(ValueError, match="held-position valuation"):
         MpsTrailingMartingaleMulticoinRunner(
-            runs[1], data, pnl_lookback_bars=1440, side=side
+            runs[1], data, pnl_lookback_bars=1440, side=side,
+            filter_by_min_effective_cost={"long": False, "short": False},
         ).run(np.asarray([baseline, repaired], dtype=np.float64))
 
 
@@ -11169,7 +11208,8 @@ def test_mps_ema_multicoin_rejects_held_tails_before_twel_repair(side):
     baseline[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")] = 0.0
     with pytest.raises(ValueError, match="held-position valuation"):
         MpsEmaAnchorMulticoinRunner(
-            runs[1], data, pnl_lookback_bars=1440, side=side
+            runs[1], data, pnl_lookback_bars=1440, side=side,
+            filter_by_min_effective_cost={"long": False, "short": False},
         ).run(np.asarray([baseline, repaired], dtype=np.float64))
 
 
@@ -11313,7 +11353,8 @@ def test_mps_tm_multicoin_grid_can_fill_without_off_tick_reducer(side):
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides
+        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.asarray([candidate], dtype=np.float64))
     synchronize()
 
@@ -11368,7 +11409,8 @@ def test_mps_tm_multicoin_small_excess_reducer_crosses_strict_target(side):
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides
+        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.asarray([candidate], dtype=np.float64))
     synchronize()
 
@@ -11423,7 +11465,8 @@ def test_mps_tm_multicoin_short_post_repair_grid_uses_negative_target_tick():
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side="short", coin_overrides=overrides
+        run, data, pnl_lookback_bars=1440, side="short", coin_overrides=overrides,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.asarray([candidate], dtype=np.float64))
     synchronize()
 
@@ -11587,7 +11630,8 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides
+        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.asarray([candidate, twel_only], dtype=np.float64))
     synchronize()
 
@@ -11702,7 +11746,8 @@ def test_mps_trailing_martingale_multicoin_drops_subminimum_final_touch_close(
     row.extend([43200.0, 43200.0])
 
     output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side
+        runs[0], data, pnl_lookback_bars=1440, side=side,
+        filter_by_min_effective_cost={"long": False, "short": False},
     ).run(np.array([row], dtype=np.float64))
     synchronize()
 

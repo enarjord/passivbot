@@ -82,7 +82,7 @@ fn equity_shared_references_match_current_producers() {
         ew_half_life_days: None,
         hsl_detailed_report: false,
         skip_btc_analysis: false,
-        filter_by_min_effective_cost: false,
+        filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
         dynamic_wel_by_tradability: true,
         hedge_mode: true,
         max_realized_loss_pct: 1.0,

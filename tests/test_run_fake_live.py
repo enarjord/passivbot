@@ -1091,7 +1091,7 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg['bot']["short"]['universe']['approved_coins'] = []
     cfg['bot']["long"]['universe']['ignored_coins'] = []
     cfg['bot']["short"]['universe']['ignored_coins'] = []
-    cfg['bot']['global']['universe']['filter_by_min_effective_cost'] = True
+    cfg['bot']['long']['universe']['filter_by_min_effective_cost'] = True
     cfg['bot']['global']['execution']['market_orders_allowed'] = False
     config_path = tmp_path / "fake_live_min_effective_cost.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")

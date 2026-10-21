@@ -1000,7 +1000,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "DOGE",
                 "--bot.long.universe.minimum_coin_age_days",
                 "5",
-                "--bot.global.universe.filter_by_min_effective_cost",
+                "--bot.long.universe.filter_by_min_effective_cost",
                 "y",
                 "--bot.global.hedge_mode",
                 "n",

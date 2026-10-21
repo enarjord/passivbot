@@ -4,7 +4,7 @@ from copy import deepcopy
 import platform
 
 from config.overrides import parse_overrides
-from config.policy import effective_minimum_cost_filter
+from config.policy import effective_minimum_cost_filters
 from config.param_paths import resolve_optimizer_key_path
 from config_utils import clean_config
 from optimization.config_adapter import _flatten_bounds_for_config
@@ -112,7 +112,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),
         "bot": effective.get("bot", {}),
-        "backtest_policy": {"filter_by_min_effective_cost": effective_minimum_cost_filter(effective)},
+        "backtest_policy": {"filter_by_min_effective_cost": effective_minimum_cost_filters(effective)},
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }

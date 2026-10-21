@@ -90,7 +90,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | fraction / raw balance plus loss-gate remembered drawdown | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.global.strategy_kind` | string | `"trailing_martingale"` | — | global; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
-| `bot.global.universe.filter_by_min_effective_cost` | boolean | `true` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.global.warmup.max_minutes` | float \| null | `null` | minutes | global; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
 | `bot.global.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
@@ -158,6 +157,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.strategy.trailing_martingale.volatility_ema_span_1h_candles` | float | `683.0` | one-hour candles | long; live, backtest, optimize | Eligible (`long_volatility_ema_span_1h`); trailing_martingale is the active strategy; recommended `[168.0, 2016.0, 1.0]` | allowed | — | rust strategy metadata |
 | `bot.long.strategy.trailing_martingale.volatility_ema_span_minutes` | float | `604.0` | minutes | long; live, backtest, optimize | Eligible (`long_volatility_ema_span_1m`); trailing_martingale is the active strategy; recommended `[5.0, 2880.0, 1.0]` | allowed | — | rust strategy metadata |
 | `bot.long.universe.approved_coins` | array \| string \| null | 41 items (see template) | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.universe.filter_by_min_effective_cost` | boolean | `true` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.minimum_coin_age_days` | float | `60.0` | days | long; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.long.unstuck.close_fraction` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | long; live, backtest, optimize | Eligible (`long_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
@@ -232,6 +232,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.strategy.trailing_martingale.volatility_ema_span_1h_candles` | float | `672.0` | one-hour candles | short; live, backtest, optimize | Eligible (`short_volatility_ema_span_1h`); trailing_martingale is the active strategy; recommended `[672.0, 2016.0, 1.0]` | allowed | — | rust strategy metadata |
 | `bot.short.strategy.trailing_martingale.volatility_ema_span_minutes` | float | `5.0` | minutes | short; live, backtest, optimize | Eligible (`short_volatility_ema_span_1m`); trailing_martingale is the active strategy; recommended `[5.0, 720.0, 1.0]` | allowed | — | rust strategy metadata |
 | `bot.short.universe.approved_coins` | array \| string \| null | 41 items (see template) | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.universe.filter_by_min_effective_cost` | boolean | `true` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.minimum_coin_age_days` | float | `60.0` | days | short; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.short.unstuck.close_fraction` | float | `0.01` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | short; live, backtest, optimize | Eligible (`short_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |

@@ -382,13 +382,14 @@ def test_multicoin_adaptive_checkpoint_preserves_every_output(side):
     ).items():
         row[keys.index(key)] = value
     matrix = np.asarray([row], dtype=float)
-    plain = MpsTrailingMartingaleMulticoinRunner(run, data, side=side)
+    plain = MpsTrailingMartingaleMulticoinRunner(run, data, side=side, filter_by_min_effective_cost={"long": False, "short": False})
     expected = {
         key: value.cpu().clone() if isinstance(value, torch.Tensor) else value
         for key, value in plain.run(matrix).items()
     }
     chunked = MpsTrailingMartingaleMulticoinRunner(
-        run, data, side=side, max_dispatch_candidate_bars=94
+        run, data, side=side, max_dispatch_candidate_bars=94,
+        filter_by_min_effective_cost={"long": False, "short": False},
     )
     for key, value in chunked.run(matrix).items():
         if isinstance(value, torch.Tensor):

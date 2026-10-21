@@ -62,7 +62,7 @@ for the distinction between schema, package version and tags.
   contributors, dispersion, exclusions, reference exchange, and full-precision scale factors.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
-- **filter_by_min_effective_cost**: `null` (default) inherits `bot.global.universe.filter_by_min_effective_cost`; explicit `true` or `false` overrides that policy for simulation. When enabled, skip coins whose projected initial entry
+- **filter_by_min_effective_cost**: `null` (default) independently inherits `bot.long.universe.filter_by_min_effective_cost` and `bot.short.universe.filter_by_min_effective_cost`; explicit `true` or `false` overrides both sides for simulation. When enabled, skip coins whose projected initial entry
   (balance × wallet_exposure_limit × the active strategy initial sizing fraction, including WE
   excess allowance)
   would fall below the exchange’s effective minimum cost.
@@ -438,12 +438,12 @@ command. Retired `--live...` policy paths are rejected.
 
 - **bot.global.hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.bot.global.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 
-- **bot.global.universe.filter_by_min_effective_cost**: If `true`, disallows coins where
+- **bot.<side>.universe.filter_by_min_effective_cost**: Each side defaults to `true` and disallows flat initial entries where
   `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for `ema_anchor`, it is
   `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
-  - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
+  - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow an initial entry on that side. Set only the desired side to `false` to allow exchange-minimum-sized entries. Actual exchange minima and held-position management are unchanged. Selection and one-way arbitration apply each side's effective flag before choosing an entry. The nullable backtest override inherits both independently.
 
 - **bot.global.execution.market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
 

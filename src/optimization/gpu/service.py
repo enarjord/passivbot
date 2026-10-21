@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from config.policy import validate_minimum_cost_filters
+
 import copy
 from dataclasses import replace
 import hashlib
@@ -662,6 +664,7 @@ def _gpu_proxy_execution_checkpoint_contract(
     contract = {
         "version": 7,
         "age_admission_abi": 1,
+        "minimum_cost_filter_abi": 2,
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
         "market_ema_bootstrap_count_abi": 1,
         "hourly_ema_admission": "observed_before_first_planning",
@@ -1874,8 +1877,8 @@ class SharedAccountReplay:
                 self.needed_metrics
                 & {"fills_active_symbols_count", "fills_top_symbol_share"}
             ),
-            "filter_by_min_effective_cost": bool(
-                backtest_params.get("filter_by_min_effective_cost", False)
+            "filter_by_min_effective_cost": validate_minimum_cost_filters(
+                backtest_params["filter_by_min_effective_cost"]
             ),
             "market_order_slippage_pct": float(
                 backtest_params.get("market_order_slippage_pct", 0.0)

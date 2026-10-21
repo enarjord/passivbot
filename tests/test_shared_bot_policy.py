@@ -19,13 +19,13 @@ def test_new_policy_defaults_are_shared_and_backtest_override_retains_inheritanc
     assert not (
         set(config["live"]) & {*LIVE_POLICY_PATHS, "approved_coins", "ignored_coins"}
     )
-    assert config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] is True
+    assert config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] is True
     assert config["backtest"]["filter_by_min_effective_cost"] is None
-    assert effective_minimum_cost_filter(config) is True
-    config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = False
-    assert effective_minimum_cost_filter(config) is False
+    assert effective_minimum_cost_filter(config, "long") is True
+    config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = False
+    assert effective_minimum_cost_filter(config, "long") is False
     config["backtest"]["filter_by_min_effective_cost"] = True
-    assert effective_minimum_cost_filter(config) is True
+    assert effective_minimum_cost_filter(config, "long") is True
 
 
 @pytest.mark.parametrize(
@@ -63,7 +63,7 @@ def test_backtest_payload_resolves_shared_policy_and_persistent_selection(
     from backtest import prep_backtest_args
 
     config = get_template_config()
-    config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = shared
+    config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = shared
     config["backtest"]["filter_by_min_effective_cost"] = override
     config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     config["bot"]["long"]["universe"]["approved_coins"] = ["BTC", "ETH"]
@@ -83,7 +83,7 @@ def test_backtest_payload_resolves_shared_policy_and_persistent_selection(
         for coin in ("BTC", "ETH")
     }
     bots, _, _, backtest = prep_backtest_args(config, mss, "binance")
-    assert backtest["filter_by_min_effective_cost"] is effective
+    assert backtest["filter_by_min_effective_cost"] == {"long": effective, "short": True if override is None else override}
     assert [pair["long"]["is_forced_active"] for pair in bots] == [True, False]
     assert [pair["short"]["is_forced_active"] for pair in bots] == [False, False]
 
@@ -191,11 +191,11 @@ def test_v8_minimum_cost_defaults_preserve_missing_versus_inherited(override):
     if override != "missing":
         source["backtest"]["filter_by_min_effective_cost"] = override
     result = migrate_v8_to_v9(source, memory_span_minutes=100.0).config
-    assert result["bot"]["global"]["universe"]["filter_by_min_effective_cost"] is True
+    assert result["bot"]["long"]["universe"]["filter_by_min_effective_cost"] is True
     assert result["backtest"]["filter_by_min_effective_cost"] is (
         False if override == "missing" else override
     )
-    assert effective_minimum_cost_filter(result) is (
+    assert effective_minimum_cost_filter(result, "long") is (
         False if override == "missing" else True if override is None else override
     )
 
@@ -245,11 +245,11 @@ def test_minimum_cost_consumer_rejects_nonboolean_policy(value):
     config = get_template_config()
     config["backtest"]["filter_by_min_effective_cost"] = value
     with pytest.raises(TypeError, match="boolean or null"):
-        effective_minimum_cost_filter(config)
+        effective_minimum_cost_filter(config, "long")
     config["backtest"]["filter_by_min_effective_cost"] = None
-    config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = value
+    config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = value
     with pytest.raises(TypeError, match="must be a boolean"):
-        effective_minimum_cost_filter(config)
+        effective_minimum_cost_filter(config, "long")
 
 
 def _forced_selection_payload(config, *, optimized=False, scenario=False):

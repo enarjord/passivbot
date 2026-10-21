@@ -2615,7 +2615,7 @@ def prep_backtest_args(
 ):
     from config.hsl import engine
     from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
-    from config.policy import effective_minimum_cost_filter
+    from config.policy import effective_minimum_cost_filters
     from config.universe import always_include_matches
 
     ew_half_life_days = validate_ew_half_life_days(
@@ -2804,7 +2804,7 @@ def prep_backtest_args(
             "skip_btc_analysis": False,
             "minimum_coin_age_days": age_days,
             "inception_timestamps_ms": inception_facts,
-            "filter_by_min_effective_cost": effective_minimum_cost_filter(config),
+            "filter_by_min_effective_cost": effective_minimum_cost_filters(config),
             "dynamic_wel_by_tradability": bool(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),

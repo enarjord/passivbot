@@ -462,7 +462,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
     from .shared_policy import (COIN_SOURCE_FIELDS,
-                                move_shared_policy, preserve_forced_normal_selection,
+                                minimum_cost_policy_targets, move_shared_policy, preserve_forced_normal_selection,
                                 preserve_forced_selection_overrides)
     from .operational_live import move_operational_live
     from config.public_names import rewrite_released_public_names
@@ -569,6 +569,17 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                     converted[target] = age
                 record(f"{path}.{key}", value, targets,
                        "side-owned age gates initial entries in every selection mode; retain pre-eligibility warmup")
+                continue
+            targets = minimum_cost_policy_targets(key)
+            if targets:
+                if type(value) is not bool:
+                    raise TypeError(f"{path}.{key} must be a boolean")
+                for target in targets:
+                    if target in converted and converted[target] != value:
+                        raise ValueError(f"{path}.{key} conflicts with {target}")
+                    converted[target] = value
+                record(f"{path}.{key}", value, {target: value for target in targets},
+                       "shared minimum-cost policy copied to both position sides")
                 continue
             new = selector(key)
             if new == "bot.global.hsl.scope" and value in {"unified", "pside"}:

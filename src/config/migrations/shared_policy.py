@@ -6,13 +6,22 @@ from copy import deepcopy
 LIVE_POLICY_PATHS = {
     "strategy_kind": "bot.global.strategy_kind",
     "hedge_mode": "bot.global.hedge_mode",
-    "filter_by_min_effective_cost": "bot.global.universe.filter_by_min_effective_cost",
     "market_orders_allowed": "bot.global.execution.market_orders_allowed",
     "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_fraction",
     "forager_score_hysteresis_pct": "bot.global.forager.score_hysteresis_margin",
     "warmup_ratio": "bot.global.warmup.span_multiplier",
     "max_warmup_minutes": "bot.global.warmup.max_minutes",
 }
+MINIMUM_COST_SOURCE_PATHS = {"live.filter_by_min_effective_cost"}
+
+
+def minimum_cost_policy_targets(path):
+    """Only the explicit released converter fans a shared policy out to both sides."""
+    if path in MINIMUM_COST_SOURCE_PATHS:
+        return tuple(f"bot.{side}.universe.filter_by_min_effective_cost" for side in ("long", "short"))
+    return ()
+
+
 COIN_SOURCE_FIELDS = ("approved_coins", "ignored_coins")
 
 
@@ -79,6 +88,14 @@ def move_shared_policy(document, *, record):
         record("live.minimum_coin_age_days", value,
                {f"bot.{side}.universe.minimum_coin_age_days": value for side in ("long", "short")},
                "age now gates initial entries in every live/backtest selection mode; pre-eligibility history remains available for warmup")
+    sources = []
+    if "filter_by_min_effective_cost" in live:
+        sources.append(("live.filter_by_min_effective_cost", live.pop("filter_by_min_effective_cost")))
+    for source, value in sources:
+        if type(value) is not bool:
+            raise TypeError(f"{source} must be a boolean")
+        for target in minimum_cost_policy_targets(source):
+            put(target, value, source)
     for field, path in LIVE_POLICY_PATHS.items():
         if field in live:
             put(path, live.pop(field), f"live.{field}")

@@ -65,7 +65,7 @@
             "hsl": {"scope": "coin"},
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "ema_anchor",
-            "universe": {"filter_by_min_effective_cost": true},
+            "universe": {},
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
         },
@@ -122,7 +122,7 @@
                     "offset_volatility_ema_span_minutes": 60.0
                 }
             },
-            "universe": {"minimum_coin_age_days": 365.0, "approved_coins": ["BTC", "SOL"], "ignored_coins": []},
+            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 365.0, "approved_coins": ["BTC", "SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_fraction": 0.078,
                 "ema_distance_fraction": -0.07,
@@ -187,7 +187,7 @@
                     "offset_volatility_ema_span_minutes": 60.0
                 }
             },
-            "universe": {"minimum_coin_age_days": 365.0, "approved_coins": ["BTC", "SOL"], "ignored_coins": []},
+            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 365.0, "approved_coins": ["BTC", "SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_fraction": 0.05,
                 "ema_distance_fraction": -0.2,
