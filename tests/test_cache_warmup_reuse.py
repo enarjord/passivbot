@@ -90,7 +90,7 @@ def _base_config(**overrides):
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 30},
-                "warmup": {"ratio": 0.3, "max_minutes": None},
+                "warmup": {"span_multiplier": 0.3, "max_minutes": None},
             },
         },
         "live": {},
@@ -186,7 +186,7 @@ class TestCacheHashIndependence:
         """Changing warmup_ratio does not change the hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b['bot']['global']['warmup']['ratio'] = 10.0
+        cfg_b['bot']['global']['warmup']['span_multiplier'] = 10.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")

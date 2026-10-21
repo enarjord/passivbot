@@ -78,11 +78,11 @@ def test_ema_position_enforcers_rejected_before_device_imports(monkeypatch, side
         config["coin_overrides"] = {"COIN00": {"bot": {side: {"risk": {
             "position_exposure_enforcer": {
                 "enabled": True,
-                "threshold": 0.5,
+                'threshold_ratio': 0.5,
             },
         }}}}}
     else:
-        config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': True, 'threshold': 0.5}})
+        config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': True, 'threshold_ratio': 0.5}})
     original = builtins.__import__
     def guarded(name, *args, **kwargs):
         if name.split(".")[0] in {"torch", "cupy"}:

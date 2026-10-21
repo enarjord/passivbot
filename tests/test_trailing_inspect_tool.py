@@ -338,11 +338,11 @@ def test_extract_side_context_includes_global_and_risk_paths():
                     "max_positions": 1,
                     "position_exposure_enforcer": {
                         "enabled": True,
-                        "threshold": 0.8,
+                        'threshold_ratio': 0.8,
                     },
                     "total_exposure_enforcer": {
                         "enabled": True,
-                        "threshold": 0.9,
+                        'threshold_ratio': 0.9,
                         "policy": "reduce_portfolio",
                     },
                 },

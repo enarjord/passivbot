@@ -43,7 +43,7 @@ def _base_config(cache_dir, *, mode="dataset"):
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0},
-                "warmup": {"ratio": 0.0, "max_minutes": None},
+                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
         "live": {},
@@ -171,7 +171,7 @@ def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tm
     timestamps, _hlcvs = _write_dataset(cache_dir)
     config = _base_config(cache_dir, mode="intersection")
     config["backtest"]["start_date"] = "2025-01-02"
-    config['bot']['global']['warmup']['ratio'] = 1.0
+    config['bot']['global']['warmup']['span_multiplier'] = 1.0
     config['bot']['global']['warmup']['max_minutes'] = 1440
     config["bot"]["long"]["ema_span_0"] = 1440.0
 

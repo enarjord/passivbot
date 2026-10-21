@@ -2246,7 +2246,7 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
         pass
 
     class FakeBot:
-        config = {"live": {}, "bot": {"global": {"warmup": {"ratio": 0.0}}}}
+        config = {"live": {}, "bot": {"global": {"warmup": {'span_multiplier': 0.0}}}}
         cm = FakeCM()
         approved_coins_minus_ignored_coins = {
             "long": {"BTC/USDT:USDT"},

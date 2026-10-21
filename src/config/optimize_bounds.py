@@ -47,9 +47,9 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     },
     "risk": {
         "max_positions": "n_positions",
-        "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
+        "total_exposure_enforcer_threshold_ratio": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
-        "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer_threshold_ratio": "risk_wel_enforcer_threshold",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
     },
     "unstuck": {
@@ -93,10 +93,10 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
             "we_excess_allowance_pct": [0, 0.4, 0.01],
             "position_exposure_enforcer": {
-                "threshold": [1, 1, 0.001],
+                'threshold_ratio': [1, 1, 0.001],
             },
             "total_exposure_enforcer": {
-                "threshold": [1, 1, 0.001],
+                'threshold_ratio': [1, 1, 0.001],
             },
         },
         "unstuck": {
@@ -129,10 +129,10 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "total_wallet_exposure_limit": [0, 0],
             "we_excess_allowance_pct": [0, 0.5, 0.01],
             "position_exposure_enforcer": {
-                "threshold": [0.8, 1.01, 0.001],
+                'threshold_ratio': [0.8, 1.01, 0.001],
             },
             "total_exposure_enforcer": {
-                "threshold": [0.8, 1.01, 0.001],
+                'threshold_ratio': [0.8, 1.01, 0.001],
             },
         },
         "unstuck": {

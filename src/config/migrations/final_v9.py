@@ -444,6 +444,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 "total_exposure_enforcer_policy",
             } else (part,)
         )]
+        if len(parts) >= 2 and parts[-2] in {"position_exposure_enforcer", "total_exposure_enforcer"} and parts[-1] == "threshold":
+            parts[-1] = "threshold_ratio"
         for group, old, new in (
             ("hsl", "red_threshold", "drawdown_ratio_threshold"),
             ("unstuck", "ema_dist", "ema_distance_fraction"),
@@ -460,9 +462,9 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
             (".risk.n_positions", ".risk.max_positions"),
             (".risk.position_exposure_enforcer_enabled", ".risk.position_exposure_enforcer.enabled"),
-            (".risk.position_exposure_enforcer_threshold", ".risk.position_exposure_enforcer.threshold"),
+            (".risk.position_exposure_enforcer_threshold", ".risk.position_exposure_enforcer.threshold_ratio"),
             (".risk.total_exposure_enforcer_enabled", ".risk.total_exposure_enforcer.enabled"),
-            (".risk.total_exposure_enforcer_threshold", ".risk.total_exposure_enforcer.threshold"),
+            (".risk.total_exposure_enforcer_threshold", ".risk.total_exposure_enforcer.threshold_ratio"),
             (".risk.total_exposure_enforcer_policy", ".risk.total_exposure_enforcer.policy"),
             (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
         ):
@@ -575,13 +577,16 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         if path.endswith(".risk"):
             rename(node, "n_positions", "max_positions", path)
             for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+                if isinstance(node.get(owner), dict):
+                    rename(node[owner], "threshold", "threshold_ratio", f"{path}.{owner}")
                 for leaf in ("enabled", "threshold", "policy"):
                     old = f"{owner}_{leaf}"
                     if old in node:
                         value = node.pop(old)
-                        put(node, (owner, leaf), value, f"{path}.{old}")
+                        target = "threshold_ratio" if leaf == "threshold" else leaf
+                        put(node, (owner, target), value, f"{path}.{old}")
                         record(
-                            f"{path}.{old}", value, {f"{owner}.{leaf}": value},
+                            f"{path}.{old}", value, {f"{owner}.{target}": value},
                             "explicit released-v8 exposure-enforcer object conversion",
                         )
         if path.endswith(".unstuck"):

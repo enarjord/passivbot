@@ -100,12 +100,12 @@ def _bot_metadata(path):
         data["domain"] = FieldDomain(choices=get_supported_strategy_kinds())
     elif local == "universe.minimum_coin_age_days":
         data.update(unit="days", domain=FieldDomain(minimum=0.0, finite=True))
-    elif local in {"warmup.ratio", "execution.market_order_near_touch_threshold",
+    elif local in {"warmup.span_multiplier", "execution.market_order_near_touch_fraction",
                    "forager.score_hysteresis_pct"}:
-        denominators = {"warmup.ratio": "indicator span",
-                        "execution.market_order_near_touch_threshold": "market price",
+        denominators = {"warmup.span_multiplier": "indicator span",
+                        "execution.market_order_near_touch_fraction": "market price",
                         "forager.score_hysteresis_pct": "incumbent selection score"}
-        data.update(unit="fraction", denominator=denominators[local],
+        data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "warmup.max_minutes":
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
@@ -157,12 +157,12 @@ def _bot_metadata(path):
     elif local == "risk.we_excess_allowance_pct":
         data.update(unit="fraction", denominator="effective per-position wallet exposure limit",
                     domain=FieldDomain(minimum=0.0, finite=True))
-    elif local in {"risk.position_exposure_enforcer.threshold", "risk.total_exposure_enforcer.threshold"}:
+    elif local in {"risk.position_exposure_enforcer.threshold_ratio", "risk.total_exposure_enforcer.threshold_ratio"}:
         data.update(unit="ratio", domain=FieldDomain(finite=True),
                     denominator=("effective per-position wallet exposure limit" if "position_exposure_enforcer" in path
                                  else "side total wallet exposure limit"),
                     description="A positive threshold is required when its exposure enforcer is enabled.")
-        if local == "risk.total_exposure_enforcer.threshold":
+        if local == "risk.total_exposure_enforcer.threshold_ratio":
             data.update(domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
                         description="Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.")
     elif local == "risk.total_exposure_enforcer.policy":

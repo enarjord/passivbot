@@ -795,7 +795,7 @@
                 "execution": {
                   "type": "object",
                   "properties": {
-                    "market_order_near_touch_threshold": {
+                    "market_order_near_touch_fraction": {
                       "type": "number",
                       "default": 0.001,
                       "minimum": 0.0,
@@ -1127,11 +1127,11 @@
                       "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "ratio": {
+                    "span_multiplier": {
                       "type": "number",
                       "default": 0.3,
                       "minimum": 0.0,
-                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-unit": "multiplier",
                       "x-passivbot-denominator": "indicator span",
                       "x-passivbot-scope": "global",
                       "x-passivbot-consumers": [
@@ -1595,7 +1595,7 @@
                           "x-passivbot-optimizable": false,
                           "x-passivbot-coin-override": "allowed"
                         },
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "default": 1.0,
                           "description": "A positive threshold is required when its exposure enforcer is enabled.",
@@ -1650,7 +1650,7 @@
                           "x-passivbot-optimizable": false,
                           "x-passivbot-coin-override": "forbidden"
                         },
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "default": 1.0,
                           "description": "Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.",
@@ -3111,7 +3111,7 @@
                           "x-passivbot-optimizable": false,
                           "x-passivbot-coin-override": "allowed"
                         },
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "default": 0.8,
                           "description": "A positive threshold is required when its exposure enforcer is enabled.",
@@ -3166,7 +3166,7 @@
                           "x-passivbot-optimizable": false,
                           "x-passivbot-coin-override": "forbidden"
                         },
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "default": 0.8,
                           "description": "Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.",
@@ -5560,7 +5560,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "threshold": {
+                            "threshold_ratio": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -5586,7 +5586,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.long.risk.position_exposure_enforcer.threshold",
+                              "x-passivbot-target": "bot.long.risk.position_exposure_enforcer.threshold_ratio",
                               "examples": [
                                 [
                                   1,
@@ -5601,7 +5601,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "threshold": {
+                            "threshold_ratio": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -5627,7 +5627,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.long.risk.total_exposure_enforcer.threshold",
+                              "x-passivbot-target": "bot.long.risk.total_exposure_enforcer.threshold_ratio",
                               "examples": [
                                 [
                                   1,
@@ -7701,7 +7701,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "threshold": {
+                            "threshold_ratio": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -7727,7 +7727,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.short.risk.position_exposure_enforcer.threshold",
+                              "x-passivbot-target": "bot.short.risk.position_exposure_enforcer.threshold_ratio",
                               "examples": [
                                 [
                                   0.8,
@@ -7742,7 +7742,7 @@
                           "type": "object",
                           "additionalProperties": false,
                           "properties": {
-                            "threshold": {
+                            "threshold_ratio": {
                               "anyOf": [
                                 {
                                   "type": "number"
@@ -7768,7 +7768,7 @@
                                   "items": false
                                 }
                               ],
-                              "x-passivbot-target": "bot.short.risk.total_exposure_enforcer.threshold",
+                              "x-passivbot-target": "bot.short.risk.total_exposure_enforcer.threshold_ratio",
                               "examples": [
                                 [
                                   0.8,
@@ -10150,7 +10150,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "description": "A positive threshold is required when its exposure enforcer is enabled.",
                           "x-passivbot-unit": "ratio",
@@ -11239,7 +11239,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "description": "A positive threshold is required when its exposure enforcer is enabled.",
                           "x-passivbot-unit": "ratio",
@@ -12275,7 +12275,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "description": "A positive threshold is required when its exposure enforcer is enabled.",
                           "x-passivbot-unit": "ratio",
@@ -13241,7 +13241,7 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "threshold": {
+                        "threshold_ratio": {
                           "type": "number",
                           "description": "A positive threshold is required when its exposure enforcer is enabled.",
                           "x-passivbot-unit": "ratio",
@@ -14231,8 +14231,8 @@
         "bot.global.execution": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution"
         },
-        "bot.global.execution.market_order_near_touch_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        "bot.global.execution.market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
         },
         "bot.global.execution.market_orders_allowed": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
@@ -14306,8 +14306,8 @@
         "bot.global.warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
         },
-        "bot.global.warmup.ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
+        "bot.global.warmup.span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         },
         "bot.long": {
           "$ref": "#/$defs/config/properties/bot/properties/long"
@@ -14399,8 +14399,8 @@
         "bot.long.risk.position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "bot.long.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "bot.long.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "bot.long.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer"
@@ -14411,8 +14411,8 @@
         "bot.long.risk.total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "bot.long.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "bot.long.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "bot.long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -14663,8 +14663,8 @@
         "bot.short.risk.position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "bot.short.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "bot.short.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "bot.short.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer"
@@ -14675,8 +14675,8 @@
         "bot.short.risk.total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "bot.short.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "bot.short.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "bot.short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -15272,14 +15272,14 @@
         "optimize.bounds.long.risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "optimize.bounds.long.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "optimize.bounds.long.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "optimize.bounds.long.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "optimize.bounds.long.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "optimize.bounds.long.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "optimize.bounds.long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -15497,14 +15497,14 @@
         "optimize.bounds.short.risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "optimize.bounds.short.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "optimize.bounds.short.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "optimize.bounds.short.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "optimize.bounds.short.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "optimize.bounds.short.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "optimize.bounds.short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -15793,8 +15793,8 @@
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer\\.threshold$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer\\.threshold_ratio$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.long\\.risk\\.position_exposure_enforcer\\.enabled$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
@@ -16003,8 +16003,8 @@
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer\\.threshold$": {
-          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer\\.threshold_ratio$": {
+          "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "^coin_overrides\\.[^.]+\\.bot\\.short\\.risk\\.position_exposure_enforcer\\.enabled$": {
           "$ref": "#/$defs/coinPatch/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
@@ -16329,8 +16329,8 @@
         "global.execution": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution"
         },
-        "global.execution.market_order_near_touch_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        "global.execution.market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
         },
         "global.execution.market_orders_allowed": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
@@ -16404,8 +16404,8 @@
         "global.warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
         },
-        "global.warmup.ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
+        "global.warmup.span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         },
         "long": {
           "$ref": "#/$defs/scenarioPatch:bot.long"
@@ -16497,8 +16497,8 @@
         "long.risk.position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "long.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "long.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "long.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer"
@@ -16509,8 +16509,8 @@
         "long.risk.total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "long.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "long.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -16761,8 +16761,8 @@
         "short.risk.position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "short.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "short.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "short.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer"
@@ -16773,8 +16773,8 @@
         "short.risk.total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "short.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "short.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -16945,8 +16945,8 @@
         "execution": {
           "$ref": "#/$defs/scenarioPatch:bot.global.execution"
         },
-        "execution.market_order_near_touch_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        "execution.market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
         },
         "execution.market_orders_allowed": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
@@ -17020,8 +17020,8 @@
         "warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
         },
-        "warmup.ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
+        "warmup.span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -17030,8 +17030,8 @@
     "scenarioPatch:bot.global.execution": {
       "type": "object",
       "properties": {
-        "market_order_near_touch_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_threshold"
+        "market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
         },
         "market_orders_allowed": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
@@ -17123,8 +17123,8 @@
         "max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
         },
-        "ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/ratio"
+        "span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -17220,8 +17220,8 @@
         "risk.position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer"
@@ -17232,8 +17232,8 @@
         "risk.total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -17529,8 +17529,8 @@
         "position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "total_exposure_enforcer": {
           "$ref": "#/$defs/scenarioPatch:bot.long.risk.total_exposure_enforcer"
@@ -17541,8 +17541,8 @@
         "total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -17560,8 +17560,8 @@
         "enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -17576,8 +17576,8 @@
         "policy": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -18040,8 +18040,8 @@
         "risk.position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer"
@@ -18052,8 +18052,8 @@
         "risk.total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -18349,8 +18349,8 @@
         "position_exposure_enforcer.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "total_exposure_enforcer": {
           "$ref": "#/$defs/scenarioPatch:bot.short.risk.total_exposure_enforcer"
@@ -18361,8 +18361,8 @@
         "total_exposure_enforcer.policy": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -18380,8 +18380,8 @@
         "enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/enabled"
         },
-        "threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -18396,8 +18396,8 @@
         "policy": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/policy"
         },
-        "threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -19414,14 +19414,14 @@
         "bounds.long.risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "bounds.long.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "bounds.long.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "bounds.long.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "bounds.long.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "bounds.long.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "bounds.long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -19639,14 +19639,14 @@
         "bounds.short.risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "bounds.short.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "bounds.short.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "bounds.short.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "bounds.short.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "bounds.short.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "bounds.short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -20107,14 +20107,14 @@
         "long.risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "long.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "long.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "long.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "long.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "long.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "long.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -20332,14 +20332,14 @@
         "short.risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "short.risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "short.risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "short.risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "short.risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "short.risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "short.risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -20634,14 +20634,14 @@
         "risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer"
         },
-        "risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer"
         },
-        "risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -20860,14 +20860,14 @@
         "position_exposure_enforcer": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk.position_exposure_enforcer"
         },
-        "position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "total_exposure_enforcer": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.long.risk.total_exposure_enforcer"
         },
-        "total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_wallet_exposure_limit"
@@ -20882,8 +20882,8 @@
     "scenarioPatch:optimize.bounds.long.risk.position_exposure_enforcer": {
       "type": "object",
       "properties": {
-        "threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -20892,8 +20892,8 @@
     "scenarioPatch:optimize.bounds.long.risk.total_exposure_enforcer": {
       "type": "object",
       "properties": {
-        "threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -21357,14 +21357,14 @@
         "risk.position_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer"
         },
-        "risk.position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "risk.position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_exposure_enforcer": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer"
         },
-        "risk.total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "risk.total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "risk.total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -21583,14 +21583,14 @@
         "position_exposure_enforcer": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk.position_exposure_enforcer"
         },
-        "position_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "position_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         },
         "total_exposure_enforcer": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.short.risk.total_exposure_enforcer"
         },
-        "total_exposure_enforcer.threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "total_exposure_enforcer.threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         },
         "total_wallet_exposure_limit": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_wallet_exposure_limit"
@@ -21605,8 +21605,8 @@
     "scenarioPatch:optimize.bounds.short.risk.position_exposure_enforcer": {
       "type": "object",
       "properties": {
-        "threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/position_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},
@@ -21615,8 +21615,8 @@
     "scenarioPatch:optimize.bounds.short.risk.total_exposure_enforcer": {
       "type": "object",
       "properties": {
-        "threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold"
+        "threshold_ratio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/short/properties/risk/properties/total_exposure_enforcer/properties/threshold_ratio"
         }
       },
       "patternProperties": {},

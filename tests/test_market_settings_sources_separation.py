@@ -237,7 +237,7 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0},
-                "warmup": {"ratio": 0.0, "max_minutes": None},
+                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
         "live": {},
@@ -327,7 +327,7 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0},
-                "warmup": {"ratio": 0.0, "max_minutes": None},
+                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
         "live": {},
@@ -416,7 +416,7 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0},
-                "warmup": {"ratio": 0.0, "max_minutes": None},
+                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
         "live": {},

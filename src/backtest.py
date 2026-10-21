@@ -2505,12 +2505,12 @@ def get_backtest_execution_settings(
         market_orders_allowed_raw,
         field_name='bot.global.execution.market_orders_allowed',
     )
-    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.global.execution.market_order_near_touch_threshold', 0.001)
+    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.global.execution.market_order_near_touch_fraction', 0.001)
     market_order_near_touch_threshold = float(
         market_order_near_touch_threshold_raw or 0.0
     )
     if market_order_near_touch_threshold < 0.0:
-        raise ValueError("bot.global.execution.market_order_near_touch_threshold must be >= 0.0")
+        raise ValueError("bot.global.execution.market_order_near_touch_fraction must be >= 0.0")
     unstuck_memory_span = normalize_memory_ema_span_minutes(
         require_config_value(config, "bot.global.unstuck.memory_ema_span_minutes"),
         field="bot.global.unstuck.memory_ema_span_minutes",

@@ -20,9 +20,9 @@ def test_exposure_enforcer_bounds_mirror_the_bot_feature_objects(side):
     for owner, native in (("position", "wel"), ("total", "twel")):
         key = f"{side}_risk_{native}_enforcer_threshold"
         assert resolve_optimizer_key_path(config, key) == (
-            "bot", side, "risk", f"{owner}_exposure_enforcer", "threshold",
+            "bot", side, "risk", f"{owner}_exposure_enforcer", "threshold_ratio",
         )
-        assert flat[key] == config["optimize"]["bounds"][side]["risk"][f"{owner}_exposure_enforcer"]["threshold"]
+        assert flat[key] == config["optimize"]["bounds"][side]["risk"][f"{owner}_exposure_enforcer"]["threshold_ratio"]
 
 
 @pytest.mark.parametrize("field", [
@@ -75,7 +75,7 @@ def test_released_fixed_selector_suffixes_keep_their_gene_authority(owner, nativ
     selected = resolve_bound_selectors(config, config["optimize"]["fixed_params"], flat)
     sides = {"long"} if "long" in prefix else {"short"} if "short" in prefix else {"long", "short"}
     assert set(selected) == {f"{side}_risk_{native}_enforcer_threshold" for side in sides}
-    assert config["optimize"]["fixed_params"] == [f"{prefix}{owner}_exposure_enforcer.threshold"]
+    assert config["optimize"]["fixed_params"] == [f"{prefix}{owner}_exposure_enforcer.threshold_ratio"]
     assert any(item["path"] == "optimize.fixed_params" and item["old"] == [selector]
                and item["new"] == config["optimize"]["fixed_params"] for item in migrated.changes)
 
@@ -113,7 +113,7 @@ def test_released_file_inline_enforcer_authority_is_converted_before_merging(
         _set_patch(result, result["backtest"]["scenarios"][0]["overrides"], scenario=True)
     result = prepare_config(result, base_config_path=str(tmp_path / "moved.json"), verbose=False)
     values = result["coin_overrides"]["TEST"]["bot"]["long"]["risk"]
-    assert values == {"position_exposure_enforcer": {"enabled": False, "threshold": 0.8}}
+    assert values == {"position_exposure_enforcer": {"enabled": False, 'threshold_ratio': 0.8}}
     if inline_old:
         assert any(item["path"].endswith("coin_overrides.TEST.bot.long.risk.position_exposure_enforcer_threshold")
                    and item["old"] == 0.8 for item in migration.changes)

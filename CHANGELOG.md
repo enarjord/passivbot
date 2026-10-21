@@ -11,6 +11,10 @@ since the latest release tag; these features may already be available when insta
   and scenario/fixed overrides share the strict domains; released-v8 migration reports
   replacement of the old empty-string and zero sentinels.
 
+- Make public units explicit with exposure-enforcer `threshold_ratio`, warmup
+  `span_multiplier` and `market_order_near_touch_fraction`. Preserve numeric values,
+  native parameter identifiers and search authority; convert released v8 inputs directly.
+
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.

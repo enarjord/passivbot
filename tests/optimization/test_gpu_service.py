@@ -1041,7 +1041,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     config['bot']['global']['hedge_mode'] = False
     config["backtest"]["dynamic_wel_by_tradability"] = dynamic_wel_by_tradability
     for side in ("long", "short"):
-        config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold': 0.8}})
+        config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
         # Construction must retain the fused shared-account path when both
         # directional surfaces participate in global auto-unstuck selection.
         config["bot"][side]["unstuck"]["enabled"] = True
@@ -1399,7 +1399,7 @@ def test_gpu_proxy_rejects_all_internal_gaps():
     ("mode", "scale_budget"), [("unscaled", 0.0), ("scaled", 1.0)]
 )
 def test_single_coin_exposure_policy_packs_rust_inputs(mode, scale_budget):
-    packed = _single_coin_exposure_params({"we_excess_allowance_pct": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {"threshold": 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
+    packed = _single_coin_exposure_params({"we_excess_allowance_pct": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {'threshold_ratio': 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
     assert packed == {"we_excess_allowance_pct": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold": 0.8}
 
 
@@ -1412,7 +1412,7 @@ def test_single_coin_hsl_budget_scaling_defaults_off():
 def test_tm_position_exposure_repair_packs_exact_rust_inputs():
     assert _position_exposure_enforcer_params(
         {
-            "position_exposure_enforcer": {"enabled": True, "threshold": 0.8},
+            "position_exposure_enforcer": {"enabled": True, 'threshold_ratio': 0.8},
         },
         side="short",
     ) == {
@@ -1423,7 +1423,7 @@ def test_tm_position_exposure_repair_packs_exact_rust_inputs():
     with pytest.raises(ValueError, match="finite positive"):
         _position_exposure_enforcer_params(
             {
-                "position_exposure_enforcer": {"enabled": True, "threshold": 0.0},
+                "position_exposure_enforcer": {"enabled": True, 'threshold_ratio': 0.0},
             },
             side="long",
         )
@@ -2283,7 +2283,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                             "we_excess_allowance_pct": 0.25,
                             "position_exposure_enforcer": {
                                 "enabled": True,
-                                "threshold": 0.8,
+                                'threshold_ratio': 0.8,
                             },
                         },
                         "wallet_exposure_limit": 0.4,

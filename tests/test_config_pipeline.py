@@ -564,7 +564,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
-        == canonical['bot']['long']['risk']['position_exposure_enforcer']['threshold']
+        == canonical['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
         compiled["bot"]["long"]["unstuck_threshold"]
@@ -1318,8 +1318,8 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     ):
         trailing_martingale["entry"].pop(key)
     risk["total_exposure_enforcer"].pop("policy")
-    risk["total_exposure_enforcer"].pop("threshold")
-    risk["position_exposure_enforcer"].pop("threshold")
+    risk["total_exposure_enforcer"].pop("threshold_ratio")
+    risk["position_exposure_enforcer"].pop("threshold_ratio")
     risk.pop("we_excess_allowance_pct")
 
     with caplog.at_level(logging.INFO):
@@ -1346,16 +1346,16 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
         template_strategy["entry"]["threshold_we_weight"]
     )
-    assert long_risk['total_exposure_enforcer']['threshold'] == pytest.approx(
-        template_risk['total_exposure_enforcer']['threshold']
+    assert long_risk['total_exposure_enforcer']['threshold_ratio'] == pytest.approx(
+        template_risk['total_exposure_enforcer']['threshold_ratio']
     )
     assert "total_exposure_entry_gate_enabled" not in long_risk
     assert long_risk['total_exposure_enforcer']['policy'] == "reduce_overweight"
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(
         template_risk["we_excess_allowance_pct"]
     )
-    assert long_risk['position_exposure_enforcer']['threshold'] == pytest.approx(
-        template_risk['position_exposure_enforcer']['threshold']
+    assert long_risk['position_exposure_enforcer']['threshold_ratio'] == pytest.approx(
+        template_risk['position_exposure_enforcer']['threshold_ratio']
     )
 
 

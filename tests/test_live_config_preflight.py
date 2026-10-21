@@ -272,7 +272,7 @@ def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(
     tmp_path,
 ):
     config = _sample_config()
-    config["bot"]["global"]["warmup"]["ratio"] = 0.3
+    config["bot"]["global"]["warmup"]["span_multiplier"] = 0.3
     config["live"].update(
         {
             "startup": {

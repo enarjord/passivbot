@@ -238,7 +238,7 @@ def sample_config():
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0.0},
-                "warmup": {"max_minutes": None, "ratio": 3.0},
+                "warmup": {"max_minutes": None, "span_multiplier": 3.0},
             },
         },
         "live": {},
@@ -3362,7 +3362,7 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 0.0},
-                "warmup": {"ratio": 0.0, "max_minutes": None},
+                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
     }

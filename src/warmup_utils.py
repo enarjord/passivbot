@@ -470,8 +470,8 @@ def compute_backtest_warmup_minutes(
         max_minutes = max(max_minutes, extracted * 60.0)
 
     warmup_ratio = _to_float(
-        require_config_value(config, 'bot.global.warmup.ratio'),
-        context='bot.global.warmup.ratio',
+        require_config_value(config, 'bot.global.warmup.span_multiplier'),
+        context='bot.global.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
 
@@ -502,8 +502,8 @@ def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
     warmup_ratio = _to_float(
-        require_config_value(config, 'bot.global.warmup.ratio'),
-        context='bot.global.warmup.ratio',
+        require_config_value(config, 'bot.global.warmup.span_multiplier'),
+        context='bot.global.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
