@@ -2406,6 +2406,33 @@ def effective_config_payload(config: dict) -> dict:
     return config
 
 
+def _decode_directional_cli_coin_source(value):
+    """Only both-side convenience flags accept encoded directional objects."""
+    import hjson
+
+    if isinstance(value, dict):
+        decoded = value
+    else:
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, list) and all(isinstance(x, str) for x in value):
+            text = ",".join(value)
+        else:
+            return value
+        text = text.strip()
+        if not text.startswith("{") or not text.endswith("}"):
+            return value
+        try:
+            decoded = hjson.loads(text)
+        except ValueError:
+            return value  # Optional inline shorthand; canonical source validation still applies.
+    if isinstance(decoded, dict):
+        if set(decoded) - {"long", "short"}:
+            raise ValueError("directional coin sources must contain only long/short position-side keys")
+        return decoded
+    return value
+
+
 def update_config_with_args(
     config, args, verbose=False, allowed_keys: Optional[set[str]] = None
 ):
@@ -2421,6 +2448,9 @@ def update_config_with_args(
     supplied = {key: value for key, value in vars(args).items()
                 if (value is not None or key in nullable_overrides)
                 and (key in allowed_keys if allowed_keys is not None else "." in key or key in {"approved_coins", "ignored_coins"})}
+    for field in ("approved_coins", "ignored_coins"):
+        if field in supplied:
+            supplied[field] = _decode_directional_cli_coin_source(supplied[field])
     if "config_version" in supplied:
         raise ValueError(
             "config_version is source schema metadata and cannot be overridden at runtime; "
@@ -2439,6 +2469,8 @@ def update_config_with_args(
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
+        if key in {"approved_coins", "ignored_coins"}:
+            value = supplied.get(key, value)
         if value is None and key not in nullable_overrides:
             continue
         if allowed_keys is not None:

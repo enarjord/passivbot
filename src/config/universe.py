@@ -118,6 +118,7 @@ def resolve_universe_source_path(source, *, base_config_path="", discover_ambigu
     candidate = source[0] if isinstance(source, list) and len(source) == 1 else source
     if not isinstance(candidate, str) or allow_all and candidate.strip().lower() == "all":
         return None
+    candidate = candidate.strip()
     path = Path(candidate).expanduser()
     file_like = candidate.startswith(("./", "../", "/", "~")) or path.suffix.lower() in {".json", ".hjson", ".txt"}
     if not discover_ambiguous and not file_like:
@@ -125,9 +126,9 @@ def resolve_universe_source_path(source, *, base_config_path="", discover_ambigu
     base = Path(base_config_path).absolute().parent.resolve() if base_config_path else None
     if not path.is_absolute() and base is not None and (base / path).is_file():
         return base / path
-    if path.is_absolute() and path.is_file():
-        return path
-    if base is None or not file_like:
+    if path.is_absolute():
+        return path if path.is_file() else None  # A bound absolute file has no alias fallback.
+    if base is None or not file_like or discover_ambiguous:
         return _resolve_coins_file_path(candidate, preserve_selected_path=True)
     return None
 
@@ -146,6 +147,7 @@ def bind_universe_source(value, *, field, base_config_path="", anchor_all=False,
     candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
     if not isinstance(candidate, str) or field == "approved_coins" and candidate.strip().lower() == "all":
         return value
+    candidate = candidate.strip()
     path = Path(candidate).expanduser()
     explicit = candidate.startswith(("./", "../", "/", "~")) or path.suffix.lower() in {".json", ".hjson", ".txt"}
     if anchor_all:
@@ -154,20 +156,24 @@ def bind_universe_source(value, *, field, base_config_path="", anchor_all=False,
         base = Path(base_config_path).absolute().parent.resolve() if base_config_path else Path.cwd()
         bound = str(path if path.is_absolute() else base / path)
     else:
-        if explicit or isinstance(value, list) and not released_wrapped_files:
+        if not explicit and isinstance(value, list) and not released_wrapped_files:
             return value  # V9 lists contain literal tokens unless file syntax is explicit.
         selected = resolve_universe_source_path(
             candidate, base_config_path=base_config_path, discover_ambiguous=True,
             allow_all=field == "approved_coins",
         )
         if selected is None:
-            if isinstance(value, str):
-                from utils import normalize_coins_source
-                tokens = normalize_coins_source(value, allow_all=field == "approved_coins", resolve_files=False, parse_jsonish=False)
-                if tokens["long"] == tokens["short"]:
-                    return tokens["long"]  # Scalar literals become unambiguous before a later reload.
-            return value
-        bound = str(selected.absolute())
+            if explicit:
+                base = Path(base_config_path).absolute().parent.resolve() if base_config_path else Path.cwd()
+                selected = path if path.is_absolute() else base / path
+            else:
+                if isinstance(value, str):
+                    from utils import normalize_coins_source
+                    tokens = normalize_coins_source(value, allow_all=field == "approved_coins", resolve_files=False, parse_jsonish=False)
+                    if tokens["long"] == tokens["short"]:
+                        return tokens["long"]  # Scalar literals cannot become files on a later reload.
+                return value
+        bound = str(selected.absolute())  # Freeze the selected location, never mutable contents.
     return [bound] if isinstance(value, list) else bound
 
 
