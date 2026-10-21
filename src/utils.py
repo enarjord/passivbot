@@ -120,7 +120,8 @@ def _cleanup_stale_symbol_map_locks() -> None:
                 logging.debug("failed to remove stale lock %s: %s", lock_path, exc)
 
 
-def _resolve_coins_file_path(value: str) -> Optional[Path]:
+def _resolve_coins_file_path(value: str, *, preserve_selected_path: bool = False) -> Optional[Path]:
+    """Use legacy lookup precedence, optionally retaining the selected file alias."""
     if not isinstance(value, str) or not value.strip():
         return None
     raw_path = Path(value.strip())
@@ -145,6 +146,7 @@ def _resolve_coins_file_path(value: str) -> Optional[Path]:
 
     seen: set[Path] = set()
     for candidate in candidates:
+        selected_path = candidate.absolute()
         candidate = candidate.resolve()
         if candidate in seen:
             continue
@@ -160,7 +162,7 @@ def _resolve_coins_file_path(value: str) -> Optional[Path]:
                     raw_path,
                     rel,
                 )
-            return candidate
+            return selected_path if preserve_selected_path else candidate
     return None
 
 
@@ -2042,6 +2044,28 @@ def normalize_coins_source(src, *, allow_all: bool = True, resolve_files: bool =
     }
 
 
+def _parse_plain_coins_list(content: str) -> list[str]:
+    """Tokenize the established comma/newline/quoted-line coin-list format."""
+    content = content.strip()
+    # Check if the content is in list format
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return items
+
+
 def read_external_coins_lists(filepath) -> dict:
     """
     reads filepath and returns dict {'long': [str], 'short': [str]}
@@ -2063,22 +2087,7 @@ def read_external_coins_lists(filepath) -> dict:
         pass
     with open(filepath, "r") as file:
         content = file.read().strip()
-    # Check if the content is in list format
-    if content.startswith("[") and content.endswith("]"):
-        # Remove brackets and split by comma
-        items = content[1:-1].split(",")
-        # Remove quotes and whitespace
-        items = [item.strip().strip("\"'") for item in items if item.strip()]
-    elif all(
-        line.strip().startswith('"') and line.strip().endswith('"')
-        for line in content.split("\n")
-        if line.strip()
-    ):
-        # Split by newline, remove quotes and whitespace
-        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
-    else:
-        # Split by newline, comma, and/or space, and filter out empty strings
-        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    items = _parse_plain_coins_list(content)
     return {"long": items, "short": items}
 
 
