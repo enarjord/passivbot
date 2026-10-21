@@ -104,7 +104,7 @@ def build_coin_override_parameters(
                 matrix[row, column("WEL_ENFORCER_ENABLED_COLUMN")] = float(
                     bool(effective_bot.get("risk_wel_enforcer_enabled", False)),
                 )
-            if "threshold" in risk_patch.get("position_exposure_enforcer", {}):
+            if "threshold_ratio" in risk_patch.get("position_exposure_enforcer", {}):
                 matrix[row, column("WEL_ENFORCER_THRESHOLD_COLUMN")] = float(
                     effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0,
                 )

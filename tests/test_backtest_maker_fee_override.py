@@ -134,9 +134,9 @@ def test_prep_backtest_args_passes_market_order_slippage_pct():
     assert backtest_params["market_order_slippage_pct"] == 0.0015
 
 
-def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live():
+def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload():
     config = _base_config()
-    config['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.0017
+    config['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.0017
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_near_touch_threshold"] == 0.0017
