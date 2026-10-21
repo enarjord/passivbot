@@ -89,7 +89,7 @@ def test_runtime_schema_override_is_rejected_before_any_config_mutation(command,
         help_all=True,
     )
     args = parser.parse_args(
-        ["--fee-pct-fallback", "0.123", "--config_version", "v8.6.0"]
+        ["--fallback-fee-fraction", "0.123", "--config_version", "v8.6.0"]
     )
     with pytest.raises(
         ValueError, match="config_version.*cannot be overridden.*migrate-config-v9"

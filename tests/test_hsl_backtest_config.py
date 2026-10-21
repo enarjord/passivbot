@@ -497,12 +497,12 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
     cfg["bot"]["long"]["risk"].update(
         max_positions=slots,
         total_wallet_exposure_limit=2.5,
-        we_excess_allowance_pct=0.44,
+        we_excess_allowance_fraction=0.44,
     )
     cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=0.2, drawdown_ratio_ema_span_minutes=1)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
-        initial_qty_pct=1,
-        initial_ema_dist=0,
+        initial_qty_fraction=1,
+        initial_ema_distance_fraction=0,
         ema_span_0=2,
         ema_span_1=3,
     )
