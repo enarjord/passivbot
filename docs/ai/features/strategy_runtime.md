@@ -12,6 +12,18 @@ position entry price, plus any over-budget remainder, rounded and capped by the 
 Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
 is an absolute normalized-score gap, without an incumbent-relative denominator.
 
+## Side-Specific Minimum-Cost Admission
+
+`bot.long.universe.filter_by_min_effective_cost` and its short counterpart are independent booleans,
+both defaulting to true. Live uses the authored side flag. A null scalar
+`backtest.filter_by_min_effective_cost` inherits each respective flag; an explicit boolean overrides
+both. Native packets require the complete `{long: bool, short: bool}` pair. CPU and supported GPU
+selection, flat initial-entry checks and one-way arbitration apply the corresponding flag, without
+combining sides. Held positions retain ordinary management; disabling the filter never relaxes
+exchange minimum quantity/notional rules. Evaluation and replay identities include both flags.
+Explicit released-v8 conversion copies a shared policy to both sides and reports the change;
+ordinary v9 loading rejects the retired global path.
+
 ## Canonical And Legacy Strategy Schemas
 
 The canonical strategy kind is `trailing_martingale`. The released v7 `trailing_grid` schema is not

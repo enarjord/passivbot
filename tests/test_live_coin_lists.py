@@ -1038,7 +1038,7 @@ def test_prepared_extensionless_shared_file_remains_a_file_after_deletion(tmp_pa
     from config import prepare_config
     selected = tmp_path / 'coinlist'
     selected.write_text('["A00"]')
-    raw = ['coinlist'] if wrapped else 'coinlist'
+    raw = ['./coinlist'] if wrapped else 'coinlist'
     config = {'config_version':'v9.0.0', **_coin_list_config(
         {'long':None,'short':['SHORT']}, {'long':[],'short':[]}, shared=raw,
     )}

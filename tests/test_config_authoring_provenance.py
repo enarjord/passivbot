@@ -172,9 +172,9 @@ def test_coin_selection_keeps_simulation_null_inheritance_attributed_to_global_p
     source["backtest"]["filter_by_min_effective_cost"] = None
     source["coin_overrides"] = {coin: coin_patch(0.2)}
     report = explain_config(source, "backtest.filter_by_min_effective_cost", coin=coin)
-    assert report["value"] is True
+    assert report["value"] == {"long": True, "short": True}
     assert report["sources"][-1] == {
-        "kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost", "value": True,
+        "kind": "inherited", "path": "bot.short.universe.filter_by_min_effective_cost", "value": True,
     }
     assert report["search"]["status"] == "not_in_bounds"
 

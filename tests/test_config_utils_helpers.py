@@ -1711,14 +1711,14 @@ def test_config_change_log_keeps_non_target_generic_formatting():
 
 def test_backtest_filter_min_cost_retains_shared_policy_inheritance():
     cfg = get_template_config()
-    cfg['bot']['global']['universe']['filter_by_min_effective_cost'] = True
+    cfg['bot']['long']['universe']['filter_by_min_effective_cost'] = True
     cfg["backtest"]["filter_by_min_effective_cost"] = None
 
     formatted = format_config(cfg, verbose=False)
 
     assert formatted["backtest"]["filter_by_min_effective_cost"] is None
     from config.policy import effective_minimum_cost_filter
-    assert effective_minimum_cost_filter(formatted) is True
+    assert effective_minimum_cost_filter(formatted, "long") is True
 
 
 def _format_parser_help_with_config(command: str, config: dict, help_all: bool) -> str:

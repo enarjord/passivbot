@@ -762,7 +762,8 @@ def clean_config(config: dict) -> dict:
     # Source validation and template preparation are read-only. The projection
     # below copies retained values, so a full input copy would be redundant.
     from config.universe import universe_source_view
-    source = universe_source_view(config or {})
+    source = universe_source_view({key: value for key, value in (config or {}).items()
+                                   if not isinstance(key, str) or not key.startswith("_")})
     from config.migrations.v9 import require_v9_runtime_config, reject_retired_v9_fields
 
     if "config_version" in source:
@@ -1090,15 +1091,6 @@ RESERVED_CLI_ARGS = {
             "With the default 0.8, buys below market*0.2 and sells above "
             "market*1.8 are skipped until price action moves closer."
         ),
-    },
-    "bot.global.universe.filter_by_min_effective_cost": {
-        "visible": ["--filter-by-min-effective-cost", "-fbmec"],
-        "hidden": ["--bot_global_universe_filter_by_min_effective_cost"],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"live"},
-        "group": {"live": "Behavior"},
-        "help": "Filter out coins whose minimum effective cost exceeds the configured size.",
     },
     "bot.global.hedge_mode": {
         "visible": ["--hedge-mode", "-hm"],
@@ -1547,6 +1539,15 @@ RESERVED_CLI_ARGS["bot.global.loss_gate.memory_ema_span_minutes"] = {
     "help": "Global loss-gate realized-memory EMA span in minutes.",
 }
 
+for _side in ("long", "short"):
+    _path = f"bot.{_side}.universe.filter_by_min_effective_cost"
+    RESERVED_CLI_ARGS[_path] = {
+        "visible": [f"--{_path}"], "hidden": [], "type": str2bool, "metavar": "Y/N",
+        "commands": {"live", "backtest", "optimize"},
+        "group": dict.fromkeys(("live", "backtest", "optimize"), "Coin Selection"),
+        "help": f"Filter {_side} flat initial entries whose configured size is below the exchange minimum; backtest null inherits this flag.",
+    }
+
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 RESERVED_CLI_ARGS["bot.global.universe.approved_coins"] = {
     **deepcopy(RESERVED_CLI_ARGS["approved_coins"]),
@@ -1561,7 +1562,8 @@ for _path, _group in (
     ("bot.global.strategy_kind", "Behavior"),
     ("bot.global.warmup.span_multiplier", "Backtest Runtime"),
     ("bot.global.warmup.max_minutes", "Backtest Runtime"),
-    ("bot.global.universe.filter_by_min_effective_cost", "Coin Selection"),
+    ("bot.long.universe.filter_by_min_effective_cost", "Coin Selection"),
+    ("bot.short.universe.filter_by_min_effective_cost", "Coin Selection"),
 ):
     FIELD_RUNTIME_RULES[_path] = {
         "owner": "bot",
@@ -1834,7 +1836,8 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         'bot.global.universe.minimum_coin_age_days',
     }
     behavior = {
-        "bot.global.universe.filter_by_min_effective_cost",
+        "bot.long.universe.filter_by_min_effective_cost",
+        "bot.short.universe.filter_by_min_effective_cost",
         "live.fills.fee_conversion_max_age_milliseconds",
         "live.fills.fallback_fee_fraction",
         "live.fills.max_abs_fee_fraction",

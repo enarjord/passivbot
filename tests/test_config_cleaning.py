@@ -362,9 +362,8 @@ def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     from config.hsl import generated_template
-    from optimization.evaluation_contract import build_evaluation_contract
+    from optimization.evaluation_contract import CONTRACT_KEY, CONTRACT_VERSION, build_evaluation_contract
     from optimize import _resume_config_mismatches
-    from optimization.evaluation_contract import CONTRACT_KEY
 
     cfg = generated_template(get_template_config(), mode)
     contract = build_evaluation_contract(cfg)
@@ -373,7 +372,7 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
         contract["bot"]["global"]["hsl"] if mode == "portfolio" else contract["bot"]["long"]["hsl"]
     )
     assert "restart_after_red_policy" not in block
-    assert contract["version"] == 6
+    assert contract["version"] == CONTRACT_VERSION
     assert "independent_loss_memories" in contract["risk_model"]
     assert contract["risk_model"].startswith("v9_")
     assert "drawdown_ratio_threshold" not in block  # candidate value, not fixed policy

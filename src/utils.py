@@ -1889,10 +1889,11 @@ def _coins_source_side_is_all(value) -> bool:
     return isinstance(value, list) and len(value) == 1 and str(value[0]).strip().lower() == "all"
 
 
-def normalize_coins_source(src, *, allow_all: bool = True, resolve_files: bool = True):
+def normalize_coins_source(src, *, allow_all: bool = True, resolve_files: bool = True, parse_jsonish: bool = True):
     """
     Always return: {'long': [symbols…], 'short': [symbols…]}.
     resolve_files=False tokenizes already loaded source contents without file discovery.
+    parse_jsonish=False keeps validated source tokens literal instead of decoding shorthand.
     – Handles:
         • direct coin lists or comma-separated strings
         • lists/tuples containing paths or strings
@@ -1939,6 +1940,8 @@ def normalize_coins_source(src, *, allow_all: bool = True, resolve_files: bool =
         return parsed
 
     def _maybe_parse_jsonish(val):
+        if not parse_jsonish:
+            return val
         if isinstance(val, str):
             parsed = _parse_jsonish(val)
             return parsed if parsed is not None else val

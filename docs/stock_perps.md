@@ -229,7 +229,7 @@ For a $100 balance trading TSLA at $400:
 - At TWEL 1.0 with 2x leverage: max exposure = $200, max qty = 0.5 TSLA
 - Practical grid depth: ~5-8 entries before hitting minimums
 
-Consider setting `bot.global.universe.filter_by_min_effective_cost: false` if you want to trade with smaller balances and accept that some grid levels may be skipped.
+Consider setting `bot.<side>.universe.filter_by_min_effective_cost: false` if you want to trade with smaller balances and accept that some grid levels may be skipped.
 
 ### Example Config
 
@@ -286,7 +286,7 @@ Minimal test config for stock perps:
 
 Key settings explained:
 - `live.account.leverage: 2` - Safe starting point, meets isolated margin requirements
-- `bot.global.universe.filter_by_min_effective_cost: false` - Allow trading even if balance is low
+- `bot.<side>.universe.filter_by_min_effective_cost: false` - Allow trading even if balance is low
 - `bot.global.universe.minimum_coin_age_days: 0.0` - Stock perps are new, don't filter by age
 - `bot.long.strategy.trailing_martingale.entry.initial_qty_fraction: 0.4` - Larger initial entries (fewer grid levels with small balance)
 

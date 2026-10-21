@@ -36,7 +36,7 @@ def _anchor_file_references(config, *, base_config_path):
                       and parts[-1] in ("approved_coins", "ignored_coins")):
                     candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
                     if isinstance(candidate, str):
-                        resolved = resolve_universe_source_path(candidate, base_config_path=base, discover_ambiguous=True, allow_all=parts[-1] == "approved_coins")
+                        resolved = resolve_universe_source_path(candidate, base_config_path=base, allow_all=parts[-1] == "approved_coins")
                         if resolved is not None:
                             node[key] = [str(resolved)] if isinstance(value, list) else str(resolved)
                 else:

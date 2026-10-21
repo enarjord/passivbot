@@ -143,3 +143,25 @@ def test_suite_planner_preserves_frozen_inherited_membership_after_source_overri
                 registry.planner.prepare('different-membership', vector)
     finally:
         manager.cleanup()
+
+
+@pytest.mark.parametrize('change', ['source', 'shared_source', 'membership', 'subclass'])
+def test_fast_native_projection_checks_internal_source_authority(tmp_path, change):
+    from config.universe import ResolvedCoinList
+    from optimization.native_planning import _ExecutionProjection
+    config, *_ = prepared('all', tmp_path)
+    projection = _ExecutionProjection(config, execution_key(config))
+    assert projection.matches(deepcopy(config))
+    changed = deepcopy(config)
+    value = changed['bot']['long']['universe']['approved_coins']
+    if change == 'source':
+        value.source = list(value)  # Equal membership becomes an explicit pin.
+    elif change == 'shared_source':
+        value.shared_source = ['COIN00', 'COIN02']
+    elif change == 'membership':
+        value[:] = ['COIN01']
+    else:
+        class Unsupported(ResolvedCoinList):
+            pass
+        changed['bot']['long']['universe']['approved_coins'] = Unsupported(value, value.source, value.shared_source)
+    assert not projection.matches(changed)

@@ -325,7 +325,7 @@ def make_input(
         "balance": balance,
         "balance_raw": balance,
         "global": {
-            "filter_by_min_effective_cost": False,
+            "filter_by_min_effective_cost": {"long": False, "short": False},
             "auto_unstuck_allowed": True,
             # Each independently initialized realized memory starts empty.
             "unstuck_realized_pnl_drawdown": 0.0,
@@ -4157,7 +4157,7 @@ def test_min_effective_cost_uses_strategy_initial_qty_pct():
         global_bp=bot_params_pair(long_overrides=long_bp),
         symbols=[sym],
     )
-    inp["global"]["filter_by_min_effective_cost"] = True
+    inp["global"]["filter_by_min_effective_cost"] = {"long": True, "short": True}
 
     out = compute(pbr, inp)
 
@@ -4186,7 +4186,7 @@ def test_live_validator_accepts_real_min_effective_cost_diagnostic():
         global_bp=bot_params_pair(long_overrides=long_bp),
         symbols=[sym],
     )
-    inp["global"]["filter_by_min_effective_cost"] = True
+    inp["global"]["filter_by_min_effective_cost"] = {"long": True, "short": True}
 
     out = compute(pbr, inp)
 

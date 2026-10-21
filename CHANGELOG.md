@@ -8,6 +8,12 @@ since the latest release tag; these features may already be available when insta
 
 - Add shared approval sources under `bot.global.universe.approved_coins`. Side omission/null inherits; explicit side sources replace the shared selection and empty lists approve nothing. File refresh, scenario/fixed overrides and reloadable exports preserve source binding and explicit pins; released-v8 conversion reports the final shared or directional ownership.
 
+- Configure minimum-effective-cost filtering independently under each side's `bot.<side>.universe`.
+  Both flags default to true. A null backtest override inherits them independently; an explicit
+  boolean still overrides both. Live, Rust backtests and supported GPU replay use the corresponding
+  flag before flat-entry selection and one-way arbitration, while held-position management and
+  exchange minima are preserved. Released-v8 conversion copies and reports the shared flag to both sides.
+
 - Round positive fractional warmup caps upward to whole acquisition minutes in live mode,
   matching backtests: `0.5` stays capped at one minute and `5.5` allows six. Null remains uncapped;
   positive caps limit rather than extend a shorter candidate-refresh request. Live ranking

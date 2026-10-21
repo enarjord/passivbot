@@ -218,7 +218,6 @@
                     "APT",
                     "INJ"
                 ],
-                "filter_by_min_effective_cost": true,
                 "minimum_coin_age_days": 60.0
             },
             "unstuck": {"memory_ema_span_minutes": 43200.0},
@@ -296,6 +295,7 @@
                 }
             },
             "universe": {
+                "filter_by_min_effective_cost": true,
                 "approved_coins": null,
                 "ignored_coins": []
             },
@@ -382,6 +382,7 @@
                 }
             },
             "universe": {
+                "filter_by_min_effective_cost": true,
                 "approved_coins": null,
                 "ignored_coins": []
             },
