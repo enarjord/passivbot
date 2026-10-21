@@ -857,7 +857,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
     )
     global_threshold = base_config["bot"]["long"]["strategy"]["trailing_martingale"][
         "entry"
-    ]["threshold_base_pct"]
+    ]["threshold_base_fraction"]
     override_path = tmp_path / "btc_override.hjson"
     override_path.write_text(
         hjson.dumps(
@@ -867,7 +867,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
                         "entry_cooldown": {"base_duration_minutes": 3.0},
                         "unstuck": {
                             "ema_gating_enabled": False,
-                            "loss_allowance_pct": 0.1,
+                            "loss_allowance_fraction": 0.1,
                         },
                     }
                 }
@@ -883,7 +883,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
                     "entry_cooldown": {"base_duration_minutes": 0.05},
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"threshold_base_pct": global_threshold}
+                            "entry": {"threshold_base_fraction": global_threshold}
                         }
                     },
                 }
@@ -922,10 +922,10 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
         assert override["bot"]["long"]["risk_entry_cooldown_minutes"] == 0.05
         assert override["bot"]["long"]["unstuck"]["ema_gating_enabled"] is False
         assert override["bot"]["long"]["unstuck_ema_gating_enabled"] is False
-        assert override["bot"]["long"]["unstuck"]["loss_allowance_pct"] == 0.1
+        assert override["bot"]["long"]["unstuck"]["loss_allowance_fraction"] == 0.1
         assert (
             override["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-                "threshold_base_pct"
+                "threshold_base_fraction"
             ]
             == global_threshold
         )
@@ -1080,11 +1080,11 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg["bot"]["long"]["hsl"]["enabled"] = False
     cfg["bot"]["short"]["hsl"]["enabled"] = False
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "initial_qty_pct"
+        "initial_qty_fraction"
     ] = 0.0276
     cfg["bot"]["long"]["risk"]["max_positions"] = 5
     cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.8
-    cfg["bot"]["long"]["risk"]["we_excess_allowance_pct"] = 0.37
+    cfg["bot"]["long"]["risk"]["we_excess_allowance_fraction"] = 0.37
     cfg["bot"]["short"]["risk"]["max_positions"] = 0
     cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     cfg['bot']["long"]['universe']['approved_coins'] = ["SOL"]

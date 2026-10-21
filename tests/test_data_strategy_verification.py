@@ -442,15 +442,15 @@ class TestOverrideVariations:
                 {
                     "label": "passive_recursive",
                     "overrides": {
-                        "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0,
-                        "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0,
+                        "bot.long.strategy.trailing_martingale.entry.retracement_base_fraction": 0,
+                        "bot.long.strategy.trailing_martingale.close.retracement_base_fraction": 0,
                     },
                 },
                 {
                     "label": "trailing_enabled",
                     "overrides": {
-                        "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0.01,
-                        "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.01,
+                        "bot.long.strategy.trailing_martingale.entry.retracement_base_fraction": 0.01,
+                        "bot.long.strategy.trailing_martingale.close.retracement_base_fraction": 0.01,
                     },
                 },
             ],
@@ -462,12 +462,12 @@ class TestOverrideVariations:
 
         assert (
             scenarios[0]
-            .overrides["bot.long.strategy.trailing_martingale.entry.retracement_base_pct"]
+            .overrides["bot.long.strategy.trailing_martingale.entry.retracement_base_fraction"]
             == 0
         )
         assert (
             scenarios[1]
-            .overrides["bot.long.strategy.trailing_martingale.entry.retracement_base_pct"]
+            .overrides["bot.long.strategy.trailing_martingale.entry.retracement_base_fraction"]
             == 0.01
         )
 

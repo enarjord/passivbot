@@ -122,13 +122,13 @@ def test_full_file_hsl_patch_is_ignored_outside_coin_mode(caplog):
             "bot": {
                 "long": {
                     "hsl": {"drawdown_ratio_threshold": 0.2},
-                    "unstuck": {"loss_allowance_pct": 0.023},
+                    "unstuck": {"loss_allowance_fraction": 0.023},
                 }
             }
         },
     )
     assert parsed["coin_overrides"]["BTC"] == {
-        "bot": {"long": {"unstuck": {"loss_allowance_pct": 0.023}}}
+        "bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.023}}}
     }
     assert "hsl is overridable only" in caplog.text
     assert "the file HSL values are ignored" in caplog.text

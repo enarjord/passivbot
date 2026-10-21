@@ -108,7 +108,7 @@ fill in economic order:
 ```text
 D_realized = fma(beta_slow, D_realized, 0)        # each elapsed minute
 D_realized = max(0, D_realized - net_realized_PNL) # each ordered fill
-p = f32(loss_allowance_pct) * f32(applicable_TWEL)
+p = f32(loss_allowance_fraction) * f32(applicable_TWEL)
 allowance = max(0, fma(p, f32(raw_balance) + D_realized, -D_realized))
 ```
 

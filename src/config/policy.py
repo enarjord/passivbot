@@ -38,7 +38,7 @@ def validate_shared_bot_policy(config):
     for path in (
         "bot.global.universe.minimum_coin_age_days",
         "bot.global.execution.market_order_near_touch_threshold",
-        "bot.global.forager.score_hysteresis_pct",
+        "bot.global.forager.score_hysteresis_margin",
         "bot.global.warmup.ratio",
         "bot.global.warmup.max_minutes",
     ):

@@ -158,11 +158,11 @@ def _materialized_coin_patch(overrides, effective):
             continue
         if "override_config_path" in parts[2:]:
             parts = parts[:2]
-        from config.migrations.operational_live import operational_live_selector
+        from config.migrations.final_v9 import released_runtime_selector
 
         # A referenced coin file has already completed sparse conversion,
         # while a file-free released coin patch still uses its source paths.
-        candidates = (parts, operational_live_selector(".".join(parts)).split("."))
+        candidates = (parts, released_runtime_selector(".".join(parts)).split("."))
         for candidate in candidates:
             value = effective
             for part in candidate:
@@ -360,6 +360,9 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     old=deepcopy(value), new={new: deepcopy(value)},
                     reason="explicit released-v8 quantity rename before file/inline merge",
                 ))
+        from config.public_names import rewrite_released_public_names
+
+        rewrite_released_public_names(inline, record=record_operational)
         result["coin_overrides"][coin] = nested_update(patch, inline)
     return result
 

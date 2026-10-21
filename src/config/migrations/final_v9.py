@@ -369,6 +369,72 @@ def _migrate_shared_fixed_selector(path, *, scope):
     return path
 
 
+def released_runtime_selector(path):
+    """Convert an explicit released selector, including a coin-document prefix.
+
+    Ordinary loading never calls this adapter. Referenced coin documents and
+    authored override selectors must use the same conversion before lookup.
+    """
+    from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
+    from config.public_names import released_public_path
+    from .operational_live import operational_live_selector
+    from .shared_policy import shared_policy_selector
+
+    reject_retired_gpu_selector(path, context="optimizer selector")
+    parts = path.split(".")
+    if (len(parts) >= 2 and parts[0] in {"long", "short"}
+            and parts[1] in FLAT_BOT_KEY_TO_GROUP_PATH):
+        parts.insert(0, "bot")
+    # Only a flat side-owned shared field needs grouping. Strategy and
+    # already grouped paths keep their own canonical leaf names.
+    for offset in range(len(parts) - 2):
+        if (parts[offset] == "bot" and parts[offset + 1] in {"long", "short"}
+                and parts[offset + 2] in FLAT_BOT_KEY_TO_GROUP_PATH):
+            parts[offset + 2:offset + 3] = FLAT_BOT_KEY_TO_GROUP_PATH[parts[offset + 2]]
+            break
+    # Released fixed selectors may be suffixes, group-relative, or fully
+    # qualified. Preserve their prefix while converting the feature leaf.
+    parts = [segment for part in parts for segment in (
+        part.rsplit("_", 1) if part in {
+            "position_exposure_enforcer_enabled", "position_exposure_enforcer_threshold",
+            "total_exposure_enforcer_enabled", "total_exposure_enforcer_threshold",
+            "total_exposure_enforcer_policy",
+        } else (part,)
+    )]
+    if (len(parts) >= 2 and parts[-2] in {
+            "position_exposure_enforcer", "total_exposure_enforcer"}
+            and parts[-1] == "threshold"):
+        native = ("risk_wel_enforcer_threshold" if parts[-2].startswith("position_")
+                  else "risk_twel_enforcer_threshold")
+        parts[-1] = FLAT_BOT_KEY_TO_GROUP_PATH[native][-1]
+    for group, old, new in (
+        ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+        ("unstuck", "ema_dist", "ema_distance_fraction"),
+    ):
+        if parts[-2:] == [group, old]:
+            parts[-1] = new
+    path = ".".join(parts)
+    for old, new in (
+        ("live.hsl_signal_mode", "bot.global.hsl.scope"),
+        ("live.max_realized_loss_pct", "bot.global.loss_gate.max_drawdown_ratio"),
+        ("backtest.liquidation_threshold", "backtest.equity_floor_ratio"),
+        ("live.auto_gs", "live.disapproved_position_mode"),
+        ("bot.hsl.", "bot.global.hsl."),
+        (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
+        (".risk.n_positions", ".risk.max_positions"),
+        (".risk.position_exposure_enforcer_enabled", ".risk.position_exposure_enforcer.enabled"),
+        (".risk.position_exposure_enforcer_threshold", ".risk.position_exposure_enforcer.threshold"),
+        (".risk.total_exposure_enforcer_enabled", ".risk.total_exposure_enforcer.enabled"),
+        (".risk.total_exposure_enforcer_threshold", ".risk.total_exposure_enforcer.threshold"),
+        (".risk.total_exposure_enforcer_policy", ".risk.total_exposure_enforcer.policy"),
+        (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
+    ):
+        path = path.replace(old, new)
+    return ".".join(released_public_path(
+        operational_live_selector(shared_policy_selector(path)).split(".")
+    ))
+
+
 def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_change=False,
                        sparse=False, best_effort=False):
     """Translate public fields without guessing independent optimizer ranges."""
@@ -376,8 +442,9 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
     from .shared_policy import (COIN_SOURCE_FIELDS,
                                 move_shared_policy, preserve_forced_normal_selection,
-                                preserve_forced_selection_overrides, shared_policy_selector)
-    from .operational_live import move_operational_live, operational_live_selector
+                                preserve_forced_selection_overrides)
+    from .operational_live import move_operational_live
+    from config.public_names import rewrite_released_public_names
 
     result = deepcopy(source)
     if not sparse:
@@ -425,49 +492,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 reject_retired_gpu_selector(path, context="optimizer selector")
                 return path
             path = converted
-        reject_retired_gpu_selector(path, context="optimizer selector")
-        parts = path.split(".")
-        if (len(parts) >= 2 and parts[0] in {"long", "short"}
-                and parts[1] in FLAT_BOT_KEY_TO_GROUP_PATH):
-            parts.insert(0, "bot")
-        # Only a flat side-owned shared field needs grouping. Strategy and
-        # already grouped paths keep their own canonical leaf names.
-        if (len(parts) >= 3 and parts[0] == "bot" and parts[1] in {"long", "short"}
-                and parts[2] in FLAT_BOT_KEY_TO_GROUP_PATH):
-            parts[2:3] = FLAT_BOT_KEY_TO_GROUP_PATH[parts[2]]
-        # Released fixed selectors may be suffixes, group-relative, or fully
-        # qualified. Preserve their prefix while converting the feature leaf.
-        parts = [segment for part in parts for segment in (
-            part.rsplit("_", 1) if part in {
-                "position_exposure_enforcer_enabled", "position_exposure_enforcer_threshold",
-                "total_exposure_enforcer_enabled", "total_exposure_enforcer_threshold",
-                "total_exposure_enforcer_policy",
-            } else (part,)
-        )]
-        for group, old, new in (
-            ("hsl", "red_threshold", "drawdown_ratio_threshold"),
-            ("unstuck", "ema_dist", "ema_distance_fraction"),
-        ):
-            if parts[-2:] == [group, old]:
-                parts[-1] = new
-        path = ".".join(parts)
-        for old, new in (
-            ("live.hsl_signal_mode", "bot.global.hsl.scope"),
-            ("live.max_realized_loss_pct", "bot.global.loss_gate.max_drawdown_ratio"),
-            ("backtest.liquidation_threshold", "backtest.equity_floor_ratio"),
-            ("live.auto_gs", "live.disapproved_position_mode"),
-            ("bot.hsl.", "bot.global.hsl."),
-            (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
-            (".risk.n_positions", ".risk.max_positions"),
-            (".risk.position_exposure_enforcer_enabled", ".risk.position_exposure_enforcer.enabled"),
-            (".risk.position_exposure_enforcer_threshold", ".risk.position_exposure_enforcer.threshold"),
-            (".risk.total_exposure_enforcer_enabled", ".risk.total_exposure_enforcer.enabled"),
-            (".risk.total_exposure_enforcer_threshold", ".risk.total_exposure_enforcer.threshold"),
-            (".risk.total_exposure_enforcer_policy", ".risk.total_exposure_enforcer.policy"),
-            (".unstuck.threshold", ".unstuck.exposure_trigger_ratio"),
-        ):
-            path = path.replace(old, new)
-        return operational_live_selector(shared_policy_selector(path))
+        return released_runtime_selector(path)
 
     def patch(raw, inherited_scope, path):
         from config.scenario_overrides import normalize_scenario_overrides
@@ -622,6 +647,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         move_operational_live(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
+        rewrite_released_public_names(result, record=record)
         return result
     # All released-layout structural transforms run only inside this converter.
     from . import apply_migrations, apply_backward_compatibility_renames
@@ -665,6 +691,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     # validation. Ordinary loading never resolves their released flat aliases.
     canonicalize_coin_patches(result)
     preserve_forced_selection_overrides(result, record=record)
+    rewrite_released_public_names(result, record=record)
     sync_canonical_strategy_config(result)
     from config.limits import normalize_limit_entries
     from config.scoring import normalize_scoring_config

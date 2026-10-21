@@ -301,7 +301,7 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
   --side long --position-price 20 \
   --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
   --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033 \
-  --entry-threshold-base-pct 0.02 --json
+  --entry-threshold-base-fraction 0.02 --json
 ```
 
 ## Config cleanup and formatting
@@ -412,7 +412,7 @@ compatibility. Prefer `clean-config --mode format` for explicit output paths and
 ```shell
 passivbot tool config-explain input.json bot.long.unstuck.ema_span_0
 passivbot tool config-explain input.json bot.long.unstuck.ema_span_0 --coin BTC --json
-passivbot tool config-explain input.json bot.long.unstuck.close_pct --scenario base --optimize
+passivbot tool config-explain input.json bot.long.unstuck.close_fraction --scenario base --optimize
 ```
 
 The read-only offline report shows the value, declared type, scope, unit/denominator when known,

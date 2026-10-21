@@ -113,6 +113,15 @@ LIVE_OPERATIONAL_PATHS.update(
         "disapproved_position_mode": ("live", "modes", "disapproved_position"),
     }
 )
+for _field_id, _public_name in {
+    "balance_hysteresis_snap_pct": "balance_hysteresis_snap_fraction",
+    "fee_pct_fallback": "fallback_fee_fraction",
+    "fee_pct_sanity_abs_max": "max_abs_fee_fraction",
+    "limit_order_create_max_market_dist_pct": "limit_order_create_max_market_distance_fraction",
+    "order_match_tolerance_pct": "order_match_tolerance_fraction",
+    "order_replacement_churn_gate_market_dist_pct": "order_replacement_churn_gate_market_distance_fraction",
+}.items():
+    LIVE_OPERATIONAL_PATHS[_field_id] = (*LIVE_OPERATIONAL_PATHS[_field_id][:-1], _public_name)
 
 
 def live_field_path(field_id: str) -> str:
@@ -144,7 +153,7 @@ _FIELDS_BY_TYPE = {
     FieldType.FLOAT: {
         "backtest": """
             btc_collateral_cap equity_floor_ratio gap_tolerance_ohlcvs_minutes
-            maker_fee_override market_order_slippage_pct limit_order_fill_buffer_pct
+            maker_fee_override market_order_slippage_fraction limit_order_fill_buffer_fraction
             starting_balance taker_fee_override
         """,
         "live": """
@@ -173,7 +182,7 @@ _FIELDS_BY_TYPE = {
         "bot.global.unstuck": "memory_ema_span_minutes",
         "bot.global.universe": "minimum_coin_age_days",
         "bot.global.execution": "market_order_near_touch_threshold",
-        "bot.global.forager": "score_hysteresis_pct",
+        "bot.global.forager": "score_hysteresis_margin",
         "bot.global.warmup": "ratio max_minutes",
     },
     FieldType.BOOLEAN: {
@@ -256,9 +265,9 @@ _SHARED_SIDE_FIELDS = {
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
-        risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
-        unstuck.close_pct unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
-        unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio
+        risk.total_wallet_exposure_limit risk.we_excess_allowance_fraction
+        unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
+        unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
         hsl.enabled hsl.scale_budget_with_excess_allowance

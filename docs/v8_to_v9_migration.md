@@ -27,7 +27,10 @@ before backtesting a proposed replacement.
 | `live.approved_coins`, `live.ignored_coins` | Separate `bot.<side>.universe` sources |
 | Shared minimum-age and minimum-cost filters | `bot.global.universe`; simulation minimum-cost override remains nullable |
 | Shared market-order policy | `bot.global.execution` |
-| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_pct`, `bot.global.warmup` |
+| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_margin`, `bot.global.warmup` |
+| Scale-one sizing, allowance, fee, fill and execution `_pct` fields | Public `_fraction` names; values are unchanged |
+| `fee_pct_fallback`, `fee_pct_sanity_abs_max` | `live.fills.fallback_fee_fraction`, `live.fills.max_abs_fee_fraction` |
+| TM `entry.initial_ema_dist`, EMA-anchor `offset` | `entry.initial_ema_distance_fraction`, `offset_fraction` |
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |
 | `forager.volume_drop_pct` | Removed; volume-based ranking remains |

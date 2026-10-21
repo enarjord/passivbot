@@ -1619,7 +1619,7 @@ class SharedAccountReplay:
         ):
             raise ValueError(
                 "MPS multicoin proxy requires a finite non-negative "
-                "bot.global.forager.score_hysteresis_pct"
+                "bot.global.forager.score_hysteresis_margin"
             )
         _require_supported_multicoin_valid_tails(
             values,

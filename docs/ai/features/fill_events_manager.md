@@ -18,8 +18,8 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    is derived as `pnl + fee_paid`.
 5. Fee resolution is best-effort but observable: reported quote fee, reported
    non-quote fee converted by a fresh ticker, reported fee rate, then
-   `live.fills.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
-   against `live.fills.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
+   `live.fills.fallback_fee_fraction`. Every fill is sanity-checked by fee/notional ratio
+   against `live.fills.max_abs_fee_fraction`; outliers use the fallback percentage.
    Explicit finite zero fees and fully resolved zero-sum fee lists are authoritative amounts.
    Loading a cached fallback or rate estimate rechecks retained amounts and persists a resolved fee;
    unresolved historical estimates retain their original policy. Same-currency offsetting

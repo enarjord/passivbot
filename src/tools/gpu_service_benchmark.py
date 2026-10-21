@@ -247,9 +247,9 @@ def main(argv=None):
                     bot = candidate["bot"][side]["strategy"][args.strategy]
                     if args.strategy == "trailing_martingale":
                         bot = bot["entry"]
-                        bot["initial_qty_pct"] = .01 + index * .001
+                        bot["initial_qty_fraction"] = .01 + index * .001
                     else:
-                        bot["base_qty_pct"] = .01 + index * .001
+                        bot["base_qty_fraction"] = .01 + index * .001
                     bot["ema_span_0"] = 5. + index * 1.25
                 rows.append(prepare_candidate_parameters(candidate, markets, "binance"))
             candidates[name] = rows

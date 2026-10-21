@@ -132,8 +132,8 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
         cooldown_minutes_after_red=10000,
         panic_close_order_type="limit",
     )
-    config["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] = .8
-    config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = .8
+    config["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_fraction"] = .8
+    config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = .8
     # The panic limit cannot cross the gap. Forced delisting realizes the loss
     # after Rust's ordinary-fill liquidation check, so reporting reaches close 6.
     candles = np.repeat(inputs[1][-1:], 1410, axis=0)

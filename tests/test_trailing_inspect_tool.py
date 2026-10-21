@@ -210,7 +210,7 @@ def test_main_json_applies_parameter_override(monkeypatch, capsys):
                 "0.6",
                 "--effective-wallet-exposure-limit",
                 "0.9",
-                "--entry-threshold-base-pct",
+                "--entry-threshold-base-fraction",
                 "0.03",
                 "--json",
             ]
@@ -348,8 +348,8 @@ def test_extract_side_context_includes_global_and_risk_paths():
                 },
                 "unstuck": {
                     "enabled": True,
-                    "close_pct": 0.1,
-                    "loss_allowance_pct": 0.02,
+                    "close_fraction": 0.1,
+                    "loss_allowance_fraction": 0.02,
                     "exposure_trigger_ratio": 0.7,
                 },
                 "strategy": {
@@ -445,7 +445,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                         "entry_cooldown": {"base_duration_minutes": 9.0},
                         "strategy": {
                             "trailing_martingale": {
-                                "entry": {"threshold_base_pct": 0.2}
+                                "entry": {"threshold_base_fraction": 0.2}
                             }
                         },
                     }

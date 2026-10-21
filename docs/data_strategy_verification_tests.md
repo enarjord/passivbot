@@ -388,15 +388,15 @@ config = {
             {
                 "label": "pure_grid",
                 "overrides": {
-                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0,
-                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_fraction": 0,
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_fraction": 0
                 }
             },
             {
                 "label": "pure_trailing",
                 "overrides": {
-                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0.005,
-                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.005
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_fraction": 0.005,
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_fraction": 0.005
                 }
             }
         ]

@@ -16,9 +16,11 @@ from config import (
     prepare_config,
     project_config,
 )
-from config.optimize_bounds import get_optimize_bounds_defaults
+from config.optimize_bounds import flatten_optimize_bounds, get_optimize_bounds_defaults
 from config.overrides import parse_overrides
+from config.strategy import build_runtime_strategy_side
 from config.strategy_spec import get_supported_strategy_kinds
+from config.strategy_paths import project_native_strategy_side, project_strategy_spec
 
 
 def _set_path(mapping, path, value):
@@ -35,15 +37,6 @@ def _nested_strategy_values_from_spec(spec, field):
         pside = config_path[1]
         _set_path(result[pside], config_path[2:], param[field])
     return result
-
-
-def _flatten_strategy_bound_items(bounds, prefix=()):
-    for key, value in bounds.items():
-        path = (*prefix, key)
-        if isinstance(value, dict):
-            yield from _flatten_strategy_bound_items(value, path)
-        else:
-            yield "_".join(path), value
 
 
 def _strategy_side(config, pside, kind=None):
@@ -77,12 +70,13 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
         "btc_collateral_cap": 0.0, "suite_enabled": False,
     }.items():
         assert config["backtest"][key] == expected
-    expected_strategy = {
+    expected_native_strategy = {
         "base_qty_pct": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
         "offset": 0.003, "offset_volatility_ema_span_1m": 60.0,
         "offset_volatility_1m_weight": 0.0, "offset_volatility_ema_span_1h": 24.0,
         "offset_volatility_1h_weight": 0.0, "offset_psize_weight": 0.2,
     }
+    expected_strategy = project_native_strategy_side("ema_anchor", expected_native_strategy)
     for side in ("long", "short"):
         assert config["bot"][side]["hsl"]["enabled"] is False
         assert config["bot"][side]["risk"]["max_positions"] == 2.0
@@ -90,6 +84,11 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
         for key, expected in expected_strategy.items():
             assert _strategy_side(config, side)[key] == expected
             assert _strategy_side(compiled, side)[key] == expected
+        native_strategy = build_runtime_strategy_side(
+            _strategy_side(compiled, side), strategy_kind="ema_anchor", pside=side,
+        )
+        for key, expected in expected_native_strategy.items():
+            assert native_strategy[key] == expected
         assert config["bot"][side]["unstuck"]["ema_span_0"] == 48.0
         assert config["bot"][side]["unstuck"]["ema_span_1"] == 288.0
     for retired in ("pnls_max_lookback_days", "realized_loss_gate_lookback_minutes",
@@ -117,7 +116,7 @@ def test_startup_phase_budgets_validate_and_roundtrip():
 def test_prepare_config_preserves_fixed_runtime_override_mapping():
     source = get_template_config()
     source["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.strategy.trailing_martingale.entry.threshold_base_pct": 0.123,
+        "bot.long.strategy.trailing_martingale.entry.threshold_base_fraction": 0.123,
         "bot.short.hsl.drawdown_ratio_threshold": 0.1,
     }
 
@@ -307,7 +306,7 @@ def test_rust_strategy_spec_matches_python_template_defaults(strategy_kind):
     source['bot']['global']['strategy_kind'] = strategy_kind
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     expected = _nested_strategy_values_from_spec(
-        pbr.get_strategy_spec(strategy_kind), "default"
+        project_strategy_spec(strategy_kind, pbr.get_strategy_spec(strategy_kind)), "default"
     )
 
     assert _strategy_side(prepared, "long", strategy_kind) == expected["long"]
@@ -320,17 +319,11 @@ def test_rust_strategy_spec_matches_generated_strategy_optimize_bounds(strategy_
     expected = spec["optimize_bounds"]
     generated = get_optimize_bounds_defaults()
 
-    flat_generated = {}
-    for pside in ("long", "short"):
-        strategy_bounds = generated[pside]["strategy"][strategy_kind]
-        for local_key, value in _flatten_strategy_bound_items(strategy_bounds):
-            flat_key = (
-                local_key.removeprefix("entry_")
-                if strategy_kind == "trailing_martingale"
-                and local_key in ("entry_ema_span_0", "entry_ema_span_1")
-                else local_key
-            )
-            flat_generated[f"{pside}_{flat_key}"] = value
+    flat_generated = flatten_optimize_bounds(
+        {side: {"strategy": {strategy_kind: generated[side]["strategy"][strategy_kind]}}
+         for side in ("long", "short")},
+        strategy_kind=strategy_kind,
+    )
 
     assert flat_generated == expected
 
@@ -600,7 +593,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
         "ema_span_0"
     ] = 321.0
     source["bot"]["short"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = 0.0123
     source["live"].pop("strategy_kind", None)
 
@@ -611,7 +604,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
         321.0
     )
     assert _strategy_side(prepared, "short")["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] == pytest.approx(0.0123)
 
 
@@ -620,19 +613,19 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     source['bot']['global']['strategy_kind'] = "ema_anchor"
     source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.5
     source["bot"]["long"]["strategy"]["ema_anchor"] = {
-        "base_qty_pct": 0.02,
+        "base_qty_fraction": 0.02,
         "ema_span_0": 55.0,
         "ema_span_1": 144.0,
         "entry_double_down_factor": 0.8,
-        "offset": 0.003,
+        "offset_fraction": 0.003,
         "offset_psize_weight": 0.2,
     }
     source["bot"]["short"]["strategy"]["ema_anchor"] = {
-        "base_qty_pct": 0.03,
+        "base_qty_fraction": 0.03,
         "ema_span_0": 34.0,
         "ema_span_1": 89.0,
         "entry_double_down_factor": 0.4,
-        "offset": 0.004,
+        "offset_fraction": 0.004,
         "offset_psize_weight": 0.1,
     }
 
@@ -641,11 +634,11 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
 
     assert prepared['bot']['global']['strategy_kind'] == "ema_anchor"
     assert prepared["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
-    assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.02)
+    assert _strategy_side(prepared, "long")["base_qty_fraction"] == pytest.approx(0.02)
     assert _strategy_side(prepared, "long")[
         "entry_double_down_factor"
     ] == pytest.approx(0.8)
-    assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.004)
+    assert _strategy_side(prepared, "short")["offset_fraction"] == pytest.approx(0.004)
     assert _strategy_side(prepared, "short")[
         "entry_double_down_factor"
     ] == pytest.approx(0.4)
@@ -663,12 +656,12 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared['bot']['global']['strategy_kind'] == "ema_anchor"
-    assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.01)
+    assert _strategy_side(prepared, "long")["base_qty_fraction"] == pytest.approx(0.01)
     assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(200.0)
     assert _strategy_side(prepared, "long")[
         "entry_double_down_factor"
     ] == pytest.approx(0.0)
-    assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.002)
+    assert _strategy_side(prepared, "short")["offset_fraction"] == pytest.approx(0.002)
     assert "base_qty_pct" not in prepared["bot"]["long"]
 
 
@@ -796,8 +789,8 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
 
     template = get_template_config()
     assert (
-        prepared["backtest"]["market_order_slippage_pct"]
-        == template["backtest"]["market_order_slippage_pct"]
+        prepared["backtest"]["market_order_slippage_fraction"]
+        == template["backtest"]["market_order_slippage_fraction"]
     )
     assert (
         prepared["bot"]["long"]["filter_volume_ema_span_1m"]
@@ -1146,8 +1139,8 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):
     source = get_template_config()
     if field == "forager_score_hysteresis_pct":
-        source["bot"]["global"]["forager"]["score_hysteresis_pct"] = value
-        match = r"bot\.global\.forager\.score_hysteresis_pct.*finite"
+        source["bot"]["global"]["forager"]["score_hysteresis_margin"] = value
+        match = r"bot\.global\.forager\.score_hysteresis_margin.*finite"
     else:
         from config.field_registry import LIVE_OPERATIONAL_PATHS
 
@@ -1188,21 +1181,21 @@ def test_prepare_config_rejects_retired_hsl_terminal_threshold():
         ),
         (
             "risk",
-            "we_excess_allowance_pct",
+            "we_excess_allowance_fraction",
             -0.01,
-            r"bot\.long\.risk\.we_excess_allowance_pct must be finite and >= 0\.0",
+            r"bot\.long\.risk\.we_excess_allowance_fraction must be finite and >= 0\.0",
         ),
         (
             "unstuck",
-            "close_pct",
+            "close_fraction",
             1.01,
-            r"bot\.long\.unstuck\.close_pct must be finite and <= 1\.0",
+            r"bot\.long\.unstuck\.close_fraction must be finite and <= 1\.0",
         ),
         (
             "unstuck",
-            "loss_allowance_pct",
+            "loss_allowance_fraction",
             float("nan"),
-            r"bot\.long\.unstuck\.loss_allowance_pct must be finite",
+            r"bot\.long\.unstuck\.loss_allowance_fraction must be finite",
         ),
     ],
 )
@@ -1320,7 +1313,7 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     risk["total_exposure_enforcer"].pop("policy")
     risk["total_exposure_enforcer"].pop("threshold")
     risk["position_exposure_enforcer"].pop("threshold")
-    risk.pop("we_excess_allowance_pct")
+    risk.pop("we_excess_allowance_fraction")
 
     with caplog.at_level(logging.INFO):
         prepared = prepare_config(
@@ -1351,8 +1344,8 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     )
     assert "total_exposure_entry_gate_enabled" not in long_risk
     assert long_risk['total_exposure_enforcer']['policy'] == "reduce_overweight"
-    assert long_risk["we_excess_allowance_pct"] == pytest.approx(
-        template_risk["we_excess_allowance_pct"]
+    assert long_risk["we_excess_allowance_fraction"] == pytest.approx(
+        template_risk["we_excess_allowance_fraction"]
     )
     assert long_risk['position_exposure_enforcer']['threshold'] == pytest.approx(
         template_risk['position_exposure_enforcer']['threshold']

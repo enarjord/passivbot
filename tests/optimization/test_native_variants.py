@@ -25,7 +25,7 @@ def variable_base(manager, *, anchor=False, disabled=False, mirror=False):
         seeds[0]["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
         seeds[1]["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1
         optimize.install_anchored_fine_tune_plan(
-            config, ["long.strategy.entry.initial_qty_pct"], None, starting_configs_override=seeds,
+            config, ["long.strategy.entry.initial_qty_fraction"], None, starting_configs_override=seeds,
         )
     return optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                               config, timestamps=original.timestamps)

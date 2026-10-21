@@ -451,16 +451,16 @@ def normalize_hsl_risk_unstuck_numerics(
 
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
-            path=f"{risk_path}.we_excess_allowance_pct",
+            path=f"{risk_path}.we_excess_allowance_fraction",
         )
         _validate_ratio(
             get_grouped_bot_value(bot_side, "unstuck_close_pct"),
-            path=f"{unstuck_path}.close_pct",
+            path=f"{unstuck_path}.close_fraction",
             max_value=1.0,
         )
         _validate_ratio(
             get_grouped_bot_value(bot_side, "unstuck_loss_allowance_pct"),
-            path=f"{unstuck_path}.loss_allowance_pct",
+            path=f"{unstuck_path}.loss_allowance_fraction",
         )
 
 

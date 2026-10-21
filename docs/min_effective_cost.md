@@ -25,8 +25,8 @@ With:
 - `effective_wel = wallet_exposure_limit * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
   order. For `bot.global.strategy_kind = "trailing_martingale"`, this is
-  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for
-  `bot.global.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_pct`.
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for
+  `bot.global.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
 
 
 ## Pass/fail check
@@ -46,7 +46,7 @@ Rearrange the inequality to solve for the minimum balance:
 Use the highest effective_min_cost among the symbols you want to trade. Example:
 - `effective_min_cost = 10 USDT`
 - `total_wallet_exposure_limit = 0.6`, `n_positions = 3` → `wallet_exposure_limit = 0.2`
-- `risk_we_excess_allowance_pct = 0.5` (effective_wel = 0.2 * (1 + 0.5) = 0.3)
+- `risk.we_excess_allowance_fraction = 0.5` (effective_wel = 0.2 * (1 + 0.5) = 0.3)
 - `strategy_initial_sizing_fraction = 0.015`
 → `balance_required >= 10 / (0.3 * 0.015) ≈ 2,222.22 USDT`
 

@@ -48,16 +48,16 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     "risk": {
         "max_positions": "n_positions",
         "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
         "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
     },
     "unstuck": {
-        "close_pct": "unstuck_close_pct",
+        "close_fraction": "unstuck_close_pct",
         "ema_distance_fraction": "unstuck_ema_dist",
         "ema_span_0": "unstuck_ema_span_0",
         "ema_span_1": "unstuck_ema_span_1",
-        "loss_allowance_pct": "unstuck_loss_allowance_pct",
+        "loss_allowance_fraction": "unstuck_loss_allowance_pct",
         "exposure_trigger_ratio": "unstuck_threshold",
     },
 }
@@ -91,7 +91,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "risk": {
             "max_positions": [7, 7, 1],
             "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
-            "we_excess_allowance_pct": [0, 0.4, 0.01],
+            "we_excess_allowance_fraction": [0, 0.4, 0.01],
             "position_exposure_enforcer": {
                 "threshold": [1, 1, 0.001],
             },
@@ -100,11 +100,11 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             },
         },
         "unstuck": {
-            "close_pct": [0.01, 0.12, 0.001],
+            "close_fraction": [0.01, 0.12, 0.001],
             "ema_distance_fraction": [-0.2, 0.01, 0.0001],
             "ema_span_0": [60, 2880, 10],
             "ema_span_1": [60, 2880, 10],
-            "loss_allowance_pct": [0.005, 0.2, 0.0001],
+            "loss_allowance_fraction": [0.005, 0.2, 0.0001],
             "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
     },
@@ -127,7 +127,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "risk": {
             "max_positions": [5, 5, 1],
             "total_wallet_exposure_limit": [0, 0],
-            "we_excess_allowance_pct": [0, 0.5, 0.01],
+            "we_excess_allowance_fraction": [0, 0.5, 0.01],
             "position_exposure_enforcer": {
                 "threshold": [0.8, 1.01, 0.001],
             },
@@ -136,11 +136,11 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             },
         },
         "unstuck": {
-            "close_pct": [0.01, 0.12, 0.001],
+            "close_fraction": [0.01, 0.12, 0.001],
             "ema_distance_fraction": [-0.2, 0.01, 0.0001],
             "ema_span_0": [60, 2880, 10],
             "ema_span_1": [60, 2880, 10],
-            "loss_allowance_pct": [0.005, 0.2, 0.0001],
+            "loss_allowance_fraction": [0.005, 0.2, 0.0001],
             "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
     },

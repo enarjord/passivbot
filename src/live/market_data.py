@@ -279,11 +279,11 @@ def _limit_order_create_max_market_dist_pct(bot) -> float:
         threshold = float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(
-            "live.execution.limit_order_create_max_market_dist_pct must be numeric"
+            "live.execution.limit_order_create_max_market_distance_fraction must be numeric"
         ) from exc
     if not math.isfinite(threshold) or threshold < 0.0 or threshold >= 1.0:
         raise ValueError(
-            "live.execution.limit_order_create_max_market_dist_pct must be finite and >= 0.0 and < 1.0"
+            "live.execution.limit_order_create_max_market_distance_fraction must be finite and >= 0.0 and < 1.0"
         )
     return threshold
 

@@ -31,10 +31,10 @@ def _ema_anchor_config() -> dict:
             "long": {
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": 0.01,
+                        "base_qty_fraction": 0.01,
                         "ema_span_0": 2.0,
                         "ema_span_1": 6.0,
-                        "offset": 0.01,
+                        "offset_fraction": 0.01,
                         "offset_volatility_ema_span_1m": 2.0,
                         "offset_volatility_1m_weight": 0.5,
                         "offset_volatility_ema_span_1h": 2.0,
@@ -46,10 +46,10 @@ def _ema_anchor_config() -> dict:
             "short": {
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": 0.01,
+                        "base_qty_fraction": 0.01,
                         "ema_span_0": 2.0,
                         "ema_span_1": 6.0,
-                        "offset": 0.02,
+                        "offset_fraction": 0.02,
                         "offset_volatility_ema_span_1m": 2.0,
                         "offset_volatility_1m_weight": 0.5,
                         "offset_volatility_ema_span_1h": 2.0,

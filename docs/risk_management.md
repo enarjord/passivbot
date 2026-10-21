@@ -79,9 +79,9 @@ Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and ot
 by its effective WEL must be strictly greater than the threshold. It does not specify a target
 remaining position or prevent a close from crossing below that threshold.
 
-`unstuck.close_pct` sizes each chunk from `balance * effective_wel` at the close order's price,
+`unstuck.close_fraction` sizes each chunk from `balance * effective_wel` at the close order's price,
 while wallet exposure uses average entry price. The chunk can therefore reduce the exposure ratio
-by more or less than `close_pct`, before accounting for rounding, exchange minimums, loss allowance
+by more or less than `close_fraction`, before accounting for rounding, exchange minimums, loss allowance
 and balance changes. See the [auto-unstuck formulas](config.bot.md#auto-unstucking) for details.
 
 #### Auto-Unstuck Loss-Allowance Contract
@@ -121,7 +121,7 @@ While exposure limits prevent *new* orders, it is still possible for existing po
 
 These parameters function on top of the base limits:
 * `position_exposure_enforcer.threshold` (The Position Trimmer)
-* `risk_we_excess_allowance_pct` (The Buffer)
+* `risk.we_excess_allowance_fraction` (The Buffer)
 * `total_exposure_enforcer.threshold` (The Portfolio Trimmer)
 
 #### Position Exposure Enforcer (`position_exposure_enforcer.threshold`)
@@ -142,8 +142,8 @@ with aggressive entries and a threshold such as `0.95`, the bot may refill towar
 the position limit and repeatedly trim back to 95% without waiting for auto
 unstuck's EMA gate or loss allowance.
 
-#### Excess Allowance (`risk_we_excess_allowance_pct`)
-In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk_we_excess_allowance_pct > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
+#### Excess Allowance (`risk.we_excess_allowance_fraction`)
+In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk.we_excess_allowance_fraction > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
 
 The excess allowance is always bounded. The raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
 

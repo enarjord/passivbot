@@ -112,5 +112,5 @@ def validate_gpu_backtest_config(config: dict) -> None:
     collateral = float(backtest["btc_collateral_cap"])
     if not math.isfinite(collateral) or collateral != 0.0:
         raise ValueError("GPU backtests require backtest.btc_collateral_cap=0; use a CPU backend")
-    validate_limit_order_fill_buffer_pct(backtest["limit_order_fill_buffer_pct"])
+    validate_limit_order_fill_buffer_pct(backtest["limit_order_fill_buffer_fraction"])
     validate_hsl_gpu_inputs(config)

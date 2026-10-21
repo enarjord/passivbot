@@ -163,13 +163,13 @@ def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
         strategy = {"entry": strategy}
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"strategy": {kind: strategy}}}},
-        "ETH": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}},
+        "ETH": {"bot": {"long": {"unstuck": {"close_fraction": 0.05}}}},
     }
     config["backtest"].update(suite_enabled=True, scenarios=[
         {"label": "base", "coins": ["BTC", "ETH"], "start_date": "2024-01-01"},
         {"label": "alternate", "overrides": {
             f"bot.long.{strategy_path}.ema_span_1": 301.25,
-            "coin_overrides.ETH.bot.long.unstuck.close_pct": 0.075,
+            "coin_overrides.ETH.bot.long.unstuck.close_fraction": 0.075,
         }},
     ])
     saved = deepcopy(config)
@@ -190,7 +190,7 @@ def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
         (0, "start_date", "2024-01-02"),
         (1, "overrides", {f"bot.long.{strategy_path}.ema_span_1": 401.25}),
         (1, "overrides", {f"coin_overrides.BTC.bot.long.{strategy_path}.ema_span_0": 80.5}),
-        (1, "overrides", {"coin_overrides.ETH.bot.long.unstuck.close_pct": 0.08}),
+        (1, "overrides", {"coin_overrides.ETH.bot.long.unstuck.close_fraction": 0.08}),
     ]
     for index, key, value in changes:
         changed = deepcopy(config)

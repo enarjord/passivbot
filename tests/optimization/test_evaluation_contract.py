@@ -298,7 +298,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
         "strategy",
         "trailing_martingale",
         "entry",
-        "threshold_base_pct",
+        "threshold_base_fraction",
     ]
     config[ANCHOR_PLAN_KEY] = {
         "anchors": [
@@ -318,7 +318,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
     assert entry["optimizer_anchor"]["id"] == 1
     assert (
         entry["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-            "threshold_base_pct"
+            "threshold_base_fraction"
         ]
         == 0.02
     )

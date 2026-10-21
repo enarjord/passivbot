@@ -2492,14 +2492,14 @@ def get_backtest_execution_settings(
     from config.validate import validate_limit_order_fill_buffer_pct
 
     limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-        require_config_value(config, "backtest.limit_order_fill_buffer_pct")
+        require_config_value(config, "backtest.limit_order_fill_buffer_fraction")
     )
     market_order_slippage_pct = float(
-        get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005)
+        get_optional_config_value(config, "backtest.market_order_slippage_fraction", 0.0005)
         or 0.0
     )
     if market_order_slippage_pct < 0.0:
-        raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
+        raise ValueError("backtest.market_order_slippage_fraction must be >= 0.0")
     market_orders_allowed_raw = get_optional_config_value(config, 'bot.global.execution.market_orders_allowed', False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
@@ -2544,11 +2544,11 @@ def log_backtest_execution_settings(
         execution_settings.market_order_near_touch_threshold,
     )
     logging.info(
-        "[backtest]   market_order_slippage_pct = %s (backtest)",
+        "[backtest]   market_order_slippage_fraction = %s (backtest)",
         execution_settings.market_order_slippage_pct,
     )
     logging.info(
-        "[backtest]   limit_order_fill_buffer_pct = %s (backtest)",
+        "[backtest]   limit_order_fill_buffer_fraction = %s (backtest)",
         execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
@@ -2812,7 +2812,7 @@ def prep_backtest_args(
             "market_orders_allowed": execution_settings.market_orders_allowed,
             "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
             "forager_score_hysteresis_pct": float(
-                get_optional_config_value(config, 'bot.global.forager.score_hysteresis_pct', 0.02)
+                get_optional_config_value(config, 'bot.global.forager.score_hysteresis_margin', 0.02)
                 or 0.0
             ),
             "liquidation_threshold": liquidation_threshold,

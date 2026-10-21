@@ -49,8 +49,8 @@ def reject_backtest_inherited_live_fields(result: dict) -> None:
     if invalid:
         joined = ", ".join(f"backtest.{key}" for key in invalid)
         owners = {
-            "fee_pct_fallback": "live.fills.fee_pct_fallback",
-            "fee_pct_sanity_abs_max": "live.fills.fee_pct_sanity_abs_max",
+            "fee_pct_fallback": "live.fills.fallback_fee_fraction",
+            "fee_pct_sanity_abs_max": "live.fills.max_abs_fee_fraction",
             "market_orders_allowed": "bot.global.execution.market_orders_allowed",
             "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_threshold",
         }

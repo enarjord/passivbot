@@ -33,16 +33,16 @@ def config():
     set_side_universe_sources(result, 'approved_coins', {"long": ["TEST"], "short": []})
     side = result["bot"]["long"]
     side["risk"].update(
-        max_positions=1, total_wallet_exposure_limit=1.0, we_excess_allowance_pct=0.0
+        max_positions=1, total_wallet_exposure_limit=1.0, we_excess_allowance_fraction=0.0
     )
     side["entry_cooldown"].update(base_duration_minutes=5.0)
     strategy = side["strategy"]["trailing_martingale"]
     strategy["entry"].update(
-        initial_qty_pct=0.1,
+        initial_qty_fraction=0.1,
         double_down_factor=1.0,
-        threshold_base_pct=0.03,
+        threshold_base_fraction=0.03,
         threshold_we_weight=5.0,
-        retracement_base_pct=0.001,
+        retracement_base_fraction=0.001,
         retracement_we_weight=0.1,
         threshold_volatility_1m_weight=0,
         threshold_volatility_1h_weight=0,
@@ -50,11 +50,11 @@ def config():
         retracement_volatility_1h_weight=0,
     )
     strategy["close"].update(
-        threshold_base_pct=0.01,
+        threshold_base_fraction=0.01,
         threshold_we_weight=-0.005,
         threshold_volatility_1m_weight=0,
         threshold_volatility_1h_weight=0,
-        retracement_base_pct=0.002,
+        retracement_base_fraction=0.002,
         retracement_volatility_1m_weight=0,
         retracement_volatility_1h_weight=0,
     )
@@ -106,7 +106,7 @@ def test_scalar_is_pure_graded_and_uses_effective_capacity(
     assert findings[0]["value"] == pytest.approx(0.156)
     assert (candidate, params) == before
     candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = 0.04
     assert config_prefilter(candidate, params) > first
     assert config_prefilter(config(), policy(max=0.2)) == 0
@@ -137,12 +137,12 @@ def test_grid_span_checks_both_bounds_and_incomplete_ladders(
 ):
     candidate = config()
     entry = candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]
-    entry.update(threshold_we_weight=0, retracement_base_pct=0, initial_ema_dist=0)
-    entry["threshold_base_pct"] = 0.0001
+    entry.update(threshold_we_weight=0, retracement_base_fraction=0, initial_ema_distance_fraction=0)
+    entry["threshold_base_fraction"] = 0.0001
     assert config_prefilter(candidate, policy("grid_span", min=0.1, max=0.35)) > 0
-    entry["threshold_base_pct"] = 0.05
+    entry["threshold_base_fraction"] = 0.05
     assert config_prefilter(candidate, policy("grid_span", min=0.05, max=0.35)) == 0
-    entry["threshold_base_pct"] = 0.3
+    entry["threshold_base_fraction"] = 0.3
     assert config_prefilter(candidate, policy("grid_span", max=0.1)) > 0
     limited = policy("grid_span", max=100)
     limited["grid_max_entries"] = 2
@@ -160,7 +160,7 @@ def test_coin_and_unscreened_scenario_overrides_are_checked(
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.001},
+                            "entry": {"threshold_base_fraction": 0.001},
                         }
                     }
                 }
@@ -185,7 +185,7 @@ def test_trailing_grid_completes_on_both_sides(
     set_side_universe_sources(candidate, 'approved_coins', {"long": [], "short": []})
     candidate['bot'][side]['universe']['approved_coins'] = ["TEST"]
     entry = candidate["bot"][side]["strategy"]["trailing_martingale"]["entry"]
-    entry.update(threshold_base_pct=0.03, threshold_we_weight=0, initial_ema_dist=0)
+    entry.update(threshold_base_fraction=0.03, threshold_we_weight=0, initial_ema_distance_fraction=0)
     params = policy("grid_span", min=100)
     params["checks"][0]["sides"] = [side]
     constraint, findings = inspect_config_prefilter(candidate, params)
@@ -221,7 +221,7 @@ def test_prepared_venue_aliases_use_the_backtest_override_resolver(
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_base_pct": 0.001}},
+                        "trailing_martingale": {"entry": {"threshold_base_fraction": 0.001}},
                     }
                 }
             }
@@ -262,7 +262,7 @@ def test_denomination_alias_preserves_its_resolved_override(
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"threshold_base_pct": 0.001}}
+                        "trailing_martingale": {"entry": {"threshold_base_fraction": 0.001}}
                     }
                 }
             }
@@ -278,7 +278,7 @@ def test_multiple_venues_combine_check_maxima_before_scenario_selection(
     first, second = config(), config()
     first["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 0
     second["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = 0.001
     params = policy(max=0.1)
     params["checks"].append(
@@ -323,7 +323,7 @@ def test_single_coin_dynamic_wel_matches_capacity_and_exposure_cooldown(
     require_real_passivbot_rust_module,
 ):
     candidate = config()
-    candidate["bot"]["long"]["risk"].update(max_positions=4, we_excess_allowance_pct=0.5)
+    candidate["bot"]["long"]["risk"].update(max_positions=4, we_excess_allowance_fraction=0.5)
     candidate["bot"]["long"]["entry_cooldown"]["weights_minutes"]["exposure_ratio"] = 10
     candidate["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 100
     params = policy("entry_cooldown_minutes", max=14)

@@ -95,7 +95,7 @@ def validate_limit_order_fill_buffer_pct(value) -> float:
         or not 0.0 <= value < 1.0
     ):
         raise ValueError(
-            "backtest.limit_order_fill_buffer_pct must be finite and in [0, 1)"
+            "backtest.limit_order_fill_buffer_fraction must be finite and in [0, 1)"
         )
     return float(value)
 
@@ -127,7 +127,7 @@ def validate_config(
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
     validate_limit_order_fill_buffer_pct(
-        config["backtest"]["limit_order_fill_buffer_pct"]
+        config["backtest"]["limit_order_fill_buffer_fraction"]
     )
     from .ew import validate_ew_config
 
@@ -227,22 +227,22 @@ def validate_config(
             "config.live.api.market_snapshot_ticker_strategy must be one of: auto, bulk, symbols"
         )
     try:
-        hysteresis_pct = float(config['bot']['global']['forager']['score_hysteresis_pct'])
+        hysteresis_pct = float(config['bot']['global']['forager']['score_hysteresis_margin'])
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.bot.global.forager.score_hysteresis_pct must be numeric"
+            "config.bot.global.forager.score_hysteresis_margin must be numeric"
         ) from exc
     if not math.isfinite(hysteresis_pct) or hysteresis_pct < 0.0:
         raise ValueError(
-            "config.bot.global.forager.score_hysteresis_pct must be finite and >= 0.0"
+            "config.bot.global.forager.score_hysteresis_margin must be finite and >= 0.0"
         )
     try:
         limit_order_market_dist = float(
-            config["live"]["execution"]["limit_order_create_max_market_dist_pct"]
+            config["live"]["execution"]["limit_order_create_max_market_distance_fraction"]
         )
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.execution.limit_order_create_max_market_dist_pct must be numeric"
+            "config.live.execution.limit_order_create_max_market_distance_fraction must be numeric"
         ) from exc
     if (
         not math.isfinite(limit_order_market_dist)
@@ -250,18 +250,18 @@ def validate_config(
         or limit_order_market_dist >= 1.0
     ):
         raise ValueError(
-            "config.live.execution.limit_order_create_max_market_dist_pct must be finite and >= 0.0 and < 1.0"
+            "config.live.execution.limit_order_create_max_market_distance_fraction must be finite and >= 0.0 and < 1.0"
         )
-    order_match_tolerance_raw = config["live"]["execution"]["order_match_tolerance_pct"]
+    order_match_tolerance_raw = config["live"]["execution"]["order_match_tolerance_fraction"]
     if isinstance(order_match_tolerance_raw, bool):
         raise TypeError(
-            "config.live.execution.order_match_tolerance_pct must be numeric"
+            "config.live.execution.order_match_tolerance_fraction must be numeric"
         )
     try:
         order_match_tolerance = float(order_match_tolerance_raw)
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.execution.order_match_tolerance_pct must be numeric"
+            "config.live.execution.order_match_tolerance_fraction must be numeric"
         ) from exc
     if (
         not math.isfinite(order_match_tolerance)
@@ -269,7 +269,7 @@ def validate_config(
         or order_match_tolerance > 0.01
     ):
         raise ValueError(
-            "config.live.execution.order_match_tolerance_pct must be finite and between 0.0 and 0.01 inclusive"
+            "config.live.execution.order_match_tolerance_fraction must be finite and between 0.0 and 0.01 inclusive"
         )
     try:
         active_tail_gap_minutes = float(
@@ -315,7 +315,7 @@ def validate_config(
         raise TypeError(
             "config.live.candles.enable_forager_ws_candles must be a boolean"
         )
-    for key in ("fee_pct_fallback", "fee_pct_sanity_abs_max"):
+    for key in ("fallback_fee_fraction", "max_abs_fee_fraction"):
         try:
             value = float(config["live"]["fills"][key])
         except (TypeError, ValueError) as exc:
@@ -382,7 +382,7 @@ def validate_config(
     for key in (
         "order_replacement_churn_gate_window_minutes",
         "order_replacement_churn_gate_stability_minutes",
-        "order_replacement_churn_gate_market_dist_pct",
+        "order_replacement_churn_gate_market_distance_fraction",
     ):
         try:
             value = float(config["live"]["execution"][key])
@@ -393,7 +393,7 @@ def validate_config(
         churn_numeric[key] = value
     window = churn_numeric["order_replacement_churn_gate_window_minutes"]
     stability = churn_numeric["order_replacement_churn_gate_stability_minutes"]
-    distance = churn_numeric["order_replacement_churn_gate_market_dist_pct"]
+    distance = churn_numeric["order_replacement_churn_gate_market_distance_fraction"]
     if activation_raw > 0 and window <= 0.0:
         raise ValueError(
             "config.live.execution.order_replacement_churn_gate_window_minutes must be > 0 when enabled"
@@ -404,7 +404,7 @@ def validate_config(
         )
     if distance < 0.0 or distance >= 1.0:
         raise ValueError(
-            "config.live.execution.order_replacement_churn_gate_market_dist_pct must be >= 0 and < 1"
+            "config.live.execution.order_replacement_churn_gate_market_distance_fraction must be >= 0 and < 1"
         )
     max_cancellations = int(
         config["live"]["execution"]["max_n_cancellations_per_batch"]

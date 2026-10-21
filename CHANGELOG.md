@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name scale-one configuration shares and price offsets with `_fraction`, including strategy
+  sizing, unstuck allowances, simulated fills and live fee/execution policy. Name the absolute
+  Forager score gap `score_hysteresis_margin`. Values, native optimizer IDs and trading packets
+  are unchanged; explicit released-v8 migration reports the new paths in every authored layer.
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.

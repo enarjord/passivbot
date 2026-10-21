@@ -7552,7 +7552,7 @@ class Passivbot:
                     incumbent_short.add(idx)
 
         score_hysteresis_pct = float(
-            require_config_value(self.config, 'bot.global.forager.score_hysteresis_pct') or 0.0
+            require_config_value(self.config, 'bot.global.forager.score_hysteresis_margin') or 0.0
         )
         return {
             "peek_hints": {
@@ -17851,7 +17851,7 @@ class Passivbot:
             "timestamp_ms": now_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
-            # Deliberately omit backtest.market_order_slippage_pct in live.
+            # Deliberately omit backtest.market_order_slippage_fraction in live.
             # Rust defaults it to 0.0 for live loss projections; the backtest
             # value is a simulation knob, not a live slippage cap.
             "global": {

@@ -110,9 +110,9 @@ def test_cpu_optimizer_and_resume_use_real_workers_without_gpu_imports(tmp_path,
                 value = config["bot"][side]["risk"][name]
                 side_bounds["risk"][name] = [value, value]
             if strategy == "ema_anchor":
-                side_bounds["strategy"][strategy]["base_qty_pct"] = [0.01, 0.05]
+                side_bounds["strategy"][strategy]["base_qty_fraction"] = [0.01, 0.05]
             else:
-                side_bounds["strategy"][strategy]["entry"] = {"initial_qty_pct": [0.01, 0.05]}
+                side_bounds["strategy"][strategy]["entry"] = {"initial_qty_fraction": [0.01, 0.05]}
         config["backtest"].update(suite_enabled=False, scenarios=[])
         config_path = directory / "input.json"
         authored = deepcopy(config)

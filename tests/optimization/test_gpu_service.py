@@ -1399,7 +1399,7 @@ def test_gpu_proxy_rejects_all_internal_gaps():
     ("mode", "scale_budget"), [("unscaled", 0.0), ("scaled", 1.0)]
 )
 def test_single_coin_exposure_policy_packs_rust_inputs(mode, scale_budget):
-    packed = _single_coin_exposure_params({"we_excess_allowance_pct": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {"threshold": 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
+    packed = _single_coin_exposure_params({"we_excess_allowance_fraction": 0.25, "total_exposure_entry_gate_enabled": False, "total_exposure_enforcer": {"threshold": 0.8}}, side="long", scale_hsl_budget=bool(scale_budget))
     assert packed == {"we_excess_allowance_pct": 0.25, "hsl_scale_budget_with_excess_allowance": scale_budget, "twel_entry_gate_enabled": 1.0, "twel_enforcer_threshold": 0.8}
 
 
@@ -1746,11 +1746,11 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                 "bot": {
                     "long": {
                         "strategy": {
-                            "ema_anchor": {"offset": 0.25, "ema_span_0": 90.0}
+                            "ema_anchor": {"offset_fraction": 0.25, "ema_span_0": 90.0}
                         },
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
-                            "we_excess_allowance_pct": 0.25,
+                            "we_excess_allowance_fraction": 0.25,
                         },
                         "wallet_exposure_limit": 0.4,
                         "unstuck": {
@@ -1758,9 +1758,9 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                             "ema_span_1": 211.75,
                             "enabled": True,
                             "ema_gating_enabled": False,
-                            "close_pct": 0.125,
+                            "close_fraction": 0.125,
                             "ema_distance_fraction": -0.01,
-                            "loss_allowance_pct": 0.02,
+                            "loss_allowance_fraction": 0.02,
                             "exposure_trigger_ratio": 0.85,
                         },
                     }
@@ -1811,7 +1811,7 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
         config = {
             "coin_overrides": {
                 "ETH": {
-                    "bot": {"long": {"strategy": {"ema_anchor": {"offset": value}}}}
+                    "bot": {"long": {"strategy": {"ema_anchor": {"offset_fraction": value}}}}
                 }
             }
         }
@@ -1849,8 +1849,8 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
     assert first_contract["exact_overrides"] != second_contract["exact_overrides"]
     first_exact = first_contract["exact_overrides"][0]["bot"]["long"]
     second_exact = second_contract["exact_overrides"][0]["bot"]["long"]
-    assert first_exact["strategy"]["ema_anchor"]["offset"] == first
-    assert second_exact["strategy"]["ema_anchor"]["offset"] == second
+    assert first_exact["strategy"]["ema_anchor"]["offset_fraction"] == first
+    assert second_exact["strategy"]["ema_anchor"]["offset_fraction"] == second
 
 
 def test_coin_override_contract_keeps_backtest_inert_live_values():
@@ -1991,11 +1991,11 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
             "ETH": {
                 "bot": {
                     "long": {
-                        "strategy": {"ema_anchor": {"offset": 0.25}},
+                        "strategy": {"ema_anchor": {"offset_fraction": 0.25}},
                         "wallet_exposure_limit": 0.4,
                     },
                     "short": {
-                        "strategy": {"ema_anchor": {"offset": 0.5}},
+                        "strategy": {"ema_anchor": {"offset_fraction": 0.5}},
                         "entry_cooldown": {"base_duration_minutes": 30.0},
                     },
                 }
@@ -2269,18 +2269,18 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                             "trailing_martingale": {
                                 "entry": {
                                     "ema_gate_mode": "reentry",
-                                    "threshold_base_pct": 0.25,
-                                    "retracement_base_pct": 1.0e-50,
+                                    "threshold_base_fraction": 0.25,
+                                    "retracement_base_fraction": 1.0e-50,
                                 },
                                 "close": {
-                                    "qty_pct": 0.5,
-                                    "retracement_base_pct": 1.0e-50,
+                                    "qty_fraction": 0.5,
+                                    "retracement_base_fraction": 1.0e-50,
                                 },
                             }
                         },
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
-                            "we_excess_allowance_pct": 0.25,
+                            "we_excess_allowance_fraction": 0.25,
                             "position_exposure_enforcer": {
                                 "enabled": True,
                                 "threshold": 0.8,
@@ -2290,9 +2290,9 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                         "unstuck": {
                             "enabled": True,
                             "ema_gating_enabled": False,
-                            "close_pct": 0.125,
+                            "close_fraction": 0.125,
                             "ema_distance_fraction": -0.01,
-                            "loss_allowance_pct": 0.02,
+                            "loss_allowance_fraction": 0.02,
                             "exposure_trigger_ratio": 0.85,
                         },
                     }

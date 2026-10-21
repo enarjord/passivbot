@@ -53,10 +53,10 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     second = _single_coin_config("ETH")
 
     first["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "initial_qty_pct"
+        "initial_qty_fraction"
     ] = 0.01
     second["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "initial_qty_pct"
+        "initial_qty_fraction"
     ] = 0.02
     first["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 1.0
     second["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.0
@@ -102,7 +102,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     eth = composed["coin_overrides"]["ETH"]
     assert (
         eth["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-            "initial_qty_pct"
+            "initial_qty_fraction"
         ]
         == 0.02
     )
@@ -153,7 +153,7 @@ def test_mixed_feature_enablement_omits_inert_dependent_overrides(tmp_path: Path
         {"enabled": False, "drawdown_ratio_threshold": 0.24, "drawdown_ratio_ema_span_minutes": 12.0}
     )
     disabled["bot"]["long"]["unstuck"].update(
-        {"enabled": False, "exposure_trigger_ratio": 0.88, "close_pct": 0.11}
+        {"enabled": False, "exposure_trigger_ratio": 0.88, "close_fraction": 0.11}
     )
     disabled["bot"]["long"]["risk"].update(
         {
@@ -534,17 +534,17 @@ def test_retains_gpu_optimizer_with_coin_overrides(tmp_path: Path, strategy_kind
     master["optimize"]["iters"] = 123
     master["backtest"]["start_date"] = "2021-01-01"
     if strategy_kind == "ema_anchor":
-        master["bot"]["long"]["strategy"][strategy_kind]["offset"] = 0.01
-        other["bot"]["long"]["strategy"][strategy_kind]["offset"] = 0.02
-        expected_strategy = {"offset": 0.02}
+        master["bot"]["long"]["strategy"][strategy_kind]["offset_fraction"] = 0.01
+        other["bot"]["long"]["strategy"][strategy_kind]["offset_fraction"] = 0.02
+        expected_strategy = {"offset_fraction": 0.02}
     else:
         master["bot"]["long"]["strategy"][strategy_kind]["entry"][
-            "initial_qty_pct"
+            "initial_qty_fraction"
         ] = 0.01
         other["bot"]["long"]["strategy"][strategy_kind]["entry"][
-            "initial_qty_pct"
+            "initial_qty_fraction"
         ] = 0.02
-        expected_strategy = {"entry": {"initial_qty_pct": 0.02}}
+        expected_strategy = {"entry": {"initial_qty_fraction": 0.02}}
     _write(tmp_path / "a.json", master)
     _write(tmp_path / "b.json", other)
 
@@ -638,10 +638,10 @@ def test_verbose_overrides_survive_master_edits(
         verbose["bot"]["short"]["strategy"][strategy_kind]
     )
     if strategy_kind == "ema_anchor":
-        verbose["bot"]["long"]["strategy"][strategy_kind]["offset"] = 0.15
+        verbose["bot"]["long"]["strategy"][strategy_kind]["offset_fraction"] = 0.15
     else:
         verbose["bot"]["long"]["strategy"][strategy_kind]["entry"][
-            "initial_qty_pct"
+            "initial_qty_fraction"
         ] = 0.15
     if hsl_signal_mode == "coin":
         verbose["bot"]["long"]["hsl"]["enabled"] = True
@@ -928,7 +928,7 @@ def test_custom_group_only_includes_allowed_leaves(tmp_path: Path):
     for patch in composed["coin_overrides"].values():
         assert "base_duration_minutes" in patch["bot"]["long"]["entry_cooldown"]
         assert set(patch["bot"]["long"]["risk"]) == {
-            "position_exposure_enforcer", "we_excess_allowance_pct",
+            "position_exposure_enforcer", "we_excess_allowance_fraction",
         }
         assert set(patch["bot"]["long"]["risk"]["position_exposure_enforcer"]) == {"enabled", "threshold"}
         assert patch["live"] == {
@@ -940,18 +940,18 @@ def test_custom_strategy_leaf_uses_active_strategy_shorthand(tmp_path: Path):
     for coin in ("BTC", "ETH"):
         config = _single_coin_config(coin)
         config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-            "initial_qty_pct"
+            "initial_qty_fraction"
         ] = 0.03
         _write(tmp_path / f"{coin}.json", config)
     composed, _ = compose_directory(
-        tmp_path, override_params="long.strategy.entry.initial_qty_pct"
+        tmp_path, override_params="long.strategy.entry.initial_qty_fraction"
     )
     for patch in composed["coin_overrides"].values():
         assert patch == {
             "bot": {
                 "long": {
                     "strategy": {
-                        "trailing_martingale": {"entry": {"initial_qty_pct": 0.03}}
+                        "trailing_martingale": {"entry": {"initial_qty_fraction": 0.03}}
                     }
                 }
             }

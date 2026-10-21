@@ -17,7 +17,7 @@ def _single_coin_exposure_params(
 ) -> dict[str, float]:
     return {
         "we_excess_allowance_pct": float(
-            risk.get("we_excess_allowance_pct", 0.0) or 0.0
+            risk.get("we_excess_allowance_fraction", 0.0) or 0.0
         ),
         "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
         "twel_entry_gate_enabled": 1.0,

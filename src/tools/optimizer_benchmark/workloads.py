@@ -62,9 +62,9 @@ def apply_features(config, case, coins, markets, bars):
     if "min_cost" in flags:
         config["backtest"]["filter_by_min_effective_cost"] = True
     if "fill_buffer" in flags:
-        config["backtest"]["limit_order_fill_buffer_pct"] = 0.001
+        config["backtest"]["limit_order_fill_buffer_fraction"] = 0.001
     if "slippage" in flags:
-        config["backtest"]["market_order_slippage_pct"] = 0.003
+        config["backtest"]["market_order_slippage_fraction"] = 0.003
     if "btc_collateral" in flags:
         config["backtest"]["btc_collateral_cap"] = 0.25
     if "eligibility" in flags and len(coins) > 1:
@@ -73,7 +73,7 @@ def apply_features(config, case, coins, markets, bars):
     for side in ("long", "short"):
         bot = config["bot"][side]
         slots = 1 if case.topology == "single" else max(1, len(coins) // 2) if case.topology == "forager" else len(coins)
-        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_pct': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold': 0.8}})
+        bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold': 0.8}})
         bot["unstuck"].update(enabled=side in active and bool(flags & {"unstuck", "unstuck_no_ema"}),
                               ema_gating_enabled="unstuck_no_ema" not in flags)
         bot["entry_cooldown"].update(base_duration_minutes=5.0 if flags & {"cooldown", "adaptive_cooldown"} else 0.0)
@@ -85,7 +85,7 @@ def apply_features(config, case, coins, markets, bars):
         if case.topology != "forager":
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
-            config['bot']['global']['forager']['score_hysteresis_pct'] = 0.1
+            config['bot']['global']['forager']['score_hysteresis_margin'] = 0.1
         policy = config["bot"]["global"]["hsl"] if config["bot"]["global"]["hsl"]["scope"] == "portfolio" else bot["hsl"]
         if "hsl_slow_memory" in flags:
             policy["memory_ema_span_minutes"] = 10.5
@@ -99,7 +99,7 @@ def apply_features(config, case, coins, markets, bars):
                 for key in list(strategy[leg]):
                     if "weight" in key:
                         strategy[leg][key] = 0.0
-                strategy[leg]["retracement_base_pct"] = 0.001 if f"{leg}_trailing" in flags else 0.0
+                strategy[leg]["retracement_base_fraction"] = 0.001 if f"{leg}_trailing" in flags else 0.0
             for flag, mode in (("gate_disabled", "disabled"), ("gate_all", "all"), ("gate_reentry", "reentry")):
                 if flag in flags:
                     strategy["entry"]["ema_gate_mode"] = mode
@@ -117,7 +117,7 @@ def apply_features(config, case, coins, markets, bars):
                     strategy[key] = 0.1 if "volatility" in flags else 0.0
     if "overrides" in flags:
         config["coin_overrides"] = {coins[0]: {"bot": {side: {"entry_cooldown": {"base_duration_minutes": 3.0},
-            "risk": {"we_excess_allowance_pct": 0.13}} for side in active}}}
+            "risk": {"we_excess_allowance_fraction": 0.13}} for side in active}}}
 
 
 def sampled_population(config, case, count, seed, bounds_config=None, boundary_candidates=False):
@@ -163,7 +163,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
             enabled = False
         if path[-1] == "memory_ema_span_minutes" and bounds_config is None:
             enabled = False
-        if path[-1] == "we_excess_allowance_pct" and "excess" not in flags:
+        if path[-1] == "we_excess_allowance_fraction" and "excess" not in flags:
             enabled = False
         if path[2] == "risk" and path[-1] == "total_wallet_exposure_limit" and path[1] in active:
             # The public short template pins TWEL=0. The short class needs positive bounds.
@@ -175,7 +175,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
                      "cooldown_minutes_after_red": Bound(5, 30, 1)}[path[-1]]
         if not enabled:
             bound = Bound(float(value), float(value))
-        elif value != 0 and ("weight" in path[-1] or "retracement_base_pct" == path[-1]) and bound.low == bound.high == 0:
+        elif value != 0 and ("weight" in path[-1] or "retracement_base_fraction" == path[-1]) and bound.low == bound.high == 0:
             bound = Bound(float(value), float(value))
         specs.append((key, path, bound))
     bounds = [item[2] for item in specs]
