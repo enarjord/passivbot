@@ -157,13 +157,12 @@ async def prepare_suite_contexts(
 
     base_config = deepcopy(config)
     if isinstance(require_side_universe_sources(base_config, 'approved_coins'), dict):
-        base_config['bot']["long"]['universe']['approved_coins'] = master_coins_list
-        base_config['bot']["short"]['universe']['approved_coins'] = master_coins_list
+        from config.universe import materialize_side_universe_sources
+        materialize_side_universe_sources(base_config, "approved_coins", {side: list(master_coins_list) for side in ("long", "short")})
     else:
         set_side_universe_sources(base_config, 'approved_coins', master_coins_list)
     if isinstance(require_side_universe_sources(base_config, 'ignored_coins'), dict):
-        base_config['bot']["long"]['universe']['ignored_coins'] = master_ignored_list
-        base_config['bot']["short"]['universe']['ignored_coins'] = master_ignored_list
+        materialize_side_universe_sources(base_config, "ignored_coins", {side: list(master_ignored_list) for side in ("long", "short")})
     else:
         set_side_universe_sources(base_config, 'ignored_coins', master_ignored_list)
     base_config["backtest"]["coins"] = {}

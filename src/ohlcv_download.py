@@ -84,8 +84,9 @@ async def main() -> None:
         f"bot.{side}.universe.{field}"
         for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
     }
+    side_source_keys.add("bot.global.universe.approved_coins")
     for key in sorted(side_source_keys):
-        parser.add_argument(f"--{key}", dest=key, type=str, default=None, metavar="CSV_OR_PATH")
+        parser.add_argument(f"--{key}", dest=key, type=str, default=argparse.SUPPRESS, metavar="CSV_OR_PATH")
     parser.add_argument(
         "--exchanges",
         "-e",

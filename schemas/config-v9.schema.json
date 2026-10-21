@@ -1062,6 +1062,75 @@
                 "universe": {
                   "type": "object",
                   "properties": {
+                    "approved_coins": {
+                      "type": [
+                        "array",
+                        "string"
+                      ],
+                      "default": [
+                        "BTC",
+                        "ETH",
+                        "BNB",
+                        "XRP",
+                        "SOL",
+                        "TRX",
+                        "HYPE",
+                        "DOGE",
+                        "ZEC",
+                        "XLM",
+                        "ADA",
+                        "LINK",
+                        "XMR",
+                        "CC",
+                        "BCH",
+                        "TON",
+                        "GRAM",
+                        "LTC",
+                        "HBAR",
+                        "SUI",
+                        "AVAX",
+                        "NEAR",
+                        "UNI",
+                        "TAO",
+                        "ASTER",
+                        "ONDO",
+                        "AAVE",
+                        "DOT",
+                        "WLD",
+                        "MNT",
+                        "MORPHO",
+                        "POL",
+                        "ATOM",
+                        "RENDER",
+                        "KAS",
+                        "ENA",
+                        "ALGO",
+                        "FIL",
+                        "ARB",
+                        "APT",
+                        "INJ"
+                      ],
+                      "description": "Shared approval list, all sentinel or reloadable common-list file; sparse config omission approves nothing, while the starter declares its list.",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
                     "filter_by_min_effective_cost": {
                       "type": "boolean",
                       "default": true,
@@ -2438,50 +2507,8 @@
                         "string",
                         "null"
                       ],
-                      "default": [
-                        "BTC",
-                        "ETH",
-                        "BNB",
-                        "XRP",
-                        "SOL",
-                        "TRX",
-                        "HYPE",
-                        "DOGE",
-                        "ZEC",
-                        "XLM",
-                        "ADA",
-                        "LINK",
-                        "XMR",
-                        "CC",
-                        "BCH",
-                        "TON",
-                        "GRAM",
-                        "LTC",
-                        "HBAR",
-                        "SUI",
-                        "AVAX",
-                        "NEAR",
-                        "UNI",
-                        "TAO",
-                        "ASTER",
-                        "ONDO",
-                        "AAVE",
-                        "DOT",
-                        "WLD",
-                        "MNT",
-                        "MORPHO",
-                        "POL",
-                        "ATOM",
-                        "RENDER",
-                        "KAS",
-                        "ENA",
-                        "ALGO",
-                        "FIL",
-                        "ARB",
-                        "APT",
-                        "INJ"
-                      ],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "default": null,
+                      "description": "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.",
                       "x-passivbot-scope": "long",
                       "x-passivbot-consumers": [
                         "live",
@@ -2512,7 +2539,7 @@
                         "null"
                       ],
                       "default": [],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "description": "Side-owned exclusions subtracted from effective approval; null or [] means none.",
                       "x-passivbot-scope": "long",
                       "x-passivbot-consumers": [
                         "live",
@@ -3980,50 +4007,8 @@
                         "string",
                         "null"
                       ],
-                      "default": [
-                        "BTC",
-                        "ETH",
-                        "BNB",
-                        "XRP",
-                        "SOL",
-                        "TRX",
-                        "HYPE",
-                        "DOGE",
-                        "ZEC",
-                        "XLM",
-                        "ADA",
-                        "LINK",
-                        "XMR",
-                        "CC",
-                        "BCH",
-                        "TON",
-                        "GRAM",
-                        "LTC",
-                        "HBAR",
-                        "SUI",
-                        "AVAX",
-                        "NEAR",
-                        "UNI",
-                        "TAO",
-                        "ASTER",
-                        "ONDO",
-                        "AAVE",
-                        "DOT",
-                        "WLD",
-                        "MNT",
-                        "MORPHO",
-                        "POL",
-                        "ATOM",
-                        "RENDER",
-                        "KAS",
-                        "ENA",
-                        "ALGO",
-                        "FIL",
-                        "ARB",
-                        "APT",
-                        "INJ"
-                      ],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "default": null,
+                      "description": "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.",
                       "x-passivbot-scope": "short",
                       "x-passivbot-consumers": [
                         "live",
@@ -4054,7 +4039,7 @@
                         "null"
                       ],
                       "default": [],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "description": "Side-owned exclusions subtracted from effective approval; null or [] means none.",
                       "x-passivbot-scope": "short",
                       "x-passivbot-consumers": [
                         "live",
@@ -14478,6 +14463,9 @@
         "bot.global.universe": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
         },
+        "bot.global.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "bot.global.universe.filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },
@@ -16576,6 +16564,9 @@
         "global.universe": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
         },
+        "global.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "global.universe.filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },
@@ -17192,6 +17183,9 @@
         "universe": {
           "$ref": "#/$defs/scenarioPatch:bot.global.universe"
         },
+        "universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "universe.filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },
@@ -17287,6 +17281,9 @@
     "scenarioPatch:bot.global.universe": {
       "type": "object",
       "properties": {
+        "approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },

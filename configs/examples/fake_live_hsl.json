@@ -174,7 +174,7 @@
             "hsl": {"scope": "position_side"},
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 1440.0},
             "strategy_kind": "trailing_martingale",
-            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 0.0},
+            "universe": {"approved_coins": [], "filter_by_min_effective_cost": true, "minimum_coin_age_days": 0.0},
             "unstuck": {"memory_ema_span_minutes": 1440.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.0}
         },

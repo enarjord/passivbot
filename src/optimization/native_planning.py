@@ -68,11 +68,14 @@ def _static_contract(config):
     Feature enablement, execution modes and coin overrides stay dataset-owned.
     Changing one requires another prepared dataset, never silently ignoring it.
     """
-    cleaned = clean_config(config)
+    from config.universe import anchored_universe_source_view, runtime_universe_snapshot
+    cleaned = clean_config(anchored_universe_source_view(config))
     result = {key: cleaned[key] for key in ("bot", "live", "backtest", "coin_overrides") if key in cleaned}
     # Numeric exposure/position values are dynamic, but their side enablement
     # chooses the registered replay's directional/fused kernel topology.
     result["enabled_sides"] = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
+    available = sorted({coin for coins in config["backtest"]["coins"].values() for coin in coins})
+    result["prepared_universe"] = runtime_universe_snapshot(config, available_coins=available)
     result["backtest"]["coins"] = config["backtest"]["coins"]
     # The standalone simulation consumes the materialized scenario, not the
     # optimizer's saved suite recipe or its candidate-dependent derived patches.
@@ -244,7 +247,7 @@ class NativeCandidatePlanner:
         for binding in self.bindings:
             pair = (binding.scenario, binding.dataset.exchange)
             variants = self._variants.setdefault(pair, {})
-            config = json.loads(binding.dataset.config_json)
+            config = binding.dataset.policy_config()
             key = execution_key(config)
             if key in variants:
                 raise ValueError("scenario/exchange execution variants must be unique")

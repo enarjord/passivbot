@@ -399,9 +399,17 @@ operational execution, exchange I/O and startup settings.
 
 ### Universe and selection
 
-- **bot.<side>.universe.approved_coins**: A coin list, `"all"` for every eligible coin, or a path
-  to an external coin-list file. An empty list disables entries for that side. Long and short
-  have separate source leaves; live refresh preserves each side's file reference.
+- **bot.global.universe.approved_coins**: A shared coin list, `"all"`, or a reloadable file
+  containing one common list. Directional objects in a shared file are rejected; use explicit
+  side sources for existing directional-list files. An unused shared source is not read by entry
+  eligibility when both sides have explicit replacements.
+- **bot.<side>.universe.approved_coins**: Omission or `null` inherits the shared source. An
+  explicit list, `"all"`, or file replaces it completely; `[]` approves no entries. Lists are
+  never merged. An explicit list stays pinned even if it equals the shared list today.
+  Shared omission in any sparse authored config means `[]`; the no-config starter instead declares
+  its approved universe explicitly. Omitting an entire side still disables it by exposure policy.
+  Refresh rereads files and blocks affected new-entry eligibility when a source is unavailable;
+  independent pinned sides and protective position management retain their existing policies.
 - **bot.<side>.universe.ignored_coins**: A coin list or external coin-list file. The side's
   tradable universe is its approved coins minus ignored coins, subject to age/market checks.
 - **bot.<side>.forager.always_include**: Ordered, deduplicated coin/market identifiers that
@@ -411,7 +419,8 @@ operational execution, exchange I/O and startup settings.
 
 ```json
 "bot": {
-    "long": {"universe": {"approved_coins": ["BTC", "ETH"], "ignored_coins": []}},
+    "global": {"universe": {"approved_coins": ["BTC", "ETH"]}},
+    "long": {"universe": {"approved_coins": null, "ignored_coins": []}},
     "short": {"universe": {"approved_coins": "all", "ignored_coins": ["BTC"]}}
 }
 ```
@@ -419,7 +428,18 @@ operational execution, exchange I/O and startup settings.
 CLI `--symbols`/`-s` and `--ignored-coins`/`-ic` deliberately set both side sources.
 Use `--bot.long.universe.approved_coins BTC,ETH` or the corresponding short/ignored path to
 change one side. A per-side option takes precedence over a both-side convenience in the same
-command. Retired `--live...` policy paths are rejected.
+command. Retired `--live...` policy paths are rejected. Setting only
+`--bot.global.universe.approved_coins` changes inheriting sides and preserves explicit side pins.
+A side flag accepts `null` to resume inheritance. Both-side convenience flags replace both sides;
+they are not aliases for the shared source.
+
+Compact and full exports preserve source bindings and explicit side pins. Resolved export inlines
+local files while retaining side `null` inheritance. Semantic exports moved to another directory
+rebase retained source references; `--mode format` only formats the original JSON values.
+Prepared optimizer datasets separately freeze effective per-side memberships for replay. Their
+identity includes those memberships; changing a source file requires fresh data preparation,
+rather than changing an already prepared search's eligibility midway through execution.
+
 
 - **bot.global.universe.minimum_coin_age_days**: Disallows coins younger than a given number of days.
 

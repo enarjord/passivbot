@@ -185,10 +185,12 @@ def test_effective_backtest_data_coins_rejects_missing_approved_side():
         effective_backtest_data_coins(cfg)
 
 
-def test_effective_backtest_data_coins_rejects_null_approved_side():
+def test_effective_backtest_data_coins_inherits_shared_approval_for_null_side():
     cfg = _base_config()
     cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     cfg['bot']["long"]['universe']['approved_coins'] = None
 
-    with pytest.raises(TypeError, match="approved coin sides"):
-        effective_backtest_data_coins(cfg)
+    cfg["bot"]["global"]["universe"]["approved_coins"] = ["B", "C"]
+    assert effective_backtest_data_coins(cfg) == ["A", "B", "C"]
+    cfg["bot"]["long"]["universe"]["approved_coins"] = []
+    assert effective_backtest_data_coins(cfg) == ["A"]

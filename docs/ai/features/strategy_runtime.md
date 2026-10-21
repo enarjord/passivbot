@@ -64,6 +64,16 @@ Optimizer selector contract:
   `optimize.bounds` are clamped into bounds with aggregated source/key logging. Without
   `--fine_tune_params`, `--start` remains seed-only.
 
+Approval source authority:
+
+- `bot.global.universe.approved_coins` is the common source. Side omission/null inherits;
+  an explicit side source replaces it, and `[]` approves nothing. Ignored sources remain side-owned.
+- Source restoration precedes scenario/fixed edits and reloadable export. Explicit equal lists
+  remain pins. Provenance metadata never grants membership; live refresh rereads actual sources.
+- Prepared datasets retain source policy for identity/results and a separate immutable per-side
+  membership snapshot for execution. Both participate in matching; candidate replay does not
+  reread mutable files or weaken explicit-pin equality.
+
 Seed evaluation contract:
 
 - Shared ingestion normalizes, clamps, quantizes and deduplicates starting configs.

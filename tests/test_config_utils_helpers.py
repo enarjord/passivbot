@@ -1317,11 +1317,12 @@ def test_update_config_with_args_preserves_cli_coin_file_source_for_live_reload(
 
     update_config_with_args(config, args, verbose=False)
 
-    assert config['bot']["long"]['universe']['approved_coins'] == ["BTC", "ETH"]
+    assert config['bot']["long"]['universe']['approved_coins'] == [str(approved_file)]
     assert config["_coins_sources"]["approved_coins"]["long"] == [str(approved_file)]
 
     approved_file.write_text('["BTC","XRP"]', encoding="utf-8")
-    refreshed = normalize_coins_source(config["_coins_sources"]["approved_coins"])
+    from config.universe import resolve_universe_sources
+    refreshed, _ = resolve_universe_sources(config, "approved_coins")
 
     assert set(refreshed["long"]) == {"BTC", "XRP"}
 

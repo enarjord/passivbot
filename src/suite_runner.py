@@ -1199,6 +1199,9 @@ def apply_scenario_overrides(config, overrides, tracker=None):
 
     Mutates config, matching apply_scenario's existing configuration stage.
     """
+    from config.universe import restore_universe_sources, universe_sources_affected
+    if universe_sources_affected(overrides):
+        restore_universe_sources(config)
     if tracker is None:
         tracker = ConfigTransformTracker()
     if overrides:
@@ -1232,7 +1235,8 @@ def apply_scenario(
     base_ignored: Optional[List[str]] = None,
     quiet: bool = False,
 ) -> Tuple[Dict[str, Any], List[str]]:
-    cfg = deepcopy(base_config)
+    from config.universe import universe_source_view
+    cfg = universe_source_view(base_config)
     tracker = ConfigTransformTracker()
     bot_section = cfg.setdefault("bot", {})
     if not isinstance(bot_section, dict):
@@ -1324,7 +1328,8 @@ def apply_scenario(
             current = universe.get(field, [])
             if current != values:
                 tracker.update(["bot", side, "universe", field], deepcopy(current), list(values))
-            universe[field] = list(values)
+            if (field == "approved_coins" and scenario.coins is not None) or (field == "ignored_coins" and scenario.ignored_coins is not None):
+                universe[field] = list(values)
 
     resolved_sources = resolve_coin_sources(
         base_coin_sources or {},
@@ -2175,13 +2180,12 @@ async def run_backtest_suite_async(
     base_config.setdefault("backtest", {})
     base_config["backtest"]["coin_sources"] = suite_coin_sources
     if isinstance(require_side_universe_sources(base_config, 'approved_coins'), dict):
-        base_config['bot']["long"]['universe']['approved_coins'] = list(master_coins)
-        base_config['bot']["short"]['universe']['approved_coins'] = list(master_coins)
+        from config.universe import materialize_side_universe_sources
+        materialize_side_universe_sources(base_config, "approved_coins", {side: list(master_coins) for side in ("long", "short")})
     else:
         set_side_universe_sources(base_config, 'approved_coins', list(master_coins))
     if isinstance(require_side_universe_sources(base_config, 'ignored_coins'), dict):
-        base_config['bot']["long"]['universe']['ignored_coins'] = list(master_ignored)
-        base_config['bot']["short"]['universe']['ignored_coins'] = list(master_ignored)
+        materialize_side_universe_sources(base_config, "ignored_coins", {side: list(master_ignored) for side in ("long", "short")})
     else:
         set_side_universe_sources(base_config, 'ignored_coins', list(master_ignored))
 

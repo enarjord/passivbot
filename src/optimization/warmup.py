@@ -26,6 +26,9 @@ from warmup_utils import compute_per_coin_warmup_minutes
 
 
 def _apply_config_overrides(config: dict, overrides: dict) -> None:
+    from config.universe import restore_universe_sources, universe_sources_affected
+    if universe_sources_affected(overrides):
+        restore_universe_sources(config)
     if not overrides:
         return
     from config.hsl import validate_override_paths

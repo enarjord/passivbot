@@ -381,6 +381,7 @@ def get_field_registry() -> FieldRegistry:
         (FieldType.INTEGER, FieldType.STRING))
     for name in ("mutation_prob", "mutation_prob_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
+    add("bot.global.universe.approved_coins", (FieldType.ARRAY, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
         for side in ("long", "short"):
             add(f"bot.{side}.universe.{name}", (FieldType.ARRAY, FieldType.STRING), nullable=True)

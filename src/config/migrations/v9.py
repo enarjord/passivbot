@@ -241,6 +241,7 @@ def migrate_v8_to_v9(
     _coin_patch=False,
     best_effort=False,
     _guess_log_prefix="",
+    base_config_path="",
 ):
     """Transform authored policy without importing simulation or exchange runtimes.
 
@@ -515,7 +516,7 @@ def migrate_v8_to_v9(
 
     result = finalize_v8_layout(result, span=None if _coin_patch else root_span, changes=changes,
                                 acknowledge_search_backend_change=acknowledge_search_backend_change,
-                                sparse=_coin_patch, best_effort=best_effort)
+                                sparse=_coin_patch, best_effort=best_effort, base_config_path=base_config_path)
     if not _coin_patch:
         from .released_v8 import materialize_released_v8_optimizer_bounds
 

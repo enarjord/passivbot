@@ -10,7 +10,9 @@ from shared_arrays import SharedArrayManager, SharedArraySpec
 
 def inputs():
     return dict(
-        config={"backtest": {"coins": {"binance": ["A", "B"]}}},
+        config={"backtest": {"coins": {"binance": ["A", "B"]}},
+                "bot": {side: {"universe": {"approved_coins": ["A", "B"], "ignored_coins": []}}
+                        for side in ("long", "short")}},
         markets={"A": {"price_step": 0.01}, "B": {"price_step": 0.1}},
         hlcvs=SharedArraySpec("candles", (10, 3, 4), "<f8"),
         candle_coins=["B", "C", "A"],

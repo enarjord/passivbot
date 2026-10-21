@@ -1,6 +1,7 @@
 """Explicit released-v8 ownership conversion for shared bot policy."""
 
 from copy import deepcopy
+from pathlib import Path
 
 
 LIVE_POLICY_PATHS = {
@@ -15,6 +16,27 @@ LIVE_POLICY_PATHS = {
     "max_warmup_minutes": "bot.global.warmup.max_minutes",
 }
 COIN_SOURCE_FIELDS = ("approved_coins", "ignored_coins")
+
+
+def is_shared_approved_source(value, *, base_config_path=""):
+    """Preserve released file bindings even in a one-item list wrapper."""
+    if isinstance(value, str):
+        return value.strip().lower() == "all"
+    if not isinstance(value, list):
+        return False
+    if len(value) == 1 and isinstance(value[0], str):
+        name = value[0]
+        if name.strip().lower() == "all":
+            return True
+        path = Path(name).expanduser()
+        if name.startswith(("./", "../", "/", "~")) or path.suffix.lower() in {".json", ".hjson", ".txt"}:
+            return False
+        roots = [Path.cwd(), Path(__file__).resolve().parents[3]]
+        if base_config_path:
+            roots.insert(0, Path(base_config_path).absolute().parent.resolve())
+        if any((base / path).is_file() for base in roots):
+            return False
+    return True
 
 
 def shared_policy_selector(path):
@@ -48,7 +70,7 @@ def forced_normal_coins(coin_overrides):
     return result
 
 
-def move_shared_policy(document, *, record):
+def move_shared_policy(document, *, record, base_config_path=""):
     """Move authored leaves without hydrating sparse coin/scenario documents."""
     live = document.get("live", {})
     if not isinstance(live, dict):
@@ -78,14 +100,21 @@ def move_shared_policy(document, *, record):
         if field not in live:
             continue
         value = live.pop(field)
-        if isinstance(value, dict):
-            if set(value) - {"long", "short"}:
-                raise ValueError(f"live.{field} must use only long/short source keys")
-            sources = value
+        if isinstance(value, dict) and set(value) - {"long", "short"}:
+            raise ValueError(f"live.{field} must use only long/short source keys")
+        shared = field == "approved_coins" and is_shared_approved_source(value, base_config_path=base_config_path)
+        if shared:
+            put("bot.global.universe.approved_coins", value, f"live.{field}")
+            for side in ("long", "short"):
+                put(f"bot.{side}.universe.approved_coins", None, f"live.{field}.{side}")
         else:
-            sources = {side: value for side in ("long", "short")}
-        for side, source in sources.items():
-            put(f"bot.{side}.universe.{field}", source, f"live.{field}.{side}")
+            sources = value if isinstance(value, dict) else {side: value for side in ("long", "short")}
+            for side in ("long", "short"):
+                source = sources.get(side, [])
+                put(f"bot.{side}.universe.{field}", [] if source is None else source, f"live.{field}.{side}")
+            if field == "approved_coins":
+                put("bot.global.universe.approved_coins", [], f"live.{field}")
+
 
 
 def preserve_forced_normal_selection(document, *, record):
