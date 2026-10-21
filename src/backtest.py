@@ -1909,6 +1909,13 @@ def _automatic_cache_unresolved_inception_coins(
             if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
 
 
+def _inception_market_identity_matches(previous, current):
+    return bool(current.get("exchange")) and all(
+        previous.get(key) == current.get(key)
+        for key in ("exchange", "symbol", "ohlcv_source")
+    )
+
+
 def _preserve_cached_inception_facts(config, exchange, mss):
     """Carry matching, verified facts through independent candle-cache rebuilds.
 
@@ -1935,8 +1942,7 @@ def _preserve_cached_inception_facts(config, exchange, mss):
         for coin in unresolved:
             old = old_mss.get(coin, {})
             new = mss[coin]
-            if (coin not in old_coins or not new.get("exchange")
-                    or any(old.get(key) != new.get(key) for key in ("exchange", "symbol", "ohlcv_source"))):
+            if coin not in old_coins or not _inception_market_identity_matches(old, new):
                 continue
             fact = inception_timestamp_ms(old.get("inception_timestamp_ms"))
             if fact is not None:
@@ -2060,10 +2066,21 @@ def save_coins_hlcvs_to_cache(
                     config, existing_coins, existing_mss,
                     require_inception_facts=require_inception_facts,
                 )
-                if not unresolved:
+                corrected = []
+                for coin in existing_coins:
+                    old, new = existing_mss[coin], mss.get(coin)
+                    if new is None or not _inception_market_identity_matches(old, new):
+                        continue
+                    previous = inception_timestamp_ms(old.get("inception_timestamp_ms"))
+                    incoming = inception_timestamp_ms(new.get("inception_timestamp_ms"))
+                    if previous is not None and incoming is not None and previous != incoming:
+                        corrected.append(coin)
+                if not unresolved and not corrected:
                     verify_hlcvs_manifest(cache_dir, existing_manifest)
                     return cache_dir
-                logging.info("[hlcvs] replacing cache with unresolved inception for %s", unresolved)
+                logging.info(
+                    "[hlcvs] refreshing cache inception: unresolved=%s corrected=%s", unresolved, corrected,
+                )
         except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
             logging.warning(
                 "[hlcvs] existing cache %s failed validation; overwriting: %s",

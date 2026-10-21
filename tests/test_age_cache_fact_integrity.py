@@ -59,6 +59,21 @@ def test_direct_save_preserves_only_matching_verified_facts_without_mutation(cac
     assert fresh == original
 
 
+def test_fresh_positive_correction_replaces_sufficient_cache_without_force(cache):
+    bt, config = cache
+    directory, arrays, old = _save_cache(bt, config, BASE - 61 * DAY)
+    fresh = deepcopy(old)
+    fresh["AAA"]["inception_timestamp_ms"] = BASE - 62 * DAY
+    original = deepcopy(fresh)
+    result = bt.save_coins_hlcvs_to_cache(
+        config, ["AAA"], arrays[0], "binance", fresh, arrays[1], arrays[2], warmup_minutes=7,
+    )
+    assert result == directory
+    assert bt.load_coins_hlcvs_from_cache(config, "binance")[3] == original
+    assert json.loads((directory / "market_specific_settings.json").read_text()) == original
+    assert fresh == original
+
+
 @pytest.mark.parametrize("damage", ["hash", "identity", "venue", "path", "symlink", "missing", "invalid_fact", "invalid_shape"])
 def test_untrusted_cached_fact_is_never_borrowed(cache, damage):
     bt, config = cache

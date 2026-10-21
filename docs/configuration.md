@@ -482,8 +482,11 @@ shared source.
   dataset overrides remain immutable; unknown inception in them still fails a positive gate.
   Live acquisition requests only approved markets on enabled sides with positive ages. Automatic
   cache rebuilds retain verified known inception for the same market when a fresh lookup is
-  unresolved; a fresh positive fact wins. Metadata is checked before large cache arrays load,
+  unresolved; a fresh positive fact corrects an existing positive fact on publication, even
+  when the cached candles already cover warmup. Metadata is checked before large cache arrays load,
   and unused combined suite datasets do not inherit individual scenarios' fact requirements.
+  A zero-age context may still reuse a sufficient cache with unknown inception without refreshing
+  that unused fact; it does not force a rebuild merely because a new fact is available.
 
 - **bot.global.forager.score_hysteresis_margin**: Absolute normalized-score margin for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 
