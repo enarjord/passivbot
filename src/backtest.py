@@ -1886,6 +1886,18 @@ def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamp
     return HLCVS_CACHE_ROOT / dir_name
 
 
+def _automatic_cache_unresolved_inception_coins(config, coins, mss):
+    """Retry missing facts for either positive age policy, including dormant sides.
+
+    Prepared history is shared with optimizer candidates that can activate a side.
+    Explicit dataset overrides are immutable inputs and do not use this retry gate.
+    """
+    if not any(minimum_coin_age_days(config, side) > 0 for side in POSITION_SIDES):
+        return []
+    return [coin for coin in coins
+            if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
+
+
 def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
@@ -1926,6 +1938,10 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             return None
         coins = json.load(open(cache_dir / "coins.json"))
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
+        unresolved = _automatic_cache_unresolved_inception_coins(config, coins, mss)
+        if unresolved:
+            logging.info("[hlcvs] cache has unresolved inception for %s; rebuilding", unresolved)
+            return None
         # verify_hlcvs_manifest hard-fails unless all three array artifacts
         # exist and match their recorded hashes, so the verified arrays are
         # authoritative here — no re-read needed.
@@ -1972,7 +1988,14 @@ def save_coins_hlcvs_to_cache(
                 existing_manifest
             ):
                 verify_hlcvs_manifest(cache_dir, existing_manifest)
-                return cache_dir
+                existing_coins = json.load(open(cache_dir / "coins.json"))
+                existing_mss = json.load(open(cache_dir / "market_specific_settings.json"))
+                unresolved = _automatic_cache_unresolved_inception_coins(
+                    config, existing_coins, existing_mss,
+                )
+                if not unresolved:
+                    return cache_dir
+                logging.info("[hlcvs] replacing cache with unresolved inception for %s", unresolved)
         except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
             logging.warning(
                 "[hlcvs] existing cache %s failed validation; overwriting: %s",

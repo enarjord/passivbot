@@ -55,7 +55,7 @@ def stable_market_identity(monkeypatch):
 
 
 def _base_config(**overrides):
-    """Minimal config sufficient for cache hash computation."""
+    """Synthetic warmup-only caches have no inception facts, so disable age."""
     cfg = {
         "backtest": {
             "base_dir": "backtests",
@@ -75,7 +75,7 @@ def _base_config(**overrides):
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "entry_volatility_ema_span_1h": 1.0,
-                "universe": {"minimum_coin_age_days": 30, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
             "short": {
                 "n_positions": 0,
@@ -86,7 +86,7 @@ def _base_config(**overrides):
                 "forager_volume_ema_span_1m": 360.0,
                 "forager_volatility_ema_span_1m": 10.0,
                 "entry_volatility_ema_span_1h": 1.0,
-                "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
             },
             "global": {
                 "universe": {},

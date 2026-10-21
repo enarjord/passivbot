@@ -226,6 +226,14 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
     for coin, inline in result.get("coin_overrides", {}).items():
         if not isinstance(inline, dict):
             raise ValueError(f"coin_overrides.{coin} must be a mapping")
+        inline_live = inline.get("live", {})
+        if isinstance(inline_live, dict) and "minimum_coin_age_days" in inline_live:
+            value = inline_live.pop("minimum_coin_age_days")
+            changes.append(dict(
+                path=f"{_change_prefix}coin_overrides.{coin}.live.minimum_coin_age_days",
+                old=deepcopy(value), new=None,
+                reason="ignored shared age policy in a released coin inline patch; side universe admission is not coin overridable",
+            ))
         if not inline.get("override_config_path"):
             continue
         context = deepcopy(result)

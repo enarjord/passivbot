@@ -5275,7 +5275,11 @@ class Passivbot:
         symbols = sorted(
             set(symbols + flatten(self.approved_coins_minus_ignored_coins.values()))
         )
-        if all([s in self.first_timestamps for s in symbols]):
+        symbols = [
+            symbol for symbol in symbols
+            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+        ]
+        if not symbols:
             return
         if self.exchange == "fake":
             first_timestamps = {}
@@ -5297,12 +5301,16 @@ class Passivbot:
             first_timestamps = await get_first_timestamps_unified(
                 symbols, exchange=self.exchange
             )
-        self.first_timestamps.update(first_timestamps)
+        for symbol, value in first_timestamps.items():
+            if (inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+                    and inception_timestamp_ms(value) is not None):
+                self.first_timestamps[symbol] = value
         for symbol in sorted(self.first_timestamps):
             symbolf = self.coin_to_symbol(symbol, verbose=False)
             if symbolf not in self.markets_dict:
                 continue
-            if symbolf not in self.first_timestamps:
+            if (inception_timestamp_ms(self.first_timestamps[symbol]) is not None
+                    and inception_timestamp_ms(self.first_timestamps.get(symbolf)) is None):
                 self.first_timestamps[symbolf] = self.first_timestamps[symbol]
         for symbol in symbols:
             if symbol not in self.first_timestamps:
