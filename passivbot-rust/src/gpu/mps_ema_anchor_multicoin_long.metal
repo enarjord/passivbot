@@ -4088,7 +4088,8 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
     int short_effective_n_positions,
     bool long_can_generate,
     bool short_can_generate,
-    bool filter_by_min_effective_cost,
+    bool filter_by_min_effective_cost_long,
+    bool filter_by_min_effective_cost_short,
     float balance,
     thread ulong& long_selection_blocked_mask,
     thread ulong& short_selection_blocked_mask,
@@ -4147,7 +4148,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
             ));
         const bool long_min_cost_eligible =
             passes_multicoin_min_effective_cost(
-                filter_by_min_effective_cost, balance,
+                filter_by_min_effective_cost_long, balance,
                 long_allowed_wel,
                 coin_override_or(
                     long_coin_overrides, c, 0, long_config.base_qty_pct
@@ -4156,7 +4157,7 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
             );
         const bool short_min_cost_eligible =
             passes_multicoin_min_effective_cost(
-                filter_by_min_effective_cost, balance,
+                filter_by_min_effective_cost_short, balance,
                 short_allowed_wel,
                 coin_override_or(
                     short_coin_overrides, c, 0, short_config.base_qty_pct
@@ -4350,7 +4351,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float market_order_near_touch_threshold = fmax(
         run_settings[12], 0.0f
     );
-    const bool filter_by_min_effective_cost = run_settings[13] > 0.5f;
+    const bool filter_by_min_effective_cost_long = run_settings[13] > 0.5f;
+    const bool filter_by_min_effective_cost_short = run_settings[17] > 0.5f;
     const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
@@ -4760,7 +4762,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_effective_n_positions,
                 short_effective_n_positions,
                 long_can_generate, short_can_generate,
-                filter_by_min_effective_cost, account.balance,
+                filter_by_min_effective_cost_long, filter_by_min_effective_cost_short, account.balance,
                 long_one_way_selection_blocked_mask,
                 short_one_way_selection_blocked_mask,
                 long_one_way_order_blocked_mask,
@@ -4814,7 +4816,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 any_fill,
                 long_effective_n_positions, score_hysteresis,
                 long_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, account.balance
+                filter_by_min_effective_cost_long, account.balance
             );
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
@@ -4832,7 +4834,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 any_fill,
                 short_effective_n_positions, score_hysteresis,
                 short_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, account.balance
+                filter_by_min_effective_cost_short, account.balance
             );
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,

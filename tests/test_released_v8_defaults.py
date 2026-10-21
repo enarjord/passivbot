@@ -137,7 +137,7 @@ def test_explicit_migration_materializes_missing_defaults_and_retains_null(conve
     before = deepcopy(source)
     result = converter(source, memory_span_minutes=123.5)
     assert source == before
-    assert result.config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] is True
+    assert result.config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] is True
     assert result.config["backtest"]["filter_by_min_effective_cost"] is (
         False if backtest is _MISSING else backtest
     )
@@ -150,7 +150,7 @@ def test_explicit_migration_materializes_missing_defaults_and_retains_null(conve
     loaded = prepare_config(result.config, verbose=False)
     from config.policy import effective_minimum_cost_filter
     assert loaded["backtest"]["filter_by_min_effective_cost"] is (False if backtest is _MISSING else backtest)
-    assert effective_minimum_cost_filter(loaded) is (True if backtest is None else False if backtest is _MISSING else backtest)
+    assert effective_minimum_cost_filter(loaded, "long") is (True if backtest is None else False if backtest is _MISSING else backtest)
 
 
 def test_migrated_null_tracks_shared_policy_when_authored_config_is_reused():
@@ -161,10 +161,10 @@ def test_migrated_null_tracks_shared_policy_when_authored_config_is_reused():
     for enabled in (False, True):
         config = deepcopy(result.config)
         from config.policy import effective_minimum_cost_filter
-        config["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = enabled
+        config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = enabled
         loaded = prepare_config(config, verbose=False)
         assert loaded["backtest"]["filter_by_min_effective_cost"] is None
-        assert effective_minimum_cost_filter(loaded) is enabled
+        assert effective_minimum_cost_filter(loaded, "long") is enabled
     assert migrate(result.config).config == result.config
 
 

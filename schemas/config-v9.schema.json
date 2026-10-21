@@ -1062,18 +1062,6 @@
                 "universe": {
                   "type": "object",
                   "properties": {
-                    "filter_by_min_effective_cost": {
-                      "type": "boolean",
-                      "default": true,
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
                     "minimum_coin_age_days": {
                       "type": "number",
                       "default": 60.0,
@@ -2504,6 +2492,19 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "filter_by_min_effective_cost": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "Side-specific flat initial-entry eligibility; simulation null inherits this flag, while exchange minima and held-position management remain authoritative.",
+                      "x-passivbot-scope": "long",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
                     },
                     "ignored_coins": {
                       "type": [
@@ -4046,6 +4047,19 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "filter_by_min_effective_cost": {
+                      "type": "boolean",
+                      "default": true,
+                      "description": "Side-specific flat initial-entry eligibility; simulation null inherits this flag, while exchange minima and held-position management remain authoritative.",
+                      "x-passivbot-scope": "short",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
                     },
                     "ignored_coins": {
                       "type": [
@@ -14478,9 +14492,6 @@
         "bot.global.universe": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
         },
-        "bot.global.universe.filter_by_min_effective_cost": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
-        },
         "bot.global.universe.minimum_coin_age_days": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
         },
@@ -14732,6 +14743,9 @@
         },
         "bot.long.universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "bot.long.universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/filter_by_min_effective_cost"
         },
         "bot.long.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
@@ -14996,6 +15010,9 @@
         },
         "bot.short.universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "bot.short.universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/filter_by_min_effective_cost"
         },
         "bot.short.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
@@ -16576,9 +16593,6 @@
         "global.universe": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
         },
-        "global.universe.filter_by_min_effective_cost": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
-        },
         "global.universe.minimum_coin_age_days": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
         },
@@ -16830,6 +16844,9 @@
         },
         "long.universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "long.universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/filter_by_min_effective_cost"
         },
         "long.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
@@ -17095,6 +17112,9 @@
         "short.universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
         },
+        "short.universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/filter_by_min_effective_cost"
+        },
         "short.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
         },
@@ -17192,9 +17212,6 @@
         "universe": {
           "$ref": "#/$defs/scenarioPatch:bot.global.universe"
         },
-        "universe.filter_by_min_effective_cost": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
-        },
         "universe.minimum_coin_age_days": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
         },
@@ -17287,9 +17304,6 @@
     "scenarioPatch:bot.global.universe": {
       "type": "object",
       "properties": {
-        "filter_by_min_effective_cost": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
-        },
         "minimum_coin_age_days": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
         }
@@ -17553,6 +17567,9 @@
         },
         "universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
+        },
+        "universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/filter_by_min_effective_cost"
         },
         "universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
@@ -18102,6 +18119,9 @@
         "approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/approved_coins"
         },
+        "filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/filter_by_min_effective_cost"
+        },
         "ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
         }
@@ -18373,6 +18393,9 @@
         },
         "universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "universe.filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/filter_by_min_effective_cost"
         },
         "universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
@@ -18921,6 +18944,9 @@
       "properties": {
         "approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/approved_coins"
+        },
+        "filter_by_min_effective_cost": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/filter_by_min_effective_cost"
         },
         "ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"

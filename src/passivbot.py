@@ -131,6 +131,7 @@ from live import exchange_params
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from config import get_template_config, load_input_config, prepare_config
+from config.policy import minimum_cost_filter
 from config.access import (
     get_optional_config_value,
     get_optional_live_value,
@@ -9846,7 +9847,7 @@ class Passivbot:
             s: self.effective_min_cost_is_low_enough(pside, s) for s in candidates
         }
         if not any(min_cost_flags.values()):
-            if require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
+            if minimum_cost_filter(self.config, pside):
                 self.warn_on_high_effective_min_cost(pside)
             return []
         try:
@@ -10029,13 +10030,13 @@ class Passivbot:
                 status="succeeded" if ideal_coins else "skipped",
                 reason_code="selected" if ideal_coins else "none_selected",
             )
-            if not ideal_coins and require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
+            if not ideal_coins and minimum_cost_filter(self.config, pside):
                 if any(not flag for flag in min_cost_flags.values()):
                     self.warn_on_high_effective_min_cost(pside)
         else:
             eligible = [s for s in candidates if min_cost_flags.get(s, True)]
             if not eligible:
-                if require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
+                if minimum_cost_filter(self.config, pside):
                     self.warn_on_high_effective_min_cost(pside)
                 return []
             # all approved coins are selected, no filtering by volume and log range
@@ -10213,7 +10214,7 @@ class Passivbot:
 
     def warn_on_high_effective_min_cost(self, pside):
         """Log a warning if min effective cost filtering removes every candidate."""
-        if not require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
+        if not minimum_cost_filter(self.config, pside):
             return
         if not self.is_pside_enabled(pside):
             return
@@ -10226,7 +10227,7 @@ class Passivbot:
             logging.info(
                 f"Warning: No {pside} symbols are approved due to min effective cost too high. "
                 + f"Suggestions: 1) increase account balance, 2) "
-                + f"set 'filter_by_min_effective_cost' to false, 3) reduce n_{pside}s"
+                + f"set 'bot.{pside}.universe.filter_by_min_effective_cost' to false, 3) reduce n_{pside}s"
             )
 
     def get_max_n_positions(self, pside):
@@ -10328,7 +10329,7 @@ class Passivbot:
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
         """Check whether the symbol meets the effective minimum cost requirement."""
-        if not require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost'):
+        if not minimum_cost_filter(self.config, pside):
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
@@ -13437,7 +13438,7 @@ class Passivbot:
                     effective_min_cost,
                 )
             logging.debug(
-                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.global.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
+                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.%s.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
@@ -13445,6 +13446,7 @@ class Passivbot:
                 balance,
                 effective_limit,
                 entry_initial_qty_pct,
+                pside,
                 pside,
             )
             if callable(emit_blocked_event):
@@ -17846,9 +17848,9 @@ class Passivbot:
             # Rust defaults it to 0.0 for live loss projections; the backtest
             # value is a simulation knob, not a live slippage cap.
             "global": {
-                "filter_by_min_effective_cost": bool(
-                    require_config_value(self.config, 'bot.global.universe.filter_by_min_effective_cost')
-                ),
+                "filter_by_min_effective_cost": {
+                    side: minimum_cost_filter(self.config, side) for side in ("long", "short")
+                },
                 "market_orders_allowed": bool(require_config_value(self.config, 'bot.global.execution.market_orders_allowed')),
                 "market_order_near_touch_threshold": float(
                     require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction')

@@ -616,7 +616,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: true,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,

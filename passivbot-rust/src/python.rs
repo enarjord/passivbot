@@ -37,7 +37,7 @@ use numpy::{
 };
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList};
+use pyo3::types::{PyAny, PyBool, PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
 use serde_json::{self, Value};
@@ -2282,11 +2282,36 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
-        filter_by_min_effective_cost: dict
-            .get_item("filter_by_min_effective_cost")?
-            .map(|item| item.extract::<bool>())
-            .transpose()?
-            .unwrap_or(false),
+        filter_by_min_effective_cost: {
+            let pair = dict
+                .get_item("filter_by_min_effective_cost")?
+                .ok_or_else(|| PyValueError::new_err("missing filter_by_min_effective_cost"))?;
+            let pair = pair.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err(
+                    "filter_by_min_effective_cost must contain long and short booleans",
+                )
+            })?;
+            if pair.len() != 2 {
+                return Err(PyValueError::new_err(
+                    "filter_by_min_effective_cost must contain exactly long and short",
+                ));
+            }
+            let flag = |side: &str| -> PyResult<bool> {
+                let value = pair.get_item(side)?.ok_or_else(|| {
+                    PyValueError::new_err(format!("missing filter_by_min_effective_cost.{side}"))
+                })?;
+                if !value.is_instance_of::<PyBool>() {
+                    return Err(PyValueError::new_err(format!(
+                        "filter_by_min_effective_cost.{side} must be a boolean"
+                    )));
+                }
+                value.extract::<bool>()
+            };
+            crate::types::MinimumCostFilter {
+                long: flag("long")?,
+                short: flag("short")?,
+            }
+        },
         dynamic_wel_by_tradability: extract_value(dict, "dynamic_wel_by_tradability")?,
         hedge_mode: dict
             .get_item("hedge_mode")?

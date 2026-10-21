@@ -291,7 +291,7 @@ def test_schema_cli_is_offline_and_registered():
 
 @pytest.mark.parametrize("path", [
     "bot.global.strategy_kind", "bot.global.hedge_mode",
-    "bot.global.universe.minimum_coin_age_days", "bot.global.universe.filter_by_min_effective_cost",
+    "bot.global.universe.minimum_coin_age_days", "bot.long.universe.filter_by_min_effective_cost",
     "bot.global.execution.market_orders_allowed", "bot.global.execution.market_order_near_touch_fraction",
     "bot.global.forager.score_hysteresis_margin", "bot.global.warmup.span_multiplier", "bot.global.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",

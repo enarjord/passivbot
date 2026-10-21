@@ -1253,7 +1253,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 }
 
                 self.apply_organillo_modes(idx, k, &mut mode_long, &mut mode_short);
-                if self.backtest_params.filter_by_min_effective_cost {
+                {
                     if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                         mode_long = Some(orchestrator::TradingMode::GracefulStop);
                     }
@@ -1528,7 +1528,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             }
 
             self.apply_organillo_modes(idx, k, &mut mode_long, &mut mode_short);
-            if self.backtest_params.filter_by_min_effective_cost {
+            {
                 if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
                     mode_long = Some(orchestrator::TradingMode::GracefulStop);
                 }
@@ -2540,7 +2540,11 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     }
 
     fn coin_passes_min_effective_cost(&self, idx: usize, pside: usize) -> bool {
-        if !self.backtest_params.filter_by_min_effective_cost {
+        if !self
+            .backtest_params
+            .filter_by_min_effective_cost
+            .for_side(pside)
+        {
             return true;
         }
         if idx >= self.exchange_params_list.len() {
@@ -4899,7 +4903,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             forager_score_hysteresis_pct: 0.0,
             hedge_mode: true,
@@ -5437,7 +5441,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             forager_score_hysteresis_pct: 0.0,
             hedge_mode: true,
@@ -5515,7 +5519,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
@@ -5581,7 +5585,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
@@ -5684,7 +5688,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -5768,7 +5772,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -5853,7 +5857,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -5947,7 +5951,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6029,7 +6033,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6123,7 +6127,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6392,7 +6396,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6546,7 +6550,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6608,7 +6612,7 @@ mod tests {
                 ew_half_life_days: None,
                 hsl_detailed_report: false,
                 skip_btc_analysis: false,
-                filter_by_min_effective_cost: false,
+                filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 dynamic_wel_by_tradability: true,
                 hedge_mode: true,
                 max_realized_loss_pct: 1.0,
@@ -6678,7 +6682,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6752,7 +6756,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6832,7 +6836,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6907,7 +6911,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -6990,7 +6994,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -7089,7 +7093,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -7208,7 +7212,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
@@ -7361,7 +7365,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -7467,7 +7471,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -7586,7 +7590,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis_pct: 0.0,
@@ -7663,7 +7667,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
@@ -7743,7 +7747,7 @@ mod tests {
             ew_half_life_days: None,
             hsl_detailed_report: false,
             skip_btc_analysis: false,
-            filter_by_min_effective_cost: false,
+            filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,

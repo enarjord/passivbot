@@ -4,7 +4,7 @@ from copy import deepcopy
 import platform
 
 from config.overrides import parse_overrides
-from config.policy import effective_minimum_cost_filter
+from config.policy import effective_minimum_cost_filters
 from config.param_paths import resolve_optimizer_key_path
 from config_utils import clean_config
 from optimization.config_adapter import _flatten_bounds_for_config
@@ -14,7 +14,7 @@ from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
-CONTRACT_VERSION = 6
+CONTRACT_VERSION = 7
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -111,7 +111,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),
         "bot": effective.get("bot", {}),
-        "backtest_policy": {"filter_by_min_effective_cost": effective_minimum_cost_filter(effective)},
+        "backtest_policy": {"filter_by_min_effective_cost": effective_minimum_cost_filters(effective)},
         "coin_overrides": coin_overrides,
         "anchors": anchor_contract,
     }

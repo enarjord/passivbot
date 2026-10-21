@@ -99,7 +99,7 @@ def reject_retired_v9_fields(config, *, additional_inputs=()):
     from .shared_policy import COIN_SOURCE_FIELDS, LIVE_POLICY_PATHS
     from config.field_registry import LIVE_OPERATIONAL_PATHS
 
-    moved = (*LIVE_POLICY_PATHS, *COIN_SOURCE_FIELDS)
+    moved = (*LIVE_POLICY_PATHS, "filter_by_min_effective_cost", *COIN_SOURCE_FIELDS)
     moved_pattern = re.compile(
         r"(?:^|\.)live\.(?:" + "|".join(map(re.escape, moved)) + r")(?:$|\.)"
     )

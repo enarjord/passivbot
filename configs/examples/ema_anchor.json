@@ -60,7 +60,7 @@
             "hsl": {"scope": "coin"},
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "ema_anchor",
-            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 365.0},
+            "universe": { "minimum_coin_age_days": 365.0},
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
         },
@@ -117,7 +117,7 @@
                     "offset_volatility_ema_span_minutes": 664.0
                 }
             },
-            "universe": {"approved_coins": ["SOL"], "ignored_coins": []},
+            "universe": {"filter_by_min_effective_cost": true, "approved_coins": ["SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_fraction": 0.099,
                 "ema_distance_fraction": -0.1046,
@@ -182,7 +182,7 @@
                     "offset_volatility_ema_span_minutes": 664.0
                 }
             },
-            "universe": {"approved_coins": ["SOL"], "ignored_coins": []},
+            "universe": {"filter_by_min_effective_cost": true, "approved_coins": ["SOL"], "ignored_coins": []},
             "unstuck": {
                 "close_fraction": 0.099,
                 "ema_distance_fraction": -0.1046,
