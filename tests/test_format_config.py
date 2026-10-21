@@ -190,7 +190,7 @@ def test_format_config_adds_monitor_defaults():
         "retain_candles": True,
         "retain_fills": True,
         "compress_rotated_segments": True,
-        "price_tick_min_interval_ms": 500,
+        "price_tick_min_interval_milliseconds": 500,
         "emit_completed_candles": True,
         "include_raw_fill_payloads": False,
     }
@@ -334,8 +334,8 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     trailing_martingale = current["bot"]["long"]["strategy"]["trailing_martingale"]
-    trailing_martingale.pop("volatility_ema_span_1h")
-    trailing_martingale.pop("volatility_ema_span_1m")
+    trailing_martingale.pop("volatility_ema_span_1h_candles")
+    trailing_martingale.pop("volatility_ema_span_minutes")
     for key in (
         "threshold_volatility_1h_weight",
         "threshold_volatility_1m_weight",
@@ -362,11 +362,11 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     long_strategy = long_cfg["strategy"]["trailing_martingale"]
     default_long = tmpl["bot"]["long"]
     default_strategy = default_long["strategy"]["trailing_martingale"]
-    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(
-        default_strategy["volatility_ema_span_1h"]
+    assert long_strategy["volatility_ema_span_1h_candles"] == pytest.approx(
+        default_strategy["volatility_ema_span_1h_candles"]
     )
-    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(
-        default_strategy["volatility_ema_span_1m"]
+    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(
+        default_strategy["volatility_ema_span_minutes"]
     )
     assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(
         default_strategy["entry"]["threshold_volatility_1h_weight"]
@@ -386,11 +386,11 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     assert long_strategy["close"]["retracement_base_fraction"] == pytest.approx(
         default_strategy["close"]["retracement_base_fraction"]
     )
-    assert long_cfg["forager"]["volatility_ema_span_1m"] == pytest.approx(
-        default_long["forager"]["volatility_ema_span_1m"]
+    assert long_cfg["forager"]["volatility_ema_span_minutes"] == pytest.approx(
+        default_long["forager"]["volatility_ema_span_minutes"]
     )
-    assert long_cfg["forager"]["volume_ema_span_1m"] == pytest.approx(
-        default_long["forager"]["volume_ema_span_1m"]
+    assert long_cfg["forager"]["volume_ema_span_minutes"] == pytest.approx(
+        default_long["forager"]["volume_ema_span_minutes"]
     )
     assert (
         long_cfg["hsl"]["panic_close_order_type"]

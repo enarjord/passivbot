@@ -31,10 +31,10 @@ def test_omitted_dimensions_freeze_effective_values_through_exports(omission, st
     source = get_template_config()
     source["bot"]["global"]["strategy_kind"] = strategy
     if strategy == "trailing_martingale":
-        source["bot"]["long"]["strategy"][strategy]["entry"]["ema_span_0"] = 123.5
+        source["bot"]["long"]["strategy"][strategy]["entry"]["ema_span_0_minutes"] = 123.5
         branch = source["optimize"]["bounds"]["long"]["strategy"][strategy]["entry"]
     else:
-        source["bot"]["long"]["strategy"][strategy]["ema_span_0"] = 123.5
+        source["bot"]["long"]["strategy"][strategy]["ema_span_0_minutes"] = 123.5
         branch = source["optimize"]["bounds"]["long"]["strategy"][strategy]
     if omission == "optimize":
         source.pop("optimize")
@@ -45,7 +45,7 @@ def test_omitted_dimensions_freeze_effective_values_through_exports(omission, st
     elif omission == "side":
         source["optimize"]["bounds"].pop("long")
     else:
-        branch.pop("ema_span_0")
+        branch.pop("ema_span_0_minutes")
     original = deepcopy(source)
     prepared = prepare_config(source, verbose=False)
     assert source == original
@@ -429,12 +429,12 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
 def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missing):
     source = released_v8_policy()
     if missing == "leaf":
-        del source["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"]
+        del source["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
     elif missing == "bounds":
         source["optimize"]["bounds"] = {}
     else:
         source["optimize"].pop("bounds")
-    source["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 42.5
+    source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
     migrated = migrate(source, memory_span_minutes=123.5)
     bounds = flattened(migrated.config)
     assert bounds["long_ema_span_0"] == [100.0, 2880.0, 10.0]
@@ -516,16 +516,16 @@ def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
     for name in ("volume", "future"):
         assert bounds["long"]["forager"]["score_weights"][name] == authored["long"]["forager"]["score_weights"][name]
     assert bounds["long"]["forager"]["score_weights"]["volatility"] == [0, 1, 0.01]
-    assert bounds["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == [100.0, 2880.0, 10.0]
+    assert bounds["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == [100.0, 2880.0, 10.0]
 
 
 @pytest.mark.parametrize("transform,source_parts,target_parts,configured,domain", [
-    ("couple_unstuck_ema_spans", ("strategy", "trailing_martingale", "entry", "ema_span_0"),
-     ("long", "unstuck", "ema_span_0"), 42.5, [100.0, 200.0]),
+    ("couple_unstuck_ema_spans", ("strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
+     ("long", "unstuck", "ema_span_0_minutes"), 42.5, [100.0, 200.0]),
     ("mirror_short_from_long", ("risk", "total_wallet_exposure_limit"),
      ("short", "risk", "total_wallet_exposure_limit"), 0.0, [0.5, 1.5]),
-    ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_pct"),
-     ("long", "strategy", "trailing_martingale", "close", "threshold_base_pct"), 0.0, [0.01, 0.02]),
+    ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_fraction"),
+     ("long", "strategy", "trailing_martingale", "close", "threshold_base_fraction"), 0.0, [0.01, 0.02]),
 ])
 def test_explicit_relationships_derive_effective_targets_without_opening_target_genes(
     transform, source_parts, target_parts, configured, domain,

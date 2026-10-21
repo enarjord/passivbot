@@ -19,7 +19,7 @@ def omit_unilateralness_bounds(config):
     for side in ("long", "short"):
         bounds = config["optimize"]["bounds"][side]["forager"]
         bounds.get("score_weights", {}).pop("unilateralness", None)
-        bounds.pop("unilateralness_ema_span_1m", None)
+        bounds.pop("unilateralness_ema_span_minutes", None)
 
 
 
@@ -55,7 +55,7 @@ def test_parsed_template_bounds_freeze_adaptive_defaults():
     for side in ("long", "short"):
         forager = cfg["bot"][side]["forager"]
         weight = forager["score_weights"]["unilateralness"]
-        span = forager["unilateralness_ema_span_1m"]
+        span = forager["unilateralness_ema_span_minutes"]
         assert bounds[f"{side}_forager_score_weights_unilateralness"] == [weight, weight]
         assert bounds[f"{side}_unilateralness_ema_span_1m"] == [span, span]
         cooldown = cfg["bot"][side]["entry_cooldown"]
@@ -80,7 +80,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
     source["bot"][side]["forager"].update(
         score_weights={"volume": 1.0, "ema_readiness": 0.0,
                        "volatility": 0.0, "unilateralness": 1.0},
-        unilateralness_ema_span_1m=42.5,
+        unilateralness_ema_span_minutes=42.5,
     )
     source["bot"][side]["entry_cooldown"].update(
         min_duration_minutes=20.0, max_duration_minutes=90.0,
@@ -107,7 +107,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
             vector[index] = parsed["bot"][side]["forager"]["score_weights"][path[-1]]
     candidate = build_optimizer_vector_config(vector, parsed)
     assert candidate["bot"][side]["forager"]["score_weights"]["unilateralness"] == 0.5
-    assert candidate["bot"][side]["forager"]["unilateralness_ema_span_1m"] == 42.5
+    assert candidate["bot"][side]["forager"]["unilateralness_ema_span_minutes"] == 42.5
     for key in ("weights_minutes", "min_duration_minutes", "max_duration_minutes"):
         assert candidate["bot"][side]["entry_cooldown"][key] == parsed["bot"][side]["entry_cooldown"][key]
 
@@ -123,7 +123,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
     source = get_template_config()
     for side, span, weight in (("long", 12.5, 2.0), ("short", 81.25, 3.0)):
         source["bot"][side]["forager"].update(
-            unilateralness_ema_span_1m=span,
+            unilateralness_ema_span_minutes=span,
             score_weights={"volume": 1.0, "ema_readiness": 1.0,
                            "volatility": 0.0, "unilateralness": weight},
         )
@@ -145,7 +145,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
         for side in ("long", "short"):
             forager = cfg["bot"][side]["forager"]
             weight = forager["score_weights"]["unilateralness"]
-            span = forager["unilateralness_ema_span_1m"]
+            span = forager["unilateralness_ema_span_minutes"]
             assert bounds[f"{side}_forager_score_weights_unilateralness"] == [weight, weight]
             assert bounds[f"{side}_unilateralness_ema_span_1m"] == [span, span]
     path = str(tmp_path / "config.json")
@@ -161,10 +161,10 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
         forager = source["optimize"]["bounds"][side]["forager"]
         if form == "nested":
             forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
-            forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
+            forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
         elif form == "grouped":
             forager["score_weights_unilateralness"] = [0.0, 1.0, 0.01]
-            forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
+            forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
         else:
             source["optimize"]["bounds"][f"{side}_forager_score_weights_unilateralness"] = [0.0, 1.0, 0.01]
             source["optimize"]["bounds"][f"{side}_unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
@@ -177,7 +177,7 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
             forager = source["optimize"]["bounds"][side]["forager"]
             forager.pop("score_weights_unilateralness", None)
             forager.setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
-            forager["unilateralness_ema_span_1m"] = [20.5, 240.5, 0.5]
+            forager["unilateralness_ema_span_minutes"] = [20.5, 240.5, 0.5]
     cfg = prepare_config(source, verbose=False)
     path = str(tmp_path / "config.json")
     dump_config(cfg, path, clean=True)

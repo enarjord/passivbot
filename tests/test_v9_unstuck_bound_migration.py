@@ -45,8 +45,8 @@ def test_omitted_search_policy_fixes_new_unstuck_spans_at_effective_values(kind,
         strategy = strategy["entry"]
     strategy["ema_span_0"] = 403.5
     prepared = _convert(source)
-    assert prepared["bot"]["long"]["unstuck"]["ema_span_0"] == 403.5
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] == [403.5, 403.5]
+    assert prepared["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 403.5
+    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] == [403.5, 403.5]
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -63,7 +63,7 @@ def test_released_flat_bounds_preserve_fixed_or_authored_unstuck_choices(bound, 
     expected = (34.5 if explicit else
                 source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
                 if bound == [10, 20] else 12.5)
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] == [expected, expected]
+    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] == [expected, expected]
     assert not any(key.startswith(("long_", "short_")) for key in prepared["optimize"]["bounds"])
 
 

@@ -137,3 +137,47 @@ def test_released_flat_unstuck_span_retains_its_explicit_value_and_report(kind):
     assert result.config["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 123.75
     assert any(item["path"] == "bot.long.unstuck_ema_span_0" for item in result.changes)
     assert source == original
+
+
+def released_portfolio_source(kind):
+    source = released_source(kind)
+    source["live"]["hsl_signal_mode"] = "unified"
+    source["bot"]["hsl"] = deepcopy(source["bot"]["long"]["hsl"])
+    for side in ("long", "short"):
+        source["optimize"]["bounds"][side].pop("hsl")
+    source["optimize"]["bounds"]["hsl"] = {
+        "cooldown_minutes_after_red": [1, 2880, 10],
+        "ema_span_minutes": [1, 2880, 10],
+        "red_threshold": [0.01, 0.12, 0.001],
+    }
+    return source
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_portfolio_bounds_move_before_unit_projection_and_keep_native_genes(kind):
+    source = released_portfolio_source(kind)
+    original = deepcopy(source)
+    result = migrate(source, memory_span_minutes=123.5)
+    bounds = result.config["optimize"]["bounds"]
+    assert "hsl" not in bounds
+    assert bounds["global"]["hsl"]["cooldown_after_red_minutes"] == [1, 2880, 10]
+    native = flatten_optimize_bounds(bounds, strategy_kind=kind)
+    assert native["hsl_cooldown_minutes_after_red"] == [1, 2880, 10]
+    assert native["hsl_drawdown_ratio_ema_span_minutes"] == [1, 2880, 10]
+    assert native["hsl_red_threshold"] == [0.01, 0.12, 0.001]
+    assert any(item["path"] == "optimize.bounds.hsl" for item in result.changes)
+    assert any(item["path"] == "optimize.bounds.global.hsl.cooldown_minutes_after_red"
+               for item in result.changes)
+    assert source == original
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_portfolio_bound_collision_requires_an_explicit_choice(kind):
+    source = released_portfolio_source(kind)
+    source["optimize"]["bounds"]["global"] = {
+        "hsl": {"cooldown_after_red_minutes": [2, 3]},
+    }
+    original = deepcopy(source)
+    with pytest.raises(ValueError, match="conflicts"):
+        migrate(source, memory_span_minutes=123.5)
+    assert source == original

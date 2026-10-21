@@ -4,6 +4,7 @@ import json
 import pytest
 
 from config import get_template_config, prepare_config, compile_runtime_config
+from config.migrations.released_v8 import get_released_v8_defaults
 from config.overrides import parse_overrides
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -17,13 +18,13 @@ SPANS = ("ema_span_0", "ema_span_1")
 
 
 def legacy_config():
-    config = clean_config(get_template_config())
-    config["config_version"] = "v8.3.0"
-    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
-                "realized_loss_gate_lookback_minutes"):
-        config["live"].pop(key, None)
-    config["live"]["pnls_max_lookback_days"] = 30.0
-    config["optimize"]["bounds"].pop("live", None)
+    config = get_released_v8_defaults(strategy_kind=KIND)
+    config["backtest"]["visible_metrics"] = [
+        name for name in config["backtest"]["visible_metrics"] if not name.endswith("_w")
+    ]
+    config["optimize"]["scoring"] = [
+        item for item in config["optimize"]["scoring"] if not item["metric"].endswith("_w")
+    ]
     # This fixture migrates unrelated strategy fields with old HSL disabled,
     # not newly generated current-schema HSL restart authorization.
     for side in ("long", "short"):
@@ -60,10 +61,17 @@ def test_lossless_migration_runtime_warmup_and_roundtrip():
     ]
     prepared = prepare_migrated_legacy(old)
     strategy = prepared["bot"]["long"]["strategy"][KIND]
-    assert strategy["entry"]["ema_span_0"] == 123.75
-    assert strategy["entry"]["ema_span_1"] == 998.125
+    assert strategy["entry"]["ema_span_0_minutes"] == 123.75
+    assert strategy["entry"]["ema_span_1_minutes"] == 998.125
     assert not any(key in strategy for key in SPANS)
-    assert prepared["bot"]["long"]["unstuck"] == old["bot"]["long"]["unstuck"]
+    names = {
+        "ema_span_0": "ema_span_0_minutes", "ema_span_1": "ema_span_1_minutes",
+        "close_pct": "close_fraction", "ema_dist": "ema_distance_fraction",
+        "loss_allowance_pct": "loss_allowance_fraction", "threshold": "exposure_trigger_ratio",
+    }
+    assert prepared["bot"]["long"]["unstuck"] == {
+        names.get(key, key): value for key, value in old["bot"]["long"]["unstuck"].items()
+    }
     bounds = flatten_optimize_bounds(prepared["optimize"]["bounds"], strategy_kind=KIND)
     assert bounds["long_ema_span_0"] == [12.5, 321.75, 0.25]
     saved = clean_config(prepared)
@@ -87,8 +95,9 @@ def test_external_inline_precedence_and_partial_coupling(
     config = get_template_config()
 
     def patch(old, **values):
+        authored = values if old else {f"{key}_minutes": value for key, value in values.items()}
         return {
-            "bot": {"long": {"strategy": {KIND: values if old else {"entry": values}}}}
+            "bot": {"long": {"strategy": {KIND: authored if old else {"entry": authored}}}}
         }
 
     source = tmp_path / "coin.json"
@@ -111,7 +120,7 @@ def test_external_inline_precedence_and_partial_coupling(
     else:
         config = parse_overrides(prepare_config(config, verbose=False), verbose=False)
     entry = config["coin_overrides"]["BTC"]["bot"]["long"]["strategy"][KIND]["entry"]
-    assert entry == {"ema_span_0": 17.125, "ema_span_1": 81.5}
+    assert entry == {"ema_span_0_minutes": 17.125, "ema_span_1_minutes": 81.5}
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     apply_coupled_unstuck_ema_spans(config)
     assert config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == entry
@@ -121,7 +130,7 @@ def test_current_config_rejects_conflicting_retired_ema_path():
     config = get_template_config()
     strategy = config["bot"]["long"]["strategy"][KIND]
     strategy["ema_span_0"] = 17.5
-    strategy["entry"]["ema_span_0"] = 123.5
+    strategy["entry"]["ema_span_0_minutes"] = 123.5
     original = deepcopy(config)
     with pytest.raises(ValueError, match="ema_span_0.*unknown configuration field"):
         prepare_config(config, verbose=False)
@@ -138,8 +147,8 @@ def test_retired_selectors_reject_and_entry_group_selects_current_genes():
         with pytest.raises(KeyError, match="missing"):
             require_existing_config_path(config, selector)
         assert resolve_bound_selectors(config, [selector], bounds) == {}
-    canonical = "bot.long.strategy.trailing_martingale.entry.ema_span_0"
-    assert require_existing_config_path(config, canonical)[-2:] == ("entry", "ema_span_0")
+    canonical = "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes"
+    assert require_existing_config_path(config, canonical)[-2:] == ("entry", "ema_span_0_minutes")
     assert set(resolve_bound_selectors(config, [canonical], bounds)) == {"long_ema_span_0"}
     selected = resolve_bound_selectors(config, ["long.strategy.entry"], bounds)
     assert {"long_ema_span_0", "long_ema_span_1"} <= set(selected)
@@ -186,7 +195,7 @@ def test_retired_cli_paths_reject_and_canonical_entry_flags_apply(side, suffix, 
         flag = "-" + create_acronym(old, set())
     with pytest.raises(SystemExit):
         parser.parse_args([flag, "123.75"])
-    canonical = old.replace("trailing_martingale.ema_span_", "trailing_martingale.entry.ema_span_")
+    canonical = old.replace("trailing_martingale.ema_span_", "trailing_martingale.entry.ema_span_") + "_minutes"
     if suffix == "_short":
         canonical_flag = next(option for action in parser._actions if action.dest == canonical
                               for option in action.option_strings
@@ -196,7 +205,7 @@ def test_retired_cli_paths_reject_and_canonical_entry_flags_apply(side, suffix, 
     args = parser.parse_args([canonical_flag, "123.75"])
     update_config_with_args(config, args, verbose=False, allowed_keys=allowed)
     prepared = prepare_config(config, verbose=False)
-    assert prepared["bot"][side]["strategy"][KIND]["entry"][span] == 123.75
+    assert prepared["bot"][side]["strategy"][KIND]["entry"][f"{span}_minutes"] == 123.75
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -251,7 +260,7 @@ def test_canonical_wildcard_leaf_selector_preserves_active_strategy_genes(kind):
         return
     bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
     entry = "entry." if kind == KIND else ""
-    selected = resolve_bound_selectors(config, [f"*.strategy.{kind}.{entry}ema_span_0"], bounds)
+    selected = resolve_bound_selectors(config, [f"*.strategy.{kind}.{entry}ema_span_0_minutes"], bounds)
     assert set(selected) == {"long_ema_span_0", "short_ema_span_0"}
     for path in selected.values():
         assert ("entry" in path) == (kind == KIND)

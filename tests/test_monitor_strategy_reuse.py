@@ -29,7 +29,9 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     overrides = {('long', symbols[0]): .017, ('short', symbols[1]): .028}
     def params(side, symbol):
         calls[side, symbol] += 1
-        result = deepcopy(defaults[side])
+        from config.strategy_paths import lower_runtime_strategy_side
+
+        result = lower_runtime_strategy_side("trailing_martingale", defaults[side])
         result['entry']['initial_qty_pct'] = overrides.get((side, symbol), .011)
         return result
     def bp(side, key, symbol=None):

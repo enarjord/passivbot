@@ -806,7 +806,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
         drawdown_ratio_threshold=0.06,
         drawdown_ratio_ema_span_minutes=1.0,
         panic_close_order_type="market",
-        cooldown_minutes_after_red=cooldown_minutes,
+        cooldown_after_red_minutes=cooldown_minutes,
     )
     config_path = tmp_path / "config.json"
     config_path.write_text(

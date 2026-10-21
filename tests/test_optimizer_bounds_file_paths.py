@@ -50,10 +50,10 @@ def test_moved_export_keeps_original_coin_file_and_inline_precedence(tmp_path, m
     original_dir, output_dir = tmp_path / "source", tmp_path / "output"
     original_dir.mkdir()
     output_dir.mkdir()
-    original_file = write_json(original_dir / "coin.json", strategy_patch(ema_span_0=171.5, ema_span_1=222.5))
-    decoy_file = write_json(output_dir / "coin.json", strategy_patch(ema_span_0=999.5, ema_span_1=999.5))
+    original_file = write_json(original_dir / "coin.json", strategy_patch(ema_span_0_minutes=171.5, ema_span_1_minutes=222.5))
+    decoy_file = write_json(output_dir / "coin.json", strategy_patch(ema_span_0_minutes=999.5, ema_span_1_minutes=999.5))
     config = source_config()
-    config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json", **strategy_patch(ema_span_0=345.5)}}
+    config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json", **strategy_patch(ema_span_0_minutes=345.5)}}
     source_path, output_path = original_dir / "source.json", output_dir / "search.json"
     if context == "metadata":
         config["live"]["base_config_path"] = str(source_path)
@@ -76,14 +76,14 @@ def test_moved_export_keeps_original_coin_file_and_inline_precedence(tmp_path, m
     monkeypatch.chdir(output_dir)
     reloaded = load_prepared_config(str(output_path), verbose=False)
     resolved = parse_overrides(reloaded, verbose=False)
-    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_0"] == 345.5
-    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_1"] == 222.5
+    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_0_minutes"] == 345.5
+    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_1_minutes"] == 222.5
     # The file remains authoritative: later edits still apply without changing
     # the exported inline patch or accidentally selecting the destination decoy.
-    write_json(original_file, strategy_patch(ema_span_0=444.5, ema_span_1=333.5))
+    write_json(original_file, strategy_patch(ema_span_0_minutes=444.5, ema_span_1_minutes=333.5))
     resolved = parse_overrides(load_prepared_config(str(output_path), verbose=False), verbose=False)
-    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_0"] == 345.5
-    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_1"] == 333.5
+    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_0_minutes"] == 345.5
+    assert entry(resolved["coin_overrides"]["BTC"])["ema_span_1_minutes"] == 333.5
     assert source_path.read_bytes() == original_bytes[source_path]
     assert decoy_file.read_bytes() == original_bytes[decoy_file]
 
@@ -93,13 +93,13 @@ def test_scenario_coin_files_keep_their_scope_and_fixed_scalar_pins(tmp_path, mo
     source_dir, destination = tmp_path / "source", tmp_path / "destination"
     source_dir.mkdir()
     destination.mkdir()
-    root_file = write_json(source_dir / "root.json", strategy_patch(ema_span_0=101.5))
-    scenario_file = write_json(source_dir / "scenario.json", strategy_patch(ema_span_0=202.5, ema_span_1=303.5))
-    write_json(destination / "root.json", strategy_patch(ema_span_0=901.5))
-    write_json(destination / "scenario.json", strategy_patch(ema_span_0=902.5))
+    root_file = write_json(source_dir / "root.json", strategy_patch(ema_span_0_minutes=101.5))
+    scenario_file = write_json(source_dir / "scenario.json", strategy_patch(ema_span_0_minutes=202.5, ema_span_1_minutes=303.5))
+    write_json(destination / "root.json", strategy_patch(ema_span_0_minutes=901.5))
+    write_json(destination / "scenario.json", strategy_patch(ema_span_0_minutes=902.5))
     config = source_config()
     config["coin_overrides"] = {"BTC": {"override_config_path": root_file.name}}
-    patch = {"override_config_path": scenario_file.name, **strategy_patch(ema_span_0=404.5)}
+    patch = {"override_config_path": scenario_file.name, **strategy_patch(ema_span_0_minutes=404.5)}
     selector = "coin_overrides.BTC" if atomic_coin else "coin_overrides"
     overrides = {selector: patch if atomic_coin else {"BTC": patch}}
     config["backtest"]["scenarios"] = [{"label": "coin-file", "overrides": overrides}]
@@ -118,12 +118,12 @@ def test_scenario_coin_files_keep_their_scope_and_fixed_scalar_pins(tmp_path, mo
     output_path = write_json(destination / "search.json", exported)
     monkeypatch.chdir(destination)
     effective = load_prepared_config(str(output_path), verbose=False)
-    assert entry(parse_overrides(effective, verbose=False)["coin_overrides"]["BTC"])["ema_span_0"] == 101.5
+    assert entry(parse_overrides(effective, verbose=False)["coin_overrides"]["BTC"])["ema_span_0_minutes"] == 101.5
     _apply_config_overrides(effective, effective["optimize"]["fixed_runtime_overrides"])
-    assert entry(effective)["ema_span_1"] == 505.5
+    assert entry(effective)["ema_span_1_minutes"] == 505.5
     _apply_config_overrides(effective, normalize_scenario_overrides(effective["backtest"]["scenarios"][0]["overrides"]))
     resolved = parse_overrides(effective, verbose=False)
-    assert entry(resolved["coin_overrides"]["BTC"]) == {"ema_span_0": 404.5, "ema_span_1": 303.5}
+    assert entry(resolved["coin_overrides"]["BTC"]) == {"ema_span_0_minutes": 404.5, "ema_span_1_minutes": 303.5}
     assert source_path.read_bytes() == source_bytes
 
 
@@ -175,7 +175,7 @@ def test_missing_override_file_fails_before_creating_output(tmp_path):
 
 
 def test_file_references_do_not_weaken_overwrite_guards(tmp_path):
-    write_json(tmp_path / "coin.json", strategy_patch(ema_span_0=171.5))
+    write_json(tmp_path / "coin.json", strategy_patch(ema_span_0_minutes=171.5))
     config = source_config()
     config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
     source_path = write_json(tmp_path / "source.json", config)

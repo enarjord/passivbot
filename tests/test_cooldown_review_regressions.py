@@ -224,7 +224,7 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
     if bound_span is not None:
-        bounds["forager"]["unilateralness_ema_span_1m"] = [60.0, bound_span]
+        bounds["forager"]["unilateralness_ema_span_minutes"] = [60.0, bound_span]
     cfg = prepare_config(cfg, verbose=False)
     import math
     assert compute_backtest_warmup_minutes(cfg) == math.ceil(20 * (bound_span or 60.0)) + 1
@@ -256,7 +256,7 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     cfg['bot']['global']['warmup']['max_minutes'] = 1
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"]["long"]
-    bounds["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
+    bounds["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     if consumer == "forager":
         bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     else:
@@ -424,7 +424,7 @@ def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
         weights_minutes={"exposure_ratio": [0, 10], "adverse_directionality": [0, 20]},
     )
     bounds[side]["forager"].update(
-        unilateralness_ema_span_1m=[10.5, 60.5],
+        unilateralness_ema_span_minutes=[10.5, 60.5],
     )
     bounds[side]["forager"]["score_weights"]["unilateralness"] = [0, 1]
     expected = flatten_optimize_bounds(bounds, strategy_kind="trailing_martingale")
@@ -597,7 +597,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
         max_duration_minutes=ceil_bounds, weights_minutes={"adverse_directionality": [0, 20]},
     )
     cfg['bot']['global']['warmup']['max_minutes'] = 3
-    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
+    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_minutes"] = [1.0, 60.0]
     cfg = prepare_config(cfg, verbose=False)
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]})
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}

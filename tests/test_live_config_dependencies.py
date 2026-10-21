@@ -37,19 +37,19 @@ config = get_template_config()
 for side in ("long", "short"):
     bot = config["bot"][side]
     bot["entry_cooldown"]["base_duration_minutes"] = 7.5
-    bot["strategy"]["trailing_martingale"]["entry"].update(ema_span_0=123.75, ema_span_1=567.25)
+    bot["strategy"]["trailing_martingale"]["entry"].update(ema_span_0_minutes=123.75, ema_span_1_minutes=567.25)
     if legacy:
         bot["risk"]["entry_cooldown_minutes"] = bot.pop("entry_cooldown")["base_duration_minutes"]
         strategy = bot["strategy"]["trailing_martingale"]
-        for key in ("ema_span_0", "ema_span_1"):
-            strategy[key] = strategy["entry"].pop(key)
+        for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
+            strategy[key.removesuffix("_minutes")] = strategy["entry"].pop(key)
 config["backtest"]["scenarios"] = []
 if with_scenarios:
     config["backtest"]["scenarios"] = [{
         "label": "canonical",
         "overrides": {"bot": {"long": {
             "entry_cooldown": {"base_duration_minutes": 3.5},
-            "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 234.5}}},
+            "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 234.5}}},
         }}},
     }]
 
@@ -69,14 +69,14 @@ if with_scenarios:
     assert canonical["backtest"]["scenarios"][0]["overrides"] == {
         "bot": {"long": {
             "entry_cooldown": {"base_duration_minutes": 3.5},
-            "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 234.5}}},
+            "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 234.5}}},
         }},
     }
 live = prepare_config(config, live_only=True, verbose=False, target="live")
 live = compile_runtime_config(parse_overrides(live, verbose=False), runtime="live")
 for side in ("long", "short"):
     assert live["bot"][side]["risk_entry_cooldown_minutes"] == 7.5
-    assert live["bot"][side]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == 123.75
+    assert live["bot"][side]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == 123.75
 assert not any(name in sys.modules for name in blocked)
 """
 

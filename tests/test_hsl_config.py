@@ -63,7 +63,7 @@ def test_explicit_hsl_config_roundtrips_without_legacy_fields(mode):
     assert "hsl_engine" not in result["live"]
     block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
     assert "restart_after_red_policy" not in block
-    assert block["cooldown_minutes_after_red"] >= 0.0
+    assert block["cooldown_after_red_minutes"] >= 0.0
     assert not (
         {"tier_ratios", "orange_tier_mode", "no_restart_drawdown_threshold"}
         & block.keys()
@@ -103,7 +103,7 @@ def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode)
     result = prepared(cfg)
     block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
     assert block["enabled"]
-    assert block["cooldown_minutes_after_red"] >= 0.0
+    assert block["cooldown_after_red_minutes"] >= 0.0
     assert "restart_after_red_policy" not in block
     with pytest.raises(ValueError, match="removed|unknown"):
         update_config_with_args(cfg, Namespace(**{f"{path}.restart_after_red_policy": "never"}), verbose=False)
@@ -340,7 +340,7 @@ def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
     [
         ("drawdown_ratio_threshold", [0, 0.2]),
         ("drawdown_ratio_ema_span_minutes", [0.5, 2]),
-        ("cooldown_minutes_after_red", [-1, 2]),
+        ("cooldown_after_red_minutes", [-1, 2]),
     ],
 )
 @pytest.mark.parametrize("mode", ["coin", "portfolio"])
@@ -783,7 +783,7 @@ def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mod
     update_config_with_args(result, Namespace(**{f"{path}.enabled": True}))
     result = prepared(result)
     block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
-    assert block["enabled"] and block["cooldown_minutes_after_red"] >= 0.0
+    assert block["enabled"] and block["cooldown_after_red_minutes"] >= 0.0
 
 
 @pytest.mark.parametrize("enabled_before,enabled_after", [(False, True), (True, False)])

@@ -700,6 +700,11 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     # validation. Ordinary loading never resolves their released flat aliases.
     canonicalize_coin_patches(result)
     preserve_forced_selection_overrides(result, record=record)
+    bounds = result.get("optimize", {}).get("bounds", {})
+    if "hsl" in bounds:
+        old = bounds.pop("hsl")
+        put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
+        record("optimize.bounds.hsl", old, {"global.hsl": old}, "portfolio HSL bound authority")
     rewrite_released_public_names(result, record=record)
     sync_canonical_strategy_config(result)
     from config.limits import normalize_limit_entries
@@ -724,9 +729,6 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     bounds = result.get("optimize", {}).get("bounds", {})
     if "live" in bounds and "lookback_ema_span_minutes" in bounds["live"]:
         raise ValueError("optimize.bounds.live.lookback_ema_span_minutes requires explicit independent memory bounds")
-    if "hsl" in bounds:
-        old = bounds.pop("hsl")
-        put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
     from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
     kind = result.get("bot", {}).get("global", {}).get("strategy_kind", "trailing_martingale")
     for side in ("long", "short"):
