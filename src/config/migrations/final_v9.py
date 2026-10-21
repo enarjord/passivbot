@@ -461,7 +461,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     """Translate public fields without guessing independent optimizer ranges."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
-    from .shared_policy import (COIN_SOURCE_FIELDS, is_shared_approved_source,
+    from .shared_policy import (COIN_SOURCE_FIELDS, is_shared_approved_source, normalize_released_coin_source,
                                 minimum_cost_policy_targets, move_shared_policy, preserve_forced_normal_selection,
                                 preserve_forced_selection_overrides)
     from .operational_live import move_operational_live
@@ -524,6 +524,13 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         converted = {}
         for key, value in values.items():
             authored_value = deepcopy(value)
+            source_parts = key.split(".")
+            if (len(source_parts) in {2, 3} and source_parts[0] == "live"
+                    and source_parts[1] in COIN_SOURCE_FIELDS
+                    and (len(source_parts) == 2 or source_parts[2] in {"long", "short"})):
+                value = normalize_released_coin_source(value, field=source_parts[1],
+                    path=f"{path}.{key}", record=record, base_config_path=base_config_path,
+                    side=source_parts[2] if len(source_parts) == 3 else None)
             reject_retired_gpu_selector(key, value, context=path)
             if key == "backtest.max_warmup_minutes":
                 record(f"{path}.{key}", value, None, _IGNORED_BACKTEST_WARMUP_REASON)
