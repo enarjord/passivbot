@@ -190,3 +190,104 @@ def test_released_encoded_directional_null_reports_final_empty_selection(field):
     assert result == []
     assert events[-1][0] == f'live.{field}.long'
     assert events[-1][2] == []
+
+
+@pytest.mark.parametrize('kind', ['trailing_martingale', 'ema_anchor'])
+@pytest.mark.parametrize('value', ['BTC', 'BTC,ETH'])
+@pytest.mark.parametrize('owner', ['scenario', 'fixed'])
+def test_released_nonfile_scalar_approval_becomes_shared_and_future_shared_edits_apply(kind, value, owner):
+    raw = released(kind)
+    raw['live']['approved_coins'] = value
+    before = deepcopy(raw)
+    result = migrate(raw, memory_span_minutes=123.5)
+    assert result.config['bot']['global']['universe']['approved_coins'] == value.split(',')
+    assert all(result.config['bot'][side]['universe']['approved_coins'] is None for side in ('long','short'))
+    effective = prepare_config(result.config, verbose=False)
+    patch = {'bot.global.universe.approved_coins':['SOL']}
+    if owner == 'scenario':
+        apply_scenario_overrides(effective, patch)
+    else:
+        _apply_config_overrides(effective, patch)
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['SOL'],'short':['SOL']}
+    assert raw == before
+
+
+@pytest.mark.parametrize('path', ['./missing', 'missing.json', '/not-present/coins.txt'])
+def test_released_missing_explicit_file_source_stays_directional(path):
+    from config.migrations.v9 import migrate_v8_to_v9
+    raw = released('trailing_martingale')
+    raw['live']['approved_coins'] = path
+    result = migrate_v8_to_v9(raw, memory_span_minutes=123.5).config
+    assert result['bot']['global']['universe']['approved_coins'] == []
+    assert all(result['bot'][side]['universe']['approved_coins'] == path for side in ('long','short'))
+
+
+@pytest.mark.parametrize('owner', ['scenario', 'fixed'])
+@pytest.mark.parametrize('value', ['SOL', 'SOL,BNB'])
+def test_released_whole_scalar_override_resets_directional_pins_to_shared(owner, value):
+    raw = released('trailing_martingale')
+    raw['live']['approved_coins'] = {'long':['BTC'], 'short':['ETH']}
+    override = {'live.approved_coins':value}
+    if owner == 'scenario':
+        raw['backtest']['scenarios'] = [{'label':'scalar','overrides':override}]
+    else:
+        raw['optimize']['fixed_runtime_overrides'] = override
+    result = migrate(raw, memory_span_minutes=123.5).config
+    effective = prepare_config(result, verbose=False)
+    if owner == 'scenario':
+        apply_scenario_overrides(effective, effective['backtest']['scenarios'][0]['overrides'])
+    else:
+        _apply_config_overrides(effective, effective['optimize']['fixed_runtime_overrides'])
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':value.split(','),'short':value.split(',')}
+    _apply_config_overrides(effective, {'bot.global.universe.approved_coins':['XRP']})
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['XRP'],'short':['XRP']}
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_released_whitespace_file_binding_uses_resolver_and_stays_directional(tmp_path, monkeypatch, wrapped):
+    monkeypatch.chdir(tmp_path)
+    selected = tmp_path/'coinlist'
+    selected.write_text('["BTC"]')
+    value = [' coinlist '] if wrapped else ' coinlist '
+    raw = released('trailing_martingale')
+    raw['live']['approved_coins'] = value
+    before = deepcopy(raw)
+    effective = prepare_config(migrate(raw, memory_span_minutes=123.5).config, verbose=False)
+    restored = universe_source_view(effective)
+    assert restored['bot']['global']['universe']['approved_coins'] == []
+    for side in ('long','short'):
+        assert restored['bot'][side]['universe']['approved_coins'] == ([str(selected)] if wrapped else str(selected))
+    _apply_config_overrides(effective, {'bot.global.universe.approved_coins':['ETH']})
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['BTC'],'short':['BTC']}
+    selected.write_text('["SOL"]')
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['SOL'],'short':['SOL']}
+    assert raw == before
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+@pytest.mark.parametrize('fallback', ['cwd', 'repo'])
+def test_released_fallback_coin_file_binding_preserves_reloadable_symlink(tmp_path, monkeypatch, wrapped, fallback):
+    import utils
+    repo, cwd, configs = (tmp_path/name for name in ('repo','cwd','configs'))
+    for directory in (repo, cwd, configs):
+        directory.mkdir()
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    monkeypatch.chdir(cwd)
+    selected = (cwd if fallback == 'cwd' else repo)/'coinlist'
+    first, second = selected.with_name('first.json'), selected.with_name('second.json')
+    first.write_text('["BTC"]')
+    second.write_text('["ETH"]')
+    selected.symlink_to(first.name)
+    # The old helper's default physical-path result remains unchanged.
+    assert utils._resolve_coins_file_path('coinlist') == first.resolve()
+    raw = released('trailing_martingale')
+    raw['live']['approved_coins'] = ['coinlist'] if wrapped else 'coinlist'
+    before = deepcopy(raw)
+    exported = migrate(raw, base_config_path=str(configs/'input.json'), memory_span_minutes=123.5).config
+    for side in ('long','short'):
+        assert exported['bot'][side]['universe']['approved_coins'] == ([str(selected)] if wrapped else str(selected))
+    selected.unlink()
+    selected.symlink_to(second.name)
+    effective = prepare_config(exported, base_config_path=str(tmp_path/'moved.json'), verbose=False)
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}
+    assert raw == before

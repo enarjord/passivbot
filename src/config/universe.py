@@ -128,7 +128,7 @@ def resolve_universe_source_path(source, *, base_config_path="", discover_ambigu
     if path.is_absolute() and path.is_file():
         return path
     if base is None or not file_like:
-        return _resolve_coins_file_path(candidate)
+        return _resolve_coins_file_path(candidate, preserve_selected_path=True)
     return None
 
 
@@ -217,7 +217,7 @@ def resolve_universe_sources(config, field, *, allow_partial=False):
     an unreadable source is never represented as a successful empty selection.
     """
     import hjson
-    from utils import normalize_coins_source, read_external_coins_lists
+    from utils import normalize_coins_source, read_external_coins_lists, _parse_plain_coins_list
     sources = raw_side_universe_sources(config, field)
     shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
     base = config.get("live", {}).get("base_config_path", "")
@@ -242,11 +242,25 @@ def resolve_universe_sources(config, field, *, allow_partial=False):
             selected = resolve_universe_source_path(candidate, base_config_path=base, allow_all=field == "approved_coins")
             if selected is not None:
                 if common:
+                    message = "shared approved_coins file must contain one coin list; use bot.long.universe.approved_coins and bot.short.universe.approved_coins for directional files"
                     with selected.open() as stream:
-                        content = hjson.load(stream)
-                    if not (isinstance(content, list) and all(isinstance(x, str) for x in content)):
-                        raise ValueError("shared approved_coins file must contain one coin list; use bot.long.universe.approved_coins and bot.short.universe.approved_coins for directional files")
-                    source = content
+                        text = stream.read()
+                    try:
+                        content = hjson.loads(text)
+                    except ValueError as error:
+                        if text.lstrip().startswith(("{", "[")):
+                            raise ValueError(message) from error
+                        content = None  # The same literal text fallback as side-owned lists.
+                    if isinstance(content, dict):
+                        raise ValueError(message)  # Equal directional arrays remain an object.
+                    if isinstance(content, list):
+                        if not all(isinstance(x, str) for x in content):
+                            raise ValueError(message)
+                        source = content
+                    else:
+                        if "{" in text or "}" in text:
+                            raise ValueError(message)  # Never demote a malformed/encoded object to common text.
+                        source = _parse_plain_coins_list(text)
                 else:
                     source = read_external_coins_lists(str(selected))
             elif file_like:

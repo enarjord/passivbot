@@ -504,3 +504,36 @@ def test_literal_source_owner_does_not_change_legacy_jsonish_helper_default():
     literal = normalize_coins_source(encoded, resolve_files=False, parse_jsonish=False)
     assert literal['long'] == literal['short']
     assert 'BTC' not in literal['long']
+
+
+@pytest.mark.parametrize('content', ['BTC, ETH', 'BTC\nETH\n', '"BTC"\n"ETH"\n'])
+def test_shared_plain_text_file_uses_existing_token_format_and_reads_once(tmp_path, monkeypatch, content):
+    selected = tmp_path/'coins.txt'
+    selected.write_text(content)
+    config = prepare_config(source(str(selected)), live_only=True, verbose=False)
+    opened, original = [], Path.open
+    def counted(path, *args, **kwargs):
+        if path == selected:
+            opened.append(path)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'open', counted)
+    assert resolve_universe_sources(config, 'approved_coins')[0] == {'long':['BTC','ETH'],'short':['BTC','ETH']}
+    assert opened == [selected]
+    selected.write_text('SOL\n')
+    assert resolve_universe_sources(config, 'approved_coins')[0] == {'long':['SOL'],'short':['SOL']}
+
+
+@pytest.mark.parametrize('coins', [['BTC'], []])
+def test_shared_file_rejects_equal_directional_object_too(tmp_path, coins):
+    selected = tmp_path/'coins.txt'
+    selected.write_text(json.dumps({'long':coins,'short':coins}))
+    with pytest.raises(ValueError, match='one coin list'):
+        prepare_config(source(str(selected)), verbose=False)
+
+
+@pytest.mark.parametrize('content', ['{long BTC', '# comment\n{long: [BTC]'])
+def test_shared_file_never_demotes_malformed_mapping_to_plain_coins(tmp_path, content):
+    selected = tmp_path/'coins.txt'
+    selected.write_text(content)
+    with pytest.raises(ValueError, match='one coin list'):
+        prepare_config(source(str(selected)), verbose=False)

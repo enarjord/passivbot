@@ -400,7 +400,8 @@ operational execution, exchange I/O and startup settings.
 ### Universe and selection
 
 - **bot.global.universe.approved_coins**: A shared coin list, `"all"`, or a reloadable file
-  containing one common list. Directional objects in a shared file are rejected; use explicit
+  containing one common list (JSON/HJSON or comma/newline-separated text).
+  Directional objects in a shared file are rejected; use explicit
   side sources for existing directional-list files. An unused shared source is not read by entry
   eligibility when both sides have explicit replacements.
 - **bot.<side>.universe.approved_coins**: Omission or `null` inherits the shared source. An

@@ -80,21 +80,20 @@ def normalize_released_coin_source(value, *, field, path, record, base_config_pa
 
 def is_shared_approved_source(value, *, base_config_path=""):
     """Preserve released file bindings even in a one-item list wrapper."""
-    if isinstance(value, str):
-        return value.strip().lower() == "all"
-    if not isinstance(value, list):
+    from config.universe import resolve_universe_source_path
+
+    if not isinstance(value, (str, list)):
         return False
-    if len(value) == 1 and isinstance(value[0], str):
-        name = value[0]
+    if isinstance(value, str) or len(value) == 1 and isinstance(value[0], str):
+        name = value if isinstance(value, str) else value[0]
         if name.strip().lower() == "all":
             return True
+        if resolve_universe_source_path(value, base_config_path=base_config_path,
+                discover_ambiguous=True) is not None:
+            return False
+        name = name.strip()
         path = Path(name).expanduser()
         if name.startswith(("./", "../", "/", "~")) or path.suffix.lower() in {".json", ".hjson", ".txt"}:
-            return False
-        roots = [Path.cwd(), Path(__file__).resolve().parents[3]]
-        if base_config_path:
-            roots.insert(0, Path(base_config_path).absolute().parent.resolve())
-        if any((base / path).is_file() for base in roots):
             return False
     return True
 
