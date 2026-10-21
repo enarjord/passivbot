@@ -478,7 +478,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.candles.candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
 - **live.candles.inactive_coin_candle_ttl_minutes**: How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep inactive symbols fresher at the cost of more network/disk churn.
 - **live.modes.long**, **live.modes.short**: Force all coins long/short to a given mode, or use `null` (default) to leave the mode unforced. A per-coin `null` clears the root forced mode; omission inherits it. Empty strings are rejected. CLI `--live.modes.long null` clears the setting explicitly.
-  - Choices: `[m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
+  - Modes: `normal` (`n`), `manual` (`m`), `graceful_stop` (`gs`, `graceful-stop`), `panic` (`p`), and `tp_only` (`t`, `tp`, `tp-only`). Mode inputs ignore case and surrounding whitespace; loader and editor validation accept the same spellings.
 - **live.account.leverage**: Leverage set on the exchange. Default is `10`.
 - **live.account.margin_mode_preference**: Preferred live margin mode when a symbol supports both cross and isolated.
   - `auto` / `auto_cross`: prefer cross when both modes are available.

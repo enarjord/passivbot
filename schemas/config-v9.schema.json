@@ -4503,8 +4503,9 @@
                     "null"
                   ],
                   "default": null,
-                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode.",
-                  "enum": [
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
                     "normal",
                     "manual",
                     "graceful_stop",
@@ -4520,8 +4521,9 @@
                     "null"
                   ],
                   "default": null,
-                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode.",
-                  "enum": [
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
                     "normal",
                     "manual",
                     "graceful_stop",
@@ -9939,8 +9941,9 @@
                     "string",
                     "null"
                   ],
-                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode.",
-                  "enum": [
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
                     "normal",
                     "manual",
                     "graceful_stop",
@@ -9955,8 +9958,9 @@
                     "string",
                     "null"
                   ],
-                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode.",
-                  "enum": [
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
                     "normal",
                     "manual",
                     "graceful_stop",
@@ -12225,8 +12229,9 @@
                     "string",
                     "null"
                   ],
-                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode.",
-                  "enum": [
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
                     "normal",
                     "manual",
                     "graceful_stop",
@@ -12241,8 +12246,9 @@
                     "string",
                     "null"
                   ],
-                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode.",
-                  "enum": [
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
                     "normal",
                     "manual",
                     "graceful_stop",

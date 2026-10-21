@@ -77,9 +77,9 @@ def _context(
         "coin_context_override_descriptions": [],
         "loss_gate_max_drawdown_ratio": loss_gate_max_drawdown_ratio,
         "position_exposure_enforcer_enabled": enforcer_enabled,
-        "position_exposure_enforcer_threshold": enforcer_threshold,
+        "position_exposure_enforcer_threshold_ratio": enforcer_threshold,
         "total_exposure_enforcer_enabled": total_enforcer,
-        "total_exposure_enforcer_threshold": total_enforcer_threshold,
+        "total_exposure_enforcer_threshold_ratio": total_enforcer_threshold,
         "total_exposure_enforcer_policy": total_enforcer_policy,
         "unstuck_enabled": unstuck_enabled,
         "unstuck_close_fraction": unstuck_close_fraction,
@@ -366,9 +366,9 @@ def test_extract_side_context_includes_global_and_risk_paths():
     context = trailing_inspect._extract_side_context(config, "long")
     assert context["forced_mode"] == "panic"
     assert context["position_exposure_enforcer_enabled"] is True
-    assert context["position_exposure_enforcer_threshold"] == pytest.approx(0.8)
+    assert context["position_exposure_enforcer_threshold_ratio"] == pytest.approx(0.8)
     assert context["total_exposure_enforcer_enabled"] is True
-    assert context["total_exposure_enforcer_threshold"] == pytest.approx(0.9)
+    assert context["total_exposure_enforcer_threshold_ratio"] == pytest.approx(0.9)
     assert context["total_exposure_enforcer_policy"] == "reduce_portfolio"
     assert context["unstuck_enabled"] is True
     assert context["unstuck_close_fraction"] == pytest.approx(0.1)

@@ -3,6 +3,8 @@
 from argparse import ArgumentParser
 from copy import deepcopy
 import json
+import re
+import sys
 
 import pytest
 
@@ -218,6 +220,81 @@ def test_generated_schema_models_null_and_numeric_auto_domains():
             set_path(source, path, value)
             assert list(validator.iter_errors(source)), (path, value)
         set_path(source, path, get_path(get_template_config(), path))
+
+
+def _mode_policy(value, layer):
+    source = get_template_config()
+    source["live"]["modes"]["long"] = "manual"
+    if layer == "root":
+        source["live"]["modes"]["long"] = value
+    elif layer == "coin":
+        source["coin_overrides"] = {"BTC": {"live": {"modes": {"long": value}}}}
+    elif layer == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = {"live.modes.long": value}
+    else:
+        source["backtest"]["scenarios"] = [
+            {"label": "mode", "overrides": {"live.modes.long": value}}
+        ]
+    return source
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, None), ("n", "normal"), ("normal", "normal"), ("m", "manual"),
+    ("manual", "manual"), ("gs", "graceful_stop"),
+    ("graceful_stop", "graceful_stop"), ("graceful-stop", "graceful_stop"),
+    ("p", "panic"), ("panic", "panic"), ("t", "tp_only"), ("tp", "tp_only"),
+    ("tp_only", "tp_only"), ("tp-only", "tp_only"),
+    (" \tGs\n", "graceful_stop"), ("\u001cTP\u0085", "tp_only"),
+    ("\u2003NoRmAl\u3000", "normal"),
+])
+@pytest.mark.parametrize("layer", ["root", "coin", "fixed", "scenario"])
+def test_mode_schema_loader_and_cli_share_supported_inputs(value, expected, layer):
+    import jsonschema
+
+    source = _mode_policy(value, layer)
+    original = deepcopy(source)
+    jsonschema.Draft202012Validator(generate_schema()).validate(source)
+    prepared = parse_overrides(prepare_config(source, verbose=False), verbose=False)
+    if layer == "coin":
+        assert prepared["coin_overrides"]["BTC"]["live"]["modes"]["long"] == expected
+    elif layer == "root":
+        assert prepared["live"]["modes"]["long"] == expected
+        parser = ArgumentParser()
+        add_arguments_recursively(parser, get_template_config())
+        args = parser.parse_args(["--live.modes.long", "null" if value is None else value])
+        updated = get_template_config()
+        update_config_with_args(updated, args)
+        assert updated["live"]["modes"]["long"] == expected
+    else:
+        report = explain_config(source, "live.modes.long", optimize=layer == "fixed",
+                                scenario="mode" if layer == "scenario" else None)
+        assert report["value"] == expected
+    assert source == original
+
+
+@pytest.mark.parametrize("value", ["", " \t", "take_profit_only", "graceful__stop", False, 0,
+                                   "\ufeffm", "ſ"])
+@pytest.mark.parametrize("layer", ["root", "coin", "fixed", "scenario"])
+def test_mode_schema_and_loader_reject_the_same_invalid_inputs(value, layer):
+    import jsonschema
+
+    source = _mode_policy(value, layer)
+    assert list(jsonschema.Draft202012Validator(generate_schema()).iter_errors(source))
+    with pytest.raises((ValueError, TypeError), match="mode"):
+        prepare_config(source, verbose=False)
+
+
+def test_mode_schema_pattern_preserves_python_strip_whitespace_domain():
+    from config.control_sentinels import forced_mode_input_pattern, optional_forced_mode
+
+    pattern = forced_mode_input_pattern()
+    whitespace = (chr(code) for code in range(sys.maxunicode + 1) if chr(code).isspace())
+    for char in whitespace:
+        value = f"{char}m{char}"
+        assert optional_forced_mode(value, path="live.modes.long") == "manual"
+        assert re.fullmatch(pattern, value)
+    for char in ("\u180e", "\u200b", "\ufeff"):
+        assert not re.fullmatch(pattern, f"{char}m{char}")
 
 
 def test_released_v8_sentinels_convert_at_every_layer_and_report(tmp_path):
