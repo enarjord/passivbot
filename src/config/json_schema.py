@@ -119,9 +119,12 @@ def _object_schema(tree, path, definitions):
     field = tree.get(None)
     result = field_schema(field) if field else {"type": "object"}
     children = {name: node for name, node in tree.items() if name is not None}
-    if (len(path) == 4 and path[:1] == ("bot",) and path[1] in {"long", "short"}
+    if (len(path) == 4 and path[:1] == ("bot",) and path[1] in {"global", "long", "short"}
             and path[2] == "universe" and path[3] in {"approved_coins", "ignored_coins"}):
-        return {**result, **_coin_source(sides=False)}
+        source_schema = _coin_source(sides=False)
+        if path[1] == "global":
+            source_schema["anyOf"] = source_schema["anyOf"][:-1]
+        return {**result, **source_schema}
     if path in {
                 ("backtest", "scenarios", "*", "coins"),
                 ("backtest", "scenarios", "*", "ignored_coins")}:

@@ -1,4 +1,5 @@
 import datetime
+from copy import deepcopy
 import pprint
 import json
 import re
@@ -77,7 +78,14 @@ def config_pretty_str(config: dict) -> str:
 
 def sort_dict_keys(d):
     if isinstance(d, list):
-        return [sort_dict_keys(e) for e in d]
+        values = [sort_dict_keys(e) for e in d]
+        if type(d) is list:
+            return values
+        # Preserve internal list-view provenance until the configuration owner
+        # explicitly exports its source policy or a fixed runtime snapshot.
+        result = deepcopy(d)
+        result[:] = values
+        return result
     if not isinstance(d, dict):
         return d
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}

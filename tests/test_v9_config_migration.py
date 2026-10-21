@@ -133,7 +133,11 @@ def test_conversion_preserves_reloadable_coin_sources_and_idempotence(tmp_path, 
     result = migrate(source, memory_span_minutes=123.5)
     for key, value in values.items():
         for side in ("long", "short"):
-            assert result.config["bot"][side]["universe"][key] == (value.get(side, []) if isinstance(value, dict) else value)
+            expected = (None if key == "approved_coins" and source_shape == "list"
+                        else value.get(side, []) if isinstance(value, dict) else value)
+            assert result.config["bot"][side]["universe"][key] == expected
+    if source_shape == "list":
+        assert result.config["bot"]["global"]["universe"]["approved_coins"] == values["approved_coins"]
     patch = result.config["backtest"]["scenarios"][0]["overrides"]
     for side in ("long", "short"):
         assert patch[f"bot.{side}.universe.approved_coins"] == str(approved)

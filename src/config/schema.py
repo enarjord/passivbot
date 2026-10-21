@@ -361,6 +361,7 @@ def _build_template_config():
                     "strategy_kind": "trailing_martingale",
                     "hedge_mode": False,
                     "universe": {
+                        "approved_coins": list(DEFAULT_APPROVED_COINS),
                         "minimum_coin_age_days": 60.0,
                     },
                     "execution": {
@@ -381,7 +382,7 @@ def _build_template_config():
                     "strategy": strategy_defaults["long"],
                     "universe": {
                         "filter_by_min_effective_cost": True,
-                        "approved_coins": list(DEFAULT_APPROVED_COINS),
+                        "approved_coins": None,
                         "ignored_coins": [],
                     },
                 },
@@ -390,7 +391,7 @@ def _build_template_config():
                     "strategy": strategy_defaults["short"],
                     "universe": {
                         "filter_by_min_effective_cost": True,
-                        "approved_coins": list(DEFAULT_APPROVED_COINS),
+                        "approved_coins": None,
                         "ignored_coins": [],
                     },
                 },

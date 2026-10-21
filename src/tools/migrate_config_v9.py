@@ -65,17 +65,21 @@ def _restore_authored_export_inputs(exported, authored):
     defaults = get_template_config()["backtest"]
     for key in ("start_date", "end_date"):
         exported["backtest"][key] = deepcopy(authored.get("backtest", {}).get(key, defaults[key]))
-    from config.universe import get_side_universe_sources, set_side_universe_sources
+    from config.universe import raw_side_universe_sources
     for key in ("approved_coins", "ignored_coins"):
-        sources = get_side_universe_sources(authored, key)
-        if sources is not None:
-            set_side_universe_sources(exported, key, sources)
+        sources = raw_side_universe_sources(authored, key)
+        for side, source in sources.items():
+            exported["bot"][side]["universe"][key] = deepcopy(source)
+
+    if "bot" in authored:
+        exported["bot"]["global"]["universe"]["approved_coins"] = deepcopy(authored.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", []))
 
     if "filter_by_min_effective_cost" in authored.get("backtest", {}):
         exported["backtest"]["filter_by_min_effective_cost"] = authored["backtest"]["filter_by_min_effective_cost"]
 
     preserved_paths = {("backtest", "start_date"), ("backtest", "end_date"),
                        ("backtest", "filter_by_min_effective_cost"),
+                       ("bot", "global", "universe", "approved_coins"),
                        *(("bot", side, "universe", key)
                          for side in ("long", "short") for key in ("approved_coins", "ignored_coins"))}
 
@@ -440,7 +444,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             )
     if payload.get("config_version") == V9_SCHEMA_VERSION:
         transformed = migrate_v8_to_v9(
-            payload, memory_span_minutes=memory_span_minutes,
+            payload, base_config_path=base_config_path, memory_span_minutes=memory_span_minutes,
             memory_span_choices=memory_span_choices,
             acknowledge_realized_loss_gate_memory_change=acknowledge_realized_loss_gate_memory_change,
             acknowledge_search_backend_change=acknowledge_search_backend_change,
@@ -552,7 +556,7 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
                     overrides = _materialized_coin_patch(overrides, effective)
                     scenario["overrides"] = overrides
         transformed = migrate_v8_to_v9(
-            authored, memory_span_minutes=span, memory_span_choices=memory_span_choices,
+            authored, base_config_path=base_config_path, memory_span_minutes=span, memory_span_choices=memory_span_choices,
             acknowledge_never_removal=acknowledge_never_removal,
             acknowledge_realized_loss_gate_memory_change=acknowledge_realized_loss_gate_memory_change,
             acknowledge_search_backend_change=acknowledge_search_backend_change,
@@ -564,6 +568,15 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         changes = [item for item in transformed.changes if item["path"] not in inferred_paths]
         transformed = MigrationResult(transformed.config, inferred_changes + file_changes + changes,
                                       transformed.warnings)
+    from config.universe import normalize_universe_source_bindings
+
+    def binding_change(path, old, new):
+        transformed.changes.append(dict(path=".".join(map(str, path)), old=old, new=new,
+            reason="anchored retained coin-list file binding before export"))
+
+    normalize_universe_source_bindings(transformed.config, base_config_path=base_config_path,
+                                       on_change=binding_change,
+                                       released_wrapped_files=payload.get("config_version") != V9_SCHEMA_VERSION)
     prepared = prepare_config(
         transformed.config, verbose=False, target="canonical", runtime=None,
         base_config_path=base_config_path,

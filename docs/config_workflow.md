@@ -74,7 +74,7 @@ The default profile mirrored by `configs/examples/default_trailing_martingale_lo
 - `bot.long.risk.total_wallet_exposure_limit = 1.5`
 - HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
 - HSL signal mode set to per-coin slots with `bot.global.hsl.scope = "coin"`
-- approved-coin universe seeded to the current 41-coin default list
+- approved-coin universe declared once as the current 41-coin shared starter list; sides inherit it
 - optimizer backend defaulting to `pymoo`
 
 ## When To Omit A Config Path

@@ -1199,6 +1199,9 @@ def apply_scenario_overrides(config, overrides, tracker=None):
 
     Mutates config, matching apply_scenario's existing configuration stage.
     """
+    from config.universe import restore_universe_sources, universe_sources_affected
+    if universe_sources_affected(overrides):
+        restore_universe_sources(config)
     if tracker is None:
         tracker = ConfigTransformTracker()
     if overrides:
@@ -1217,6 +1220,83 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     from config.schema import get_template_config
 
     normalize_hsl(config, get_template_config(), verbose=False)
+
+
+def _materialize_scenario_universe(
+    config, prepared_base, *, available_coins, exchanges, columns=None, replacement_paths=()
+):
+    """Keep unchanged prepared memberships; resolve only replacement sources."""
+    from config.universe import (
+        ResolvedCoinList,
+        bind_universe_source,
+        materialize_side_universe_sources,
+        raw_side_universe_sources,
+        resolve_universe_sources,
+    )
+
+    def replaced(path):
+        return any(
+            selected[:len(path)] == path or path[:len(selected)] == selected
+            for selected in replacement_paths
+        )
+
+    shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
+    base_shared = (
+        prepared_base.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
+    )
+    if shared != base_shared:
+        config["bot"]["global"]["universe"]["approved_coins"] = bind_universe_source(
+            shared,
+            field="approved_coins",
+            base_config_path=config.get("live", {}).get("base_config_path", ""),
+        )
+        shared = config["bot"]["global"]["universe"]["approved_coins"]
+    for field in ("approved_coins", "ignored_coins"):
+        sources = raw_side_universe_sources(config, field)
+        old_sources = raw_side_universe_sources(prepared_base, field)
+        base_values = require_side_universe_sources(prepared_base, field)
+        values, unresolved = {}, []
+        for side in ("long", "short"):
+            default = None if field == "approved_coins" else []
+            source = sources.get(side, default)
+            same = source == old_sources.get(side, default) and not replaced(
+                ("bot", side, "universe", field)
+            )
+            if field == "approved_coins" and source is None:
+                same = same and shared == base_shared and not replaced(
+                    ("bot", "global", "universe", "approved_coins")
+                )
+            previous = base_values.get(side)
+            if same and type(previous) is ResolvedCoinList:
+                values[side] = list(previous)
+            else:
+                config["bot"][side]["universe"][field] = bind_universe_source(
+                    source,
+                    field=field,
+                    base_config_path=config.get("live", {}).get("base_config_path", ""),
+                )
+                unresolved.append(side)
+        if unresolved:
+            resolved, _ = resolve_universe_sources(config, field, position_sides=unresolved)
+            values.update(resolved)
+        for side, members in values.items():
+            if field == "approved_coins" and members == ["all"]:
+                members = sorted(available_coins)
+            members = _reconcile_suite_identifiers_to_available(members, available_coins, exchanges)
+            if field == "approved_coins" and columns is not None:
+                members = [coin for coin in members if coin in columns]
+            values[side] = members
+        materialize_side_universe_sources(config, field, values)
+    approved = require_side_universe_sources(config, "approved_coins")
+    ignored = require_side_universe_sources(config, "ignored_coins")
+    materialize_side_universe_sources(
+        config,
+        "approved_coins",
+        {
+            side: [coin for coin in approved[side] if coin not in ignored[side]]
+            for side in ("long", "short")
+        },
+    )
 
 
 def apply_scenario(
@@ -1245,7 +1325,12 @@ def apply_scenario(
             seed_missing_groups=False,
         )
     backtest_section = cfg.setdefault("backtest", {})
+    _materialize_scenario_universe(
+        cfg, base_config, available_coins=available_coins,
+        exchanges=backtest_section.get("exchanges", []),
+    )
     validate_suite_side_coin_lists(cfg, backtest_section.get("exchanges", []))
+    prepared_base = deepcopy(cfg)
 
     new_start = scenario.start_date or backtest_section.get("start_date")
     if new_start != backtest_section.get("start_date"):
@@ -1324,7 +1409,8 @@ def apply_scenario(
             current = universe.get(field, [])
             if current != values:
                 tracker.update(["bot", side, "universe", field], deepcopy(current), list(values))
-            universe[field] = list(values)
+            if (field == "approved_coins" and scenario.coins is not None) or (field == "ignored_coins" and scenario.ignored_coins is not None):
+                universe[field] = list(values)
 
     resolved_sources = resolve_coin_sources(
         base_coin_sources or {},
@@ -1340,6 +1426,15 @@ def apply_scenario(
         backtest_section["coin_sources"] = resolved_sources
 
     apply_scenario_overrides(cfg, scenario.overrides, tracker)
+    replacement_paths = [tuple(path.split(".")) for path in scenario.overrides or ()]
+    for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
+        if value is not None:
+            replacement_paths.extend(("bot", side, "universe", field) for side in ("long", "short"))
+    _materialize_scenario_universe(
+        cfg, prepared_base, available_coins=available_coins,
+        exchanges=scenario_exchanges, columns=set(filtered_coins), replacement_paths=replacement_paths,
+    )
+    validate_suite_side_coin_lists(cfg, scenario_exchanges)
 
     if cfg["backtest"].get("organillo_csv") is not None:
         from organillo import freeze_config, period_coins
@@ -2127,9 +2222,6 @@ async def run_backtest_suite_async(
 ) -> SuiteSummary:
     base_exchanges = require_config_value(config, "backtest.exchanges")
 
-    base_coins = _flatten_coin_list(require_side_universe_sources(config, 'approved_coins'))
-    base_ignored = _flatten_coin_list(require_side_universe_sources(config, 'ignored_coins'))
-
     scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
@@ -2160,6 +2252,9 @@ async def run_backtest_suite_async(
     )
     validate_suite_side_coin_lists(config, exchanges_list)
 
+    base_coins = _flatten_coin_list(require_side_universe_sources(config, 'approved_coins'))
+    base_ignored = _flatten_coin_list(require_side_universe_sources(config, 'ignored_coins'))
+
     master_coins = _collect_union((s.coins for s in scenarios), base_coins)
     master_coins = _coalesce_master_coins(
         master_coins, suite_coin_sources, identity_exchanges
@@ -2174,22 +2269,22 @@ async def run_backtest_suite_async(
     base_config = deepcopy(config)
     base_config.setdefault("backtest", {})
     base_config["backtest"]["coin_sources"] = suite_coin_sources
-    if isinstance(require_side_universe_sources(base_config, 'approved_coins'), dict):
-        base_config['bot']["long"]['universe']['approved_coins'] = list(master_coins)
-        base_config['bot']["short"]['universe']['approved_coins'] = list(master_coins)
+    master_config = deepcopy(base_config)
+    if isinstance(require_side_universe_sources(master_config, 'approved_coins'), dict):
+        from config.universe import materialize_side_universe_sources
+        materialize_side_universe_sources(master_config, "approved_coins", {side: list(master_coins) for side in ("long", "short")})
     else:
-        set_side_universe_sources(base_config, 'approved_coins', list(master_coins))
-    if isinstance(require_side_universe_sources(base_config, 'ignored_coins'), dict):
-        base_config['bot']["long"]['universe']['ignored_coins'] = list(master_ignored)
-        base_config['bot']["short"]['universe']['ignored_coins'] = list(master_ignored)
+        set_side_universe_sources(master_config, 'approved_coins', list(master_coins))
+    if isinstance(require_side_universe_sources(master_config, 'ignored_coins'), dict):
+        materialize_side_universe_sources(master_config, "ignored_coins", {side: list(master_ignored) for side in ("long", "short")})
     else:
-        set_side_universe_sources(base_config, 'ignored_coins', list(master_ignored))
+        set_side_universe_sources(master_config, 'ignored_coins', list(master_ignored))
 
     candle_interval = int(
         base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
     )
     datasets = await prepare_master_datasets(
-        base_config,
+        master_config,
         exchanges_list,
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,

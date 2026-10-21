@@ -68,11 +68,16 @@ def _static_contract(config):
     Feature enablement, execution modes and coin overrides stay dataset-owned.
     Changing one requires another prepared dataset, never silently ignoring it.
     """
-    cleaned = clean_config(config)
+    from config.universe import anchored_universe_source_view, runtime_universe_snapshot
+    policy = {key: value for key, value in config.items()
+              if not isinstance(key, str) or not key.startswith("_")}
+    cleaned = clean_config(anchored_universe_source_view(policy))
     result = {key: cleaned[key] for key in ("bot", "live", "backtest", "coin_overrides") if key in cleaned}
     # Numeric exposure/position values are dynamic, but their side enablement
     # chooses the registered replay's directional/fused kernel topology.
     result["enabled_sides"] = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
+    available = sorted({coin for coins in config["backtest"]["coins"].values() for coin in coins})
+    result["prepared_universe"] = runtime_universe_snapshot(config, available_coins=available)
     result["backtest"]["coins"] = config["backtest"]["coins"]
     # The standalone simulation consumes the materialized scenario, not the
     # optimizer's saved suite recipe or its candidate-dependent derived patches.
@@ -134,8 +139,9 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                 return None
             return lambda current: _finite_projection_number(current) and current >= 0.0
         return _finite_projection_number
+    from config.universe import ResolvedCoinList
     kind = type(value)
-    if kind in (dict, list, tuple):
+    if kind in (dict, list, tuple, ResolvedCoinList):
         # Ignored metadata can contain cycles or arbitrarily deep containers.
         # It remains valid for the legacy cleaner; decline this optional guard.
         if len(path) > 32 or id(value) in ancestors:
@@ -151,6 +157,18 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
         return lambda current: (type(current) is dict and len(current) == len(children)
                                 and all(type(key) is str for key in current)
                                 and all(key in current and guard(current[key]) for key, guard in children))
+    if kind is ResolvedCoinList:
+        # Only the validated internal view is supported. Equal membership is
+        # insufficient: changing a source or inheritance must use full matching.
+        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors)
+                         for index, child in enumerate(value))
+        source_guard = _compile_projection_guard(value.source, (), (*path, "source"), ancestors)
+        shared_guard = _compile_projection_guard(value.shared_source, (), (*path, "shared_source"), ancestors)
+        if source_guard is None or shared_guard is None or any(guard is None for guard in children):
+            return None
+        return lambda current: (type(current) is ResolvedCoinList and len(current) == len(children)
+                                and source_guard(current.source) and shared_guard(current.shared_source)
+                                and all(guard(child) for guard, child in zip(children, current)))
     if kind in (list, tuple):
         children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors)
                          for index, child in enumerate(value))
@@ -244,7 +262,7 @@ class NativeCandidatePlanner:
         for binding in self.bindings:
             pair = (binding.scenario, binding.dataset.exchange)
             variants = self._variants.setdefault(pair, {})
-            config = json.loads(binding.dataset.config_json)
+            config = binding.dataset.policy_config()
             key = execution_key(config)
             if key in variants:
                 raise ValueError("scenario/exchange execution variants must be unique")

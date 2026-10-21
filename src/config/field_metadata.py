@@ -162,8 +162,12 @@ def _bot_metadata(path):
                     description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")
     elif local == "forager.always_include":
         data["description"] = "Persistent side selection within the eligible universe; operational modes and risk gates retain priority."
-    elif local in {"universe.approved_coins", "universe.ignored_coins"}:
-        data["description"] = "Side-owned coin identifiers or a reloadable local coin-list source."
+    elif local == "universe.approved_coins":
+        data["description"] = ("Shared approval list, all sentinel or reloadable common-list file; sparse config omission approves nothing, while the starter declares its list."
+                               if path[1] == "global" else
+                               "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.")
+    elif local == "universe.ignored_coins":
+        data["description"] = "Side-owned exclusions subtracted from effective approval; null or [] means none."
     elif name in {"memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes"}:
         data.update(unit="minutes", domain=FieldDomain(minimum=1.0, finite=True),
                     description="Floating-point EMA span; native f32 decay representability is validated at load time.")

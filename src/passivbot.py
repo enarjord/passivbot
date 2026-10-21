@@ -2026,9 +2026,8 @@ class Passivbot:
     def _max_configured_entry_cooldown_minutes(self) -> float:
         overrides = getattr(self, "coin_overrides", {}) or {}
         config = getattr(self, "config", {})
-        source = config.get("_coins_sources", {}).get(
-            "approved_coins", get_side_universe_sources(config, 'approved_coins')
-        )
+        from config.universe import universe_source_view
+        source = get_side_universe_sources(universe_source_view(config), 'approved_coins', {})
         horizons = []
         for pside in ("long", "short"):
             if not self.is_pside_enabled(pside):
@@ -19949,7 +19948,8 @@ class Passivbot:
             self._coin_list_identifier_symbols = identifier_symbol_cache
         list_identifier_symbol_cache = identifier_symbol_cache.setdefault(k_coins, {})
         result = {"added": {}, "removed": {}}
-        psides_equal = content["long"] == content["short"]
+        psides_equal = (set(content) == {"long", "short"}
+                        and content["long"] == content["short"])
         for pside in content:
             symbols_already = getattr(self, k_coins)[pside]
             if not psides_equal or symbols is None:
@@ -20088,16 +20088,17 @@ class Passivbot:
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
-                config_sources = self.config.get("_coins_sources", {})
-                if k in config_sources:
-                    raw_source = config_sources[k]
-                    source_by_list_kind[k] = "config_sources"
-                else:
-                    raw_source = require_side_universe_sources(self.config, k)
-                    source_by_list_kind[k] = "live_value"
-                parsed = normalize_coins_source(
-                    raw_source, allow_all=(k == "approved_coins")
+                from config.universe import resolve_universe_sources
+                parsed, unavailable = resolve_universe_sources(self.config, k, allow_partial=True)
+                source_by_list_kind[k] = (
+                    "config_sources" if k in self.config.get("_coins_sources", {}) else "live_value"
                 )
+                for pside, error in unavailable.items():
+                    self.approved_coins[pside] = set()
+                    logging.error(
+                        "[forager] coin source unavailable | pside=%s list=%s error_type=%s action=clear_approved_eligibility",
+                        pside, k, bounded_exception_type(error),
+                    )
                 if k == "approved_coins":
                     log_psides = {ps for ps in parsed if self.is_pside_enabled(ps)}
                 else:

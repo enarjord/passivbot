@@ -118,7 +118,7 @@ class NativeBacktestService:
                         self._subset_cache[key] = self._residency.prepare_coin_subset(candles, indices)
                     candles = self._subset_cache[key]
                 replay = SharedAccountReplay(
-                    config=json.loads(dataset.config_json), mss=json.loads(dataset.markets_json),
+                    config=dataset.execution_config(), mss=json.loads(dataset.markets_json),
                     hlcvs=candles, btc=btc, timestamps=timestamps, exchange=dataset.exchange,
                     needed_metrics=dataset.metrics, batch_size=self._batch_size,
                     max_dispatch_candidate_bars=self._dispatch_budget,

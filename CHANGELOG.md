@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add shared approval sources under `bot.global.universe.approved_coins`. Side omission/null inherits; explicit side sources replace the shared selection and empty lists approve nothing. File refresh, scenario/fixed overrides and reloadable exports preserve source binding and explicit pins; released-v8 conversion reports the final shared or directional ownership.
+
 - Configure minimum-effective-cost filtering independently under each side's `bot.<side>.universe`.
   Both flags default to true. A null backtest override inherits them independently; an explicit
   boolean still overrides both. Live, Rust backtests and supported GPU replay use the corresponding

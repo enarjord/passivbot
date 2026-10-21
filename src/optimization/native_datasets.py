@@ -24,7 +24,8 @@ from shared_arrays import SharedArrayManager
 
 def _worker_config(config):
     """Lower CPU-owned dependencies into ordinary backtest parameter inheritance."""
-    result = project_config(config, "backtest", record_step=False)
+    from config.universe import fixed_runtime_universe_view
+    result = project_config(fixed_runtime_universe_view(config), "backtest", record_step=False)
     for name in ("_coins_sources", "_raw", "_raw_effective", "_transform_log"):
         result.pop(name, None)
     if unstuck_ema_spans_coupled(config):
@@ -136,7 +137,7 @@ class NativeDatasetRegistry:
         for binding in bindings:
             variants = {}
             # Keep the original view's identity stable when it is usable.
-            original = json.loads(binding.dataset.config_json)
+            original = binding.dataset.policy_config()
             variants[execution_key(original)] = original
             for effective in configurations:
                 if contexts:
@@ -197,7 +198,7 @@ class NativeDatasetRegistry:
         if self._closed:
             raise RuntimeError("native dataset registry is closed")
         for binding in self.bindings:
-            runtime = _worker_config(json.loads(binding.dataset.config_json))
+            runtime = _worker_config(binding.dataset.execution_config())
             service.register_dataset(binding.dataset_id, binding.dataset.with_config(runtime))
 
     def close(self):

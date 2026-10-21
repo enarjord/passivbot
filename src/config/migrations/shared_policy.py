@@ -1,6 +1,7 @@
 """Explicit released-v8 ownership conversion for shared bot policy."""
 
 from copy import deepcopy
+from pathlib import Path
 
 
 LIVE_POLICY_PATHS = {
@@ -24,6 +25,78 @@ def minimum_cost_policy_targets(path):
 
 
 COIN_SOURCE_FIELDS = ("approved_coins", "ignored_coins")
+
+
+def normalize_released_coin_source(value, *, field, path, record, base_config_path="", side=None):
+    """Decode only released inline shorthand, retaining every external file binding.
+
+    Released normalization decoded the whole source, then each directional value.
+    Files won before either decode. Do not resolve their mutable contents here.
+    """
+    import hjson
+    from config.universe import resolve_universe_source_path
+
+    def decode_one(source, source_path):
+        if resolve_universe_source_path(source, base_config_path=base_config_path,
+                discover_ambiguous=True, allow_all=field == "approved_coins") is not None:
+            return source, True
+        text = (source if isinstance(source, str) else
+                ",".join(item.strip() for item in source if item.strip())
+                if isinstance(source, list) and source and all(isinstance(item, str) for item in source)
+                else "")
+        text = text.strip()
+        if not text or text[0] not in "[{" or text[-1] not in "]}":
+            return source, False
+        try:
+            decoded = hjson.loads(text)
+        except ValueError:
+            return source, False  # Optional released shorthand; strict source validation follows.
+        if decoded != source:
+            record(source_path, source, decoded, "decoded released-v8 inline coin-source shorthand")
+        return decoded, False
+
+    def directional(source, selected_side, source_path):
+        decoded, external = decode_one(source, source_path)
+        if not external and isinstance(decoded, dict) and set(decoded) <= {"long", "short"}:
+            selected = decoded.get(selected_side, [])
+            selected = [] if selected is None else selected
+            record(source_path, decoded, selected, "decoded released directional source for its position side")
+            return selected
+        if decoded is None:
+            record(source_path, None, [], "released null coin source selects no coins")
+            return []
+        return decoded
+
+    if side is not None:
+        return directional(value, side, path)
+    decoded, external = decode_one(value, path)
+    if external or decoded is None:
+        return decoded
+    if isinstance(decoded, dict) and set(decoded) <= {"long", "short"}:
+        return {selected: directional(child, selected, f"{path}.{selected}")
+                for selected, child in decoded.items()}
+    values = {selected: directional(decoded, selected, f"{path}.{selected}") for selected in ("long", "short")}
+    return values["long"] if values["long"] == values["short"] else values
+
+
+def is_shared_approved_source(value, *, base_config_path=""):
+    """Preserve released file bindings even in a one-item list wrapper."""
+    from config.universe import resolve_universe_source_path
+
+    if not isinstance(value, (str, list)):
+        return False
+    if isinstance(value, str) or len(value) == 1 and isinstance(value[0], str):
+        name = value if isinstance(value, str) else value[0]
+        if name.strip().lower() == "all":
+            return True
+        if resolve_universe_source_path(value, base_config_path=base_config_path,
+                discover_ambiguous=True) is not None:
+            return False
+        name = name.strip()
+        path = Path(name).expanduser()
+        if name.startswith(("./", "../", "/", "~")) or path.suffix.lower() in {".json", ".hjson", ".txt"}:
+            return False
+    return True
 
 
 def shared_policy_selector(path):
@@ -57,7 +130,7 @@ def forced_normal_coins(coin_overrides):
     return result
 
 
-def move_shared_policy(document, *, record):
+def move_shared_policy(document, *, record, base_config_path=""):
     """Move authored leaves without hydrating sparse coin/scenario documents."""
     live = document.get("live", {})
     if not isinstance(live, dict):
@@ -94,15 +167,23 @@ def move_shared_policy(document, *, record):
     for field in COIN_SOURCE_FIELDS:
         if field not in live:
             continue
-        value = live.pop(field)
-        if isinstance(value, dict):
-            if set(value) - {"long", "short"}:
-                raise ValueError(f"live.{field} must use only long/short source keys")
-            sources = value
+        value = normalize_released_coin_source(live.pop(field), field=field,
+            path=f"live.{field}", record=record, base_config_path=base_config_path)
+        if isinstance(value, dict) and set(value) - {"long", "short"}:
+            raise ValueError(f"live.{field} must use only long/short source keys")
+        shared = field == "approved_coins" and is_shared_approved_source(value, base_config_path=base_config_path)
+        if shared:
+            put("bot.global.universe.approved_coins", value, f"live.{field}")
+            for side in ("long", "short"):
+                put(f"bot.{side}.universe.approved_coins", None, f"live.{field}.{side}")
         else:
-            sources = {side: value for side in ("long", "short")}
-        for side, source in sources.items():
-            put(f"bot.{side}.universe.{field}", source, f"live.{field}.{side}")
+            sources = value if isinstance(value, dict) else {side: value for side in ("long", "short")}
+            for side in ("long", "short"):
+                source = sources.get(side, [])
+                put(f"bot.{side}.universe.{field}", [] if source is None else source, f"live.{field}.{side}")
+            if field == "approved_coins":
+                put("bot.global.universe.approved_coins", [], f"live.{field}")
+
 
 
 def preserve_forced_normal_selection(document, *, record):

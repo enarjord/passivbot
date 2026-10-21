@@ -273,8 +273,11 @@ class TestApplyScenarioBaseCoins:
         scenario = SuiteScenario("base", None, None, coins=["BTC"], ignored_coins=None)
         base_ignored = ["XRP"]
         master_ignored = ["XRP", "DOGE", "SHIB"]
+        base_config = deepcopy(self.BASE_CONFIG)
+        for pside in ("long", "short"):
+            base_config["bot"][pside]["universe"]["ignored_coins"] = list(base_ignored)
         cfg, _ = apply_scenario(
-            deepcopy(self.BASE_CONFIG),
+            base_config,
             scenario,
             master_coins=["BTC"],
             master_ignored=master_ignored,
@@ -285,6 +288,43 @@ class TestApplyScenarioBaseCoins:
         ignored_long = cfg['bot']["long"]['universe']['ignored_coins']
         assert "XRP" in ignored_long
         assert "DOGE" not in ignored_long
+
+    @pytest.mark.parametrize("ignored", [
+        {"long": [], "short": []},
+        {"long": ["DOGE"], "short": ["DOGE"]},
+    ])
+    def test_base_ignored_helper_does_not_replace_explicit_side_sources(self, ignored):
+        base_config = deepcopy(self.BASE_CONFIG)
+        for pside, coins in ignored.items():
+            base_config["bot"][pside]["universe"]["ignored_coins"] = list(coins)
+        cfg, _ = apply_scenario(
+            base_config,
+            SuiteScenario("base", None, None, coins=["BTC"], ignored_coins=None),
+            master_coins=["BTC"],
+            master_ignored=["XRP", "DOGE", "SHIB"],
+            available_exchanges=["binance"],
+            available_coins={"BTC", "XRP", "DOGE", "SHIB"},
+            base_ignored=["XRP"],
+        )
+        assert {pside: cfg["bot"][pside]["universe"]["ignored_coins"]
+                for pside in ("long", "short")} == ignored
+
+    def test_base_ignored_helper_cannot_repair_unsupported_asymmetric_sources(self):
+        base_config = deepcopy(self.BASE_CONFIG)
+        base_config["bot"]["long"]["universe"]["ignored_coins"] = ["XRP"]
+        base_config["bot"]["short"]["universe"]["ignored_coins"] = ["DOGE"]
+        before = deepcopy(base_config)
+        with pytest.raises(ValueError, match="asymmetric.*ignored_coins"):
+            apply_scenario(
+                base_config,
+                SuiteScenario("base", None, None, coins=["BTC"], ignored_coins=None),
+                master_coins=["BTC"],
+                master_ignored=["XRP", "DOGE", "SHIB"],
+                available_exchanges=["binance"],
+                available_coins={"BTC", "XRP", "DOGE", "SHIB"},
+                base_ignored=["XRP"],
+            )
+        assert base_config == before
 
 
 # ---------------------------------------------------------------------------

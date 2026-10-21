@@ -25,7 +25,32 @@ from optimization.shape import build_optimization_shape
 from warmup_utils import compute_per_coin_warmup_minutes
 
 
-def _apply_config_overrides(config: dict, overrides: dict) -> None:
+def _apply_config_overrides(
+    config: dict, overrides: dict, *, preserve_prepared_universe=False
+) -> None:
+    from config.universe import (
+        ResolvedCoinList,
+        raw_side_universe_sources,
+        restore_universe_sources,
+        universe_sources_affected,
+    )
+
+    affected = universe_sources_affected(overrides)
+    prepared = {}
+    if affected and preserve_prepared_universe:
+        shared = deepcopy(config["bot"]["global"]["universe"]["approved_coins"])
+        sources = {
+            field: raw_side_universe_sources(config, field)
+            for field in ("approved_coins", "ignored_coins")
+        }
+        prepared = {
+            (field, side): deepcopy(value)
+            for side in ("long", "short")
+            for field in ("approved_coins", "ignored_coins")
+            if type(value := config["bot"][side]["universe"].get(field)) is ResolvedCoinList
+        }
+    if affected:
+        restore_universe_sources(config)
     if not overrides:
         return
     from config.hsl import validate_override_paths
@@ -40,7 +65,49 @@ def _apply_config_overrides(config: dict, overrides: dict) -> None:
         for part in parts[:-1]:
             target = target[part]
         target[parts[-1]] = value
+    if prepared:
+        same_policy = shared == config["bot"]["global"]["universe"]["approved_coins"] and all(
+            sources[field] == raw_side_universe_sources(config, field) for field in sources
+        )
+        if not same_policy:
+            if any(config.get("backtest", {}).get("coins", {}).values()):
+                raise ValueError(
+                    "optimizer universe source policy changed; prepare its membership before candidate replay"
+                )
+        else:
+            for (field, side), value in prepared.items():
+                if (
+                    field == "approved_coins"
+                    and value.source is None
+                    and value.shared_source != shared
+                ):
+                    raise ValueError(
+                        "optimizer inherited universe source requires fresh preparation"
+                    )
+                config["bot"][side]["universe"][field] = value
     # Public fixed/scenario patches stay canonical until explicit runtime lowering.
+
+
+def apply_optimizer_universe_sources(config: dict) -> None:
+    """Install fixed source policy before acquiring an optimizer context's membership."""
+    from config.universe import (
+        normalize_universe_source_bindings,
+        raw_side_universe_sources,
+        set_side_universe_sources,
+        universe_sources_affected,
+    )
+
+    overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {})
+    if not universe_sources_affected(overrides):
+        return
+    effective = deepcopy(config)
+    _apply_config_overrides(effective, overrides)
+    config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
+        effective["bot"]["global"]["universe"]["approved_coins"]
+    )
+    for field in ("approved_coins", "ignored_coins"):
+        set_side_universe_sources(config, field, raw_side_universe_sources(effective, field))
+    normalize_universe_source_bindings(config)
 
 
 def _set_path(config: dict, path: Sequence[str], value) -> None:
@@ -161,7 +228,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         canonicalize_shared_bot_side(side_cfg, path_prefix=("bot", pside))
     config.pop(ANCHOR_PLAN_KEY, None)
     runtime_overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {})
-    _apply_config_overrides(config, runtime_overrides)
+    _apply_config_overrides(config, runtime_overrides, preserve_prepared_universe=True)
     fixed_value_paths = set(fixed_paths) | {
         require_existing_config_path(config, selector) for selector in runtime_overrides
     }
@@ -381,7 +448,10 @@ def build_optimizer_data_config(config: dict) -> dict:
         return deepcopy(config)
     data_config = deepcopy(config)
     # Dataset sizing must see runtime pins already applied, just as candidates do.
-    _apply_config_overrides(data_config, config.get("optimize", {}).get("fixed_runtime_overrides", {}))
+    _apply_config_overrides(
+        data_config, config.get("optimize", {}).get("fixed_runtime_overrides", {}),
+        preserve_prepared_universe=True,
+    )
     for pside in ("long", "short"):
         source = next(
             (

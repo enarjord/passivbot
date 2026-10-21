@@ -45,6 +45,37 @@ def source_config():
     return config
 
 
+@pytest.mark.parametrize("source_kind", ["scalar", "wrapper"])
+@pytest.mark.parametrize("lookup", ["repo", "cwd", "legacy"])
+def test_initial_fallback_selection_precedes_semantic_export_anchoring(tmp_path,monkeypatch,source_kind,lookup):
+    import utils
+    inputs,repo,cwd,output=(tmp_path/name for name in ("inputs","repo","cwd","output"))
+    for folder in (inputs,repo,cwd,output):
+        folder.mkdir()
+    monkeypatch.setattr(utils,"PROJECT_ROOT",repo)
+    monkeypatch.chdir(cwd)
+    name="coins.json"
+    selected=(repo if lookup != "cwd" else cwd)/name
+    if lookup == "legacy":
+        name="approved_coins_topmcap.json"
+        selected=repo/"configs"/"approved_coins.json"
+        selected.parent.mkdir()
+    write_json(selected,["BTC"])
+    source=source_config()
+    source["bot"]["global"]["universe"]["approved_coins"] = [name] if source_kind == "wrapper" else name
+    before=deepcopy(source)
+    result=apply_recommended_bounds(source,base_config_path=str(inputs/"input.json"))
+    bound=result["bot"]["global"]["universe"]["approved_coins"]
+    assert bound == ([str(selected)] if source_kind == "wrapper" else str(selected))
+    assert source == before
+    selected.unlink()
+    write_json(output/name,["ETH"])
+    destination=write_json(output/"result.json",result)
+    from config.universe import resolve_universe_sources
+    with pytest.raises(FileNotFoundError):
+        resolve_universe_sources(load_prepared_config(str(destination),verbose=False),"approved_coins")
+
+
 @pytest.mark.parametrize("context", ["argument", "metadata", "cwd", "cli"])
 def test_moved_export_keeps_original_coin_file_and_inline_precedence(tmp_path, monkeypatch, context):
     original_dir, output_dir = tmp_path / "source", tmp_path / "output"
@@ -148,7 +179,7 @@ def test_retained_universe_files_use_original_resolver_in_scenarios_and_fixed_pi
     exported = apply_recommended_bounds(config, base_config_path=str(source_path))
     assert config == before
     assert exported["bot"]["long"]["universe"] == {
-        "approved_coins": ["bybit::BTCUSDT", "ETH"], "ignored_coins": ["SOL"],
+        "approved_coins": str(approved.resolve()), "ignored_coins": [str(ignored.resolve())],
         "filter_by_min_effective_cost": True,
     }
     assert exported["optimize"]["fixed_runtime_overrides"] == {"bot.short.universe.approved_coins": str(short.resolve())}
@@ -160,7 +191,10 @@ def test_retained_universe_files_use_original_resolver_in_scenarios_and_fixed_pi
     _apply_config_overrides(reloaded, reloaded["optimize"]["fixed_runtime_overrides"])
     _apply_config_overrides(reloaded, normalize_scenario_overrides(scenario))
     normalized = prepare_config(reloaded, base_config_path=str(output_path), verbose=False)
-    assert normalized["bot"]["long"]["universe"] == exported["bot"]["long"]["universe"]
+    assert normalized["bot"]["long"]["universe"] == {
+        "approved_coins": ["bybit::BTCUSDT", "ETH"], "ignored_coins": ["SOL"],
+        "filter_by_min_effective_cost": True,
+    }
     assert normalized["bot"]["short"]["universe"]["approved_coins"] == ["XRP"]
     assert {path: path.read_bytes() for path in source_bytes} == source_bytes
 

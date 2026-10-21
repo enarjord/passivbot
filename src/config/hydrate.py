@@ -41,7 +41,7 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
 
 
 from config.access import get_optional_config_value
-from config.universe import get_side_universe_sources, require_side_universe_sources, set_side_universe_sources
+from config.universe import get_side_universe_sources, require_side_universe_sources
 
 def reject_backtest_inherited_live_fields(result: dict) -> None:
     backtest = result.setdefault("backtest", {})
@@ -91,7 +91,7 @@ def seed_missing_default_sections(
                 seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded
             result["bot"][pside]["universe"] = {
-                "approved_coins": [], "ignored_coins": [], "filter_by_min_effective_cost": True,
+                "approved_coins": None, "ignored_coins": [], "filter_by_min_effective_cost": True,
             }
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)
@@ -99,9 +99,9 @@ def seed_missing_default_sections(
         universe = result["bot"][pside].setdefault("universe", {})
         for key in ("approved_coins", "ignored_coins"):
             if key not in universe:
-                universe[key] = []
+                universe[key] = None if key == "approved_coins" else []
                 if tracker is not None:
-                    tracker.add(["bot", pside, "universe", key], [])
+                    tracker.add(["bot", pside, "universe", key], universe[key])
     if "bounds" not in result["optimize"]:
         seeded_bounds = deepcopy(template["optimize"]["bounds"])
         result["optimize"]["bounds"] = seeded_bounds
@@ -226,17 +226,16 @@ def apply_non_live_adjustments(
     raw_optimize_limits: Any = None,
     raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
+    from .universe import resolve_universe_sources, materialize_side_universe_sources
     for key in ("approved_coins", "ignored_coins"):
-        set_side_universe_sources(result, key, normalize_coins_source(
-            require_side_universe_sources(result, key),
-            allow_all=(key == "approved_coins"),
-        ))
+        values, _ = resolve_universe_sources(result, key)
+        materialize_side_universe_sources(result, key, values)
     for pside in require_side_universe_sources(result, 'approved_coins'):
-        result['bot'][pside]['universe']['approved_coins'] = [
-            coin
-            for coin in result['bot'][pside]['universe']['approved_coins']
-            if coin not in result['bot'][pside]['universe']['ignored_coins']
-        ]
+        from .universe import ResolvedCoinList
+        current = result['bot'][pside]['universe']['approved_coins']
+        result['bot'][pside]['universe']['approved_coins'] = ResolvedCoinList(
+            [coin for coin in current if coin not in result['bot'][pside]['universe']['ignored_coins']], current.source, current.shared_source
+        )
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     result["backtest"]["coin_sources"] = normalize_backtest_coin_sources(
         result["backtest"].get("coin_sources", {})

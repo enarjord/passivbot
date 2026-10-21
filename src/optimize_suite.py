@@ -156,22 +156,20 @@ async def prepare_suite_contexts(
     )
 
     base_config = deepcopy(config)
-    if isinstance(require_side_universe_sources(base_config, 'approved_coins'), dict):
-        base_config['bot']["long"]['universe']['approved_coins'] = master_coins_list
-        base_config['bot']["short"]['universe']['approved_coins'] = master_coins_list
-    else:
-        set_side_universe_sources(base_config, 'approved_coins', master_coins_list)
-    if isinstance(require_side_universe_sources(base_config, 'ignored_coins'), dict):
-        base_config['bot']["long"]['universe']['ignored_coins'] = master_ignored_list
-        base_config['bot']["short"]['universe']['ignored_coins'] = master_ignored_list
-    else:
-        set_side_universe_sources(base_config, 'ignored_coins', master_ignored_list)
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
+    master_config = deepcopy(base_config)
+    from config.universe import materialize_side_universe_sources
+    materialize_side_universe_sources(
+        master_config, "approved_coins", {side: list(master_coins_list) for side in ("long", "short")}
+    )
+    materialize_side_universe_sources(
+        master_config, "ignored_coins", {side: list(master_ignored_list) for side in ("long", "short")}
+    )
 
     candle_interval = int(base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     datasets = await prepare_master_datasets(
-        base_config,
+        master_config,
         exchanges_list,
         shared_array_manager=shared_array_manager,
         needed_individual_exchanges=needed_individual,
@@ -296,8 +294,27 @@ async def prepare_suite_contexts(
         # Rebuild these below from the selected datasets after public formatting.
         for key in ("coins", "cache_dir"):
             scenario_config_raw["backtest"].pop(key, None)
-        scenario_config = format_config(scenario_config_raw, verbose=False)
+        from config.universe import (
+            fixed_runtime_universe_view,
+            materialize_universe_snapshot,
+            raw_side_universe_sources,
+            runtime_universe_snapshot,
+            universe_source_view,
+        )
+        # Formatting is an authored-policy boundary. Give it the fixed execution
+        # view here so this prepared context never rereads mutable source files.
+        source_policy = universe_source_view(scenario_config_raw)
+        membership = runtime_universe_snapshot(scenario_config_raw, available_coins=available_coins)
+        scenario_config = format_config(
+            fixed_runtime_universe_view(scenario_config_raw, snapshot=membership), verbose=False
+        )
         scenario_config = parse_overrides(scenario_config, verbose=False)
+        scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
+            source_policy["bot"]["global"]["universe"]["approved_coins"]
+        )
+        for field in ("approved_coins", "ignored_coins"):
+            set_side_universe_sources(scenario_config, field, raw_side_universe_sources(source_policy, field))
+        scenario_config = materialize_universe_snapshot(scenario_config, membership)
         # Freeze the resolved patch in both candidate evaluation and resume evidence.
         # Reapplying raw file references would discard preparation's resolved values.
         scenario_overrides = deepcopy(scenario.overrides) if scenario.overrides else {}

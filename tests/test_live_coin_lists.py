@@ -5,6 +5,7 @@ import passivbot as passivbot_module
 
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 from passivbot import Passivbot
+from config.universe import set_side_universe_sources
 from utils import AmbiguousMarketIdentifier, UnknownMarketIdentifier
 
 
@@ -500,13 +501,9 @@ def test_refresh_approved_ignored_coin_lists_supports_explicit_all_per_side():
     bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
     bot._disabled_psides_logged = set()
     bot._unsupported_coin_warnings = set()
-    bot.config = {
-        "_coins_sources": {
-            "approved_coins": {"long": ["AAA"], "short": "all"},
-            "ignored_coins": {"long": [], "short": []},
-        },
-        "live": {},
-    }
+    bot.config = _coin_list_config(
+        {"long": ["AAA"], "short": "all"}, {"long": [], "short": []},
+    )
 
     def fake_coin_to_symbol(self, coin, verbose=True):
         mapping = {"AAA": "AAA/USDT:USDT", "BBB": "BBB/USDT:USDT"}
@@ -533,13 +530,9 @@ def test_refresh_approved_ignored_coin_lists_supports_migrated_global_all():
     bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
     bot._disabled_psides_logged = set()
     bot._unsupported_coin_warnings = set()
-    bot.config = {
-        "_coins_sources": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        },
-        "live": {},
-    }
+    bot.config = _coin_list_config(
+        {"long": None, "short": None}, {"long": [], "short": []}, shared="all",
+    )
 
     def fake_coin_to_symbol(self, coin, verbose=True):
         mapping = {"AAA": "AAA/USDT:USDT", "BBB": "BBB/USDT:USDT"}
@@ -589,11 +582,11 @@ def test_refresh_market_resolution_error_skips_affected_identifier(
 
 def test_refresh_market_resolution_error_retains_other_valid_markets(caplog):
     bot = _make_eligibility_event_bot()
-    bot.config["_coins_sources"]["approved_coins"] = {
+    set_side_universe_sources(bot.config, "approved_coins", {
         "long": ["BTC", "OLDUSDT"],
         "short": ["BTC", "OLDUSDT"],
-    }
-    bot.config["_coins_sources"]["ignored_coins"] = {"long": [], "short": []}
+    })
+    set_side_universe_sources(bot.config, "ignored_coins", {"long": [], "short": []})
     bot.eligible_symbols.add("BTC/USDT:USDT")
 
     def resolve(coin, verbose=True):
@@ -619,14 +612,14 @@ def test_refresh_market_resolution_error_retains_other_valid_markets(caplog):
 
 def test_refresh_ignored_resolution_error_retains_prior_restriction(caplog):
     bot = _make_eligibility_event_bot()
-    bot.config["_coins_sources"]["approved_coins"] = {
+    set_side_universe_sources(bot.config, "approved_coins", {
         "long": ["BTC", "ETH"],
         "short": ["BTC", "ETH"],
-    }
-    bot.config["_coins_sources"]["ignored_coins"] = {
+    })
+    set_side_universe_sources(bot.config, "ignored_coins", {
         "long": ["OLDUSDT"],
         "short": ["OLDUSDT"],
-    }
+    })
     bot.eligible_symbols.update({"BTC/USDT:USDT", "ETH/USDT:USDT"})
     bot.ignored_coins = {
         "long": {"BTC/USDT:USDT"},
@@ -666,14 +659,14 @@ def test_refresh_ignored_resolution_error_retains_prior_restriction(caplog):
 
 def test_refresh_ignored_resolution_error_does_not_restore_unrelated_removals(caplog):
     bot = _make_eligibility_event_bot()
-    bot.config["_coins_sources"]["approved_coins"] = {
+    set_side_universe_sources(bot.config, "approved_coins", {
         "long": ["BTC", "DOGE", "ETH"],
         "short": ["BTC", "DOGE", "ETH"],
-    }
-    bot.config["_coins_sources"]["ignored_coins"] = {
+    })
+    set_side_universe_sources(bot.config, "ignored_coins", {
         "long": ["ETH", "DOGE"],
         "short": ["ETH", "DOGE"],
-    }
+    })
     bot.eligible_symbols.update(
         {"BTC/USDT:USDT", "DOGE/USDT:USDT", "ETH/USDT:USDT"}
     )
@@ -709,6 +702,16 @@ def test_refresh_ignored_resolution_error_does_not_restore_unrelated_removals(ca
     assert "BTC/USDT:USDT" not in bot.ignored_coins["long"]
 
 
+def _coin_list_config(approved, ignored, *, shared=None):
+    # Provenance labels remain observable, but only public fields grant membership.
+    config = {"bot": {"global": {"universe": {"approved_coins": shared or []}}},
+              "live": {}, "_coins_sources": {"approved_coins": approved,
+                                              "ignored_coins": ignored}}
+    set_side_universe_sources(config, "approved_coins", approved)
+    set_side_universe_sources(config, "ignored_coins", ignored)
+    return config
+
+
 def _make_eligibility_event_bot():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
@@ -732,16 +735,10 @@ def _make_eligibility_event_bot():
         "symbol_to_coin_fallbacks": 0,
         "coin_to_symbol_fallbacks": 0,
     }
-    bot.config = {
-        "_coins_sources": {
-            "approved_coins": {
-                "long": [f"A{index:02d}" for index in range(14)],
-                "short": ["SHORT"],
-            },
-            "ignored_coins": {"long": ["IGNORED"], "short": []},
-        },
-        "live": {},
-    }
+    bot.config = _coin_list_config(
+        {"long": [f"A{index:02d}" for index in range(14)], "short": ["SHORT"]},
+        {"long": ["IGNORED"], "short": []},
+    )
     bot.coin_to_symbol = lambda coin, verbose=True: f"{coin}/USDT:USDT"
     bot.is_pside_enabled = lambda _pside: True
     bot.live_value = lambda key: bot.config["live"][key]
@@ -990,3 +987,86 @@ def test_refresh_approved_ignored_coin_lists_redacts_outer_failure_and_returns(
         "Traceback",
     ):
         assert unsafe_value not in output
+
+
+def test_shared_file_refresh_clears_only_dependent_entry_eligibility_and_recovers(tmp_path, caplog):
+    bot = _make_eligibility_event_bot()
+    selected = tmp_path / 'coins.json'
+    selected.write_text('["A00"]')
+    bot.config = _coin_list_config(
+        {"long": None, "short": ["SHORT"]}, {"long": [], "short": []}, shared='coins.json',
+    )
+    bot.config['live']['base_config_path'] = str(tmp_path / 'input.json')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins == {'long': {'A00/USDT:USDT'}, 'short': {'SHORT/USDT:USDT'}}
+    selected.write_text('["A01"]')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins['long'] == {'A01/USDT:USDT'}
+    selected.unlink()
+    with caplog.at_level(logging.ERROR):
+        bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins == {'long': set(), 'short': {'SHORT/USDT:USDT'}}
+    assert bot.approved_coins_minus_ignored_coins == bot.approved_coins
+    assert any('action=clear_approved_eligibility' in record.getMessage() for record in caplog.records)
+    selected.write_text('["A02"]')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins == {'long': {'A02/USDT:USDT'}, 'short': {'SHORT/USDT:USDT'}}
+
+
+def test_unreadable_ignored_file_preserves_restrictions_and_blocks_dependent_entries(tmp_path):
+    bot = _make_eligibility_event_bot()
+    selected = tmp_path / 'ignored.json'
+    selected.write_text('["A00"]')
+    bot.config = _coin_list_config(
+        {"long": ["A00"], "short": ["SHORT"]}, {"long": 'ignored.json', "short": []},
+    )
+    bot.config['live']['base_config_path'] = str(tmp_path / 'input.json')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.ignored_coins['long'] == {'A00/USDT:USDT'}
+    selected.unlink()
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins == {'long': set(), 'short': {'SHORT/USDT:USDT'}}
+    assert bot.ignored_coins['long'] == {'A00/USDT:USDT'}
+    selected.write_text('[]')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.ignored_coins['long'] == set()
+    assert bot.approved_coins_minus_ignored_coins['long'] == {'A00/USDT:USDT'}
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_prepared_extensionless_shared_file_remains_a_file_after_deletion(tmp_path, wrapped):
+    from config import prepare_config
+    selected = tmp_path / 'coinlist'
+    selected.write_text('["A00"]')
+    raw = ['./coinlist'] if wrapped else 'coinlist'
+    config = {'config_version':'v9.0.0', **_coin_list_config(
+        {'long':None,'short':['SHORT']}, {'long':[],'short':[]}, shared=raw,
+    )}
+    prepared = prepare_config(config, base_config_path=str(tmp_path/'input.json'), live_only=True, verbose=False)
+    bot = _make_eligibility_event_bot()
+    bot.config = prepared
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins['long'] == {'A00/USDT:USDT'}
+    selected.unlink()
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins == {'long':set(), 'short':{'SHORT/USDT:USDT'}}
+    selected.write_text('["A01"]')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins['long'] == {'A01/USDT:USDT'}
+
+
+@pytest.mark.parametrize('file_source', [False, True])
+def test_prepared_literal_coins_and_shared_file_contents_are_not_rediscovered_as_files(tmp_path, file_source):
+    from config import prepare_config
+    common = ['A00']
+    if file_source:
+        (tmp_path/'coins.json').write_text('["A00"]')
+        common = 'coins.json'
+    config = {'config_version':'v9.0.0', **_coin_list_config(
+        {'long':None,'short':['SHORT']}, {'long':[],'short':[]}, shared=common,
+    )}
+    bot = _make_eligibility_event_bot()
+    bot.config = prepare_config(config, base_config_path=str(tmp_path/'input.json'), live_only=True, verbose=False)
+    (tmp_path/'A00').write_text('["A01"]')
+    bot.refresh_approved_ignored_coins_lists()
+    assert bot.approved_coins == {'long':{'A00/USDT:USDT'}, 'short':{'SHORT/USDT:USDT'}}

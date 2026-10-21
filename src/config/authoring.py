@@ -16,12 +16,12 @@ from .overrides import parse_overrides, normalize_coin_override_keys
 from .param_paths import resolve_dotted_config_path
 from .result_records import extract_result_config
 from .scenario_overrides import normalize_scenario_overrides
-from .universe import COIN_SOURCE_FIELDS, require_side_universe_sources, set_side_universe_sources
+from .universe import COIN_SOURCE_FIELDS
 
 
 _MISSING = object()
 _UNIVERSE_PATHS = tuple(("bot", side, "universe", field)
-                        for side in ("long", "short") for field in sorted(COIN_SOURCE_FIELDS))
+                        for side in ("long", "short") for field in sorted(COIN_SOURCE_FIELDS)) + (("bot", "global", "universe", "approved_coins"),)
 _PROTECTED = (
     ("coin_overrides",), ("optimize", "bounds"),
     ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
@@ -65,7 +65,8 @@ def _authored(source, base_config_path):
     from tools.clean_config import cleanup_config
     from config_utils import strip_config_metadata
 
-    payload = extract_result_config(source, allow_unmarked_wrapper=True)
+    from .universe import universe_source_view
+    payload = universe_source_view(extract_result_config(source, allow_unmarked_wrapper=True))
     # Validate the complete input before stripping metadata or pruning defaults.
     full = cleanup_config(payload, base_config_path=base_config_path, _allow_sparse=True)
     payload = strip_config_metadata(payload)
@@ -90,14 +91,25 @@ def _rebase_override_files(config, source, destination):
                 visit(item)
         elif isinstance(node, dict):
             for key, value in node.items():
-                if key.split(".")[-1] == "override_config_path" and isinstance(value, str):
-                    reference = Path(value)
+                source_leaf = key.split(".")[-1]
+                candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
+                from .universe import resolve_universe_source_path
+                source_file = (resolve_universe_source_path(candidate, base_config_path=source, discover_ambiguous=not isinstance(value, list), allow_all=source_leaf == "approved_coins")
+                               if source_leaf in COIN_SOURCE_FIELDS else None)
+                coin_source = source_leaf in COIN_SOURCE_FIELDS and isinstance(candidate, str) and (
+                    source_file is not None or candidate.startswith(("./", "../", "/", "~"))
+                    or Path(candidate).suffix.lower() in {".json", ".hjson", ".txt"}
+                )
+                if (source_leaf == "override_config_path" and isinstance(value, str)) or coin_source:
+                    value = candidate if coin_source else value
+                    reference = Path(value).expanduser()
                     if not reference.is_absolute():
                         candidates = (base / reference, Path.cwd() / reference)
-                        resolved = next((path.resolve() for path in candidates if path.is_file()), None)
+                        resolved = (source_file.absolute() if source_file is not None else None) if coin_source else next((path.resolve() for path in candidates if path.is_file()), None)
                         if resolved is None:
-                            raise FileNotFoundError(f"override_config_path not found: {value}")
-                        node[key] = str(resolved) if shared_file_aliases else os.path.relpath(resolved, output)
+                            raise FileNotFoundError(f"{source_leaf} file not found: {value}")
+                        selected = str(resolved) if shared_file_aliases else os.path.relpath(resolved, output)
+                        node[key] = [selected] if coin_source and isinstance(node[key], list) else selected
                 else:
                     visit(value)
 
@@ -156,40 +168,36 @@ def compact_config(source, *, base_config_path="", destination_path=""):
 
 
 def _resolve_coin_sources(config, *, require_complete):
-    from utils import _resolve_coins_file_path, normalize_coins_source
-
     result = deepcopy(config)
     unresolved = []
 
-    def check_source(value):
-        if isinstance(value, dict):
-            for child in value.values():
-                check_source(child)
-        elif isinstance(value, list):
-            for child in value:
-                check_source(child)
-        elif isinstance(value, str):
-            file_like = value.startswith(("./", "../", "/", "~")) or Path(value).suffix.lower() in {
-                ".json", ".hjson", ".txt",
-            }
-            if file_like and _resolve_coins_file_path(value) is None:
-                raise FileNotFoundError(f"coin-list file not found: {value}")
-
-    for name in ("approved_coins", "ignored_coins"):
-        value = require_side_universe_sources(result, name)
-        check_source(value)
-        resolved = normalize_coins_source(value, allow_all=name == "approved_coins")
-        for side, coins in resolved.items():
-            if coins == ["all"]:
-                unresolved.append(f"bot.{side}.universe.{name}")
-            elif require_complete and any(
-                _resolve_coins_file_path(coin) is not None for coin in coins
-            ):
-                raise ValueError(
-                    "a coin-list file remains unresolved inside a multi-item source; "
-                    "use a single list-file source or explicit coin identifiers"
-                )
-        set_side_universe_sources(result, name, resolved)
+    from .universe import resolve_universe_sources, raw_side_universe_sources
+    raw = raw_side_universe_sources(result, "approved_coins")
+    approved, _ = resolve_universe_sources(result, "approved_coins")
+    ignored, _ = resolve_universe_sources(result, "ignored_coins")
+    inherited = [side for side in ("long", "short") if raw.get(side) is None]
+    if inherited:
+        selected = approved[inherited[0]]
+        if selected == ["all"]:
+            unresolved.append("bot.global.universe.approved_coins")
+        else:
+            result["bot"]["global"]["universe"]["approved_coins"] = selected
+    for side in ("long", "short"):
+        if raw.get(side) is not None:
+            if approved[side] == ["all"]:
+                unresolved.append(f"bot.{side}.universe.approved_coins")
+            else:
+                result["bot"][side]["universe"]["approved_coins"] = approved[side]
+        result["bot"][side]["universe"]["ignored_coins"] = ignored[side]
+    # Even an unused shared source must become portable in a resolved export.
+    if not inherited:
+        probe = deepcopy(result)
+        probe["bot"]["long"]["universe"]["approved_coins"] = None
+        common, _ = resolve_universe_sources(probe, "approved_coins")
+        if common["long"] == ["all"]:
+            unresolved.append("bot.global.universe.approved_coins")
+        else:
+            result["bot"]["global"]["universe"]["approved_coins"] = common["long"]
     if require_complete and unresolved:
         raise ValueError(
             "offline resolved export cannot expand approved_coins='all'; "
@@ -458,16 +466,23 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     # The same non-live loader resolves null inheritance, ignored lists and
     # dynamic dates without fetching market data.
     effective = prepare_config(effective, base_config_path=base_config_path, verbose=False, log_config_transforms=False)
+    inherited_approval = (parts in {("bot", side, "universe", "approved_coins")
+                                   for side in ("long", "short")}
+                          and _get(context, parts) is None)
+    if inherited_approval:
+        common = ("bot", "global", "universe", "approved_coins")
+        events.append({"kind": "inherited", "path": ".".join(common),
+                       "value": deepcopy(_get(effective, common))})
     for prefix in _UNIVERSE_PATHS:
-        if not _intersects(parts, prefix):
+        if not (_intersects(parts, prefix) or inherited_approval and prefix == ("bot", "global", "universe", "approved_coins")):
             continue
-        from utils import _resolve_coins_file_path
+        from .universe import resolve_universe_source_path
 
         def references(value):
             if isinstance(value, list) and len(value) == 1:
                 yield from references(value[0])
             elif isinstance(value, str):
-                resolved_file = _resolve_coins_file_path(value)
+                resolved_file = resolve_universe_source_path(value, base_config_path=base_config_path, allow_all=prefix[-1] == "approved_coins")
                 if resolved_file is not None:
                     yield str(resolved_file)
 

@@ -237,6 +237,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
+    "bot.global.universe.approved_coins": {"owner": "bot", "consumed_by": {"live", "backtest", "optimize"}, "cli_exposed_on": {"live", "backtest", "optimize"}, "help_group": {"backtest": "Coin Selection", "optimize": "Coin Selection"}},
     "bot.global.universe.minimum_coin_age_days": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -482,7 +483,8 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
 
 
 def dump_config(config: dict, filepath: str, *, clean: bool = False):
-    config_copy = deepcopy(config)
+    from config.universe import anchored_universe_source_view
+    config_copy = anchored_universe_source_view(config)
     if clean:
         config_copy = clean_config(config_copy)
     sorted_config = sort_dict_keys(config_copy)
@@ -759,7 +761,9 @@ def clean_config(config: dict) -> dict:
     from config.hsl import FIELDS, normalization_template
     # Source validation and template preparation are read-only. The projection
     # below copies retained values, so a full input copy would be redundant.
-    source = config or {}
+    from config.universe import universe_source_view
+    source = universe_source_view({key: value for key, value in (config or {}).items()
+                                   if not isinstance(key, str) or not key.startswith("_")})
     from config.migrations.v9 import require_v9_runtime_config, reject_retired_v9_fields
 
     if "config_version" in source:
@@ -788,6 +792,16 @@ def clean_config(config: dict) -> dict:
 
     preserve_optional_adaptive_bounds(template, source)
     cleaned = _clean_with_template(template, source)
+    cleaned["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
+        source.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
+    )
+    # Coin sources are scalar/list policy, not list-valued template defaults.
+    # Keep their authored binding when exporting a prepared membership view.
+    for side in ("long", "short"):
+        universe = source.get("bot", {}).get(side, {}).get("universe", {})
+        for field in ("approved_coins", "ignored_coins"):
+            if field in universe:
+                cleaned["bot"][side]["universe"][field] = deepcopy(universe[field])
     # Derive fixed weight bounds from the same normalized weights the loader
     # will consume, while preserving the cleaner's authored bot values.
     bound_config = {**cleaned, "bot": deepcopy(cleaned["bot"])}
@@ -819,7 +833,8 @@ def strip_config_metadata(config: dict, *, keys: Iterable[str] | None = None) ->
             return [_strip(item) for item in node]
         return deepcopy(node)
 
-    return _strip(config)
+    from config.universe import universe_source_view
+    return _strip(universe_source_view(config))
 
 
 def sanitize_prepared_config_for_dump(
@@ -833,7 +848,8 @@ def sanitize_prepared_config_for_dump(
     removal = ["_raw", "_raw_effective", "_transform_log", "_coins_sources", "analysis"]
     if extra_keys is not None:
         removal.extend(extra_keys)
-    stripped = strip_config_metadata(config, keys=tuple(removal))
+    from config.universe import anchored_universe_source_view
+    stripped = strip_config_metadata(anchored_universe_source_view(config), keys=tuple(removal))
     return clean_config(stripped)
 
 
@@ -961,7 +977,7 @@ RESERVED_CLI_ARGS = {
         "help": (
             "Approved coin sources for both sides. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
             "coin list file, or a JSON/HJSON per-side object like "
-            '{"long":["BTC"],"short":"all"}. Use coin tickers, not exchange symbols.'
+            '{"long":["BTC"],"short":"all"}. An empty value approves nothing; null is reserved for explicit side approved_coins flags.'
         ),
     },
     "ignored_coins": {
@@ -975,7 +991,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Coin Selection",
             "optimize": "Coin Selection",
         },
-        "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file.",
+        "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file. Use an empty value to clear ignores; null is not supported.",
     },
     "bot.global.universe.minimum_coin_age_days": {
         "visible": ["--minimum-coin-age-days", "-mcad"],
@@ -1540,6 +1556,12 @@ for _side in ("long", "short"):
     }
 
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
+RESERVED_CLI_ARGS["bot.global.universe.approved_coins"] = {
+    **deepcopy(RESERVED_CLI_ARGS["approved_coins"]),
+    "visible": ["--bot.global.universe.approved_coins"], "hidden": [],
+    "help": "Shared approval source; explicit side sources keep their replacement authority.",
+}
+
 
 # Shared fixed policy remains configurable on every consuming command. The
 # optimizer projects these settings separately from its numeric search genes.
@@ -2059,7 +2081,7 @@ def add_reserved_arguments(
                 type=spec["type"],
                 dest=config_key,
                 required=False,
-                default=None,
+                default=argparse.SUPPRESS if config_key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} else None,
                 metavar=spec["metavar"],
                 help=help_text,
             )
@@ -2215,6 +2237,7 @@ def add_arguments_recursively(
                 "backtest.ew_half_life_days",
                 "bot.global.warmup.max_minutes",
             }
+            nullable_coin_override = full_name in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}
             nullable_mode_override = full_name in {"live.modes.long", "live.modes.short"}
             type_ = type(value)
             if "bounds" in full_name:
@@ -2292,7 +2315,7 @@ def add_arguments_recursively(
                 dest=full_name,
                 required=False,
                 # Omitted nullable settings must differ from an explicit null.
-                default=argparse.SUPPRESS if nullable_float_override or nullable_mode_override else None,
+                default=argparse.SUPPRESS if nullable_float_override or nullable_mode_override or nullable_coin_override else None,
                 metavar=_argument_metavar(type_, full_name, value),
                 help=(
                     _argument_help_text(full_name, appendix)
@@ -2367,6 +2390,33 @@ def effective_config_payload(config: dict) -> dict:
     return config
 
 
+def _decode_directional_cli_coin_source(value):
+    """Only both-side convenience flags accept encoded directional objects."""
+    import hjson
+
+    if isinstance(value, dict):
+        decoded = value
+    else:
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, list) and all(isinstance(x, str) for x in value):
+            text = ",".join(value)
+        else:
+            return value
+        text = text.strip()
+        if not text.startswith("{") or not text.endswith("}"):
+            return value
+        try:
+            decoded = hjson.loads(text)
+        except ValueError:
+            return value  # Optional inline shorthand; canonical source validation still applies.
+    if isinstance(decoded, dict):
+        if set(decoded) - {"long", "short"}:
+            raise ValueError("directional coin sources must contain only long/short position-side keys")
+        return decoded
+    return value
+
+
 def update_config_with_args(
     config, args, verbose=False, allowed_keys: Optional[set[str]] = None
 ):
@@ -2377,10 +2427,28 @@ def update_config_with_args(
         *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
         "backtest.ew_half_life_days",
         "bot.global.warmup.max_minutes", "live.modes.long", "live.modes.short",
+        *(f"bot.{side}.universe.approved_coins" for side in ("long", "short")),
     }
     supplied = {key: value for key, value in vars(args).items()
                 if (value is not None or key in nullable_overrides)
                 and (key in allowed_keys if allowed_keys is not None else "." in key or key in {"approved_coins", "ignored_coins"})}
+    for field in ("approved_coins", "ignored_coins"):
+        if field in supplied:
+            supplied[field] = _decode_directional_cli_coin_source(supplied[field])
+    def null_source(value):
+        candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
+        return candidate is None or isinstance(candidate, str) and candidate.strip().lower() == "null"
+    for key in ("approved_coins", "ignored_coins", "bot.global.universe.approved_coins"):
+        if key not in supplied:
+            continue
+        value = supplied[key]
+        sources = value.values() if isinstance(value, dict) else (value,)
+        if any(null_source(item) for item in sources):
+            raise ValueError(
+                "null inheritance requires an explicit side approved_coins flag "
+                "(--bot.long.universe.approved_coins or --bot.short.universe.approved_coins); "
+                "use an empty value for no coins or a concrete coin source"
+            )
     if "config_version" in supplied:
         raise ValueError(
             "config_version is source schema metadata and cannot be overridden at runtime; "
@@ -2399,6 +2467,8 @@ def update_config_with_args(
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
+        if key in {"approved_coins", "ignored_coins"}:
+            value = supplied.get(key, value)
         if value is None and key not in nullable_overrides:
             continue
         if allowed_keys is not None:
@@ -2410,28 +2480,27 @@ def update_config_with_args(
             f"bot.{side}.universe.{field}": (side, field)
             for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
         }
-        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths:
-            from config.universe import get_side_universe_sources
-
-            side, source_key = side_source_paths.get(key, (None, key))
-            normalized = normalize_coins_source(
-                value if side is None else {side: value},
-                allow_all=(source_key == "approved_coins"),
-            )
-            stored = config.setdefault("_coins_sources", {}).get(source_key)
-            if not isinstance(stored, dict) or set(stored) - {"long", "short"}:
-                stored = (get_side_universe_sources(config, source_key, {}) if stored is None else
-                          {pside: deepcopy(stored) for pside in ("long", "short")})
-            stored = deepcopy(stored)
-            for pside in ("long", "short") if side is None else (side,):
-                path = f"bot.{pside}.universe.{source_key}"
-                change = recursive_config_update(config, path, normalized[pside], verbose=verbose)
-                # Retain raw per-side file references for live refresh.
-                stored[pside] = deepcopy(value.get(pside, []) if side is None and isinstance(value, dict) else value)
+        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths or key == "bot.global.universe.approved_coins":
+            from config.universe import restore_universe_sources
+            restore_universe_sources(config)
+            targets = ([f"bot.{pside}.universe.{key}" for pside in ("long", "short")]
+                       if key in {"approved_coins", "ignored_coins"} else [key])
+            for path in targets:
+                raw = value
+                if key in {"approved_coins", "ignored_coins"} and isinstance(value, dict):
+                    raw = value.get(path.split(".")[1], [])
+                if key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} and null_source(raw):
+                    raw = None
+                from config.universe import bind_universe_source
+                raw = bind_universe_source(raw, field=path.split(".")[-1],
+                    base_config_path=config.get("live", {}).get("base_config_path", ""))
+                change = recursive_config_update(config, path, deepcopy(raw), verbose=verbose)
                 if change:
                     changed_keys.append(path)
                     diffs.append(change)
-            config["_coins_sources"][source_key] = stored
+            from config.universe import get_side_universe_sources
+            config["_coins_sources"] = {field: deepcopy(get_side_universe_sources(config, field, {}))
+                                       for field in ("approved_coins", "ignored_coins")}
             continue
         change = recursive_config_update(config, key, value, verbose=verbose)
         if change:

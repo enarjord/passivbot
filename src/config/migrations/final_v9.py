@@ -457,11 +457,11 @@ def released_runtime_selector(path):
 
 
 def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_change=False,
-                       sparse=False, best_effort=False):
+                       sparse=False, best_effort=False, base_config_path=""):
     """Translate public fields without guessing independent optimizer ranges."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
-    from .shared_policy import (COIN_SOURCE_FIELDS,
+    from .shared_policy import (COIN_SOURCE_FIELDS, is_shared_approved_source, normalize_released_coin_source,
                                 minimum_cost_policy_targets, move_shared_policy, preserve_forced_normal_selection,
                                 preserve_forced_selection_overrides)
     from .operational_live import move_operational_live
@@ -524,6 +524,13 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         converted = {}
         for key, value in values.items():
             authored_value = deepcopy(value)
+            source_parts = key.split(".")
+            if (len(source_parts) in {2, 3} and source_parts[0] == "live"
+                    and source_parts[1] in COIN_SOURCE_FIELDS
+                    and (len(source_parts) == 2 or source_parts[2] in {"long", "short"})):
+                value = normalize_released_coin_source(value, field=source_parts[1],
+                    path=f"{path}.{key}", record=record, base_config_path=base_config_path,
+                    side=source_parts[2] if len(source_parts) == 3 else None)
             reject_retired_gpu_selector(key, value, context=path)
             if key == "backtest.max_warmup_minutes":
                 record(f"{path}.{key}", value, None, _IGNORED_BACKTEST_WARMUP_REASON)
@@ -554,12 +561,18 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 sources = value if isinstance(value, dict) else {side: value for side in ("long", "short")}
                 if set(sources) - {"long", "short"}:
                     raise ValueError(f"{path}.{key} must use only long/short source keys")
-                for side, source in sources.items():
+                shared = field == "approved_coins" and is_shared_approved_source(value, base_config_path=base_config_path)
+                if field == "approved_coins":
+                    converted["bot.global.universe.approved_coins"] = deepcopy(value) if shared else []
+                for side in ("long", "short"):
+                    source = None if shared else sources.get(side, [])
+                    if source is None and not shared:
+                        source = []
                     target = f"bot.{side}.universe.{field}"
                     if target in converted and converted[target] != source:
                         raise ValueError(f"{path}.{key} conflicts with {target}")
                     converted[target] = deepcopy(source)
-                record(f"{path}.{key}", value, converted, "side-owned universe source paths")
+                record(f"{path}.{key}", value, converted, "preserved whole-source replacement with explicit shared binding or directional pins")
                 continue
             targets = minimum_cost_policy_targets(key)
             if targets:
@@ -573,6 +586,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                        "shared minimum-cost policy copied to both position sides")
                 continue
             new = selector(key)
+            if key.startswith("live.approved_coins.") and value is None:
+                value = []  # Released null selected nothing; v9 null means inheritance.
             if new == "bot.global.hsl.scope" and value in {"unified", "pside"}:
                 value = "portfolio" if value == "unified" else "position_side"
             if key == "live.auto_gs":
@@ -691,7 +706,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
         migrate_entry_cooldown_tree(result)
         migrate_entry_ema_tree(result)
-        move_shared_policy(result, record=record)
+        move_shared_policy(result, record=record, base_config_path=base_config_path)
         move_operational_live(result, record=record)
         from .control_sentinels import migrate_control_sentinels
 
@@ -720,7 +735,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     apply_migrations(result, verbose=False)
     apply_backward_compatibility_renames(result, verbose=False)
     migrate_entry_cooldown(result)
-    move_shared_policy(result, record=record)
+    move_shared_policy(result, record=record, base_config_path=base_config_path)
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
     move_operational_live(result, record=record)
