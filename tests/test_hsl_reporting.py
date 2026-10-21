@@ -132,6 +132,7 @@ def test_coin_plots_keep_each_coin_and_side_separate():
         "last_valid_indices",
         "warmup_minutes",
         "trade_start_indices",
+        "inception_timestamps_ms",
     ):
         params[key] *= 2
     for pair in args[2]:

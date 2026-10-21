@@ -77,7 +77,21 @@ def test_suite_prepared_data_rejects_changed_run_or_market_settings(builds, kind
     changed = deepcopy(inputs)
     row = changed[kind][1]
     value = getattr(row, field)
-    changed[kind][1] = replace(row, **{field: 1 if value is None else value + 1})
+    changed_value = (tuple(item + 1 for item in value) if isinstance(value, tuple)
+                     else 1 if value is None else value + 1)
+    changed[kind][1] = replace(row, **{field: changed_value})
+    assert service._prepared_multicoin_data(**changed, cache=cache) is not first
+    assert len(builds) == 2
+
+
+@pytest.mark.parametrize("side_index", [0, 1])
+def test_prepared_data_cache_separates_each_side_age_boundary(builds, side_index):
+    inputs, cache = _inputs(), {}
+    first = service._prepared_multicoin_data(**inputs, cache=cache)
+    changed = deepcopy(inputs)
+    changed["runs"][1] = replace(
+        changed["runs"][1], age_eligible_indices=tuple(int(i == side_index) for i in (0, 1)),
+    )
     assert service._prepared_multicoin_data(**changed, cache=cache) is not first
     assert len(builds) == 2
 
