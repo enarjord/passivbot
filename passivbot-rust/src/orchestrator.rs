@@ -335,7 +335,7 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorGlobal {
-        pub filter_by_min_effective_cost: bool,
+        pub filter_by_min_effective_cost: crate::types::MinimumCostFilter,
         #[serde(default)]
         pub market_orders_allowed: bool,
         #[serde(default = "default_market_order_near_touch_threshold")]
@@ -3607,7 +3607,7 @@ mod core {
                     PositionSide::Long,
                     input.global.strategy_kind,
                     input.global.hedge_mode,
-                    input.global.filter_by_min_effective_cost,
+                    input.global.filter_by_min_effective_cost.long,
                     input.balance,
                     &workspace.runtime_budget_long,
                     Some(actives_long),
@@ -3703,7 +3703,7 @@ mod core {
                     PositionSide::Short,
                     input.global.strategy_kind,
                     input.global.hedge_mode,
-                    input.global.filter_by_min_effective_cost,
+                    input.global.filter_by_min_effective_cost.short,
                     input.balance,
                     &workspace.runtime_budget_short,
                     Some(actives_short),
@@ -3806,6 +3806,38 @@ mod core {
                             true,
                         );
 
+                    // Admission must precede one-way arbitration: an ineligible side
+                    // must not win the EMA tie and suppress the eligible opposite side.
+                    let long_enabled = long_enabled
+                        && effective_min_cost_is_low_enough(
+                            input.balance,
+                            input.global.filter_by_min_effective_cost.long,
+                            s.effective_min_cost,
+                            &s.long.bot_params,
+                            &workspace.runtime_budget_long[idx],
+                            strategy_initial_qty_pct(&cached_strategy_params_for_symbol_side(
+                                &mut workspace.derived_long,
+                                idx,
+                                input.global.strategy_kind,
+                                StrategySide::Long,
+                                &s.long,
+                            )?),
+                        );
+                    let short_enabled = short_enabled
+                        && effective_min_cost_is_low_enough(
+                            input.balance,
+                            input.global.filter_by_min_effective_cost.short,
+                            s.effective_min_cost,
+                            &s.short.bot_params,
+                            &workspace.runtime_budget_short[idx],
+                            strategy_initial_qty_pct(&cached_strategy_params_for_symbol_side(
+                                &mut workspace.derived_short,
+                                idx,
+                                input.global.strategy_kind,
+                                StrategySide::Short,
+                                &s.short,
+                            )?),
+                        );
                     if long_enabled && !short_enabled {
                         workspace.one_way_block_initial_short[idx] = true;
                         continue;
@@ -3948,7 +3980,7 @@ mod core {
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
-                        input.global.filter_by_min_effective_cost,
+                        input.global.filter_by_min_effective_cost.long,
                         s.effective_min_cost,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
@@ -4044,7 +4076,7 @@ mod core {
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
-                        input.global.filter_by_min_effective_cost,
+                        input.global.filter_by_min_effective_cost.short,
                         s.effective_min_cost,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
@@ -4702,7 +4734,7 @@ mod core {
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
-                        input.global.filter_by_min_effective_cost,
+                        input.global.filter_by_min_effective_cost.long,
                         s.effective_min_cost,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
@@ -4723,7 +4755,7 @@ mod core {
                         PositionSide::Long,
                         input.balance,
                         s.effective_min_cost,
-                        input.global.filter_by_min_effective_cost,
+                        input.global.filter_by_min_effective_cost.long,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
                         workspace.derived_long[s.symbol_idx]
@@ -4737,7 +4769,7 @@ mod core {
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
-                        input.global.filter_by_min_effective_cost,
+                        input.global.filter_by_min_effective_cost.short,
                         s.effective_min_cost,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
@@ -4758,7 +4790,7 @@ mod core {
                         PositionSide::Short,
                         input.balance,
                         s.effective_min_cost,
-                        input.global.filter_by_min_effective_cost,
+                        input.global.filter_by_min_effective_cost.short,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
                         workspace.derived_short[s.symbol_idx]
@@ -5054,7 +5086,7 @@ mod core {
 
         fn make_basic_global() -> OrchestratorGlobal {
             OrchestratorGlobal {
-                filter_by_min_effective_cost: false,
+                filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0,
@@ -5529,7 +5561,7 @@ mod core {
                 balance: 51.154957,
                 balance_raw: 51.154957,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: true,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(true),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -5996,7 +6028,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6328,7 +6360,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6368,7 +6400,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6417,7 +6449,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6476,7 +6508,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6532,7 +6564,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6588,7 +6620,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6638,7 +6670,7 @@ mod core {
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6689,7 +6721,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6907,7 +6939,7 @@ mod core {
                 balance_raw: 1_000_000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -6976,7 +7008,7 @@ mod core {
                 balance_raw: 1_000_000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -7029,7 +7061,7 @@ mod core {
                 balance: 1_000_000.0,
                 balance_raw: 1_000_000.0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -7484,7 +7516,7 @@ mod core {
                 ..Default::default()
             };
             let global = OrchestratorGlobal {
-                filter_by_min_effective_cost: false,
+                filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 market_orders_allowed: true,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0,
@@ -8087,7 +8119,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -8179,7 +8211,7 @@ mod core {
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -8243,7 +8275,7 @@ mod core {
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -8335,7 +8367,7 @@ mod core {
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -8797,7 +8829,9 @@ mod core {
                     balance_raw: raw_balance,
                     timestamp_ms: 0,
                     global: OrchestratorGlobal {
-                        filter_by_min_effective_cost: false,
+                        filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(
+                            false,
+                        ),
                         market_orders_allowed: false,
                         market_order_near_touch_threshold: 0.001,
                         market_order_slippage_pct: 0.0,
@@ -8889,7 +8923,7 @@ mod core {
                 balance_raw: 800.0, // raw: WE = 500/800 = 0.625 (over limit)
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -8961,7 +8995,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -9040,7 +9074,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -9101,7 +9135,7 @@ mod core {
                 balance_raw: 500.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -9173,7 +9207,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
@@ -9224,7 +9258,7 @@ mod core {
                 balance_raw: 1000.0,
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
+                    filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,

@@ -8,6 +8,30 @@ use serde_json::Value;
 use std::collections::HashSet;
 use strum_macros::{Display, EnumIter, EnumString};
 
+/// Independent admission policy for each position side. This does not change exchange minima.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimumCostFilter {
+    pub long: bool,
+    pub short: bool,
+}
+
+impl MinimumCostFilter {
+    pub fn uniform(enabled: bool) -> Self {
+        Self {
+            long: enabled,
+            short: enabled,
+        }
+    }
+    pub fn for_side(self, side: usize) -> bool {
+        match side {
+            crate::constants::LONG => self.long,
+            crate::constants::SHORT => self.short,
+            _ => panic!("invalid position side"),
+        }
+    }
+}
+
 /// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
 ///
 /// The numeric fields mirror the values currently distributed through `mss` dictionaries in
@@ -312,7 +336,7 @@ pub struct BacktestParams {
     pub ew_half_life_days: Option<f64>,
     pub hsl_detailed_report: bool,
     pub skip_btc_analysis: bool,
-    pub filter_by_min_effective_cost: bool,
+    pub filter_by_min_effective_cost: MinimumCostFilter,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
     pub max_realized_loss_pct: f64,

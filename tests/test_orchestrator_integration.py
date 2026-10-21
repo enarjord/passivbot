@@ -313,7 +313,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
             # Explicit known-empty continuous realized memory for these order fixtures.
             "unstuck_realized_pnl_drawdown": 0.0,
             "loss_gate_realized_pnl_drawdown": 0.0,
-            "filter_by_min_effective_cost": False,
+            "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
             "max_realized_loss_pct": 0.0,

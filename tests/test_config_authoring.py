@@ -135,8 +135,8 @@ def test_compact_preserves_null_inheritance_and_eligibility_sources():
     assert require_side_universe_sources(compact, 'ignored_coins') == require_side_universe_sources(source, 'ignored_coins')
     for flag in (False, True):
         left, right = deepcopy(source), deepcopy(compact)
-        left['bot']['global']['universe']['filter_by_min_effective_cost'] = flag
-        right['bot'].setdefault('global', {}).setdefault('universe', {})['filter_by_min_effective_cost'] = flag
+        left['bot']['long']['universe']['filter_by_min_effective_cost'] = flag
+        right['bot'].setdefault('long', {}).setdefault('universe', {})['filter_by_min_effective_cost'] = flag
         assert effective(left) == effective(right)
 
 
@@ -426,8 +426,8 @@ def test_explain_reports_null_inheritance_fixed_selectors_and_fixed_bounds():
     source = policy()
     source["backtest"]["filter_by_min_effective_cost"] = None
     report = explain_config(source, "backtest.filter_by_min_effective_cost")
-    assert report["value"] is True
-    assert report["sources"][-1] == {"kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost", "value": True}
+    assert report["value"] == {"long": True, "short": True}
+    assert report["sources"][-1] == {"kind": "inherited", "path": "bot.short.universe.filter_by_min_effective_cost", "value": True}
     source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0_minutes", "short.unstuck.close_fraction"]
     search = explain_config(source, "bot.long.unstuck.ema_span_0_minutes")["search"]
     assert search["status"] == "fixed_selector"

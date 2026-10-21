@@ -474,11 +474,12 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         for reference in sorted(set(references(_get(before_files, prefix)))):
             events.append({"kind": "coin_list_file", "path": ".".join(prefix), "file": reference})
     if parts == ("backtest", "filter_by_min_effective_cost") and _get(context, parts) is None:
-        from .policy import effective_minimum_cost_filter
+        from .policy import effective_minimum_cost_filters
 
-        value = effective_minimum_cost_filter(effective)
-        events.append({"kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost",
-                       "value": value})
+        value = effective_minimum_cost_filters(effective)
+        events.extend({"kind": "inherited",
+                       "path": f"bot.{side}.universe.filter_by_min_effective_cost",
+                       "value": value[side]} for side in ("long", "short"))
         # Explain the effective simulation policy without changing authored or
         # resolved exports, which preserve explicit null inheritance.
         effective["backtest"]["filter_by_min_effective_cost"] = value

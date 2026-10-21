@@ -204,7 +204,6 @@ _FIELDS_BY_TYPE = {
         "optimize": "compress_results_file write_all_results",
         "optimize.pymoo.shared": "eliminate_duplicates",
         "bot.global": "hedge_mode",
-        "bot.global.universe": "filter_by_min_effective_cost",
         "bot.global.execution": "market_orders_allowed",
     },
     FieldType.STRING: {
@@ -276,6 +275,7 @@ _SHARED_SIDE_FIELDS = {
     FieldType.BOOLEAN: """
         hsl.enabled hsl.scale_budget_with_excess_allowance
         risk.position_exposure_enforcer.enabled risk.total_exposure_enforcer.enabled
+        universe.filter_by_min_effective_cost
         unstuck.ema_gating_enabled unstuck.enabled
     """,
     FieldType.STRING: "hsl.panic_close_order_type risk.total_exposure_enforcer.policy",

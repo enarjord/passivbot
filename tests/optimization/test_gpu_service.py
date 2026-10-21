@@ -166,7 +166,7 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "trade_start_indices": [1],
         "global_warmup_bars": 1,
         "liquidation_threshold": 0.05,
-        "filter_by_min_effective_cost": False,
+        "filter_by_min_effective_cost": {"long": False, "short": False},
         "dynamic_wel_by_tradability": True,
         "hedge_mode": False,
         "max_realized_loss_pct": 1.0,
@@ -1131,7 +1131,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "requested_start_timestamp_ms": 0,
             "first_timestamp_ms": 0,
             "liquidation_threshold": 0.05,
-            "filter_by_min_effective_cost": True,
+            "filter_by_min_effective_cost": {"long": True, "short": True},
             "max_realized_loss_pct": 1.0,
             "market_order_slippage_pct": 0.0,
             "hedge_mode": config['bot']['global']['hedge_mode'],
@@ -1217,7 +1217,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
     assert "high_exposure_enabled" not in constructed["kwargs"]
     assert constructed["kwargs"]["hedge_mode"] is False
-    assert constructed["kwargs"]["filter_by_min_effective_cost"] is True
+    assert constructed["kwargs"]["filter_by_min_effective_cost"] == {"long": True, "short": True}
     assert (
         constructed["kwargs"]["dynamic_wel_by_tradability"]
         is dynamic_wel_by_tradability

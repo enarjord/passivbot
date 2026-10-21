@@ -128,7 +128,7 @@ def iter_starting_snapshot(stream):
 def effective_setup_config(config, *, optimize=False) -> dict:
     """Project execution inputs; never hash helper state or machine-local paths."""
     from config_utils import clean_config
-    from config.policy import effective_minimum_cost_filter
+    from config.policy import effective_minimum_cost_filters
     from optimization.fine_tune_anchors import get_anchor_plan
 
     effective = clean_config(config)
@@ -147,7 +147,7 @@ def effective_setup_config(config, *, optimize=False) -> dict:
         "compress_cache",
     ):
         backtest.pop(key, None)
-    backtest["filter_by_min_effective_cost"] = effective_minimum_cost_filter(effective)
+    backtest["filter_by_min_effective_cost"] = effective_minimum_cost_filters(effective)
     result = {
         "bot": effective["bot"],
         "backtest": backtest,

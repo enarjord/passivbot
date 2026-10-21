@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config.policy import validate_minimum_cost_filters
 from functools import lru_cache
 import time
 import logging
@@ -1307,7 +1308,7 @@ class _MulticoinReplayRunner:
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
-        filter_by_min_effective_cost: bool = False,
+        filter_by_min_effective_cost: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -1562,6 +1563,7 @@ class _MulticoinReplayRunner:
                 "market_order_near_touch_threshold must be finite and non-negative"
             )
         liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
                 run.starting_balance,
@@ -1575,7 +1577,7 @@ class _MulticoinReplayRunner:
                 float(bool(hsl_panic_market)),
                 float(bool(market_orders_allowed)),
                 market_order_near_touch_threshold,
-                float(bool(filter_by_min_effective_cost)),
+                float(minimum_cost_filters[side]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
                 float(self.loss_gate_enabled),  # Original float64 gate activation.
@@ -2188,12 +2190,13 @@ class _MulticoinReplayRunner:
         # The baseline split and policy validation precede any new headroom query.
         # Admission preserves that split width and the already-sized compiled ABI.
         self._seed_initial_factual_capacity(int(matrix.shape[0]))
-        # The final word is original-f64 gate activation, not factual control.
-        self.settings[-3] = getattr(self, "hsl_fact_capacity", 0)
+        # Factual slots are fixed; fused side-policy ABI appends the short flag.
+        factual_offset = 14 if self.replay_sides == 2 else 12
+        self.settings[factual_offset] = getattr(self, "hsl_fact_capacity", 0)
         factual_replay = bool(getattr(self, "hsl_factual_replay", False))
         if factual_replay and not getattr(self, "hsl_fact_capacity", 0):
             raise ValueError("GPU factual HSL evaluation requires retained fill capacity")
-        self.settings[-2] = float(factual_replay)
+        self.settings[factual_offset + 1] = float(factual_replay)
         batch_size = int(matrix.shape[0])
         self._prepare_scratch_shape(batch_size)
         params_mps = torch.as_tensor(matrix, device=gpu_device())
@@ -2479,7 +2482,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
-        filter_by_min_effective_cost: bool = False,
+        filter_by_min_effective_cost: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -2579,6 +2582,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         market_order_slippage_pct = float(market_order_slippage_pct)
         market_order_near_touch_threshold = float(market_order_near_touch_threshold)
         liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
                 run.starting_balance,
@@ -2594,10 +2598,11 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(bool(hedge_mode)),
                 float(bool(market_orders_allowed)),
                 market_order_near_touch_threshold,
-                float(bool(filter_by_min_effective_cost)),
+                float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
                 float(self.loss_gate_enabled),  # Original float64 gate activation.
+                float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -2732,7 +2737,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
-        filter_by_min_effective_cost: bool = False,
+        filter_by_min_effective_cost: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -2921,7 +2926,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
-        filter_by_min_effective_cost: bool = False,
+        filter_by_min_effective_cost: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -3016,6 +3021,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             float(max_realized_loss_pct)
         )
         liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
+        minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
         self.settings = torch.tensor(
             [
                 run.starting_balance,
@@ -3031,10 +3037,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 float(bool(hedge_mode)),
                 float(bool(market_orders_allowed)),
                 float(market_order_near_touch_threshold),
-                float(bool(filter_by_min_effective_cost)),
+                float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
                 float(self.loss_gate_enabled),  # Original float64 gate activation.
+                float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
             ],
             dtype=torch.float32,
             device=gpu_device(),

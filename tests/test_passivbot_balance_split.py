@@ -7903,7 +7903,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 
         def live_value(self, key):
             values = {
-                "filter_by_min_effective_cost": False,
+                "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": True,
                 "market_order_near_touch_threshold": 0.0,
                 "max_realized_loss_pct": 1.0,

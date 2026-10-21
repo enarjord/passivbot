@@ -167,7 +167,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
             # Explicit known-empty continuous realized memory for these order fixtures.
             "unstuck_realized_pnl_drawdown": 0.0,
             "loss_gate_realized_pnl_drawdown": 0.0,
-            "filter_by_min_effective_cost": False,
+            "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
             "max_realized_loss_pct": 1.0,
