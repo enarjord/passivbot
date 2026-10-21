@@ -782,7 +782,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
     ]
     calls = []
 
-    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False, require_inception_facts=None):
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False, inception_fact_coins=None):
         calls.append(
             (
                 exchange,
@@ -835,7 +835,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
 
 @pytest.mark.asyncio
 async def test_prepare_master_datasets_preserves_combined_source_exchanges(monkeypatch):
-    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False, require_inception_facts=None):
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False, inception_fact_coins=None):
         assert exchange == "combined"
         timestamps = np.array([0, 60_000], dtype=np.int64)
         return (

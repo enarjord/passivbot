@@ -64,6 +64,9 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
         bot._assert_supported_live_state = lambda: None
         bot._build_live_symbol_universe = lambda: []
         await bot.prepare_planning_universe()
+        task = getattr(bot, "maintainers", {}).get("first_timestamp_refresh")
+        if task is not None:
+            await task  # Preparation returned before the owned background acquisition.
     else:
         await bot.update_first_timestamps()
 
@@ -73,7 +76,11 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
         for symbol in bot.approved_coins_minus_ignored_coins[side]
     })
     if expected:
-        lookup.assert_awaited_once_with(expected, exchange="binance")
+        if planning:
+            assert [symbol for call in lookup.await_args_list for symbol in call.args[0]] == expected
+            assert all(call.kwargs == {"exchange": "binance"} for call in lookup.await_args_list)
+        else:
+            lookup.assert_awaited_once_with(expected, exchange="binance")
     else:
         lookup.assert_not_awaited()
     assert bot.first_timestamps == {symbol: FIRST for symbol in expected}

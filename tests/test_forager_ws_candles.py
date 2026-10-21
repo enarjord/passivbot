@@ -1543,6 +1543,7 @@ async def test_reconcile_retires_removed_watchers_in_one_bulk_unsubscribe():
 @pytest.mark.asyncio
 async def test_ws_maintainer_starts_before_forager_mode_becomes_active():
     bot = Passivbot.__new__(Passivbot)
+    bot._schedule_first_timestamp_refresh = lambda: None
     bot.config = {
         "live": {
             "candles": {

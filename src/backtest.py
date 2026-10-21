@@ -148,6 +148,8 @@ from backtest_universe import (
     effective_backtest_approved_coins_by_side,
     effective_backtest_data_coins,
     normalize_backtest_coin,
+    backtest_side_enabled,
+    reconcile_backtest_coin_identifiers,
 )
 from pathlib import Path
 import re
@@ -1887,25 +1889,41 @@ def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamp
     return HLCVS_CACHE_ROOT / dir_name
 
 
-def _automatic_cache_unresolved_inception_coins(
-    config, coins, mss, *, require_inception_facts=None,
-):
-    """Retry missing facts for either positive age policy, including dormant sides.
+def _automatic_cache_unresolved_inception_coins(config, coins, mss, *, inception_fact_coins=None):
+    """Retry unknown facts only for enabled positive-age prepared memberships.
 
-    Prepared history is shared with optimizer candidates that can activate a side.
-    Suite acquisition can supply the demand of its assigned effective scenarios.
+    Optimizer acquisition supplies its reachable-side sizing view, so sides that
+    candidates can activate are included without querying permanently disabled
+    sides. Suite acquisition supplies the exact assigned-context coin union.
     This transient requirement changes neither age policy nor cache identity.
     Explicit dataset overrides are immutable inputs and do not use this retry gate.
     """
-    if require_inception_facts is None:
-        require_inception_facts = any(
-            minimum_coin_age_days(config, side) > 0 for side in POSITION_SIDES
+    exchanges = require_config_value(config, "backtest.exchanges")
+    # A combined cache can contain different venues. A qualified permission must
+    # resolve against each column's factual venue, not any configured exchange.
+    venues = {coin: mss[coin]["exchange"] for coin in coins if mss[coin].get("exchange")}
+    def reconcile(identifiers):
+        return reconcile_backtest_coin_identifiers(
+            identifiers, set(coins), exchanges, coin_exchanges=venues,
         )
-    elif not isinstance(require_inception_facts, bool):
-        raise TypeError("require_inception_facts must be a boolean or None")
-    if not require_inception_facts:
-        return []
-    return [coin for coin in coins
+    if inception_fact_coins is None:
+        from config.universe import require_side_universe_sources
+        required = set()
+        for side in POSITION_SIDES:
+            if minimum_coin_age_days(config, side) <= 0 or not backtest_side_enabled(config, side):
+                continue
+            approved = require_side_universe_sources(config, "approved_coins")[side]
+            ignored = require_side_universe_sources(config, "ignored_coins")[side]
+            if not isinstance(approved, list) or not isinstance(ignored, list):
+                raise TypeError("inception acquisition requires prepared side coin memberships")
+            allowed = reconcile(approved)
+            excluded = reconcile(ignored)
+            required.update(set(allowed) - set(excluded))
+    else:
+        if not isinstance(inception_fact_coins, frozenset) or any(not isinstance(c, str) for c in inception_fact_coins):
+            raise TypeError("inception_fact_coins must be a frozenset of coin identifiers or None")
+        required = set(reconcile(inception_fact_coins))
+    return [coin for coin in coins if coin in required
             if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
 
 
@@ -1959,7 +1977,7 @@ def _preserve_cached_inception_facts(config, exchange, mss):
 
 
 def load_coins_hlcvs_from_cache(
-    config, exchange, warmup_minutes=0, *, require_inception_facts=None,
+    config, exchange, warmup_minutes=0, *, inception_fact_coins=None,
 ):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
@@ -1999,7 +2017,7 @@ def load_coins_hlcvs_from_cache(
         coins = metadata["coins"]
         mss = metadata["market_specific_settings"]
         unresolved = _automatic_cache_unresolved_inception_coins(
-            config, coins, mss, require_inception_facts=require_inception_facts,
+            config, coins, mss, inception_fact_coins=inception_fact_coins,
         )
         if unresolved:
             logging.info("[hlcvs] cache has unresolved inception for %s; rebuilding", unresolved)
@@ -2033,7 +2051,7 @@ def save_coins_hlcvs_to_cache(
     warmup_minutes=0,
     force_overwrite=False,
     *,
-    require_inception_facts=None,
+    inception_fact_coins=None,
 ):
     mss = _preserve_cached_inception_facts(config, exchange, mss)
     cache_hash = get_cache_hash(config, exchange)
@@ -2064,7 +2082,7 @@ def save_coins_hlcvs_to_cache(
                 existing_mss = metadata["market_specific_settings"]
                 unresolved = _automatic_cache_unresolved_inception_coins(
                     config, existing_coins, existing_mss,
-                    require_inception_facts=require_inception_facts,
+                    inception_fact_coins=inception_fact_coins,
                 )
                 corrected = []
                 for coin in existing_coins:
@@ -2389,7 +2407,7 @@ async def prepare_hlcvs_mss(
     *,
     force_refetch_gaps: bool = False,
     allow_internal_nan_gaps: bool = False,
-    require_inception_facts: bool | None = None,
+    inception_fact_coins: frozenset[str] | None = None,
 ):
     if config["backtest"].get("organillo_csv") is not None:
         from organillo import freeze_config
@@ -2466,8 +2484,8 @@ async def prepare_hlcvs_mss(
             timestamps,
         )
     cache_requirements = (
-        {} if require_inception_facts is None
-        else {"require_inception_facts": require_inception_facts}
+        {} if inception_fact_coins is None
+        else {"inception_fact_coins": inception_fact_coins}
     )
     try:
         sts = utc_ms()

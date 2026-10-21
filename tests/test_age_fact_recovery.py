@@ -103,8 +103,13 @@ def test_automatic_cache_rebuild_publishes_recovered_inception(tmp_path, monkeyp
     import backtest as bt
     monkeypatch.setattr(bt, "HLCVS_CACHE_ROOT", tmp_path / "cache")
     monkeypatch.setattr(bt, "coin_to_symbol", lambda coin, *_a, **_kw: coin)
-    # Short is dormant, but an optimizer candidate can activate its positive gate.
+    # The actual optimizer sizing owner activates the reachable short side.
+    from optimization.warmup import build_optimizer_data_config
     config = _cache_config(tmp_path, (0.0, 60.0))
+    config["optimize"]["bounds"] = {"short": {"risk": {
+        "total_wallet_exposure_limit": [0.0, 1.0], "max_positions": [1, 1],
+    }}}
+    config = build_optimizer_data_config(config)
     directory, arrays, original_mss = _save_cache(bt, config, unknown)
     assert bt.load_coins_hlcvs_from_cache(config, "binance", 7) is None
     recovered_dir, _, _ = _save_cache(bt, config, BASE - 61 * DAY)

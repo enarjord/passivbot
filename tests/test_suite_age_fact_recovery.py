@@ -87,9 +87,10 @@ async def test_assigned_scenario_fact_demand_follows_fixed_then_scenario_owner(
     from optimization.warmup import build_optimizer_data_config
 
     config = _cache_config(tmp_path, base_ages)
-    config["optimize"]["bounds"] = {"long": {"risk": {
-        "total_wallet_exposure_limit": [1.0, 1.0],
-    }}}
+    config["optimize"]["bounds"] = {
+        "long": {"risk": {"total_wallet_exposure_limit": [1.0, 1.0]}},
+        "short": {"risk": {"total_wallet_exposure_limit": [0.0, 1.0], "max_positions": [1, 1]}},
+    }
     if fixed_age is not None:
         config["optimize"]["fixed_runtime_overrides"] = {
             "bot.short.universe.minimum_coin_age_days": fixed_age,
@@ -118,7 +119,7 @@ async def test_assigned_scenario_fact_demand_follows_fixed_then_scenario_owner(
 
     monkeypatch.setattr(bt, "prepare_hlcvs_mss", prepare)
     await prepare_master_datasets(config, ["binance"], scenarios=scenarios)
-    assert calls[0][1] == {"require_inception_facts": expected}
+    assert calls[0][1] == {"inception_fact_coins": frozenset({"AAA"}) if expected else frozenset()}
     assert calls[0][0] == original
     assert config == original and scenarios == originals
 
@@ -130,20 +131,21 @@ async def test_combined_and_individual_fact_demand_uses_only_assigned_scenarios(
     config["backtest"]["exchanges"] = ["binance", "bybit"]
     scenarios, _ = build_scenarios({"scenarios": [
         {"label": "combined", "exchanges": ["binance", "bybit"], "overrides": {
-            "bot.short.universe.minimum_coin_age_days": 7.25}},
+            "bot.short.universe.minimum_coin_age_days": 7.25,
+            "bot.short.risk.total_wallet_exposure_limit": 1.0, "bot.short.risk.max_positions": 1}},
         {"label": "single", "exchanges": ["binance"]},
     ]}, config["backtest"]["exchanges"])
     calls = {}
 
     async def prepare(effective, exchange, **kwargs):
-        calls[exchange] = kwargs.get("require_inception_facts")
+        calls[exchange] = kwargs.get("inception_fact_coins")
         return (["AAA"], np.ones((2, 1, 4)), {"AAA": {"exchange": "binance"}}, "", "cache",
                 np.ones(2), np.array([BASE, BASE + 60_000], dtype=np.int64))
 
     monkeypatch.setattr(bt, "prepare_hlcvs_mss", prepare)
     await prepare_master_datasets(config, config["backtest"]["exchanges"],
                                   scenarios=scenarios, needed_individual_exchanges={"binance"})
-    assert calls == {"combined": True, "binance": False}
+    assert calls == {"combined": frozenset({"AAA"}), "binance": frozenset()}
 
 
 @pytest.mark.asyncio
@@ -176,7 +178,7 @@ async def test_suite_unknown_cache_reuse_and_explicit_dataset_boundaries(tmp_pat
         recovered["AAA"]["inception_timestamp_ms"] = BASE
         bt.save_coins_hlcvs_to_cache(
             config, ["AAA"], arrays[0], "binance", recovered, arrays[1], arrays[2],
-            warmup_minutes=7, require_inception_facts=False,
+            warmup_minutes=7, inception_fact_coins=frozenset(),
         )
     assert config == original
     assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == original_files
@@ -190,21 +192,22 @@ async def test_individual_only_scenarios_do_not_require_facts_for_unused_combine
     config["backtest"]["exchanges"] = ["binance", "bybit"]
     scenarios, _ = build_scenarios({"scenarios": [
         {"label": "single", "exchanges": ["binance"], "coins": ["AAA"], "overrides": {
-            "bot.short.universe.minimum_coin_age_days": 7.25}},
+            "bot.short.universe.minimum_coin_age_days": 7.25,
+            "bot.short.risk.total_wallet_exposure_limit": 1.0, "bot.short.risk.max_positions": 1}},
     ]}, config["backtest"]["exchanges"])
     calls = {}
     async def prepare(effective, exchange, **kwargs):
-        calls[exchange] = kwargs.get("require_inception_facts")
+        calls[exchange] = kwargs.get("inception_fact_coins")
         return (["AAA"], np.ones((2, 1, 4)), {"AAA": {"exchange": "binance"}}, "", "cache",
                 np.ones(2), np.array([BASE, BASE + 60_000], dtype=np.int64))
     monkeypatch.setattr(bt, "prepare_hlcvs_mss", prepare)
     await prepare_master_datasets(config, config["backtest"]["exchanges"],
                                   scenarios=scenarios, needed_individual_exchanges={"binance"})
-    assert calls == {"combined": False, "binance": True}
+    assert calls == {"combined": frozenset(), "binance": frozenset({"AAA"})}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenarios,expected", [(None, {}), ([], {"require_inception_facts": False})])
+@pytest.mark.parametrize("scenarios,expected", [(None, {}), ([], {"inception_fact_coins": frozenset()})])
 async def test_unassigned_base_preload_retains_default_age_inference(tmp_path, monkeypatch, scenarios, expected):
     import backtest as bt
     config = _cache_config(tmp_path, (60.0, 0.0))

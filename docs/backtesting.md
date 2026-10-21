@@ -195,7 +195,11 @@ the side age-policy pair, preparation version, and gap tolerance. Long-only, sho
 therefore reuse the same prepared cache when their effective coin union and other
 data inputs match. Age no longer crops the shared candle history: inception is retained as a factual market input,
 and Rust applies each side's initial-entry gate at its decision timestamp. Unknown inception fails
-a positive age gate without discarding otherwise usable warmup data.
+a positive age gate without discarding otherwise usable warmup data. Automatic cache recovery
+is scoped to coins approved and not ignored on enabled positive-age sides. Optimizer acquisition
+uses its reachable-side configuration. Suite preparation resolves source policy once per context
+and reuses that frozen membership during execution, including explicit same-file replacements;
+zero-age or disabled contexts do not require unused facts from other shared dataset columns.
 Side membership remains run-specific; manifests retain the
 build request for provenance and explicit dataset replay. Warmup is checked
 separately, so a cache with greater warmup coverage may satisfy a smaller request.

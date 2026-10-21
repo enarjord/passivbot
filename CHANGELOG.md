@@ -12,7 +12,11 @@ since the latest release tag; these features may already be available when insta
   static and forced-normal selection, with exact threshold equality and unknown inception
   failing positive gates while live lookups and automatic prepared caches retry unresolved facts,
   including positive gates enabled by assigned suite scenarios after shared data preparation.
-  Live lookups cover only enabled positive-age sides; verified known inception survives unrelated
+  Fact acquisition covers only approved, non-ignored coins on reachable positive-age sides;
+  disjoint zero-age scenarios do not require unused listing facts. Scenario source memberships
+  resolve once and remain frozen through preload and execution. Live lookup runs as a tracked,
+  bounded background task so held-position planning does not wait for missing listing facts.
+  Verified known inception survives unrelated
   candle-cache rebuilds, and rejected caches do not materialize large arrays first.
   Held-position management remains available. Shared history retains
   pre-eligibility warmup rather than adding age and warmup delays. Direct released-v8 migration

@@ -7449,6 +7449,7 @@ async def test_monitor_snapshot_maintainer_is_registered_when_enabled():
     import passivbot as pb_mod
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot._schedule_first_timestamp_refresh = lambda: None
     bot.ws_enabled = False
     bot.monitor_publisher = SimpleNamespace(snapshot_interval_ms=1_000)
     blocker = asyncio.Event()

@@ -125,6 +125,12 @@ history may warm indicators. Backtest and GPU preparation transport inception se
 shared candle validity and warmup. GPU side admission indices are derived by the same Rust
 predicate on the native decision clock and must have an exact integer representation.
 
+Live inception acquisition is an owned, bounded background maintainer and must not await network
+lookup on the protective planning path. Automatic cache fact demand is the enabled positive-age
+side's prepared approved-minus-ignored membership; optimizer preparation supplies reachable-side
+sizing. Suite acquisition unions only assigned contexts, preserving their once-resolved source
+memberships through execution. This volatile acquisition context grants no trading permission.
+
 ## Forager Readiness Stages
 
 Live health distinguishes three stages:
