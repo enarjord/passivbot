@@ -27,7 +27,11 @@ def field_schema(field, *, include_default=True):
             result["exclusiveMinimum" if domain.exclusive_minimum else "minimum"] = domain.minimum
         if domain.maximum is not None:
             result["exclusiveMaximum" if domain.exclusive_maximum else "maximum"] = domain.maximum
-        if domain.choices:
+        if domain.string_pattern is not None:
+            result["pattern"] = domain.string_pattern
+            if domain.choices:
+                result["examples"] = [*domain.choices, *([None] if field.nullable else [])]
+        elif domain.choices:
             numeric_types = [kind for kind in types if kind in {"integer", "number"}]
             if numeric_types and "string" in types and all(isinstance(choice, str) for choice in domain.choices):
                 # Mixed numeric controls can name an automatic policy without

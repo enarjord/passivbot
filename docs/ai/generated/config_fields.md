@@ -297,8 +297,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.fills.fills_confirmation_overlap_minutes` | float | `60.0` | — | — | — | forbidden | — | python |
 | `live.fills.fills_recent_overlap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
 | `live.modes.disapproved_position` | string | `"graceful_stop"` | — | — | — | forbidden | — | python |
-| `live.modes.long` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only` | python |
-| `live.modes.short` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only` | python |
+| `live.modes.long` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only`; authored string pattern; choices show canonical examples | python |
+| `live.modes.short` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only`; authored string pattern; choices show canonical examples | python |
 | `live.recovery.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | — | —; live | — | forbidden | — | python |
 | `live.recovery.max_n_restarts_per_day` | integer | `10` | — | — | — | forbidden | — | python |
 | `live.startup.defer_broad_candle_warmup` | boolean | `true` | — | — | — | forbidden | — | python |

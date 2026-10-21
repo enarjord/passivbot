@@ -9,7 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Use explicit control values: `null` leaves long/short modes unforced and warmup uncapped;
   `live.startup.warmup_concurrency: "auto"` retains automatic scheduling. CLI, coin patches
   and scenario/fixed overrides share the strict domains; released-v8 migration reports
-  replacement of the old empty-string and zero sentinels.
+  replacement of the old empty-string and zero sentinels. Editor validation accepts the same
+  supported mode shorthand, case and surrounding whitespace as the loader.
 
 - Make public units explicit with exposure-enforcer `threshold_ratio`, warmup
   `span_multiplier` and `market_order_near_touch_fraction`. Preserve numeric values,

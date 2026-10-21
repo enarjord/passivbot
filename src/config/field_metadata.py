@@ -68,10 +68,10 @@ def enrich_fields(fields):
             data["coin_override"] = (CoinOverridePolicy.ALLOWED if path in get_live_coin_override_paths()
                                      else CoinOverridePolicy.FORBIDDEN)
             if path in {("live", "modes", side) for side in ("long", "short")}:
-                from .control_sentinels import FORCED_MODES
+                from .control_sentinels import FORCED_MODES, forced_mode_input_pattern
 
-                data.update(domain=FieldDomain(choices=FORCED_MODES),
-                            description="Null leaves the mode unforced; per-coin null clears a root forced mode.")
+                data.update(domain=FieldDomain(choices=FORCED_MODES, string_pattern=forced_mode_input_pattern()),
+                            description="Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.")
             elif path == ("live", "startup", "warmup_concurrency"):
                 data.update(domain=FieldDomain(minimum=1, choices=("auto",)),
                             description="Auto uses the existing context/exchange concurrency policy; a positive integer is explicit.")
