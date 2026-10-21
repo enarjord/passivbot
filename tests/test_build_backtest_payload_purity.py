@@ -37,7 +37,7 @@ def _base_config(candle_interval_minutes: int = 1) -> dict:
     cfg["backtest"]["maker_fee_override"] = None
     cfg["backtest"]["taker_fee_override"] = None
     cfg['bot']['global']['warmup']['ratio'] = 0.0
-    cfg['bot']['global']['warmup']['max_minutes'] = 0
+    cfg['bot']['global']['warmup']['max_minutes'] = None
     cfg['bot']['global']['hedge_mode'] = False
     return cfg
 

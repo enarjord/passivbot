@@ -12,7 +12,7 @@ from passivbot import Passivbot
 def test_coin_override_forced_mode_manual(monkeypatch):
     base_config = {
         "bot": {"long": {}, "short": {}},
-        "live": {"account": {"user": "dummy"}, "modes": {"long": "", "short": ""}},
+        "live": {"account": {"user": "dummy"}, "modes": {"long": None, "short": None}},
         "coin_overrides": {"DOGEUSDT": {"live": {"modes": {"long": "manual"}}}},
     }
 

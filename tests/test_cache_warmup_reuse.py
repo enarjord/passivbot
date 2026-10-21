@@ -90,7 +90,7 @@ def _base_config(**overrides):
             },
             "global": {
                 "universe": {"minimum_coin_age_days": 30},
-                "warmup": {"ratio": 0.3, "max_minutes": 0},
+                "warmup": {"ratio": 0.3, "max_minutes": None},
             },
         },
         "live": {},

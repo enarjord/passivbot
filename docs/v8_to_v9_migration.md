@@ -30,6 +30,7 @@ before backtesting a proposed replacement.
 | `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_pct`, `bot.global.warmup` |
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |
+| Empty forced modes, zero warmup cap, zero warmup concurrency | `null` modes, `bot.global.warmup.max_minutes: null`, and `live.startup.warmup_concurrency: "auto"`; each conversion is reported in every authored layer |
 | `forager.volume_drop_pct` | Removed; volume-based ranking remains |
 | Optional total-exposure entry gate | Removed; the entry cap always applies |
 | `trailing_grid_v7`, Defx and Paradex | Removed; select a retained strategy/venue explicitly |

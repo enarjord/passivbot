@@ -28,7 +28,15 @@ def field_schema(field, *, include_default=True):
         if domain.maximum is not None:
             result["exclusiveMaximum" if domain.exclusive_maximum else "maximum"] = domain.maximum
         if domain.choices:
-            result["enum"] = [*domain.choices, *([None] if field.nullable else [])]
+            numeric_types = [kind for kind in types if kind in {"integer", "number"}]
+            if numeric_types and "string" in types and all(isinstance(choice, str) for choice in domain.choices):
+                # Mixed numeric controls can name an automatic policy without
+                # restricting their separate positive numeric domain to strings.
+                result["anyOf"] = [{"type": numeric_types}, {"enum": list(domain.choices)}]
+                if field.nullable:
+                    result["anyOf"].append({"type": "null"})
+            else:
+                result["enum"] = [*domain.choices, *([None] if field.nullable else [])]
     annotations = {
         "unit": field.unit, "denominator": field.denominator,
         "scope": field.scope, "consumers": field.consumers,

@@ -338,6 +338,10 @@ def _extract_allowed_patch(
 
     def visit(value, policy, path: tuple[str, ...]):
         if policy is True:
+            from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
+
+            if path in FORCED_MODE_PATHS:
+                return optional_forced_mode(value, path=_format_override_path(coin, path))
             if value is None and path[-2:] != ("entry_cooldown", "max_duration_minutes"):
                 raise TypeError(f"{_format_override_path(coin, path)} may not be null")
             return deepcopy(value)
@@ -405,6 +409,11 @@ def _validate_patch_leaf_types(
     template = get_template_config()
     for path, value in _iter_patch_leaves(patch):
         display_path = f"{_format_override_path(coin, path)} ({origin})"
+        from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
+
+        if path in FORCED_MODE_PATHS:
+            optional_forced_mode(value, path=display_path)
+            continue
         reference = _get_nested_value(config, path)
         if reference is None:
             reference = _get_nested_value(template, path)

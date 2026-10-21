@@ -54,7 +54,7 @@ def base_config():
             },
             "global": {
                 "strategy_kind": "trailing_martingale",
-                "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                "warmup": {"ratio": 3.0, "max_minutes": None},
             },
         },
         "live": {},
@@ -183,9 +183,9 @@ class TestWarmupCalculation:
         # Should be capped at 1000 despite calculated value being 6000
         assert warmup_minutes == 1000
 
-    def test_zero_warmup_edge_case(self, base_config):
-        """Test with max_warmup_minutes = 0 (disabled limit)."""
-        base_config['bot']['global']['warmup']['max_minutes'] = 0.0
+    def test_uncapped_warmup_keeps_span_requirement(self, base_config):
+        """Null removes the cap without removing the indicator history requirement."""
+        base_config['bot']['global']['warmup']['max_minutes'] = None
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -485,7 +485,7 @@ class TestWarmupEdgeCases:
                 "short": {},
                 "global": {
                     "strategy_kind": "trailing_martingale",
-                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                    "warmup": {"ratio": 3.0, "max_minutes": None},
                 },
             },
             "live": {},
@@ -507,7 +507,7 @@ class TestWarmupEdgeCases:
                 "short": {},
                 "global": {
                     "strategy_kind": "trailing_martingale",
-                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                    "warmup": {"ratio": 3.0, "max_minutes": None},
                 },
             },
             "live": {},
@@ -527,7 +527,7 @@ class TestWarmupEdgeCases:
                 "short": {},
                 "global": {
                     "strategy_kind": "trailing_martingale",
-                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                    "warmup": {"ratio": 3.0, "max_minutes": None},
                 },
             },
             "live": {},

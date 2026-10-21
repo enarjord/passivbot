@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use explicit control values: `null` leaves long/short modes unforced and warmup uncapped;
+  `live.startup.warmup_concurrency: "auto"` retains automatic scheduling. CLI, coin patches
+  and scenario/fixed overrides share the strict domains; released-v8 migration reports
+  replacement of the old empty-string and zero sentinels.
+
 - Add compact authored configs, resolved local policy snapshots and offline `config-explain`
   reports with declared field metadata, value sources and optimizer treatment. Preserve sparse
   search/override authority and rebase relative coin override files when compact exports move.

@@ -133,7 +133,7 @@ _FIELDS_BY_TYPE = {
             max_memory_candles_per_symbol max_n_cancellations_per_batch
             max_n_creations_per_batch max_n_restarts_per_day max_ohlcv_fetches_per_minute
             order_replacement_churn_gate_activation_count
-            recv_window_ms warmup_concurrency
+            recv_window_ms
         """,
         "logging": "backup_count level",
         "monitor": "max_total_bytes price_tick_min_interval_ms",
@@ -174,7 +174,7 @@ _FIELDS_BY_TYPE = {
         "bot.global.universe": "minimum_coin_age_days",
         "bot.global.execution": "market_order_near_touch_threshold",
         "bot.global.forager": "score_hysteresis_pct",
-        "bot.global.warmup": "ratio max_minutes",
+        "bot.global.warmup": "ratio",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -200,7 +200,7 @@ _FIELDS_BY_TYPE = {
         "": "config_version",
         "backtest": "base_dir end_date hlcvs_data_override_mode start_date",
         "live": """
-            disapproved_position_mode forced_mode_long forced_mode_short margin_mode_preference
+            disapproved_position_mode margin_mode_preference
             market_snapshot_ticker_strategy time_in_force user
         """,
         "logging": "dir",
@@ -231,6 +231,7 @@ _FIELDS_BY_TYPE = {
 
 _NULLABLE_FIELDS = {
     FieldType.FLOAT: (
+        "bot.global.warmup.max_minutes",
         "backtest.btc_collateral_ltv_cap", "backtest.ew_half_life_days",
         "live.balance_override", "live.max_forager_candle_staleness_minutes",
     ),
@@ -238,6 +239,7 @@ _NULLABLE_FIELDS = {
         "live.max_concurrent_api_requests", "optimize.population_size", "optimize.seed",
     ),
     FieldType.STRING: (
+        "live.forced_mode_long", "live.forced_mode_short",
         "backtest.organillo_csv", "backtest.organillo_sha256", "backtest.hlcvs_data_dir",
         "backtest.ohlcv_source_dir", "live.custom_endpoints_path", "optimize.objective_scenario",
     ),
@@ -362,6 +364,7 @@ def get_field_registry() -> FieldRegistry:
     # Union fields have one unambiguous numeric serialization type.
     for path in ("optimize.gpu.batch_size", "optimize.gpu.max_dispatch_candidate_bars"):
         add(path, (FieldType.INTEGER, FieldType.STRING), nullable=True)
+    add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))
     for name in ("mutation_prob", "mutation_prob_per_variable"):
