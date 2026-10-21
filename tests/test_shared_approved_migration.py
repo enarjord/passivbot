@@ -90,3 +90,103 @@ def test_released_singleton_all_stays_shared_despite_same_named_file(tmp_path):
     result = migrate(raw, memory_span_minutes=123.5, base_config_path=str(tmp_path/'input.json'))
     assert result.config['bot']['global']['universe']['approved_coins'] == ['all']
     assert all(result.config['bot'][side]['universe']['approved_coins'] is None for side in ('long','short'))
+
+
+ENCODED_RELEASED_SOURCES = [
+    '{"long":["BTC"],"short":[]}',
+    '{"long":null,"short":[]}',
+    '["BTC","ETH"]',
+    ['{"long":["BTC"],"short":["ETH"]}'],
+    {'long':'["BTC","ETH"]','short':'[]'},
+]
+
+
+@pytest.mark.parametrize('kind', ['trailing_martingale', 'ema_anchor'])
+@pytest.mark.parametrize('field', ['approved_coins', 'ignored_coins'])
+@pytest.mark.parametrize('value', ENCODED_RELEASED_SOURCES)
+def test_released_encoded_inline_coin_sources_keep_legacy_membership_and_report(kind, field, value):
+    from utils import normalize_coins_source
+    raw = released(kind)
+    raw['live'][field] = deepcopy(value)
+    before = deepcopy(raw)
+    expected = normalize_coins_source(value, allow_all=field == 'approved_coins', resolve_files=False)
+    result = migrate(raw, memory_span_minutes=123.5)
+    effective = prepare_config(result.config, verbose=False)
+    assert resolve_universe_sources(effective, field)[0] == expected
+    assert any('decoded released' in row['reason'] for row in result.changes)
+    assert raw == before
+    assert migrate(result.config).config == result.config
+
+
+@pytest.mark.parametrize('owner', ['scenario', 'fixed'])
+@pytest.mark.parametrize('field', ['approved_coins', 'ignored_coins'])
+@pytest.mark.parametrize('selected_side', [None, 'long', 'short'])
+@pytest.mark.parametrize('value', ['["BTC","ETH"]', '{"long":["BTC"],"short":["ETH"]}', '{"long":null,"short":[]}'])
+def test_released_encoded_override_sources_preserve_replacement_scope(owner, field, selected_side, value):
+    from utils import normalize_coins_source
+    raw = released('trailing_martingale')
+    initial = {'long':['OLD'], 'short':['OTHER']}
+    raw['live'][field] = deepcopy(initial)
+    selector = f'live.{field}' + (f'.{selected_side}' if selected_side else '')
+    replacement = {selector:value}
+    if owner == 'fixed':
+        raw['optimize']['fixed_runtime_overrides'] = replacement
+    else:
+        raw['backtest']['scenarios'] = [{'label':'encoded', 'overrides':replacement}]
+    old_effective = deepcopy(initial)
+    if selected_side:
+        old_effective[selected_side] = value
+    else:
+        old_effective = value
+    expected = normalize_coins_source(old_effective, allow_all=field == 'approved_coins', resolve_files=False)
+    before = deepcopy(raw)
+    result = migrate(raw, memory_span_minutes=123.5)
+    effective = prepare_config(result.config, verbose=False)
+    if owner == 'fixed':
+        _apply_config_overrides(effective, effective['optimize']['fixed_runtime_overrides'])
+    else:
+        apply_scenario_overrides(effective, effective['backtest']['scenarios'][0]['overrides'])
+    assert resolve_universe_sources(effective, field)[0] == expected
+    assert any('decoded released' in row['reason'] for row in result.changes)
+    assert raw == before
+
+
+@pytest.mark.parametrize('owner', ['root', 'scenario', 'fixed'])
+@pytest.mark.parametrize('field', ['approved_coins', 'ignored_coins'])
+@pytest.mark.parametrize('directional', [False, True])
+def test_released_encoded_file_shorthand_retains_dynamic_binding(tmp_path, owner, field, directional):
+    selected = tmp_path/'coinlist'
+    selected.write_text('["BTC"]')
+    value = json.dumps({'long':'coinlist','short':[]}) if directional else json.dumps(['coinlist'])
+    raw = released('trailing_martingale')
+    if owner == 'root':
+        raw['live'][field] = value
+    elif owner == 'scenario':
+        raw['backtest']['scenarios'] = [{'label':'file','overrides':{f'live.{field}':value}}]
+    else:
+        raw['optimize']['fixed_runtime_overrides'] = {f'live.{field}':value}
+    before = deepcopy(raw)
+    result = migrate(raw, memory_span_minutes=123.5, base_config_path=str(tmp_path/'input.json'))
+    effective = prepare_config(result.config, base_config_path=str(tmp_path/'input.json'), verbose=False)
+    if owner == 'scenario':
+        apply_scenario_overrides(effective, effective['backtest']['scenarios'][0]['overrides'])
+    elif owner == 'fixed':
+        _apply_config_overrides(effective, effective['optimize']['fixed_runtime_overrides'])
+    expected_short = [] if directional else ['BTC']
+    assert resolve_universe_sources(effective, field)[0] == {'long':['BTC'],'short':expected_short}
+    selected.write_text('["ETH"]')
+    assert resolve_universe_sources(effective, field)[0] == {'long':['ETH'],'short':[] if directional else ['ETH']}
+    assert raw == before
+    assert any('decoded released' in row['reason'] for row in result.changes)
+
+
+@pytest.mark.parametrize('field', ['approved_coins', 'ignored_coins'])
+def test_released_encoded_directional_null_reports_final_empty_selection(field):
+    from config.migrations.shared_policy import normalize_released_coin_source
+    events = []
+    result = normalize_released_coin_source('{"long":null,"short":["ETH"]}',
+        field=field, side='long', path=f'live.{field}.long',
+        record=lambda *event: events.append(event))
+    assert result == []
+    assert events[-1][0] == f'live.{field}.long'
+    assert events[-1][2] == []
