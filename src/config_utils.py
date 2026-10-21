@@ -986,7 +986,7 @@ RESERVED_CLI_ARGS = {
         "help": (
             "Approved coin sources for both sides. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
             "coin list file, or a JSON/HJSON per-side object like "
-            '{"long":["BTC"],"short":"all"}. Use coin tickers, not exchange symbols.'
+            '{"long":["BTC"],"short":"all"}. An empty value approves nothing; null is reserved for explicit side approved_coins flags.'
         ),
     },
     "ignored_coins": {
@@ -1000,7 +1000,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Coin Selection",
             "optimize": "Coin Selection",
         },
-        "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file.",
+        "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file. Use an empty value to clear ignores; null is not supported.",
     },
     "bot.long.universe.minimum_coin_age_days": {
         "visible": ["--minimum-coin-age-days-long"],
@@ -2458,6 +2458,20 @@ def update_config_with_args(
     for field in ("approved_coins", "ignored_coins"):
         if field in supplied:
             supplied[field] = _decode_directional_cli_coin_source(supplied[field])
+    def null_source(value):
+        candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
+        return candidate is None or isinstance(candidate, str) and candidate.strip().lower() == "null"
+    for key in ("approved_coins", "ignored_coins", "bot.global.universe.approved_coins"):
+        if key not in supplied:
+            continue
+        value = supplied[key]
+        sources = value.values() if isinstance(value, dict) else (value,)
+        if any(null_source(item) for item in sources):
+            raise ValueError(
+                "null inheritance requires an explicit side approved_coins flag "
+                "(--bot.long.universe.approved_coins or --bot.short.universe.approved_coins); "
+                "use an empty value for no coins or a concrete coin source"
+            )
     if "config_version" in supplied:
         raise ValueError(
             "config_version is source schema metadata and cannot be overridden at runtime; "
@@ -2498,7 +2512,7 @@ def update_config_with_args(
                 raw = value
                 if key in {"approved_coins", "ignored_coins"} and isinstance(value, dict):
                     raw = value.get(path.split(".")[1], [])
-                if raw == ["null"] and path.endswith("approved_coins"):
+                if key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} and null_source(raw):
                     raw = None
                 from config.universe import bind_universe_source
                 raw = bind_universe_source(raw, field=path.split(".")[-1],

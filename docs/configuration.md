@@ -447,7 +447,9 @@ change one side. A per-side option takes precedence over a both-side convenience
 command. Retired `--live...` policy paths are rejected. Setting only
 `--bot.global.universe.approved_coins` changes inheriting sides and preserves explicit side pins.
 A side flag accepts `null` to resume inheritance. Both-side convenience flags replace both sides;
-they are not aliases for the shared source.
+they are not aliases for the shared source. Convenience and global source flags reject `null`,
+including null directional values. Use an empty CLI value for no coins, a concrete list/file,
+or an explicit side approved-source flag to resume inheritance.
 
 Compact and full exports preserve source bindings and explicit side pins. Resolved export inlines
 local files while retaining side `null` inheritance. Semantic exports moved to another directory

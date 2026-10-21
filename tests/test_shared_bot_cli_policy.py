@@ -94,3 +94,121 @@ async def test_download_cli_decodes_directional_convenience_sources(monkeypatch,
     await ohlcv_download.main()
     assert len(captured) == 1
     assert {side:captured[0]['bot'][side]['universe'][field] for side in ('long','short')} == {'long':['BTC'],'short':['ETH']}
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--symbols", "null"),
+        ("--ignored-coins", "null"),
+        ("--bot.global.universe.approved_coins", "null"),
+        ("--symbols", '{long: null, short: ["ETH"]}'),
+        ("--ignored-coins", "{long: [], short: null}"),
+    ],
+)
+def test_nonnullable_coin_source_flags_reject_null_before_mutation(
+    command, flag, value
+):
+    parser, keys = parser_for(command)
+    config = get_template_config()
+    before = deepcopy(config)
+    with pytest.raises(ValueError, match="explicit side.*approved_coins"):
+        update_config_with_args(
+            config, parser.parse_args([flag, value]), allowed_keys=keys
+        )
+    assert config == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--symbols", "null"),
+        ("--ignored-coins", "null"),
+        ("--bot.global.universe.approved_coins", "null"),
+        ("--symbols", '{long: null, short: ["ETH"]}'),
+    ],
+)
+async def test_download_rejects_null_sources_before_mutation(monkeypatch, flag, value):
+    import ohlcv_download
+
+    source = get_template_config()
+    before = deepcopy(source)
+    monkeypatch.setattr(
+        ohlcv_download,
+        "load_input_config",
+        lambda _path: (source, "", deepcopy(source)),
+    )
+
+    async def unexpected(*args, **kwargs):
+        pytest.fail("invalid source must not reach download preparation")
+
+    monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", unexpected)
+    monkeypatch.setattr("sys.argv", ["download", flag, value])
+    with pytest.raises(ValueError, match="explicit side.*approved_coins"):
+        await ohlcv_download.main()
+    assert source == before
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+def test_explicit_side_null_and_empty_convenience_have_distinct_authority(command):
+    from config.universe import resolve_universe_sources
+
+    parser, keys = parser_for(command)
+    config = get_template_config()
+    config["bot"]["global"]["universe"]["approved_coins"] = ["BTC"]
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["approved_coins"] = ["ETH"]
+    update_config_with_args(
+        config,
+        parser.parse_args(["--bot.long.universe.approved_coins", "null"]),
+        allowed_keys=keys,
+    )
+    assert config["bot"]["long"]["universe"]["approved_coins"] is None
+    assert resolve_universe_sources(config, "approved_coins")[0] == {
+        "long": ["BTC"],
+        "short": ["ETH"],
+    }
+    update_config_with_args(config, parser.parse_args(["-s", ""]), allowed_keys=keys)
+    assert resolve_universe_sources(config, "approved_coins")[0] == {
+        "long": [],
+        "short": [],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side_null", [False, True])
+async def test_download_empty_source_or_explicit_side_null(monkeypatch, side_null):
+    from config.universe import resolve_universe_sources
+    import ohlcv_download
+
+    source = get_template_config()
+    source["bot"]["global"]["universe"]["approved_coins"] = ["BTC"]
+    for side in ("long", "short"):
+        source["bot"][side]["universe"]["approved_coins"] = ["ETH"]
+    monkeypatch.setattr(
+        ohlcv_download,
+        "load_input_config",
+        lambda _path: (source, "", deepcopy(source)),
+    )
+    observed = []
+
+    async def inspect(config):
+        observed.append(resolve_universe_sources(config, "approved_coins")[0])
+
+    monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", inspect)
+    monkeypatch.setattr(
+        "sys.argv",
+        (
+            ["download", "--bot.long.universe.approved_coins", "null"]
+            if side_null
+            else ["download", "-s", ""]
+        ),
+    )
+    await ohlcv_download.main()
+    assert observed == (
+        [{"long": ["BTC"], "short": ["ETH"]}]
+        if side_null
+        else [{"long": [], "short": []}]
+    )

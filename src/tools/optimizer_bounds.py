@@ -16,6 +16,9 @@ def _anchor_file_references(config, *, base_config_path):
 
     base = base_config_path or config.get("live", {}).get("base_config_path", "")
 
+    # Initial selection may use the established repo/CWD/legacy fallbacks.
+    # Once selected, anchoring retains that binding rather than inventing one.
+    normalize_universe_source_bindings(config, base_config_path=base)
     normalize_universe_source_bindings(config, anchor_all=True, base_config_path=base)
 
     def visit(node, prefix=()):
