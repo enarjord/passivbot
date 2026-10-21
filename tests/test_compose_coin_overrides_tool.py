@@ -68,9 +68,9 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     first["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.21
     second["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.11
     first["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.03, 0.25, 0.01]
-    first['bot']['long']['risk']['position_exposure_enforcer']['threshold'] = 0.9
-    second['bot']['long']['risk']['position_exposure_enforcer']['threshold'] = 0.8
-    first['optimize']['bounds']['long']['risk']['position_exposure_enforcer']['threshold'] = [0.7, 1.0, 0.01]
+    first['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = 0.9
+    second['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = 0.8
+    first['optimize']['bounds']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = [0.7, 1.0, 0.01]
 
     _write(tmp_path / "a_btc.json", first)
     _write(tmp_path / "b_eth.json", second)
@@ -95,7 +95,7 @@ def test_composes_minimal_overrides_and_canonicalizes_disabled_features(tmp_path
     assert composed["bot"]["long"]["hsl"]["enabled"] is False
     assert composed["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == 0.03
     assert (
-        composed['bot']['long']['risk']['position_exposure_enforcer']['threshold'] == 0.7
+        composed['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] == 0.7
     )
 
     assert "BTC" not in composed["coin_overrides"]
@@ -157,7 +157,7 @@ def test_mixed_feature_enablement_omits_inert_dependent_overrides(tmp_path: Path
     )
     disabled["bot"]["long"]["risk"].update(
         {
-            "position_exposure_enforcer": {"enabled": False, "threshold": 0.75},
+            "position_exposure_enforcer": {"enabled": False, 'threshold_ratio': 0.75},
         }
     )
     _write(tmp_path / "a_btc.json", master)
@@ -245,14 +245,14 @@ def test_entry_cap_threshold_differences_survive_disabled_total_enforcer(tmp_pat
     first = _single_coin_config("BTC")
     second = _single_coin_config("ETH")
     for source, threshold in ((first, 0.8), (second, 0.9)):
-        source['bot']['long']['risk'].update({'total_exposure_enforcer': {**source['bot']['long']['risk']['total_exposure_enforcer'], 'enabled': False, 'threshold': threshold}})
+        source['bot']['long']['risk'].update({'total_exposure_enforcer': {**source['bot']['long']['risk']['total_exposure_enforcer'], 'enabled': False, 'threshold_ratio': threshold}})
     _write(tmp_path / "a.json", first)
     _write(tmp_path / "b.json", second)
 
     composed, report = compose_directory(tmp_path)
 
-    assert composed['bot']['long']['risk']['total_exposure_enforcer']['threshold'] == 0.8
-    assert "bot.long.risk.total_exposure_enforcer.threshold" in report.account_wide_conflicts
+    assert composed['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'] == 0.8
+    assert "bot.long.risk.total_exposure_enforcer.threshold_ratio" in report.account_wide_conflicts
 
 
 def test_rejects_all_as_single_coin(tmp_path: Path):
@@ -930,7 +930,7 @@ def test_custom_group_only_includes_allowed_leaves(tmp_path: Path):
         assert set(patch["bot"]["long"]["risk"]) == {
             "position_exposure_enforcer", "we_excess_allowance_pct",
         }
-        assert set(patch["bot"]["long"]["risk"]["position_exposure_enforcer"]) == {"enabled", "threshold"}
+        assert set(patch["bot"]["long"]["risk"]["position_exposure_enforcer"]) == {"enabled", "threshold_ratio"}
         assert patch["live"] == {
             "account": {"leverage": composed["live"]["account"]["leverage"]}
         }

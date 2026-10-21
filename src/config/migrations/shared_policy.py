@@ -9,9 +9,9 @@ LIVE_POLICY_PATHS = {
     "minimum_coin_age_days": "bot.global.universe.minimum_coin_age_days",
     "filter_by_min_effective_cost": "bot.global.universe.filter_by_min_effective_cost",
     "market_orders_allowed": "bot.global.execution.market_orders_allowed",
-    "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_threshold",
+    "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_fraction",
     "forager_score_hysteresis_pct": "bot.global.forager.score_hysteresis_pct",
-    "warmup_ratio": "bot.global.warmup.ratio",
+    "warmup_ratio": "bot.global.warmup.span_multiplier",
     "max_warmup_minutes": "bot.global.warmup.max_minutes",
 }
 COIN_SOURCE_FIELDS = ("approved_coins", "ignored_coins")

@@ -303,7 +303,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.global.execution.market_order_near_touch_threshold": {
+    "bot.global.execution.market_order_near_touch_fraction": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -1133,9 +1133,9 @@ RESERVED_CLI_ARGS = {
             "Disabled by default; live exchange slippage controls apply."
         ),
     },
-    "bot.global.execution.market_order_near_touch_threshold": {
-        "visible": ["--market-order-near-touch-threshold", "-montt"],
-        "hidden": ["--bot_global_execution_market_order_near_touch_threshold"],
+    "bot.global.execution.market_order_near_touch_fraction": {
+        "visible": ["--market-order-near-touch-fraction", "-montf"],
+        "hidden": ["--bot_global_execution_market_order_near_touch_fraction"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1545,7 +1545,7 @@ RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 # optimizer projects these settings separately from its numeric search genes.
 for _path, _group in (
     ("bot.global.strategy_kind", "Behavior"),
-    ("bot.global.warmup.ratio", "Backtest Runtime"),
+    ("bot.global.warmup.span_multiplier", "Backtest Runtime"),
     ("bot.global.warmup.max_minutes", "Backtest Runtime"),
     ("bot.global.universe.filter_by_min_effective_cost", "Coin Selection"),
 ):
@@ -1781,7 +1781,7 @@ for _pside in ("long", "short"):
                 "Allowed values: reduce_overweight or reduce_portfolio. Controls "
                 f"which managed {_pside} positions TWEL auto-reduce may trim."
             ),
-            f"bot.{_pside}.risk.total_exposure_enforcer.threshold": (
+            f"bot.{_pside}.risk.total_exposure_enforcer.threshold_ratio": (
                 f"Fraction of {_pside} TWEL used by entry gating and TWEL "
                 "auto-reduce repair."
             ),

@@ -54,7 +54,7 @@ def base_config():
             },
             "global": {
                 "strategy_kind": "trailing_martingale",
-                "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                "warmup": {'span_multiplier': 3.0, "max_minutes": 0.0},
             },
         },
         "live": {},
@@ -195,7 +195,7 @@ class TestWarmupCalculation:
 
     def test_zero_warmup_ratio_edge_case(self, base_config):
         """Test with warmup_ratio = 0."""
-        base_config['bot']['global']['warmup']['ratio'] = 0.0
+        base_config['bot']['global']['warmup']['span_multiplier'] = 0.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -216,7 +216,7 @@ class TestWarmupCalculation:
 
     def test_negative_warmup_ratio_clamped_to_zero(self, base_config):
         """Test that negative warmup_ratio is treated as 0."""
-        base_config['bot']['global']['warmup']['ratio'] = -5.0
+        base_config['bot']['global']['warmup']['span_multiplier'] = -5.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -467,7 +467,7 @@ class TestWarmupEdgeCases:
                     "strategy": {"trailing_martingale": {"entry": {"ema_span_0": 1000.0}}}
                 },
                 "short": {},
-                "global": {"strategy_kind": "trailing_martingale", "warmup": {"ratio": 3.0}},
+                "global": {"strategy_kind": "trailing_martingale", "warmup": {'span_multiplier': 3.0}},
             },
             "live": {},
             "optimize": {"bounds": {}},
@@ -485,7 +485,7 @@ class TestWarmupEdgeCases:
                 "short": {},
                 "global": {
                     "strategy_kind": "trailing_martingale",
-                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                    "warmup": {'span_multiplier': 3.0, "max_minutes": 0.0},
                 },
             },
             "live": {},
@@ -507,7 +507,7 @@ class TestWarmupEdgeCases:
                 "short": {},
                 "global": {
                     "strategy_kind": "trailing_martingale",
-                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                    "warmup": {'span_multiplier': 3.0, "max_minutes": 0.0},
                 },
             },
             "live": {},
@@ -527,7 +527,7 @@ class TestWarmupEdgeCases:
                 "short": {},
                 "global": {
                     "strategy_kind": "trailing_martingale",
-                    "warmup": {"ratio": 3.0, "max_minutes": 0.0},
+                    "warmup": {'span_multiplier': 3.0, "max_minutes": 0.0},
                 },
             },
             "live": {},

@@ -247,15 +247,15 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             risk.get('position_exposure_enforcer', {}).get('enabled', False)
         ),
         "position_exposure_enforcer_threshold": _finite_float(
-            risk.get('position_exposure_enforcer', {}).get('threshold', 0.0),
-            f"bot.{pside}.risk.position_exposure_enforcer.threshold",
+            risk.get('position_exposure_enforcer', {}).get('threshold_ratio', 0.0),
+            f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_enabled": bool(
             risk.get('total_exposure_enforcer', {}).get('enabled', False)
         ),
         "total_exposure_enforcer_threshold": _finite_float(
-            risk.get('total_exposure_enforcer', {}).get('threshold', 0.0),
-            f"bot.{pside}.risk.total_exposure_enforcer.threshold",
+            risk.get('total_exposure_enforcer', {}).get('threshold_ratio', 0.0),
+            f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_policy": str(
             risk.get('total_exposure_enforcer', {}).get('policy', 'unknown')
