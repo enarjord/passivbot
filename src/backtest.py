@@ -1886,19 +1886,31 @@ def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamp
     return HLCVS_CACHE_ROOT / dir_name
 
 
-def _automatic_cache_unresolved_inception_coins(config, coins, mss):
+def _automatic_cache_unresolved_inception_coins(
+    config, coins, mss, *, require_inception_facts=None,
+):
     """Retry missing facts for either positive age policy, including dormant sides.
 
     Prepared history is shared with optimizer candidates that can activate a side.
+    Suite acquisition can supply the demand of its assigned effective scenarios.
+    This transient requirement changes neither age policy nor cache identity.
     Explicit dataset overrides are immutable inputs and do not use this retry gate.
     """
-    if not any(minimum_coin_age_days(config, side) > 0 for side in POSITION_SIDES):
+    if require_inception_facts is None:
+        require_inception_facts = any(
+            minimum_coin_age_days(config, side) > 0 for side in POSITION_SIDES
+        )
+    elif not isinstance(require_inception_facts, bool):
+        raise TypeError("require_inception_facts must be a boolean or None")
+    if not require_inception_facts:
         return []
     return [coin for coin in coins
             if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
 
 
-def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
+def load_coins_hlcvs_from_cache(
+    config, exchange, warmup_minutes=0, *, require_inception_facts=None,
+):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     if cache_dir and os.path.exists(cache_dir):
@@ -1938,7 +1950,9 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             return None
         coins = json.load(open(cache_dir / "coins.json"))
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
-        unresolved = _automatic_cache_unresolved_inception_coins(config, coins, mss)
+        unresolved = _automatic_cache_unresolved_inception_coins(
+            config, coins, mss, require_inception_facts=require_inception_facts,
+        )
         if unresolved:
             logging.info("[hlcvs] cache has unresolved inception for %s; rebuilding", unresolved)
             return None
@@ -1966,6 +1980,8 @@ def save_coins_hlcvs_to_cache(
     timestamps=None,
     warmup_minutes=0,
     force_overwrite=False,
+    *,
+    require_inception_facts=None,
 ):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _get_hlcvs_cache_dir_for_save(
@@ -1992,6 +2008,7 @@ def save_coins_hlcvs_to_cache(
                 existing_mss = json.load(open(cache_dir / "market_specific_settings.json"))
                 unresolved = _automatic_cache_unresolved_inception_coins(
                     config, existing_coins, existing_mss,
+                    require_inception_facts=require_inception_facts,
                 )
                 if not unresolved:
                     return cache_dir
@@ -2304,6 +2321,7 @@ async def prepare_hlcvs_mss(
     *,
     force_refetch_gaps: bool = False,
     allow_internal_nan_gaps: bool = False,
+    require_inception_facts: bool | None = None,
 ):
     if config["backtest"].get("organillo_csv") is not None:
         from organillo import freeze_config
@@ -2379,12 +2397,18 @@ async def prepare_hlcvs_mss(
             btc_usd_prices,
             timestamps,
         )
+    cache_requirements = (
+        {} if require_inception_facts is None
+        else {"require_inception_facts": require_inception_facts}
+    )
     try:
         sts = utc_ms()
         result = (
             None
             if force_refetch_gaps
-            else load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
+            else load_coins_hlcvs_from_cache(
+                config, exchange, backtest_warmup_minutes, **cache_requirements,
+            )
         )
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
@@ -2486,6 +2510,7 @@ async def prepare_hlcvs_mss(
             timestamps,
             warmup_minutes=backtest_warmup_minutes,
             force_overwrite=force_refetch_gaps or is_offline(),
+            **cache_requirements,
         )
     except Exception as e:
         release_materialized_payload(hlcvs)

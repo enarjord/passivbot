@@ -10,7 +10,8 @@ since the latest release tag; these features may already be available when insta
   path. Both default to `60.0`; fractional days and zero bypass are preserved. Rust now gates
   new initial entries consistently across live/backtest/optimizer selection modes, including
   static and forced-normal selection, with exact threshold equality and unknown inception
-  failing positive gates while live lookups and automatic prepared caches retry unresolved facts.
+  failing positive gates while live lookups and automatic prepared caches retry unresolved facts,
+  including positive gates enabled by assigned suite scenarios after shared data preparation.
   Held-position management remains available. Shared history retains
   pre-eligibility warmup rather than adding age and warmup delays. Direct released-v8 migration
   copies the old live age to both sides and reports the changed admission semantics.

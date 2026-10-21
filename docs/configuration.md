@@ -476,6 +476,10 @@ shared source.
   stop held-position DCA, exits or protection. Pre-eligibility history may warm indicators;
   there is no added age-plus-warmup waiting period. This is fixed policy, outside optimizer bounds
   and coin overrides; fixed runtime and scenario overrides can set either side independently.
+  Automatic shared-data caches retry missing inception facts when any assigned scenario needs
+  a positive gate, including a dormant side that an optimizer candidate can activate. This
+  acquisition requirement leaves the configured ages and cache identity unchanged. Explicit
+  dataset overrides remain immutable; unknown inception in them still fails a positive gate.
 
 - **bot.global.forager.score_hysteresis_margin**: Absolute normalized-score margin for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 

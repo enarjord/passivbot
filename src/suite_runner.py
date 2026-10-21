@@ -921,6 +921,26 @@ def _apply_candle_aggregation(
     return hlcvs, timestamps, btc_usd_prices
 
 
+def _dataset_requires_inception_facts(base_config, scenarios):
+    """Acquire facts for assigned execution contexts without changing cached policy.
+
+    Optimizer preloads already include fixed runtime pins. Scenario overrides own
+    the final context; even dormant sides may become active in later candidates.
+    Use the scenario owner on copies so parent selectors retain its exact semantics
+    without resolving or rereading universe source files.
+    """
+    from config.age_policy import minimum_coin_age_days
+
+    if not scenarios:
+        return None  # An unassigned base preload uses the ordinary configured pair.
+    for scenario in scenarios:
+        effective = deepcopy(base_config)
+        apply_scenario_overrides(effective, scenario.overrides)
+        if any(minimum_coin_age_days(effective, side) > 0 for side in ("long", "short")):
+            return True
+    return False
+
+
 async def prepare_master_datasets(
     base_config: Dict[str, Any],
     exchanges: List[str],
@@ -935,8 +955,11 @@ async def prepare_master_datasets(
 
     datasets: Dict[str, ExchangeDataset] = {}
 
-    async def _prepare_dataset(config, exchange):
+    async def _prepare_dataset(config, exchange, assigned_scenarios):
         kwargs = {"allow_internal_nan_gaps": True} if allow_internal_nan_gaps else {}
+        requirement = _dataset_requires_inception_facts(config, assigned_scenarios)
+        if requirement is not None:
+            kwargs["require_inception_facts"] = requirement
         if config["backtest"].get("organillo_csv") is not None:
             # Masters serve scenarios with different schedules and date windows.
             # Apply each schedule after slicing, rather than pruning a shared master.
@@ -1036,10 +1059,8 @@ async def prepare_master_datasets(
         combined_window = dataset_windows["combined"]
         _log_dataset_window("combined", combined_window)
         combined_config = _config_for_dataset_window(base_config, combined_window)
-        combined_config = _config_for_dataset_coins(
-            combined_config,
-            combined_scenarios or list(scenarios or []),
-        )
+        assigned_combined = combined_scenarios or list(scenarios or [])
+        combined_config = _config_for_dataset_coins(combined_config, assigned_combined)
         (
             coins,
             hlcvs,
@@ -1048,7 +1069,7 @@ async def prepare_master_datasets(
             cache_dir,
             btc_usd_prices,
             timestamps,
-        ) = await _prepare_dataset(combined_config, "combined")
+        ) = await _prepare_dataset(combined_config, "combined", assigned_combined)
         prepared_hlcvs = hlcvs
         if candle_interval_minutes > 1:
             hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
@@ -1108,7 +1129,9 @@ async def prepare_master_datasets(
                     ex_cache_dir,
                     ex_btc_usd_prices,
                     ex_timestamps,
-                ) = await _prepare_dataset(exchange_config, exchange)
+                ) = await _prepare_dataset(
+                    exchange_config, exchange, individual_scenarios.get(str(exchange), []),
+                )
                 prepared_ex_hlcvs = ex_hlcvs
                 if candle_interval_minutes > 1:
                     ex_hlcvs, ex_timestamps, ex_btc_usd_prices = (
@@ -1162,7 +1185,7 @@ async def prepare_master_datasets(
                 cache_dir,
                 btc_usd_prices,
                 timestamps,
-            ) = await _prepare_dataset(exchange_config, exchange)
+            ) = await _prepare_dataset(exchange_config, exchange, exchange_scenarios)
             prepared_hlcvs = hlcvs
             if candle_interval_minutes > 1:
                 hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
