@@ -246,14 +246,14 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "position_exposure_enforcer_enabled": bool(
             risk.get('position_exposure_enforcer', {}).get('enabled', False)
         ),
-        "position_exposure_enforcer_threshold": _finite_float(
+        "position_exposure_enforcer_threshold_ratio": _finite_float(
             risk.get('position_exposure_enforcer', {}).get('threshold_ratio', 0.0),
             f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_enabled": bool(
             risk.get('total_exposure_enforcer', {}).get('enabled', False)
         ),
-        "total_exposure_enforcer_threshold": _finite_float(
+        "total_exposure_enforcer_threshold_ratio": _finite_float(
             risk.get('total_exposure_enforcer', {}).get('threshold_ratio', 0.0),
             f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         ),
@@ -948,7 +948,7 @@ def _classify_side(
                 "minimum-quantity, rounding, and dust-remainder rules."
             )
         if context.get("position_exposure_enforcer_enabled", False):
-            enforcer_threshold = context.get("position_exposure_enforcer_threshold", 0.0)
+            enforcer_threshold = context.get("position_exposure_enforcer_threshold_ratio", 0.0)
             if context["active"] and (
                 forced_mode not in {"panic", "manual"}
                 or context.get("hsl_enabled", False)
@@ -972,7 +972,7 @@ def _classify_side(
                 "may crop or remove the order based on exposure consumed by all positions on this side."
             )
         if context.get("total_exposure_enforcer_enabled", False):
-            twel_threshold = context.get("total_exposure_enforcer_threshold", 0.0)
+            twel_threshold = context.get("total_exposure_enforcer_threshold_ratio", 0.0)
             twel_policy = context.get("total_exposure_enforcer_policy", "unknown")
             if context["active"] and (
                 forced_mode not in {"panic", "manual"}
@@ -1184,8 +1184,8 @@ def build_overview(
                 )
                 enforcer_threshold = (
                     _finite_float(
-                        context.get("position_exposure_enforcer_threshold", 0.0),
-                        "position_exposure_enforcer_threshold",
+                        context.get("position_exposure_enforcer_threshold_ratio", 0.0),
+                        "position_exposure_enforcer_threshold_ratio",
                     )
                     if context
                     else 0.0

@@ -258,7 +258,7 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot.exchange = "hyperliquid"
     bot.config = {"bot": {"global": {"execution": {
         "market_orders_allowed": True,
-        "market_order_near_touch_threshold": 0.001,
+        "market_order_near_touch_fraction": 0.001,
     }}}}
     bot.bot_value = lambda pside, key: {
         ("long", "total_wallet_exposure_limit"): 1.5,
@@ -272,7 +272,7 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
 
     assert any(
         "live market order execution is enabled" in rec.message
-        and "market_order_near_touch_threshold=0.001" in rec.message
+        and "market_order_near_touch_fraction=0.001" in rec.message
         for rec in caplog.records
     )
 

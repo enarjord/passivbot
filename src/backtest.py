@@ -2536,11 +2536,11 @@ def log_backtest_execution_settings(
         return
     logging.info("[backtest] effective execution settings:")
     logging.info(
-        "[backtest]   market_orders_allowed = %s (live)",
+        "[backtest]   market_orders_allowed = %s (bot.global.execution)",
         execution_settings.market_orders_allowed,
     )
     logging.info(
-        "[backtest]   market_order_near_touch_threshold = %s (live)",
+        "[backtest]   market_order_near_touch_fraction = %s (bot.global.execution)",
         execution_settings.market_order_near_touch_threshold,
     )
     logging.info(
