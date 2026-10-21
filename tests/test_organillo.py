@@ -792,7 +792,7 @@ def test_future_only_warmup_does_not_delay_initial_coin(tmp_path, require_real_p
     config, candles, markets, btc, timestamps = inputs
     config['bot']['global']['warmup']['max_minutes'] = 2000
     config["coin_overrides"] = {"COIN01": {"bot": {"long": {"strategy": {
-        "ema_anchor": {"ema_span_0": 20000.0, "ema_span_1": 40000.0}}}}}}
+        "ema_anchor": {"ema_span_0_minutes": 20000.0, "ema_span_1_minutes": 40000.0}}}}}}
     for coin in ("COIN00", "COIN01"):
         markets[coin]["warmup_minutes_source"] = "history"
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0], [0, 1]])

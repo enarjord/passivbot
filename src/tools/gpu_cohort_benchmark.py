@@ -213,7 +213,7 @@ def _cohort(args, strategy, seed):
                 bot["initial_qty_fraction"] = 0.01 + index * 0.001
             else:
                 bot["base_qty_fraction"] = 0.01 + index * 0.001
-            bot["ema_span_0"] = 5.0 + index * 1.25
+            bot["ema_span_0_minutes"] = 5.0 + index * 1.25
         configs.append(candidate)
         parameters.append(prepare_candidate_parameters(candidate, markets, "binance"))
     return inputs, configs, parameters

@@ -58,7 +58,7 @@ def _request_owned_paths(config):
     for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
         if path is not None:
             yield path
-    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red"):
+    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
         yield ("bot", "global", "hsl", key)
 
 
@@ -98,7 +98,7 @@ def _static_contract(config):
     for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
         if path is not None:
             _remove_path(result, path)
-    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_minutes_after_red"):
+    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
         _remove_path(result, ("bot", "global", "hsl", key))
     coupled = unstuck_ema_spans_coupled(config)
     # CPU worker views lower coupled unstuck spans to ordinary request inheritance.
@@ -108,9 +108,9 @@ def _static_contract(config):
     if coupled:
         for patch in result.get("coin_overrides", {}).values():
             for side in ("long", "short"):
-                for name in ("ema_span_0", "ema_span_1"):
+                for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
                     _remove_path(patch, ("bot", side, "unstuck", name))
-                    _remove_path(patch, ("bot", side, f"unstuck_{name}"))
+                    _remove_path(patch, ("bot", side, f"unstuck_{name.removesuffix('_minutes')}"))
     return result
 
 
@@ -194,9 +194,9 @@ class _ExecutionProjection:
         if unstuck_ema_spans_coupled(config):
             for coin in config.get("coin_overrides", {}):
                 for side in ("long", "short"):
-                    for name in ("ema_span_0", "ema_span_1"):
+                    for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
                         numeric_paths.add(("coin_overrides", coin, "bot", side, "unstuck", name))
-                        numeric_paths.add(("coin_overrides", coin, "bot", side, f"unstuck_{name}"))
+                        numeric_paths.add(("coin_overrides", coin, "bot", side, f"unstuck_{name.removesuffix('_minutes')}"))
         self.guard = _compile_projection_guard(config, numeric_paths)
         self.specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
         self.sides = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))

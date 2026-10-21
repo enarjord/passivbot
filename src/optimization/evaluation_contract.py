@@ -76,7 +76,7 @@ def build_evaluation_contract(config: dict) -> dict:
             *(patch.get("bot", {}) for patch in coin_overrides.values()),
         ]:
             for side in ("long", "short"):
-                for key in ("ema_span_0", "ema_span_1"):
+                for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
                     bot.get(side, {}).get("unstuck", {}).pop(key, None)
     bounds = _flatten_bounds_for_config(effective, effective["optimize"]["bounds"])
     for key in bounds:

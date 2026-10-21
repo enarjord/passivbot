@@ -36,7 +36,7 @@ def _parse(overrides, *, mode="coin", loaded=None, configure_source=None):
 
 
 HSL_LEAF_CASES = [
-    (("cooldown_minutes_after_red",), 12.5),
+    (("cooldown_after_red_minutes",), 12.5),
     (("drawdown_ratio_ema_span_minutes",), 5.5),
     (("memory_ema_span_minutes",), 19.5),
     (("scale_budget_with_excess_allowance",), True),
@@ -73,7 +73,7 @@ def test_complete_hsl_group_is_allowed_for_coin_signal_mode(pside, path, value):
 
 def test_hsl_policy_registry_covers_every_canonical_leaf():
     assert CONDITIONAL_HSL_OVERRIDE_PATHS == {
-        "hsl.cooldown_minutes_after_red",
+        "hsl.cooldown_after_red_minutes",
         "hsl.drawdown_ratio_ema_span_minutes",
         "hsl.memory_ema_span_minutes",
         "hsl.scale_budget_with_excess_allowance",
@@ -192,7 +192,7 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
                 "short": {
                     "hsl": {
                         "panic_close_order_type": "limit",
-                        "cooldown_minutes_after_red": 17.5,
+                        "cooldown_after_red_minutes": 17.5,
                     }
                 },
             }
@@ -203,7 +203,7 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
     assert bot["long"]["hsl"]["drawdown_ratio_threshold"] == 0.25
     assert bot["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == 4.5
     assert bot["short"]["hsl"]["panic_close_order_type"] == "market"
-    assert bot["short"]["hsl"]["cooldown_minutes_after_red"] == 17.5
+    assert bot["short"]["hsl"]["cooldown_after_red_minutes"] == 17.5
 
 
 def test_threshold_override_does_not_add_unrequested_policy_fields():

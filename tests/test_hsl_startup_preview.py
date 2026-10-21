@@ -28,7 +28,7 @@ def _sample_config() -> dict:
                 "hsl": {
                     "enabled": True,
                     "drawdown_ratio_threshold": 0.1,
-                    "cooldown_minutes_after_red": 45,
+                    "cooldown_after_red_minutes": 45,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "panic_close_order_type": "limit",
@@ -38,7 +38,7 @@ def _sample_config() -> dict:
                 "hsl": {
                     "enabled": False,
                     "drawdown_ratio_threshold": 0.12,
-                    "cooldown_minutes_after_red": 30,
+                    "cooldown_after_red_minutes": 30,
                 },
             },
         },

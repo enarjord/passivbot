@@ -456,8 +456,8 @@ def test_startup_timing_event_carries_configured_diagnostic_budgets(monkeypatch)
                     "startup": {
                         "startup_phase_budgets": {
                             "account": {
-                                "elapsed_ms": 10_000,
-                                "since_previous_ms": 5_000,
+                                "elapsed_milliseconds": 10_000,
+                                "since_previous_milliseconds": 5_000,
                             }
                         }
                     }

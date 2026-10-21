@@ -263,9 +263,9 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             "long": {
                 "strategy": {
                     "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
+                        "ema_span_0_minutes": 48,
+                        "ema_span_1_minutes": 60,
+                        "offset_volatility_ema_span_1h_candles": 12,
                         "offset_fraction": 0.003,
                     }
                 },
@@ -274,9 +274,9 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             "short": {
                 "strategy": {
                     "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
+                        "ema_span_0_minutes": 48,
+                        "ema_span_1_minutes": 60,
+                        "offset_volatility_ema_span_1h_candles": 12,
                         "offset_fraction": 0.003,
                     }
                 },
@@ -333,7 +333,7 @@ def test_run_signature_changes_for_optimize_changes():
         },
         "bot": {
             "long": {
-                "strategy": {"ema_anchor": {"ema_span_0": 48}},
+                "strategy": {"ema_anchor": {"ema_span_0_minutes": 48}},
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {"universe": {"approved_coins": []}},

@@ -86,13 +86,13 @@ def validate_authored_config(config, template, *, policy_context=None):
             cooldown[key] = []
         cooldown["weights_minutes"] = {"exposure_ratio": [], "adverse_directionality": []}
         bounds[side]["forager"].setdefault("score_weights", {})["unilateralness"] = []
-        bounds[side]["forager"]["unilateralness_ema_span_1m"] = []
+        bounds[side]["forager"]["unilateralness_ema_span_minutes"] = []
     # Optional dimensions must remain absent from default searches.
     bounds.setdefault("global", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
     bounds.setdefault("global", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
     bounds["global"].setdefault("hsl", {}).update({
         "drawdown_ratio_threshold": [], "drawdown_ratio_ema_span_minutes": [],
-        "memory_ema_span_minutes": [], "cooldown_minutes_after_red": [],
+        "memory_ema_span_minutes": [], "cooldown_after_red_minutes": [],
     })
 
     def visit(value, expected, parts):

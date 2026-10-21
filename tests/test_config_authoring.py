@@ -111,11 +111,11 @@ def test_compact_preserves_effective_normalized_weights(weights):
 
 def test_compact_preserves_authored_search_authority_and_sparse_pins():
     source = policy()
-    source["optimize"]["bounds"] = {"long": {"unstuck": {"ema_span_0": [17.5, 17.5]}}}
-    source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0"]
+    source["optimize"]["bounds"] = {"long": {"unstuck": {"ema_span_0_minutes": [17.5, 17.5]}}}
+    source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0_minutes"]
     source["optimize"]["fixed_runtime_overrides"] = {"bot.long.unstuck.close_fraction": 0.11}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {"bot.long.unstuck.close_fraction": 0.12}}]
-    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 790.0}}}}}
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 790.0}}}}}
     compact = compact_config(source)
     for name in ("bounds", "fixed_params", "fixed_runtime_overrides"):
         assert compact["optimize"][name] == source["optimize"][name]
@@ -148,7 +148,7 @@ def test_compact_retains_optional_portfolio_authorization():
 
 
 def test_compact_rebases_relative_override_file_when_output_moves(tmp_path):
-    override = write_json(tmp_path / "inputs" / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}})
+    override = write_json(tmp_path / "inputs" / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5}}}})
     source = policy()
     source["coin_overrides"] = {"BTC": {"override_config_path": override.name}}
     input_path = write_json(override.parent / "input.json", source)
@@ -161,7 +161,7 @@ def test_compact_rebases_relative_override_file_when_output_moves(tmp_path):
 
 def test_resolved_export_inlines_files_and_preserves_sparse_override_precedence(tmp_path):
     coins = write_json(tmp_path / "approved.json", {"long": ["BTC", "ETH"], "short": []})
-    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5, "close_fraction": 0.12}}}})
+    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5, "close_fraction": 0.12}}}})
     source = policy()
     set_side_universe_sources(source, 'approved_coins', str(coins))
     set_side_universe_sources(source, 'ignored_coins', {'long': ['ETH'], 'short': []})
@@ -174,7 +174,7 @@ def test_resolved_export_inlines_files_and_preserves_sparse_override_precedence(
     assert source == before
     assert require_side_universe_sources(resolved, 'approved_coins') == {"long": ["BTC", "ETH"], "short": []}
     assert resolved["backtest"]["filter_by_min_effective_cost"] is None
-    assert resolved["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"ema_span_0": 17.5, "close_fraction": 0.13}}}}
+    assert resolved["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5, "close_fraction": 0.13}}}}
     assert effective(resolved) == effective(source, str(input_path))
     coins.unlink()
     override.unlink()
@@ -183,7 +183,7 @@ def test_resolved_export_inlines_files_and_preserves_sparse_override_precedence(
 
 def test_resolved_export_materializes_scenario_file_sources(tmp_path):
     coins = write_json(tmp_path / "scenario-coins.json", ["ETH"])
-    override = write_json(tmp_path / "scenario-coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 19.5}}}})
+    override = write_json(tmp_path / "scenario-coin.json", {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 19.5}}}})
     source = policy()
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
         "bot.long.universe.approved_coins": str(coins),
@@ -192,7 +192,7 @@ def test_resolved_export_materializes_scenario_file_sources(tmp_path):
     resolved = resolved_config(source, base_config_path=str(tmp_path / "input.json"))
     patch = resolved["backtest"]["scenarios"][0]["overrides"]
     assert patch["bot.long.universe.approved_coins"] == ["ETH"]
-    assert patch["coin_overrides"] == {"ETH": {"bot": {"long": {"unstuck": {"ema_span_0": 19.5}}}}}
+    assert patch["coin_overrides"] == {"ETH": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 19.5}}}}}
     override.unlink()
     coins.unlink()
     assert resolved_config(resolved) == resolved
@@ -216,10 +216,10 @@ def _replay_export_context(source, *, base="", fixed=False, scenario=False):
 @pytest.mark.parametrize("coin", ["BTC", "bybit::BTC/USDT:USDT"])
 def test_resolved_atomic_coin_scenario_replaces_only_its_authored_scope(tmp_path, coin):
     original_file = write_json(tmp_path / "root-coin.json", {"bot": {"long": {"unstuck": {
-        "ema_span_0": 17.5, "ema_span_1": 29.5, "close_fraction": 0.09,
+        "ema_span_0_minutes": 17.5, "ema_span_1_minutes": 29.5, "close_fraction": 0.09,
     }}}})
     scenario_file = write_json(tmp_path / "scenario-coin.json", {"bot": {"long": {"unstuck": {
-        "ema_span_0": 19.5, "close_fraction": 0.12,
+        "ema_span_0_minutes": 19.5, "close_fraction": 0.12,
     }}}})
     source = policy()
     source["coin_overrides"] = {
@@ -245,7 +245,7 @@ def test_resolved_atomic_coin_scenario_replaces_only_its_authored_scope(tmp_path
     assert source == before
     patch = resolved["backtest"]["scenarios"][0]["overrides"]
     assert patch == {selector: {"bot": {"long": {"unstuck": {
-        "ema_span_0": 19.5, "close_fraction": 0.13,
+        "ema_span_0_minutes": 19.5, "close_fraction": 0.13,
     }}}}}
     assert resolved["optimize"]["fixed_runtime_overrides"] == source["optimize"]["fixed_runtime_overrides"]
     assert expected[(True, False)]["coin_overrides"][coin]["bot"]["long"]["unstuck"]["close_fraction"] == 0.2
@@ -346,11 +346,11 @@ def test_resolved_refuses_unavailable_market_universe_and_missing_coin_file(tmp_
 
 def test_explain_defaults_declared_metadata_and_search_source():
     source = {"config_version": "v9.0.0", "bot": {"long": {}}, "live": {}}
-    report = explain_config(source, "bot.long.strategy.trailing_martingale.entry.ema_span_0")
+    report = explain_config(source, "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes")
     assert report["value"] == 790.0
     assert report["types"] == ["float"]
     assert report["scope"] == "long"
-    assert report["unit"] is None
+    assert report["unit"] == "minutes"
     assert report["default"] == {"declared": True, "value": 790.0}
     assert report["sources"][0]["kind"] == "default_or_derived"
     assert report["search"]["status"] == "omitted_fixed"
@@ -358,7 +358,7 @@ def test_explain_defaults_declared_metadata_and_search_source():
 
 
 def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
-    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}})
+    override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5}}}})
     source = policy()
     source["optimize"]["fixed_runtime_overrides"] = {"bot.long.unstuck.close_fraction": 0.11}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {"bot.long.unstuck.close_fraction": 0.12}}]
@@ -373,7 +373,7 @@ def test_explain_applies_fixed_scenario_and_coin_precedence(tmp_path):
         "authored", "fixed_runtime_override", "scenario_override", "coin_override",
     ]
     assert report["search"]["status"] == "coin_override"
-    report = explain_config(source, "bot.long.unstuck.ema_span_0", coin="BTC",
+    report = explain_config(source, "bot.long.unstuck.ema_span_0_minutes", coin="BTC",
                             base_config_path=str(tmp_path / "input.json"))
     assert report["value"] == 17.5
     assert report["sources"][-1]["kind"] == "override_file"
@@ -428,13 +428,13 @@ def test_explain_reports_null_inheritance_fixed_selectors_and_fixed_bounds():
     report = explain_config(source, "backtest.filter_by_min_effective_cost")
     assert report["value"] is True
     assert report["sources"][-1] == {"kind": "inherited", "path": "bot.global.universe.filter_by_min_effective_cost", "value": True}
-    source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0", "short.unstuck.close_fraction"]
-    search = explain_config(source, "bot.long.unstuck.ema_span_0")["search"]
+    source["optimize"]["fixed_params"] = ["long.unstuck.ema_span_0_minutes", "short.unstuck.close_fraction"]
+    search = explain_config(source, "bot.long.unstuck.ema_span_0_minutes")["search"]
     assert search["status"] == "fixed_selector"
-    assert search["fixed_selectors"] == ["long.unstuck.ema_span_0"]
+    assert search["fixed_selectors"] == ["long.unstuck.ema_span_0_minutes"]
     source["optimize"]["fixed_params"] = []
-    source["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] = [17.5, 17.5]
-    assert explain_config(source, "bot.long.unstuck.ema_span_0")["search"]["status"] == "fixed_bound"
+    source["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] = [17.5, 17.5]
+    assert explain_config(source, "bot.long.unstuck.ema_span_0_minutes")["search"]["status"] == "fixed_bound"
 
 
 def test_explain_scenario_dates_and_dataset_limit_are_explicit():
@@ -476,8 +476,8 @@ def test_explain_bounds_container_does_not_claim_one_parameter_type():
 
 def test_explain_dynamic_coin_patch_reuses_root_type_without_inventing_a_pin_default():
     source = policy()
-    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}}}
-    report = explain_config(source, "coin_overrides.BTC.bot.long.unstuck.ema_span_0")
+    source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5}}}}}
+    report = explain_config(source, "coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes")
     assert report["types"] == ["float"]
     assert report["default"] == {"declared": False}
     assert report["search"]["status"] == "coin_override"
@@ -554,8 +554,8 @@ def test_public_examples_keep_effective_policy_in_new_views(path, exporter):
 
 
 @pytest.mark.parametrize('transform,target,dependency,value,independent', [
-    ('couple_unstuck_ema_spans', 'bot.long.unstuck.ema_span_0',
-     'bot.long.strategy.trailing_martingale.entry.ema_span_0', 123.5, False),
+    ('couple_unstuck_ema_spans', "bot.long.unstuck.ema_span_0_minutes",
+     "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", 123.5, False),
     ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit',
      'bot.long.risk.total_wallet_exposure_limit', 1.25, True),
     ('lossless_close_trailing', "bot.long.strategy.trailing_martingale.close.threshold_base_fraction",
@@ -591,8 +591,8 @@ def test_explain_distinguishes_explicit_relationship_from_target_gene(transform,
 
 
 @pytest.mark.parametrize('transform,target,dependency,late_coupling', [
-    ('couple_unstuck_ema_spans', 'bot.long.unstuck.ema_span_0',
-     'bot.long.strategy.trailing_martingale.entry.ema_span_0', True),
+    ('couple_unstuck_ema_spans', "bot.long.unstuck.ema_span_0_minutes",
+     "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", True),
     ('mirror_short_from_long', 'bot.short.risk.total_wallet_exposure_limit',
      'bot.long.risk.total_wallet_exposure_limit', False),
     ('lossless_close_trailing', "bot.long.strategy.trailing_martingale.close.threshold_base_fraction",
@@ -620,16 +620,16 @@ def test_explain_coupled_coin_span_uses_exact_coin_dependency_and_is_not_authore
     source['optimize']['enable_overrides'] = ['couple_unstuck_ema_spans']
     coin = 'bybit::BTC/USDT:USDT'
     source['coin_overrides'] = {coin: {'bot': {'long': {'strategy': {
-        'trailing_martingale': {'entry': {'ema_span_0': 321.5}},
-    }, 'unstuck': {'ema_span_0': 42.5}}}}}
-    report = explain_config(source, 'bot.long.unstuck.ema_span_0', coin=coin, optimize=True)
+        'trailing_martingale': {'entry': {"ema_span_0_minutes": 321.5}},
+    }, 'unstuck': {"ema_span_0_minutes": 42.5}}}}}
+    report = explain_config(source, "bot.long.unstuck.ema_span_0_minutes", coin=coin, optimize=True)
     assert report['value'] == 321.5
     assert report['search']['status'] == 'optimizer_transform'
     assert report['sources'][-1]['name'] == 'couple_unstuck_ema_spans'
     dependency = report['sources'][-1]['dependencies'][0]
     assert dependency['path_parts'] == ['coin_overrides', coin, 'bot', 'long', 'strategy',
-                                       'trailing_martingale', 'entry', 'ema_span_0']
-    assert source['coin_overrides'][coin]['bot']['long']['unstuck']['ema_span_0'] == 42.5
+                                       'trailing_martingale', 'entry', 'ema_span_0_minutes']
+    assert source['coin_overrides'][coin]['bot']['long']['unstuck']["ema_span_0_minutes"] == 42.5
 
 
 def test_explain_mirroring_does_not_derive_directional_selection():
@@ -643,15 +643,15 @@ def test_explain_mirroring_does_not_derive_directional_selection():
 
 
 @pytest.mark.parametrize('metadata,value', [
-    ('fixed_params', ['long.unstuck.ema_span_0']),
-    ('bounds.long.unstuck.ema_span_0', [300.0, 400.0]),
+    ('fixed_params', ['long.unstuck.ema_span_0_minutes']),
+    ('bounds.long.unstuck.ema_span_0_minutes', [300.0, 400.0]),
     ('enable_overrides', ['couple_unstuck_ema_spans']),
 ])
 def test_explain_scenario_metadata_does_not_redefine_outer_genome(metadata, value):
     source = policy()
-    source['optimize']['bounds'] = {'long': {'unstuck': {'ema_span_0': [100.0, 200.0]}}}
+    source['optimize']['bounds'] = {'long': {'unstuck': {"ema_span_0_minutes": [100.0, 200.0]}}}
     source['backtest']['scenarios'] = [{'label': 'one', 'overrides': {'optimize.' + metadata: value}}]
-    report = explain_config(source, 'bot.long.unstuck.ema_span_0', optimize=True, scenario='one')
+    report = explain_config(source, "bot.long.unstuck.ema_span_0_minutes", optimize=True, scenario='one')
     assert report['search']['gene_status'] == 'searched'
     assert report['search']['bounds'] == [100.0, 200.0]
     assert report['search']['fixed_selectors'] == []
@@ -685,7 +685,7 @@ def test_explain_atomic_coin_replacement_does_not_mislabel_removed_pin_as_normal
     source = policy()
     root_path = "bot.long.unstuck.close_fraction"
     source["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"close_fraction": 0.1}}}}}
-    replacement = {"bot": {"long": {"unstuck": {"ema_span_0": 17.5}}}}
+    replacement = {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5}}}}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
         selector: {"BTC": replacement} if selector == "coin_overrides" else replacement,
     }}]
@@ -704,15 +704,15 @@ def test_explain_coin_bounds_keeps_exact_target_transform_separate_from_declarat
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     coin = "bybit::BTC/USDT:USDT"
     source["coin_overrides"] = {coin: {"bot": {"long": {"strategy": {
-        "trailing_martingale": {"entry": {"ema_span_0": 321.5}},
-    }, "unstuck": {"ema_span_0": 42.5}}}}}
-    report = explain_config(source, "optimize.bounds.long.unstuck.ema_span_0", coin=coin, optimize=True)
+        "trailing_martingale": {"entry": {"ema_span_0_minutes": 321.5}},
+    }, "unstuck": {"ema_span_0_minutes": 42.5}}}}}
+    report = explain_config(source, "optimize.bounds.long.unstuck.ema_span_0_minutes", coin=coin, optimize=True)
     matching = [event for event in report["sources"]
                 if event["kind"] == "optimizer_transform"
-                and event["path_parts"] == ["coin_overrides", coin, "bot", "long", "unstuck", "ema_span_0"]]
+                and event["path_parts"] == ["coin_overrides", coin, "bot", "long", "unstuck", "ema_span_0_minutes"]]
     assert len(matching) == 1
     assert matching[0]["value"] == 321.5
-    assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0"]] * 2
+    assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0_minutes"]] * 2
     assert report["search"]["status"] == "optimizer_transform"
     assert all(event["kind"] != "normalization" for event in report["sources"])
 
@@ -723,26 +723,26 @@ def test_explain_alias_coin_bound_trace_uses_canonical_identity_without_rewritin
     source["optimize"]["bounds"] = {}
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     source["coin_overrides"] = {"1000SHIB": {"bot": {"long": {"strategy": {
-        "trailing_martingale": {"entry": {"ema_span_0": 321.5}},
-    }, "unstuck": {"ema_span_0": 42.5}}}}}
+        "trailing_martingale": {"entry": {"ema_span_0_minutes": 321.5}},
+    }, "unstuck": {"ema_span_0_minutes": 42.5}}}}}
     original = deepcopy(source)
-    report = explain_config(source, "optimize.bounds.long.unstuck.ema_span_0", coin=selected, optimize=True)
+    report = explain_config(source, "optimize.bounds.long.unstuck.ema_span_0_minutes", coin=selected, optimize=True)
     event = report["sources"][-1]
     assert event["kind"] == "optimizer_transform"
-    assert event["path_parts"] == ["coin_overrides", "SHIB", "bot", "long", "unstuck", "ema_span_0"]
+    assert event["path_parts"] == ["coin_overrides", "SHIB", "bot", "long", "unstuck", "ema_span_0_minutes"]
     assert event["dependencies"][0]["path_parts"] == [
-        "coin_overrides", "SHIB", "bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0",
+        "coin_overrides", "SHIB", "bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0_minutes",
     ]
     assert event["value"] == 321.5
     assert report["search"]["status"] == "optimizer_transform"
-    assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0"]] * 2
+    assert report["value"] == [source["bot"]["long"]["unstuck"]["ema_span_0_minutes"]] * 2
     assert source == original
 
 
 @pytest.mark.parametrize("direct", [False, True])
 def test_explain_nested_coin_container_keeps_file_and_inline_leaf_origins(tmp_path, direct):
     override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {
-        "ema_span_0": 17.5, "ema_span_1": 21.5, "close_fraction": 0.12,
+        "ema_span_0_minutes": 17.5, "ema_span_1_minutes": 21.5, "close_fraction": 0.12,
     }}}})
     source = policy()
     source["coin_overrides"] = {"1000SHIB": {
@@ -754,10 +754,10 @@ def test_explain_nested_coin_container_keeps_file_and_inline_leaf_origins(tmp_pa
     report = explain_config(source, path, coin=None if direct else "SHIB",
                             base_config_path=str(tmp_path / "input.json"))
     assert report["value"]["close_fraction"] == 0.13
-    assert report["value"]["ema_span_0"] == 17.5
-    assert report["value"]["ema_span_1"] == 21.5
+    assert report["value"]["ema_span_0_minutes"] == 17.5
+    assert report["value"]["ema_span_1_minutes"] == 21.5
     origins = {(event["path"], event["kind"]): event for event in report["sources"]}
-    for span in ("ema_span_0", "ema_span_1"):
+    for span in ("ema_span_0_minutes", "ema_span_1_minutes"):
         event = origins[(f"coin_overrides.SHIB.bot.long.unstuck.{span}", "override_file")]
         assert event["file"] == str(override)
     assert ("coin_overrides.SHIB.bot.long.unstuck.close_fraction", "coin_override") in origins

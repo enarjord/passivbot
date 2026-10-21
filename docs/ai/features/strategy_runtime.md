@@ -82,11 +82,14 @@ Seed evaluation contract:
 - Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
   device handles or borrowed-memory names. Resume does not require original seed files.
 
-Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
-for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example
-`volatility_ema_span_1m`, `volatility_ema_span_1h`, `forager_volume_ema_span_1m`, and
-`forager_volatility_ema_span_1m`. Generic strategy EMA spans such as `ema_span_0` and `ema_span_1`
-remain unsuffixed because their timeframe comes from the strategy's base candle stream.
+Public price, unstuck and base-stream volatility/volume EMA horizons use `_minutes`, including
+`ema_span_0_minutes`, `ema_span_1_minutes` and `forager.volume_ema_span_minutes`. Backtests divide
+these floating minute horizons by `candle_interval_minutes` to obtain sample spans; longer base
+candles do not reinterpret the configured horizon as a larger number of minutes. Unilateralness
+also uses minutes and requires completed one-minute candles. Hourly volatility indicators use
+`volatility_ema_span_1h_candles` or `offset_volatility_ema_span_1h_candles`: these are floating
+counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
+not rescale values, round derived spans or change native parameter IDs.
 
 ## Forager Readiness Stages
 
@@ -117,7 +120,8 @@ shared span cannot leak a projected strategy value into coin ranking.
 
 ## Trailing Martingale Semantics
 
-Trailing-martingale price spans belong to `entry.ema_span_0/1`. Final v9 loading rejects the old
+Trailing-martingale price spans belong to `entry.ema_span_0_minutes` and `entry.ema_span_1_minutes`.
+Final v9 loading rejects the old
 strategy-root leaves. The explicit released-v8 converter moves them before independently
 authored file/inline patches merge and rejects conflicting values within one authored layer.
 Public optimizer bounds share the nested paths; internal optimizer keys and Metal columns retain
@@ -218,8 +222,8 @@ Live realized-memory bootstrap discloses an unknown prefix and residual attenuat
 a finite suffix is not proof of infinite-tail equality. Required malformed or missing
 realized facts are fatal/deferred at their owning boundary, never an invented zero D.
 
-`bot.<side>.unstuck.ema_span_0` and `ema_span_1` independently define the unstuck price EMA
-band, using the same base candle stream and unrounded geometric-mean third span as the strategy
+`bot.<side>.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` independently define the unstuck price EMA
+band, using the same minute-horizon conversion and unrounded geometric-mean third span as the strategy
 band. Long eligibility uses the upper band; short eligibility uses the lower band. Strategy EMA
 changes must not change the unstuck band. Missing required unstuck EMAs follow the existing scoped
 input-unavailable contract; disabled gating does not require them or extend warmup. Live loading
@@ -350,7 +354,7 @@ behavior patches.
 
 Rust owns signed RMS directionality, its use as a lower-is-better Forager component,
 and additive cooldown minutes. The shared side-level float span lives under
-`forager.unilateralness_ema_span_1m`. Both runtimes use the same last
+`forager.unilateralness_ema_span_minutes`. Both runtimes use the same last
 `ceil(20 * span) + 1` completed one-minute closes with zero-seeded exponential weights.
 Live replays the window. CPU uses rolling aggregate stacks with amortized constant
 work per candle, agreeing with replay within floating-point roundoff; all-flat windows

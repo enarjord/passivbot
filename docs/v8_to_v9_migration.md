@@ -18,6 +18,11 @@ before backtesting a proposed replacement.
 | `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
 | `bot.hsl` portfolio policy | `bot.global.hsl` alongside its scope |
 | HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
+| HSL `cooldown_minutes_after_red` | `cooldown_after_red_minutes` in the same policy |
+| Strategy and unstuck `ema_span_0`, `ema_span_1` | `ema_span_0_minutes`, `ema_span_1_minutes`; trailing-martingale spans live under `entry` |
+| Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
+| Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
+| Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
 | `live.max_realized_loss_pct` | `bot.global.loss_gate.max_drawdown_ratio` |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
@@ -47,6 +52,11 @@ global loss-gate realized memory. Local unstuck settings remain under `bot.<side
 The global span is `bot.global.unstuck.memory_ema_span_minutes`; the gate span is
 `bot.global.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
+
+These unit spelling changes do not rescale values. Price and minute-volatility horizons remain
+floating-point minutes, including backtests with aggregated candle intervals; hourly horizons
+remain floating-point counts of calendar-hour candles. Native parameter and optimizer identifiers
+keep their established spellings.
 
 Scenario overrides and fixed optimizer overrides convert released flat shared fields
 to their canonical side-owned groups. For example, `bot.long.n_positions` becomes

@@ -1123,6 +1123,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         expected = [deepcopy(config["bot"][s]["hsl"]) for s in ("long", "short")]
         for policy in expected:
             policy["red_threshold"] = policy.pop("drawdown_ratio_threshold")
+            policy["cooldown_minutes_after_red"] = policy.pop("cooldown_after_red_minutes")
         assert hs["sides"] == expected
         assert not any(s["enabled"] for s in hs["sides"])
 
@@ -1132,19 +1133,20 @@ class TestPrepBacktestArgsEquityHardStopLoss:
             drawdown_ratio_threshold=0.3,
             drawdown_ratio_ema_span_minutes=45.5,
             memory_ema_span_minutes=123.5,
-            cooldown_minutes_after_red=30.0,
+            cooldown_after_red_minutes=30.0,
             panic_close_order_type="limit",
         )
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         expected = {**policy, "scale_budget_with_excess_allowance": False}
         expected["red_threshold"] = expected.pop("drawdown_ratio_threshold")
+        expected["cooldown_minutes_after_red"] = expected.pop("cooldown_after_red_minutes")
         assert bp["equity_hard_stop_loss"]["sides"][0] == expected
 
     @pytest.mark.parametrize(
         "policy,field",
         [
-            ({"cooldown_minutes_after_red": -1.0}, "cooldown_minutes_after_red"),
+            ({"cooldown_after_red_minutes": -1.0}, "cooldown_after_red_minutes"),
             ({"drawdown_ratio_threshold": 0.0}, "drawdown_ratio_threshold"),
             ({"drawdown_ratio_ema_span_minutes": 0.5}, "drawdown_ratio_ema_span_minutes"),
             ({"memory_ema_span_minutes": 0.5}, "memory_ema_span_minutes"),

@@ -262,7 +262,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
         "adverse_directionality": [0.0, 20.0]
     }
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
     paths = dict(get_optimization_key_paths(cfg))
     assert paths["long_entry_cooldown_weights_minutes_adverse_directionality"] == (
@@ -329,7 +329,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
         assert original[f"{side}_entry_cooldown_min_duration_minutes"] == [0.0, 0.0]
         assert f"{side}_entry_cooldown_max_duration_minutes" not in original
     cfg["optimize"]["bounds"]["long"]["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
-    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [20.0, 80.5]
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [20.0, 80.5]
     cfg = clean_config(prepare_config(cfg, verbose=False))
     bounds = flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']['global']['strategy_kind']
@@ -372,7 +372,7 @@ def test_cpu_score_only_rms_warmup_blocks_only_required_ranking(ranking_required
     assert len(baseline) > 0
     for side in ("long", "short"):
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-        cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = span
+        cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = span
     for coin in ("LONGCOIN", "SHORTCOIN"):
         markets[coin]["warmup_minutes"] = metadata_history
         markets[coin]["warmup_minutes_source"] = "history"
@@ -504,7 +504,7 @@ def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close,
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 1.0
     if consumer == "forager":
         cfg['bot'][side]['universe']['approved_coins'] = ["LONGCOIN", "SHORTCOIN"]
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
@@ -582,7 +582,7 @@ def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer)
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
     timestamps = timestamps[0] + np.arange(len(timestamps)) * interval * 60000
     baseline = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
     if consumer == "forager":
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:
@@ -614,7 +614,7 @@ def test_cpu_entry_ineligible_rms_policy_is_inert(side, interval, consumer):
     assert all(not pair[side]["entry_eligible"] for pair in payload.bot_params_list)
     baseline = execute_backtest(payload, cfg)
     # Load a normal user config before dataset selection finalizes eligibility.
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
     if consumer == "forager":
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:
@@ -684,10 +684,10 @@ def test_adverse_rms_activates_at_first_complete_return_window(side, span):
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = span
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = span
     # The fixture is already parsed, so update its visible fixed history bound
     # alongside the bot span to exercise this exact return window.
-    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_1m"] = [span, span]
+    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_minutes"] = [span, span]
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=0.0, max_duration_minutes=60.0,
         weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
@@ -734,7 +734,7 @@ def test_adverse_rms_warmup_does_not_delay_other_sides_or_coins(side, span, targ
     cfg["backtest"]["dynamic_wel_by_tradability"] = False
     for s in ("long", "short"):
         cfg["bot"][s]["risk"]["max_positions"] = 2
-        cfg["bot"][s]["forager"]["unilateralness_ema_span_1m"] = span
+        cfg["bot"][s]["forager"]["unilateralness_ema_span_minutes"] = span
         cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": coins}
@@ -792,8 +792,8 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
     # This legacy span would impose a shared delay beyond the entire test.
-    cfg["bot"][side]["forager"]["volume_ema_span_1m"] = 5000.0
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
+    cfg["bot"][side]["forager"]["volume_ema_span_minutes"] = 5000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 1.0
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=0.0, max_duration_minutes=60.0,
         weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
@@ -820,7 +820,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
-    cfg["bot"]["long"]["forager"]["volume_ema_span_1m"] = 5000.0
+    cfg["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -850,7 +850,7 @@ def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interv
     timestamps = timestamps[0] + np.arange(len(timestamps)) * interval * 60000
     baseline = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
     actual = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
     assert len(actual[0]) > 0
     np.testing.assert_array_equal(actual[0], baseline[0])
@@ -905,7 +905,7 @@ def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot'][side]['universe']['approved_coins'] = ["LONGCOIN", "SHORTCOIN"]
-    cfg["bot"][side]["forager"].update(unilateralness_ema_span_1m=1.0)
+    cfg["bot"][side]["forager"].update(unilateralness_ema_span_minutes=1.0)
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -974,7 +974,7 @@ def test_constant_clamp_cpu_needs_no_rms_history(side, interval, base, floor, ce
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=base, min_duration_minutes=floor, max_duration_minutes=ceiling,
     )
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
     cfg["optimize"]["bounds"][side]["entry_cooldown"]["base_duration_minutes"] = [base, base]
     cfg["optimize"]["bounds"][side]["entry_cooldown"]["min_duration_minutes"] = [floor, floor]
     cfg = prepare_config(cfg, verbose=False)
@@ -1021,8 +1021,8 @@ def test_direct_rust_zero_warmup_keeps_automatic_non_rms_budget(side, metadata):
 
     cfg = _ema_anchor_config(True, include_dataset=False)
     for pside in ("long", "short"):
-        cfg["bot"][pside]["forager"].update(volume_ema_span_1m=30.0, unilateralness_ema_span_1m=1.0)
-        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_volatility_ema_span_1h"] = 0.1
+        cfg["bot"][pside]["forager"].update(volume_ema_span_minutes=30.0, unilateralness_ema_span_minutes=1.0)
+        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_volatility_ema_span_1h_candles"] = 0.1
         cfg["bot"][pside]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -1052,7 +1052,7 @@ def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 60.0
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 60.0
     if consumer == "forager":
         cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:
@@ -1127,7 +1127,7 @@ def test_late_validity_end_rejects_held_valuation_before_optional_rms_ranking(si
     set_side_universe_sources(cfg, 'approved_coins', {"long": [], "short": []})
     cfg['bot'][side]['universe']['approved_coins'] = coins
     cfg["bot"][side]["risk"]["max_positions"] = 3
-    cfg["bot"][side]["forager"].update(unilateralness_ema_span_1m=1.0,
+    cfg["bot"][side]["forager"].update(unilateralness_ema_span_minutes=1.0,
         score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
     cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=1)
     cfg = prepare_config(cfg, verbose=False)

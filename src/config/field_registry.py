@@ -111,6 +111,8 @@ LIVE_OPERATIONAL_PATHS.update(
         "forced_mode_long": ("live", "modes", "long"),
         "forced_mode_short": ("live", "modes", "short"),
         "disapproved_position_mode": ("live", "modes", "disapproved_position"),
+        "recv_window_ms": ("live", "api", "recv_window_milliseconds"),
+        "fee_conversion_max_age_ms": ("live", "fills", "fee_conversion_max_age_milliseconds"),
     }
 )
 for _field_id, _public_name in {
@@ -145,7 +147,7 @@ _FIELDS_BY_TYPE = {
             recv_window_ms
         """,
         "logging": "backup_count level",
-        "monitor": "max_total_bytes price_tick_min_interval_ms",
+        "monitor": "max_total_bytes price_tick_min_interval_milliseconds",
         "optimize": "iters n_cpus pareto_max_size round_to_n_significant_digits",
         "optimize.prefilter": "grid_max_entries",
         "optimize.gpu.screening": "min_survivors",
@@ -260,15 +262,15 @@ _SHARED_SIDE_FIELDS = {
     FieldType.FLOAT: """
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
         forager.score_weights.volatility forager.score_weights.volume
-        forager.unilateralness_ema_span_1m forager.volatility_ema_span_1m
-        forager.volume_ema_span_1m hsl.memory_ema_span_minutes
-        hsl.cooldown_minutes_after_red hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
+        forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
+        forager.volume_ema_span_minutes hsl.memory_ema_span_minutes
+        hsl.cooldown_after_red_minutes hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold_ratio risk.total_exposure_enforcer.threshold_ratio
         risk.total_wallet_exposure_limit risk.we_excess_allowance_fraction
-        unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0 unstuck.ema_span_1
+        unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0_minutes unstuck.ema_span_1_minutes
         unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
@@ -353,7 +355,7 @@ def get_field_registry() -> FieldRegistry:
         add(f"bot.global.hsl.{name}", FieldType.BOOLEAN)
     add("bot.global.hsl.panic_close_order_type", FieldType.STRING)
     for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
-                 "memory_ema_span_minutes", "cooldown_minutes_after_red"):
+                 "memory_ema_span_minutes", "cooldown_after_red_minutes"):
         add(f"bot.global.hsl.{name}", FieldType.FLOAT)
 
     for kind in get_supported_strategy_kinds():
@@ -417,7 +419,7 @@ def get_field_registry() -> FieldRegistry:
         add(f"optimize.prefilter.checks.*.{name}", FieldType.FLOAT,
             nullable=name in {"min", "max"})
     add("live.startup_phase_budgets.*", FieldType.OBJECT)
-    for name in ("elapsed_ms", "since_previous_ms"):
+    for name in ("elapsed_milliseconds", "since_previous_milliseconds"):
         add(f"live.startup_phase_budgets.*.{name}", FieldType.INTEGER,
             unit="milliseconds", domain=FieldDomain(minimum=0))
     from .field_metadata import enrich_fields

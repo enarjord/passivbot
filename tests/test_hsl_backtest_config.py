@@ -42,7 +42,7 @@ def inputs(mode="coin"):
         enabled=True,
         drawdown_ratio_threshold=0.01,
         drawdown_ratio_ema_span_minutes=1.5,
-        cooldown_minutes_after_red=10,
+        cooldown_after_red_minutes=10,
         panic_close_order_type="market",
     )
     cfg = prepare_config(cfg, verbose=False, target="canonical", runtime=None)
@@ -268,7 +268,7 @@ def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
 def test_fractional_finite_cooldown_deadline_survives_flat_green_observations():
     cfg, markets, _ = inputs()
     cooldown_minutes = 2.5
-    cfg["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = cooldown_minutes
+    cfg["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = cooldown_minutes
     args = payload(cfg=cfg, mss=markets)
     args[-1]["hsl_detailed_report"] = True
     report = run(args)[4]["hsl"]
@@ -503,8 +503,8 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=1,
         initial_ema_distance_fraction=0,
-        ema_span_0=2,
-        ema_span_1=3,
+        ema_span_0_minutes=2,
+        ema_span_1_minutes=3,
     )
     if slots > 1:
         cfg["coin_overrides"] = {

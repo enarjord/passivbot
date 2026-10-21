@@ -29,6 +29,8 @@ PUBLIC_PAIRS = list(PUBLIC_PATH_RENAMES.items()) + [
     (("bot", "long", "strategy", kind, *old), ("bot", "long", "strategy", kind, *new))
     for kind, fields in STRATEGY_NATIVE_TO_PUBLIC_PATHS.items() for old, new in fields.items()
 ]
+PUBLIC_PAIRS = [(old, new) for old, new in PUBLIC_PAIRS
+                if new[-1].endswith(("_fraction", "_margin"))]
 
 
 @pytest.mark.parametrize("old,new", PUBLIC_PAIRS, ids=lambda path: ".".join(path))

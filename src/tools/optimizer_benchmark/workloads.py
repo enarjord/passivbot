@@ -90,7 +90,7 @@ def apply_features(config, case, coins, markets, bars):
         if "hsl_slow_memory" in flags:
             policy["memory_ema_span_minutes"] = 10.5
         if "hsl_zero_cooldown" in flags:
-            policy["cooldown_minutes_after_red"] = 0.0
+            policy["cooldown_after_red_minutes"] = 0.0
         policy["scale_budget_with_excess_allowance"] = "hsl_scaled" in flags
         policy["panic_close_order_type"] = "market" if "hsl_market" in flags else "limit"
         strategy = bot["strategy"][case.strategy]
@@ -172,7 +172,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
                 raise ValueError("active-side exposure bounds must stay positive")
         if path[2] == "hsl" and enabled and bounds_config is None:
             bound = {"drawdown_ratio_threshold": Bound(.002, .01, .001), "drawdown_ratio_ema_span_minutes": Bound(2, 20, 1),
-                     "cooldown_minutes_after_red": Bound(5, 30, 1)}[path[-1]]
+                     "cooldown_after_red_minutes": Bound(5, 30, 1)}[path[-1]]
         if not enabled:
             bound = Bound(float(value), float(value))
         elif value != 0 and ("weight" in path[-1] or "retracement_base_fraction" == path[-1]) and bound.low == bound.high == 0:

@@ -193,7 +193,7 @@ def fixture_inputs(args):
             drawdown_ratio_threshold=args.hsl_red_threshold,
             drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
-            cooldown_minutes_after_red=args.hsl_cooldown_minutes,
+            cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
         bot["unstuck"]["enabled"] = args.unstuck and side in active
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
@@ -202,7 +202,7 @@ def fixture_inputs(args):
             enabled=True, drawdown_ratio_threshold=args.hsl_red_threshold,
             drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
-            cooldown_minutes_after_red=args.hsl_cooldown_minutes,
+            cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
     config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = args.unstuck_memory_ema_span_minutes
     config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = args.loss_gate_memory_ema_span_minutes

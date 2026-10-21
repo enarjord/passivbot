@@ -9,6 +9,10 @@ from copy import deepcopy
 
 STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]]] = {
     "trailing_martingale": {
+        ("entry", "ema_span_0"): ("entry", "ema_span_0_minutes"),
+        ("entry", "ema_span_1"): ("entry", "ema_span_1_minutes"),
+        ("volatility_ema_span_1m",): ("volatility_ema_span_minutes",),
+        ("volatility_ema_span_1h",): ("volatility_ema_span_1h_candles",),
         ("entry", "initial_qty_pct"): ("entry", "initial_qty_fraction"),
         ("entry", "initial_ema_dist"): ("entry", "initial_ema_distance_fraction"),
         ("entry", "threshold_base_pct"): ("entry", "threshold_base_fraction"),
@@ -18,6 +22,10 @@ STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]
         ("close", "retracement_base_pct"): ("close", "retracement_base_fraction"),
     },
     "ema_anchor": {
+        ("ema_span_0",): ("ema_span_0_minutes",),
+        ("ema_span_1",): ("ema_span_1_minutes",),
+        ("offset_volatility_ema_span_1m",): ("offset_volatility_ema_span_minutes",),
+        ("offset_volatility_ema_span_1h",): ("offset_volatility_ema_span_1h_candles",),
         ("base_qty_pct",): ("base_qty_fraction",),
         ("offset",): ("offset_fraction",),
     },

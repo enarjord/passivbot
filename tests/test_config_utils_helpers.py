@@ -203,10 +203,10 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
 def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
     for value in (1.5, "1.5", True):
         config = get_template_config()
-        config["live"]["fills"]["fee_conversion_max_age_ms"] = value
+        config["live"]["fills"]["fee_conversion_max_age_milliseconds"] = value
 
         with pytest.raises(
-            TypeError, match="fee_conversion_max_age_ms must be an integer"
+            TypeError, match="fee_conversion_max_age_milliseconds must be an integer"
         ):
             validate_config(config, verbose=False)
 
@@ -426,7 +426,7 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
     assert "backtest" not in prepared
     assert prepared["live"]["account"]["user"] == "test_user"
     assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == pytest.approx(
-        prepared["bot"]["long"]["forager"]["volume_ema_span_1m"]
+        prepared["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert prepared["_raw"] == raw_snapshot
     assert prepared["_raw_effective"]["live"]["account"]["user"] == "test_user"
@@ -435,17 +435,17 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     config = get_template_config()
-    config["bot"]["long"]["forager"].pop("volume_ema_span_1m", None)
-    config["optimize"]["bounds"]["long"]["forager"].pop("volume_ema_span_1m", None)
+    config["bot"]["long"]["forager"].pop("volume_ema_span_minutes", None)
+    config["optimize"]["bounds"]["long"]["forager"].pop("volume_ema_span_minutes", None)
 
     _ensure_bot_defaults_and_bounds(config, verbose=False)
 
-    assert config["bot"]["long"]["forager"]["volume_ema_span_1m"] == pytest.approx(
-        get_template_config()["bot"]["long"]["forager"]["volume_ema_span_1m"]
+    assert config["bot"]["long"]["forager"]["volume_ema_span_minutes"] == pytest.approx(
+        get_template_config()["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_1m"]
-        == [config["bot"]["long"]["forager"]["volume_ema_span_1m"]] * 2
+        config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_minutes"]
+        == [config["bot"]["long"]["forager"]["volume_ema_span_minutes"]] * 2
     )
 
 
@@ -1214,19 +1214,19 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["filter_volume_ema_span_1m"]
-        == config["bot"]["long"]["forager"]["volume_ema_span_1m"]
+        == config["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
         compiled["bot"]["long"]["forager_volume_ema_span_1m"]
-        == config["bot"]["long"]["forager"]["volume_ema_span_1m"]
+        == config["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
         compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
-        == config["bot"]["long"]["forager"]["volatility_ema_span_1m"]
+        == config["bot"]["long"]["forager"]["volatility_ema_span_minutes"]
     )
     assert (
-        _strategy_side(compiled, "long")["entry"]["ema_span_0"]
-        == _strategy_side(config, "long")["entry"]["ema_span_0"]
+        _strategy_side(compiled, "long")["entry"]["ema_span_0_minutes"]
+        == _strategy_side(config, "long")["entry"]["ema_span_0_minutes"]
     )
 
 

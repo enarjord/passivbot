@@ -26,8 +26,8 @@ def _roundtrip(source):
 def test_startup_budget_records_keep_integer_millisecond_leaves():
     source = get_template_config()
     source["live"]["startup"]["startup_phase_budgets"] = {
-        "account": {"elapsed_ms": 120_000, "since_previous_ms": 60_000},
-        "full-warmup": {"elapsed_ms": 900_000},
+        "account": {"elapsed_milliseconds": 120_000, "since_previous_milliseconds": 60_000},
+        "full-warmup": {"elapsed_milliseconds": 900_000},
     }
     registry = get_field_registry()
     for phase, budgets in source["live"]["startup"]["startup_phase_budgets"].items():

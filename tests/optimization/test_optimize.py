@@ -294,10 +294,10 @@ class TestApplyConfigOverrides:
     def test_bot_shared_paths_update_canonical_values(self):
         config = get_template_config()
         _apply_config_overrides(config, {
-            "bot.long.hsl.cooldown_minutes_after_red": 1.0,
+            "bot.long.hsl.cooldown_after_red_minutes": 1.0,
             "bot.long.entry_cooldown.base_duration_minutes": 2.5,
         })
-        assert config["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] == pytest.approx(1.0)
+        assert config["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] == pytest.approx(1.0)
         assert config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
         assert "risk_entry_cooldown_minutes" not in config["bot"]["long"]
         with pytest.raises(KeyError, match="missing"):
@@ -1489,7 +1489,7 @@ class TestIndividualToConfig:
         template = {
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_ratio_threshold": 0.2, "cooldown_minutes_after_red": 0.3},
+                    "hsl": {"drawdown_ratio_threshold": 0.2, "cooldown_after_red_minutes": 0.3},
                     "hsl_cooldown_minutes_after_red": 0.3,
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_we_weight": 0.0}},
@@ -1511,7 +1511,7 @@ class TestIndividualToConfig:
                         "long_hsl_red_threshold": [0.15, 0.35, 0.01],
                     },
                 ),
-                "fixed_runtime_overrides": {"bot.long.hsl.cooldown_minutes_after_red": 1.0},
+                "fixed_runtime_overrides": {"bot.long.hsl.cooldown_after_red_minutes": 1.0},
             },
         }
         original_template = deepcopy(template)
@@ -1519,11 +1519,11 @@ class TestIndividualToConfig:
 
         assert result["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl"][
-            "cooldown_minutes_after_red"
+            "cooldown_after_red_minutes"
         ] == pytest.approx(1.0)
         assert result["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl"][
-            "cooldown_minutes_after_red"
+            "cooldown_after_red_minutes"
         ] == pytest.approx(1.0)
         assert template == original_template
 
@@ -1548,8 +1548,8 @@ class TestIndividualToConfig:
                 "long": {
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.55},
                     "forager": {
-                        "volume_ema_span_1m": 520,
-                        "volatility_ema_span_1m": 225,
+                        "volume_ema_span_minutes": 520,
+                        "volatility_ema_span_minutes": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
                             "unilateralness": 0.0,
@@ -1563,8 +1563,8 @@ class TestIndividualToConfig:
                     "strategy": {
                         "ema_anchor": {
                             "base_qty_fraction": 0.012,
-                            "ema_span_0": 72.0,
-                            "ema_span_1": 432.0,
+                            "ema_span_0_minutes": 72.0,
+                            "ema_span_1_minutes": 432.0,
                             "offset_fraction": 0.009,
                             "offset_psize_weight": 0.4,
                         }
@@ -1578,8 +1578,8 @@ class TestIndividualToConfig:
                     },
                     "risk": {"max_positions": 3, "total_wallet_exposure_limit": 0.25},
                     "forager": {
-                        "volume_ema_span_1m": 360,
-                        "volatility_ema_span_1m": 10,
+                        "volume_ema_span_minutes": 360,
+                        "volatility_ema_span_minutes": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
                             "unilateralness": 0.0,
@@ -1593,8 +1593,8 @@ class TestIndividualToConfig:
                     "strategy": {
                         "ema_anchor": {
                             "base_qty_fraction": 0.004,
-                            "ema_span_0": 48.0,
-                            "ema_span_1": 288.0,
+                            "ema_span_0_minutes": 48.0,
+                            "ema_span_1_minutes": 288.0,
                             "offset_fraction": 0.02,
                             "offset_psize_weight": 0.2,
                         }
@@ -1610,8 +1610,8 @@ class TestIndividualToConfig:
                         "strategy": {
                             "ema_anchor": {
                                 "base_qty_fraction": [0.006, 0.03, 0.0005],
-                                "ema_span_0": [48, 120, 1],
-                                "ema_span_1": [288, 720, 1],
+                                "ema_span_0_minutes": [48, 120, 1],
+                                "ema_span_1_minutes": [288, 720, 1],
                                 "offset_fraction": [0.006, 0.02, 0.0005],
                                 "offset_psize_weight": [0.2, 0.8, 0.01],
                             }
@@ -1622,8 +1622,8 @@ class TestIndividualToConfig:
                         "strategy": {
                             "ema_anchor": {
                                 "base_qty_fraction": [0.004, 0.02, 0.0005],
-                                "ema_span_0": [48, 120, 1],
-                                "ema_span_1": [288, 720, 1],
+                                "ema_span_0_minutes": [48, 120, 1],
+                                "ema_span_1_minutes": [288, 720, 1],
                                 "offset_fraction": [0.007, 0.02, 0.0005],
                                 "offset_psize_weight": [0.2, 0.8, 0.01],
                             }
@@ -1673,8 +1673,8 @@ class TestIndividualToConfig:
                 "long": {
                     "risk": {"max_positions": 1, "total_wallet_exposure_limit": 0.9},
                     "forager": {
-                        "volume_ema_span_1m": 520,
-                        "volatility_ema_span_1m": 225,
+                        "volume_ema_span_minutes": 520,
+                        "volatility_ema_span_minutes": 225,
                         "score_weights": {
                             "volume": 0.0,
                             "ema_readiness": 0.0,
@@ -1683,14 +1683,14 @@ class TestIndividualToConfig:
                     },
                     "strategy": {
                         "trailing_martingale": {"ema_span_0": 100.0},
-                        "ema_anchor": {"ema_span_0": 999.0},
+                        "ema_anchor": {"ema_span_0_minutes": 999.0},
                     },
                 },
                 "short": {
                     "risk": {"max_positions": 2, "total_wallet_exposure_limit": 0.1},
                     "forager": {
-                        "volume_ema_span_1m": 10,
-                        "volatility_ema_span_1m": 20,
+                        "volume_ema_span_minutes": 10,
+                        "volatility_ema_span_minutes": 20,
                         "score_weights": {
                             "volume": 0.1,
                             "ema_readiness": 0.2,
@@ -1699,7 +1699,7 @@ class TestIndividualToConfig:
                     },
                     "strategy": {
                         "trailing_martingale": {"ema_span_0": 200.0},
-                        "ema_anchor": {"ema_span_0": 123.0},
+                        "ema_anchor": {"ema_span_0_minutes": 123.0},
                     },
                 },
                 "global": {"strategy_kind": "trailing_martingale"},
@@ -1716,7 +1716,7 @@ class TestIndividualToConfig:
             result["bot"]["short"]["strategy"]["trailing_martingale"]
             == result["bot"]["long"]["strategy"]["trailing_martingale"]
         )
-        assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
+        assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0_minutes": 123.0}
 
     @pytest.mark.parametrize(
         ("strategy_kind", "bound_key", "expected_path", "new_value"),
@@ -3444,7 +3444,7 @@ class TestApplyFineTuneBounds:
             },
             "bot": {
                 "long": {
-                    "hsl": {"enabled": True, "cooldown_minutes_after_red": 3.0},
+                    "hsl": {"enabled": True, "cooldown_after_red_minutes": 3.0},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"initial_qty_fraction": 0.1, "threshold_we_weight": 0.2},

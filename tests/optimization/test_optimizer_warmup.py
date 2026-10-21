@@ -48,20 +48,20 @@ def _make_optimizer_config() -> dict:
     config["backtest"]["coins"] = {"combined": ["HYPE"]}
 
     long_bot = config["bot"]["long"]
-    long_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 770.0
-    long_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_1"] = 210.0
-    long_bot["forager"]["volume_ema_span_1m"] = 520.0
-    long_bot["forager"]["volatility_ema_span_1m"] = 225.0
-    long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h"] = 1690.0
-    long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1m"] = 60.0
+    long_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] = 770.0
+    long_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_1_minutes"] = 210.0
+    long_bot["forager"]["volume_ema_span_minutes"] = 520.0
+    long_bot["forager"]["volatility_ema_span_minutes"] = 225.0
+    long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h_candles"] = 1690.0
+    long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_minutes"] = 60.0
 
     short_bot = config["bot"]["short"]
-    short_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 1.0
-    short_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_1"] = 1.0
-    short_bot["forager"]["volume_ema_span_1m"] = 0.0
-    short_bot["forager"]["volatility_ema_span_1m"] = 0.0
-    short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h"] = 0.0
-    short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1m"] = 0.0
+    short_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] = 1.0
+    short_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_1_minutes"] = 1.0
+    short_bot["forager"]["volume_ema_span_minutes"] = 0.0
+    short_bot["forager"]["volatility_ema_span_minutes"] = 0.0
+    short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h_candles"] = 0.0
+    short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_minutes"] = 0.0
 
     bounds = config["optimize"]["bounds"]
     _set_bounds(config, {"long_ema_span_0": [1, 100, 1]})
@@ -223,7 +223,7 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     cfg['bot']['global']['warmup']['max_minutes'] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
     bounds = cfg["optimize"]["bounds"]["long"]
-    bounds["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
+    bounds["forager"]["unilateralness_ema_span_minutes"] = [1.0, 60.0]
     if consumer == "forager":
         bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     else:
@@ -254,7 +254,7 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
         assert result[2] == baseline[2]
     else:
         # The enabled candidate uses its own short window, not the search maximum.
-        cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 1.0
+        cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 1.0
         cfg["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 1.0
         fills, _, _, payload = run_backtest(
             hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True
@@ -292,7 +292,7 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
                    else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
     weight_key = ("forager_score_weights_unilateralness" if consumer == "forager"
                   else "entry_cooldown_weights_minutes_adverse_directionality")
-    span_path = ["forager", "unilateralness_ema_span_1m"]
+    span_path = ["forager", "unilateralness_ema_span_minutes"]
     bounds = cfg["optimize"]["bounds"]
     for pside in ("long", "short"):
         _set_bounds(cfg, {f"{pside}_n_positions": [1.0]})
@@ -334,10 +334,10 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
     cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
-    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 2.5
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 2.5
     cfg["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.forager.score_weights.unilateralness": 0.0,
-        "bot.long.forager.unilateralness_ema_span_1m": 1.0,
+        "bot.long.forager.unilateralness_ema_span_minutes": 1.0,
     }
     assert compute_backtest_warmup_minutes(cfg) == 51
 
@@ -355,7 +355,7 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     for s in ("long", "short"):
         cfg["bot"][s]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(s == side))
         _set_bounds(cfg, {f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
     if searched:
@@ -393,7 +393,7 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     cfg["coin_overrides"] = {}
     for side, coin in (("long", "BTC"), ("short", "ETH")):
         cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
-        cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+        cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
         cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
         _set_bounds(cfg, {f"{side}_n_positions": [1.0], f"{side}_total_wallet_exposure_limit": [1.0]})
@@ -436,7 +436,7 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     for s in ("long", "short"):
         cfg["bot"][s]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(s == side))
         _set_bounds(cfg, {f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
-    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 2.5
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 2.5
     cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
     cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not override_enabled)
     if searched:
@@ -482,7 +482,7 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
             f"{s}_total_wallet_exposure_limit": [float(s == side)],
         })
     cfg["bot"][side]["forager"].update(
-        unilateralness_ema_span_1m=100000,
+        unilateralness_ema_span_minutes=100000,
         score_weights=dict(volume=0, volatility=0, ema_readiness=0, unilateralness=float(not searched)),
     )
     if searched:
@@ -515,7 +515,7 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["risk"].update(max_positions=2, total_wallet_exposure_limit=1)
-    cfg["bot"]["long"]["forager"].update(unilateralness_ema_span_1m=100000)
+    cfg["bot"]["long"]["forager"].update(unilateralness_ema_span_minutes=100000)
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1
     _set_bounds(cfg, {"long_n_positions": [1, 2]})
     assert compute_backtest_warmup_minutes(cfg) == 2000001

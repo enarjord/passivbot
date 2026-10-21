@@ -1047,7 +1047,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         # directional surfaces participate in global auto-unstuck selection.
         config["bot"][side]["unstuck"]["enabled"] = True
         config["bot"][side]["hsl"]["enabled"] = True
-        for key in ("ema_span_0", "ema_span_1"):
+        for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
             strategy = config["bot"][side]["strategy"][strategy_kind]
             span = (
                 strategy["entry"]
@@ -1749,7 +1749,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                 "bot": {
                     "long": {
                         "strategy": {
-                            "ema_anchor": {"offset_fraction": 0.25, "ema_span_0": 90.0}
+                            "ema_anchor": {"offset_fraction": 0.25, "ema_span_0_minutes": 90.0}
                         },
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
@@ -1757,8 +1757,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         },
                         "wallet_exposure_limit": 0.4,
                         "unstuck": {
-                            "ema_span_0": 17.25,
-                            "ema_span_1": 211.75,
+                            "ema_span_0_minutes": 17.25,
+                            "ema_span_1_minutes": 211.75,
                             "enabled": True,
                             "ema_gating_enabled": False,
                             "close_fraction": 0.125,
@@ -2116,7 +2116,7 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
         "drawdown_ratio_ema_span_minutes": 5.5,
         "memory_ema_span_minutes": 7.5,
         "scale_budget_with_excess_allowance": True,
-        "cooldown_minutes_after_red": 12.5,
+        "cooldown_after_red_minutes": 12.5,
         "panic_close_order_type": "market",
     }
     config = {"coin_overrides": {"ETH": {"bot": {"long": {"hsl": hsl_patch}}}}}

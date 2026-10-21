@@ -10,6 +10,13 @@ from .strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 
 
 PUBLIC_PATH_RENAMES = {
+    ("live", "api", "recv_window_ms"): ("live", "api", "recv_window_milliseconds"),
+    ("live", "fills", "fee_conversion_max_age_ms"): ("live", "fills", "fee_conversion_max_age_milliseconds"),
+    ("monitor", "price_tick_min_interval_ms"): ("monitor", "price_tick_min_interval_milliseconds"),
+    ("live", "startup", "startup_phase_budgets", "*", "elapsed_ms"): ("live", "startup", "startup_phase_budgets", "*", "elapsed_milliseconds"),
+    ("live", "startup", "startup_phase_budgets", "*", "since_previous_ms"): ("live", "startup", "startup_phase_budgets", "*", "since_previous_milliseconds"),
+    ("bot", "global", "hsl", "cooldown_minutes_after_red"): ("bot", "global", "hsl", "cooldown_after_red_minutes"),
+    ("optimize", "bounds", "global", "hsl", "cooldown_minutes_after_red"): ("optimize", "bounds", "global", "hsl", "cooldown_after_red_minutes"),
     ("backtest", "market_order_slippage_pct"): ("backtest", "market_order_slippage_fraction"),
     ("backtest", "limit_order_fill_buffer_pct"): ("backtest", "limit_order_fill_buffer_fraction"),
     ("live", "account", "balance_hysteresis_snap_pct"): ("live", "account", "balance_hysteresis_snap_fraction"),
@@ -22,6 +29,12 @@ PUBLIC_PATH_RENAMES = {
 }
 
 SHARED_SIDE_PATH_RENAMES = {
+    ("forager", "volume_ema_span_1m"): ("forager", "volume_ema_span_minutes"),
+    ("forager", "volatility_ema_span_1m"): ("forager", "volatility_ema_span_minutes"),
+    ("forager", "unilateralness_ema_span_1m"): ("forager", "unilateralness_ema_span_minutes"),
+    ("unstuck", "ema_span_0"): ("unstuck", "ema_span_0_minutes"),
+    ("unstuck", "ema_span_1"): ("unstuck", "ema_span_1_minutes"),
+    ("hsl", "cooldown_minutes_after_red"): ("hsl", "cooldown_after_red_minutes"),
     ("risk", "we_excess_allowance_pct"): ("risk", "we_excess_allowance_fraction"),
     ("unstuck", "close_pct"): ("unstuck", "close_fraction"),
     ("unstuck", "loss_allowance_pct"): ("unstuck", "loss_allowance_fraction"),

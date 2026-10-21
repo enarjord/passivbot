@@ -42,7 +42,7 @@ def _sample_config() -> dict:
                     "scope": "portfolio",
                     "enabled": True,
                     "drawdown_ratio_threshold": 0.05,
-                    "cooldown_minutes_after_red": 60.0,
+                    "cooldown_after_red_minutes": 60.0,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
@@ -54,11 +54,11 @@ def _sample_config() -> dict:
             "long": {
                 "risk": {"max_positions": 3, "total_wallet_exposure_limit": 1.0},
                 "unstuck": {"enabled": True},
-                "forager": {"volume_ema_span_1m": 120.0},
+                "forager": {"volume_ema_span_minutes": 120.0},
                 "hsl": {
                     "enabled": True,
                     "drawdown_ratio_threshold": 0.05,
-                    "cooldown_minutes_after_red": 60,
+                    "cooldown_after_red_minutes": 60,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
@@ -75,7 +75,7 @@ def _sample_config() -> dict:
                 "hsl": {
                     "enabled": False,
                     "drawdown_ratio_threshold": 0.04,
-                    "cooldown_minutes_after_red": 30,
+                    "cooldown_after_red_minutes": 30,
                     "memory_ema_span_minutes": 43200.0,
                     "drawdown_ratio_ema_span_minutes": 120.0,
                     "scale_budget_with_excess_allowance": False,
@@ -449,11 +449,11 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
         "risk": {"max_positions": 3},
-        "forager": {"volume_ema_span_1m": 120.0},
+        "forager": {"volume_ema_span_minutes": 120.0},
         "hsl": {
             "enabled": True,
             "drawdown_ratio_threshold": 0.05,
-            "cooldown_minutes_after_red": 60,
+            "cooldown_after_red_minutes": 60,
             "memory_ema_span_minutes": 43200.0,
             "drawdown_ratio_ema_span_minutes": 120.0,
             "panic_close_order_type": "limit",
@@ -471,7 +471,7 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
     assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
-    assert report["forager"]["sides"]["long"]["settings"] == {"volume_ema_span_1m": 120.0}
+    assert report["forager"]["sides"]["long"]["settings"] == {"volume_ema_span_minutes": 120.0}
 
 
 def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):

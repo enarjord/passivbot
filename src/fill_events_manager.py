@@ -8398,7 +8398,7 @@ def fee_policy_kwargs_from_config(config: dict) -> Dict[str, object]:
         ),
         "fee_conversion_max_age_ms": int(
             live.get("fills", {}).get(
-                "fee_conversion_max_age_ms", DEFAULT_FEE_CONVERSION_MAX_AGE_MS
+                "fee_conversion_max_age_milliseconds", DEFAULT_FEE_CONVERSION_MAX_AGE_MS
             )
         ),
     }

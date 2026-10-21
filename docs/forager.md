@@ -21,18 +21,18 @@ This lets you control the tradeoff between liquidity, volatility, entry readines
 For each side (`bot.long` and `bot.short`), forager uses:
 
 - `forager_volume_drop_pct`
-- `forager_volume_ema_span_1m`
-- `forager_volatility_ema_span_1m`
+- `forager.volume_ema_span_minutes`
+- `forager.volatility_ema_span_minutes`
 - `forager_score_weights`
-- `unilateralness_ema_span_1m` (floating-point span, default 60)
-- `ema_span_0`
-- `ema_span_1`
+- `unilateralness_ema_span_minutes` (floating-point span, default 60)
+- `ema_span_0_minutes`
+- `ema_span_1_minutes`
 - `entry_initial_ema_dist`
 
 It also depends on live/backtest market state:
 
 - latest market price
-- EMA bands derived from `ema_span_0`, `ema_span_1`, and `sqrt(span_0 * span_1)`
+- EMA bands derived from `ema_span_0_minutes`, `ema_span_1_minutes`, and `sqrt(span_0 * span_1)`
 - 1m EMA quote volume
 - 1m EMA log range
 - completed 1m close returns for enabled RMS unilateralness scoring
@@ -61,14 +61,14 @@ that happened to have the freshest candles.
 
 ### Volume
 
-`forager_volume_ema_span_1m` controls the 1m EMA of quote volume used in ranking and pruning.
+`forager.volume_ema_span_minutes` controls the 1m EMA of quote volume used in ranking and pruning.
 
 - Higher is better.
 - If `forager_volume_drop_pct > 0`, volume is required even if the volume score weight is zero.
 
 ### Volatility
 
-`forager_volatility_ema_span_1m` controls the 1m EMA of log range:
+`forager.volatility_ema_span_minutes` controls the 1m EMA of log range:
 
 `log_range = ln(high / low)`
 
@@ -101,7 +101,7 @@ Interpretation:
 one-way movement equally up or down. It uses the absolute signed RMS score from
 completed one-minute close returns. Lower is better; the candidate normalization
 inverts this penalty so higher total scores remain preferable. The weight defaults
-to zero and the floating-point `unilateralness_ema_span_1m` defaults to 60.
+to zero and the floating-point `unilateralness_ema_span_minutes` defaults to 60.
 See [adaptive entry cooldown and RMS](adaptive_entry_cooldown.md) for the formula,
 normalization, completed-candle readiness and decay through flat prices.
 
@@ -139,7 +139,8 @@ Examples:
 - `{"volume": 0.0, "ema_readiness": 0.2, "volatility": 0.4, "unilateralness": 0.4}`
   - balance entry readiness and volatility against sustained one-way movement
 
-These sub-weights are also available under `optimize.bounds` as:
+The optimizer retains these internal sub-weight identifiers; authored bounds use the nested
+`optimize.bounds.<side>.forager.score_weights` paths:
 
 - `long_forager_score_weights_volume`
 - `long_forager_score_weights_ema_readiness`
@@ -150,7 +151,7 @@ These sub-weights are also available under `optimize.bounds` as:
 - `short_forager_score_weights_volatility`
 - `short_forager_score_weights_unilateralness`
 
-The optional span dimensions are `long_unilateralness_ema_span_1m` and
+The optional span dimensions retain the internal identifiers `long_unilateralness_ema_span_1m` and
 `short_unilateralness_ema_span_1m`. Missing unilateralness weight and span bounds
 are hydrated as `[configured_value, configured_value]`, using the normalized
 Forager weight and the configured floating-point span for each side. New configs
@@ -159,7 +160,7 @@ leave these bounds absent until parsing derives them from the bot values. These
 bounds are visible but fixed; widen them explicitly to include unilateralness in the
 optimizer search. Explicit ranges are preserved. Canonical exports use
 `optimize.bounds.<side>.forager.score_weights.unilateralness` and
-`optimize.bounds.<side>.forager.unilateralness_ema_span_1m`.
+`optimize.bounds.<side>.forager.unilateralness_ema_span_minutes`.
 
 Important: these weights only rank candidates for available initial-entry slots. They do not force
 entries, bypass entry conditions, or bypass risk/min-size gates. If all four weights are set to
@@ -220,7 +221,7 @@ invent local substitute values.
 
 - Canonical shortlist scoring and selection live in Rust.
 - Python is responsible for gathering market data, building payloads, and calling Rust.
-- The canonical config names are `forager_volume_ema_span_1m` and `forager_volatility_ema_span_1m`.
+- The canonical config names are `forager.volume_ema_span_minutes` and `forager.volatility_ema_span_minutes`.
 
 When unilateralness is enabled, the monitor's ranking total comes from the latest
 Rust scoring diagnostic, including all four components, volume pruning and tie

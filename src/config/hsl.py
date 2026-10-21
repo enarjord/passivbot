@@ -25,7 +25,7 @@ FIELDS = frozenset(
         "drawdown_ratio_ema_span_minutes",
         "memory_ema_span_minutes",
         "panic_close_order_type",
-        "cooldown_minutes_after_red",
+        "cooldown_after_red_minutes",
     }
 )
 
@@ -224,9 +224,9 @@ def normalize_block(
         maximum=1,
         strict=True,
     )
-    block["cooldown_minutes_after_red"] = _number(
-        block["cooldown_minutes_after_red"],
-        f"{path}.cooldown_minutes_after_red",
+    block["cooldown_after_red_minutes"] = _number(
+        block["cooldown_after_red_minutes"],
+        f"{path}.cooldown_after_red_minutes",
         minimum=0,
     )
     order_type = block["panic_close_order_type"]
@@ -441,10 +441,10 @@ def require_live_runtime_support(config):
     for path, policy in policies:
         if not policy["enabled"]:
             continue
-        required = max(required, policy["cooldown_minutes_after_red"])
-        if policy["cooldown_minutes_after_red"] > cap:
+        required = max(required, policy["cooldown_after_red_minutes"])
+        if policy["cooldown_after_red_minutes"] > cap:
             raise ValueError(
-                f"{path}.cooldown_minutes_after_red exceeds live.startup.risk_bootstrap_max_lookback_minutes; "
+                f"{path}.cooldown_after_red_minutes exceeds live.startup.risk_bootstrap_max_lookback_minutes; "
                 "live cannot reconstruct its full finite cooldown within this history cap"
             )
     return required
@@ -564,9 +564,10 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
 
 
 def native_hsl_policy(policy):
-    """Transport the public ratio name to the stable native HSL ABI."""
+    """Transport public HSL field names to the stable native HSL ABI."""
     result = deepcopy(policy)
     result["red_threshold"] = result.pop("drawdown_ratio_threshold")
+    result["cooldown_minutes_after_red"] = result.pop("cooldown_after_red_minutes")
     return result
 
 

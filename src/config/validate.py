@@ -18,7 +18,7 @@ from .strategy import (
     normalize_strategy_kind,
 )
 
-_STARTUP_BUDGET_KEYS = frozenset({"elapsed_ms", "since_previous_ms"})
+_STARTUP_BUDGET_KEYS = frozenset({"elapsed_milliseconds", "since_previous_milliseconds"})
 
 
 def _validate_fixed_runtime_overrides(config: dict) -> None:
@@ -152,7 +152,7 @@ def validate_config(
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
-        span = bot_side["forager"]["unilateralness_ema_span_1m"]
+        span = bot_side["forager"]["unilateralness_ema_span_minutes"]
         if (
             isinstance(span, bool)
             or not isinstance(span, (int, float))
@@ -160,7 +160,7 @@ def validate_config(
             or not 1 <= span <= 100_000
         ):
             raise ValueError(
-                f"bot.{pside}.forager.unilateralness_ema_span_1m must be between 1 and 100000"
+                f"bot.{pside}.forager.unilateralness_ema_span_minutes must be between 1 and 100000"
             )
         from .entry_cooldown import validate_entry_cooldown
 
@@ -324,25 +324,25 @@ def validate_config(
             raise TypeError(f"config.live.fills.{key} must be numeric") from exc
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(f"config.live.fills.{key} must be finite and >= 0.0")
-    fee_conversion_max_age_ms_raw = config["live"]["fills"]["fee_conversion_max_age_ms"]
+    fee_conversion_max_age_ms_raw = config["live"]["fills"]["fee_conversion_max_age_milliseconds"]
     if isinstance(fee_conversion_max_age_ms_raw, bool) or isinstance(
         fee_conversion_max_age_ms_raw, float
     ):
         raise TypeError(
-            "config.live.fills.fee_conversion_max_age_ms must be an integer"
+            "config.live.fills.fee_conversion_max_age_milliseconds must be an integer"
         )
     try:
         fee_conversion_max_age_ms = int(fee_conversion_max_age_ms_raw)
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.fills.fee_conversion_max_age_ms must be an integer"
+            "config.live.fills.fee_conversion_max_age_milliseconds must be an integer"
         ) from exc
     if str(fee_conversion_max_age_ms_raw).strip() != str(fee_conversion_max_age_ms):
         raise TypeError(
-            "config.live.fills.fee_conversion_max_age_ms must be an integer"
+            "config.live.fills.fee_conversion_max_age_milliseconds must be an integer"
         )
     if fee_conversion_max_age_ms < 0:
-        raise ValueError("config.live.fills.fee_conversion_max_age_ms must be >= 0")
+        raise ValueError("config.live.fills.fee_conversion_max_age_milliseconds must be >= 0")
     exchange_symbol_cooldown_raw = config["live"]["recovery"][
         "exchange_symbol_unavailable_cooldown_hours"
     ]

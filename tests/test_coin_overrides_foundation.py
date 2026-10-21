@@ -276,7 +276,7 @@ def test_override_file_strategy_kind_mismatch_fails():
             {"BTC": {"override_config_path": "unused-by-test.json"}},
             loaded={
                 "bot": {
-                    "long": {"strategy": {"ema_anchor": {"ema_span_0": 17.5}}}
+                    "long": {"strategy": {"ema_anchor": {"ema_span_0_minutes": 17.5}}}
                 }
             },
         )

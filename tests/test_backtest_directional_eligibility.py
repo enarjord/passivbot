@@ -41,20 +41,20 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
         )
         config["bot"][pside]["forager"].update(
             {
-                "volume_ema_span_1m": 2,
-                "volatility_ema_span_1m": 2,
+                "volume_ema_span_minutes": 2,
+                "volatility_ema_span_minutes": 2,
             }
         )
         config["bot"][pside]["strategy"]["ema_anchor"].update(
             {
-                "ema_span_0": 2.0,
-                "ema_span_1": 3.0,
+                "ema_span_0_minutes": 2.0,
+                "ema_span_1_minutes": 3.0,
                 "base_qty_fraction": 0.2,
                 "offset_fraction": 0.001,
                 "offset_psize_weight": 0.0,
                 "entry_double_down_factor": 0.0,
-                "offset_volatility_ema_span_1m": 2.0,
-                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_minutes": 2.0,
+                "offset_volatility_ema_span_1h_candles": 2.0,
                 "offset_volatility_1m_weight": 0.0,
                 "offset_volatility_1h_weight": 0.0,
             }

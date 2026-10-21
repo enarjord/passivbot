@@ -79,12 +79,12 @@
                     "volatility": 0.42682926829268286,
                     "volume": 0.23170731707317072
                 },
-                "unilateralness_ema_span_1m": 60.0,
-                "volatility_ema_span_1m": 59.0,
-                "volume_ema_span_1m": 2764.0
+                "unilateralness_ema_span_minutes": 60.0,
+                "volatility_ema_span_minutes": 59.0,
+                "volume_ema_span_minutes": 2764.0
             },
             "hsl": {
-                "cooldown_minutes_after_red": 3270.0,
+                "cooldown_after_red_minutes": 3270.0,
                 "drawdown_ratio_ema_span_minutes": 427.0,
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
@@ -106,15 +106,15 @@
             "strategy": {
                 "ema_anchor": {
                     "base_qty_fraction": 0.06,
-                    "ema_span_0": 415.0,
-                    "ema_span_1": 793.0,
+                    "ema_span_0_minutes": 415.0,
+                    "ema_span_1_minutes": 793.0,
                     "entry_double_down_factor": 1.96,
                     "offset_fraction": 0.0193,
                     "offset_psize_weight": 0.3576,
                     "offset_volatility_1h_weight": 13.0,
                     "offset_volatility_1m_weight": 0.4,
-                    "offset_volatility_ema_span_1h": 448.0,
-                    "offset_volatility_ema_span_1m": 664.0
+                    "offset_volatility_ema_span_1h_candles": 448.0,
+                    "offset_volatility_ema_span_minutes": 664.0
                 }
             },
             "universe": {"approved_coins": ["SOL"], "ignored_coins": []},
@@ -122,8 +122,8 @@
                 "close_fraction": 0.099,
                 "ema_distance_fraction": -0.1046,
                 "ema_gating_enabled": true,
-                "ema_span_0": 415.0,
-                "ema_span_1": 793.0,
+                "ema_span_0_minutes": 415.0,
+                "ema_span_1_minutes": 793.0,
                 "enabled": false,
                 "exposure_trigger_ratio": 0.47,
                 "loss_allowance_fraction": 0.0396
@@ -144,12 +144,12 @@
                     "volatility": 0.42682926829268286,
                     "volume": 0.23170731707317072
                 },
-                "unilateralness_ema_span_1m": 60.0,
-                "volatility_ema_span_1m": 59.0,
-                "volume_ema_span_1m": 2764.0
+                "unilateralness_ema_span_minutes": 60.0,
+                "volatility_ema_span_minutes": 59.0,
+                "volume_ema_span_minutes": 2764.0
             },
             "hsl": {
-                "cooldown_minutes_after_red": 3270.0,
+                "cooldown_after_red_minutes": 3270.0,
                 "drawdown_ratio_ema_span_minutes": 427.0,
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
@@ -171,15 +171,15 @@
             "strategy": {
                 "ema_anchor": {
                     "base_qty_fraction": 0.06,
-                    "ema_span_0": 415.0,
-                    "ema_span_1": 793.0,
+                    "ema_span_0_minutes": 415.0,
+                    "ema_span_1_minutes": 793.0,
                     "entry_double_down_factor": 1.96,
                     "offset_fraction": 0.0193,
                     "offset_psize_weight": 0.3576,
                     "offset_volatility_1h_weight": 13.0,
                     "offset_volatility_1m_weight": 0.4,
-                    "offset_volatility_ema_span_1h": 448.0,
-                    "offset_volatility_ema_span_1m": 664.0
+                    "offset_volatility_ema_span_1h_candles": 448.0,
+                    "offset_volatility_ema_span_minutes": 664.0
                 }
             },
             "universe": {"approved_coins": ["SOL"], "ignored_coins": []},
@@ -187,8 +187,8 @@
                 "close_fraction": 0.099,
                 "ema_distance_fraction": -0.1046,
                 "ema_gating_enabled": true,
-                "ema_span_0": 415.0,
-                "ema_span_1": 793.0,
+                "ema_span_0_minutes": 415.0,
+                "ema_span_1_minutes": 793.0,
                 "enabled": false,
                 "exposure_trigger_ratio": 0.47,
                 "loss_allowance_fraction": 0.0396
@@ -207,7 +207,7 @@
         },
         "api": {
             "custom_endpoints_path": null,
-            "recv_window_ms": 5000,
+            "recv_window_milliseconds": 5000,
             "max_concurrent_api_requests": null,
             "market_snapshot_ticker_strategy": "auto"
         },
@@ -233,7 +233,7 @@
             "warmup_jitter_seconds": 30
         },
         "fills": {
-            "fee_conversion_max_age_ms": 86400000,
+            "fee_conversion_max_age_milliseconds": 86400000,
             "fallback_fee_fraction": 0.0002,
             "max_abs_fee_fraction": 0.001,
             "fills_confirmation_overlap_minutes": 60,
@@ -281,7 +281,7 @@
         "event_rotation_minutes": 60.0,
         "include_raw_fill_payloads": false,
         "max_total_bytes": 1073741824,
-        "price_tick_min_interval_ms": 500,
+        "price_tick_min_interval_milliseconds": 500,
         "retain_candles": true,
         "retain_days": 7.0,
         "retain_fills": true,
@@ -309,12 +309,12 @@
                         "volatility": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
-                    "unilateralness_ema_span_1m": [60.0, 60.0],
-                    "volatility_ema_span_1m": [10, 1440, 1],
-                    "volume_ema_span_1m": [180, 2880, 1]
+                    "unilateralness_ema_span_minutes": [60.0, 60.0],
+                    "volatility_ema_span_minutes": [10, 1440, 1],
+                    "volume_ema_span_minutes": [180, 2880, 1]
                 },
                 "hsl": {
-                    "cooldown_minutes_after_red": [2160, 4320, 10],
+                    "cooldown_after_red_minutes": [2160, 4320, 10],
                     "drawdown_ratio_ema_span_minutes": [1, 720, 1],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
                     "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
@@ -329,22 +329,22 @@
                 "strategy": {
                     "ema_anchor": {
                         "base_qty_fraction": [0.001, 0.2, 0.0001],
-                        "ema_span_0": [30, 2880, 1],
-                        "ema_span_1": [30, 2880, 1],
+                        "ema_span_0_minutes": [30, 2880, 1],
+                        "ema_span_1_minutes": [30, 2880, 1],
                         "entry_double_down_factor": [0, 2, 0.01],
                         "offset_fraction": [0.0001, 0.02, 0.0001],
                         "offset_psize_weight": [0, 5, 0.0001],
                         "offset_volatility_1h_weight": [0, 20, 0.1],
                         "offset_volatility_1m_weight": [0, 20, 0.1],
-                        "offset_volatility_ema_span_1h": [1, 672, 1],
-                        "offset_volatility_ema_span_1m": [5, 720, 1]
+                        "offset_volatility_ema_span_1h_candles": [1, 672, 1],
+                        "offset_volatility_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {
                     "close_fraction": [0.01, 0.12, 0.001],
                     "ema_distance_fraction": [-0.2, 0.01, 0.0001],
-                    "ema_span_0": [415.0, 415.0],
-                    "ema_span_1": [793.0, 793.0],
+                    "ema_span_0_minutes": [415.0, 415.0],
+                    "ema_span_1_minutes": [793.0, 793.0],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],
                     "loss_allowance_fraction": [0.005, 0.2, 0.0001]
                 }
@@ -362,12 +362,12 @@
                         "volatility": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
-                    "unilateralness_ema_span_1m": [60.0, 60.0],
-                    "volatility_ema_span_1m": [10, 1440, 1],
-                    "volume_ema_span_1m": [180, 2880, 1]
+                    "unilateralness_ema_span_minutes": [60.0, 60.0],
+                    "volatility_ema_span_minutes": [10, 1440, 1],
+                    "volume_ema_span_minutes": [180, 2880, 1]
                 },
                 "hsl": {
-                    "cooldown_minutes_after_red": [2160, 4320, 10],
+                    "cooldown_after_red_minutes": [2160, 4320, 10],
                     "drawdown_ratio_ema_span_minutes": [1, 720, 1],
                     "memory_ema_span_minutes": [43200.0, 43200.0],
                     "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
@@ -382,22 +382,22 @@
                 "strategy": {
                     "ema_anchor": {
                         "base_qty_fraction": [0.001, 0.2, 0.0001],
-                        "ema_span_0": [30, 2880, 1],
-                        "ema_span_1": [30, 2880, 1],
+                        "ema_span_0_minutes": [30, 2880, 1],
+                        "ema_span_1_minutes": [30, 2880, 1],
                         "entry_double_down_factor": [0, 2, 0.01],
                         "offset_fraction": [0.0001, 0.02, 0.0001],
                         "offset_psize_weight": [0, 5, 0.0001],
                         "offset_volatility_1h_weight": [0, 20, 0.1],
                         "offset_volatility_1m_weight": [0, 20, 0.1],
-                        "offset_volatility_ema_span_1h": [1, 672, 1],
-                        "offset_volatility_ema_span_1m": [5, 720, 1]
+                        "offset_volatility_ema_span_1h_candles": [1, 672, 1],
+                        "offset_volatility_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {
                     "close_fraction": [0.01, 0.12, 0.001],
                     "ema_distance_fraction": [-0.2, 0.01, 0.0001],
-                    "ema_span_0": [415.0, 415.0],
-                    "ema_span_1": [793.0, 793.0],
+                    "ema_span_0_minutes": [415.0, 415.0],
+                    "ema_span_1_minutes": [793.0, 793.0],
                     "exposure_trigger_ratio": [0.4, 0.9, 0.001],
                     "loss_allowance_fraction": [0.005, 0.2, 0.0001]
                 }

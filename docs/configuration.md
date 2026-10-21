@@ -147,7 +147,7 @@ The monitor publisher writes a read-only dashboard data root to disk when enable
 - **max_total_bytes**: Global byte cap for the monitor root. Old rotated event/history/checkpoint files are pruned first.
 - **retain_price_ticks**, **retain_candles**, **retain_fills**: Enable or disable the current history streams for price ticks, completed candles, and normalized fills.
 - **compress_rotated_segments**: If `true`, gzip rotated event segments and checkpoints.
-- **price_tick_min_interval_ms**: Minimum per-symbol interval for emitting `history/price_ticks.current.ndjson` entries.
+- **price_tick_min_interval_milliseconds**: Minimum per-symbol interval for emitting `history/price_ticks.current.ndjson` entries.
 - **emit_completed_candles**: Enable or disable completed 1m/1h candle history publication.
 - **include_raw_fill_payloads**: If `true`, include exchange/raw fill payloads alongside the normalized fill history payload.
 
@@ -160,7 +160,7 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/position_side modes,
 and explicit `bot.global.hsl` for portfolio mode. Supported leaves are `enabled`,
 `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
-`cooldown_minutes_after_red`, and `panic_close_order_type`. Coin scope also supports
+`cooldown_after_red_minutes`, and `panic_close_order_type`. Coin scope also supports
 `scale_budget_with_excess_allowance`.
 HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
@@ -175,15 +175,16 @@ behavior.
 
 ### General Parameters for Long and Short
 
-- **strategy.trailing_martingale.entry.ema_span_0**, **entry.ema_span_1**:
+- **strategy.trailing_martingale.entry.ema_span_0_minutes**, **entry.ema_span_1_minutes**:
   - Spans are given in minutes.
-  - Formula: `next_EMA = prev_EMA * (1 - alpha) + new_val * alpha`, where `alpha = 2 / (span + 1)`.
-  - An additional EMA span is calculated as `(ema_span_0 * ema_span_1)**0.5`.
+  - Formula: `next_EMA = prev_EMA * (1 - alpha) + new_val * alpha`. For a base candle interval
+    of `c` minutes, `alpha = min(1, 2 / (span_minutes / c + 1))`; live price candles use `c = 1`.
+  - An additional EMA span is calculated as `(ema_span_0_minutes * ema_span_1_minutes)**0.5`.
   - The three EMAs form an upper and lower EMA band:
     - `ema_band_lower = min(emas)`
     - `ema_band_upper = max(emas)`
   - These bands govern entry gating, forager entry readiness, and one-way entry arbitration.
-  - Auto-unstuck uses its own `unstuck.ema_span_0/1`; ordinary trailing-martingale closes do not use the entry price band.
+  - Auto-unstuck uses its own `unstuck.ema_span_0_minutes` and `unstuck.ema_span_1_minutes`; ordinary trailing-martingale closes do not use the entry price band.
   - Final v9 loading requires these entry paths. The explicit released-v8 converter moves old
     strategy-root spans into `entry` and rejects conflicting authored values.
 - **max_positions**: Maximum number of positions to open. Set to `0` to disable long/short.
@@ -221,14 +222,16 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
   - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
 - **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
   - Entry retracement is widened multiplicatively with the same `max(1, 1 + ...)` style as entry threshold.
-- **strategy.trailing_martingale.volatility_ema_span_1h**, **volatility_ema_span_1m**:
+- **strategy.trailing_martingale.volatility_ema_span_1h_candles**, **volatility_ema_span_minutes**:
   - Volatility is the EMA of per-candle log range `ln(high / low)` on 1h and 1m candles.
+  - The hourly horizon is a floating count of calendar-hour candle samples. The minute horizon
+    is converted to base-candle periods when backtests aggregate their input candles.
   - A volatility weight of `0` disables that horizon for the affected threshold or retracement.
 - **strategy.trailing_martingale.entry.initial_ema_distance_fraction**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
   - Short initial entry/long unstuck close prices are upper EMA band plus offset.
-  - See `ema_span_0`/`ema_span_1`.
+  - See `ema_span_0_minutes`/`ema_span_1_minutes`.
 - **strategy.trailing_martingale.entry.ema_gate_mode**:
   - Fixed enum, not optimized. Allowed values are `disabled`, `all`, `initial`, and `reentry`.
   - `initial` is the default: normal initial and partial initial entries are EMA-gated; re-entries are not.
@@ -315,9 +318,9 @@ Final reducer quantities compete largest-first across the shared batch loss allo
 Forager ranks eligible candidates using volume, EMA readiness, volatility and unilateralness.
 The old volume-drop filter is removed; volume continues to contribute through its configured weight.
 
-- **forager_volatility_ema_span_1m / forager_volume_ema_span_1m**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
+- **forager.volatility_ema_span_minutes / forager.volume_ema_span_minutes**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
   - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
-  - These spans control the raw inputs to forager ranking; they are separate from strategy volatility spans such as `volatility_ema_span_1h` and `offset_volatility_ema_span_1h`.
+  - These spans control the raw inputs to forager ranking; they are separate from strategy volatility spans such as `volatility_ema_span_1h_candles` and `offset_volatility_ema_span_1h_candles`.
 - **forager_score_weights**: Final weighted forager ranking weights.
   - Required keys: `volume`, `ema_readiness`, `volatility`, `unilateralness`.
   - The unilateralness weight defaults to zero; see the canonical template for other weights.
@@ -337,7 +340,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - `config.bot.long/short.strategy.trailing_martingale`:
       ```
       [
-        entry.ema_span_0, entry.ema_span_1, volatility_ema_span_1h, volatility_ema_span_1m,
+        entry.ema_span_0_minutes, entry.ema_span_1_minutes, volatility_ema_span_1h_candles, volatility_ema_span_minutes,
         entry.double_down_factor, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
         entry.threshold_base_fraction, entry.threshold_we_weight,
         entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,
@@ -356,7 +359,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         risk.position_exposure_enforcer.threshold_ratio,
         entry_cooldown.base_duration_minutes,
         risk.we_excess_allowance_fraction,
-        hsl.cooldown_minutes_after_red,
+        hsl.cooldown_after_red_minutes,
         hsl.drawdown_ratio_ema_span_minutes,
         hsl.enabled,
         hsl.panic_close_order_type,
@@ -516,7 +519,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.startup.defer_broad_candle_warmup**: If `true`, startup warms only trading-critical symbols first and catches up broad approved-coin candles in the background. Set `false` to block startup until broad candle warmup completes.
 - **live.account.balance_override**: Optional numeric override for wallet balance used by the live bot (useful for dry-runs and debugging). When set, the bot will not fetch balance from the exchange. Can also be useful when using BTC collateral and you want to keep an effectively “fixed USD balance” for sizing, instead of having the USD-denominated balance fluctuate with the BTC/USD price.
 - **live.account.balance_hysteresis_snap_fraction**: Relative change from the absolute previous hysteresis balance required to snap to a new balance. Set `0.0` to disable hysteresis. Snapped balance is used for sizing and entry-gating surfaces where hysteresis is intentional; raw balance remains the basis for exact exposure-repair surfaces such as WEL/TWEL auto-reduce. Values above roughly `0.05` can make near-boundary behavior less intuitive and are surfaced by `passivbot tool live-config-preflight`.
-- **live.api.recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `10000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
+- **live.api.recv_window_milliseconds**: Millisecond tolerance for authenticated REST calls (default `10000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
 - **live.fills.fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **live.fills.fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
@@ -556,7 +559,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
   - Example: with raw balance `$10,000`, remembered realized loss D=`$200` and r=`0.05`, remaining allowance is `$310`. Ordered net fills and elapsed-minute decay change D; deposits and UPNL do not.
 - **live.fills.fallback_fee_fraction**: Fallback fee fraction of absolute quote notional used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
 - **live.fills.max_abs_fee_fraction**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fallback_fee_fraction`.
-- **live.fills.fee_conversion_max_age_ms**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
+- **live.fills.fee_conversion_max_age_milliseconds**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
 - **live.startup.warmup_jitter_seconds**: Random startup delay spread applied before warm-up work begins. This helps multiple bots sharing one machine or cache avoid stampeding the same files and APIs at the same second.
 - **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `"auto"` (default) retains the context/exchange policy; a positive integer sets an explicit cap. Zero, null and booleans are rejected.
 - **live.api.max_concurrent_api_requests**: Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set an integer to throttle authenticated and public request fan-out more aggressively.
@@ -648,7 +651,7 @@ For example, with bounds `[0.01, 0.10, 0.02]`:
             }},
             "strategy": {
                 "trailing_martingale": {
-                    "entry": {"ema_span_0": [100, 10000], "ema_span_1": [200, 20000]}
+                    "entry": {"ema_span_0_minutes": [100, 10000], "ema_span_1_minutes": [200, 20000]}
                 }
             }
         }
@@ -660,11 +663,11 @@ In this example:
 - `max_positions`: Integers from 1 to 20
 - `total_wallet_exposure_limit`: Values 0.1, 0.2, 0.3, ..., 2.0
 - `forager.score_weights.volume`: Values 0.0, 0.01, 0.02, ..., 1.0
-- `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
+- `ema_span_0_minutes` and `ema_span_1_minutes`: Continuous optimization (no step defined)
 
 HSL bounds use `optimize.bounds.<side>.hsl` in coin and position_side modes, with
 `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`, and
-`cooldown_minutes_after_red` leaves. Portfolio HSL uses `optimize.bounds.global.hsl`.
+`cooldown_after_red_minutes` leaves. Portfolio HSL uses `optimize.bounds.global.hsl`.
 Independent slow spans use their canonical consumer-owned bound blocks. There is no
 restart-policy field. Use independent ordinary account-equity definitions for cross-version
 economic comparison; HSL signal metrics are model-dependent and all fitness is recomputed
@@ -857,7 +860,7 @@ coin/scenario overrides and optimizer policy. There is no engine selector or res
 
 Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`position_side` modes. `portfolio` requires an
 explicit `bot.global.hsl` block with `enabled`, `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`,
-`memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_minutes_after_red`. Side policy is never silently
+`memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_after_red_minutes`. Side policy is never silently
 promoted to portfolio authority. `scale_budget_with_excess_allowance` defaults to `false`
 and may vary per coin in coin scope.
 

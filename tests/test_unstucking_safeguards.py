@@ -366,8 +366,8 @@ def _dummy_config():
             close_fraction=0.1, ema_distance_fraction=0.0,
         )
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
-        strategy["entry"]["ema_span_0"] = 1.0
-        strategy["entry"]["ema_span_1"] = 1.0
+        strategy["entry"]["ema_span_0_minutes"] = 1.0
+        strategy["entry"]["ema_span_1_minutes"] = 1.0
         strategy["entry"]["threshold_base_fraction"] = 0.01
         strategy["close"]["threshold_base_fraction"] = 0.01
     cfg = format_config(cfg, live_only=True, verbose=False)

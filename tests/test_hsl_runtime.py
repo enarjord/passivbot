@@ -289,7 +289,7 @@ def test_held_zero_slot_scope_with_hsl_disabled_is_not_selected():
 
 def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
     value = bot()
-    value.config["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = 1.5 / 60_000
+    value.config["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = 1.5 / 60_000
     set_risk_memory_spans(value.config, 288.25)
     requests, _ = capture(
         value,
@@ -387,7 +387,7 @@ def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     assert "fill_capture_unknown" in estimated.reasons
     # Expiry follows the original finite deadline, not disappearance from the
     # exponential bootstrap target or a later GREEN sample.
-    later = NOW + round(policy["cooldown_minutes_after_red"] * 60_000)
+    later = NOW + round(policy["cooldown_after_red_minutes"] * 60_000)
     for surface in ("balance", "positions"):
         value._ensure_freshness_ledger().stamp(surface, now_ms=later - 200)
     marks = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=later - 100)}
@@ -1391,7 +1391,7 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
         else value.config["bot"][side]["hsl"]
     )
     policy.update(
-        drawdown_ratio_ema_span_minutes=1.0, cooldown_minutes_after_red=cooldown, drawdown_ratio_threshold=0.05
+        drawdown_ratio_ema_span_minutes=1.0, cooldown_after_red_minutes=cooldown, drawdown_ratio_threshold=0.05
     )
     marks = {SYMBOL: MarketSnapshot(SYMBOL, 100.0, 100.0, 100.0, NOW - 100, "fixture")}
     results = []

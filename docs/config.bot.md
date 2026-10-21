@@ -15,8 +15,8 @@ Throughout:
 
 * `pside ∈ {long, short}`
 * `EMA_low, EMA_high` are the minima / maxima of the three EMA spans
-  (`ema_span_0`, `ema_span_1`, `sqrt(ema_span_0 * ema_span_1)`).
-  Strategy logic uses the active strategy's spans; auto-unstuck uses `unstuck.ema_span_0/1`.
+  (`ema_span_0_minutes`, `ema_span_1_minutes`, `sqrt(ema_span_0_minutes * ema_span_1_minutes)`).
+  Strategy logic uses the active strategy's spans; auto-unstuck uses `unstuck.ema_span_0_minutes` and `unstuck.ema_span_1_minutes`.
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
@@ -36,10 +36,10 @@ Throughout:
 
 ## Trailing Martingale Entries
 
-Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0`
-and `entry.ema_span_1`. They govern entry gating, forager entry readiness, and the one-way
+Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0_minutes`
+and `entry.ema_span_1_minutes`. They govern entry gating, forager entry readiness, and the one-way
 entry tie-break. Ordinary closes do not consume this band. The shared
-`volatility_ema_span_1m/1h` remain at strategy level because both entries and closes use them.
+`volatility_ema_span_minutes` and `volatility_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
 
 Schema v8.4.0 moves the old strategy-root spans into `entry`, including optimizer bounds
 and coin/scenario overrides. Values and floating-point precision are preserved. Within one
@@ -160,7 +160,7 @@ auto-unstuck. It defaults to `true`. When false, auto-unstuck may trigger withou
 still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 The field may be overridden for an individual coin+side through `coin_overrides`.
 
-`bot.<side>.unstuck.ema_span_0` and `ema_span_1` are positive floating-point EMA spans in
+`bot.<side>.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` are positive floating-point EMA spans in
 minutes, independent of the active strategy spans. The band contains these two close-price EMAs
 and the EMA at their geometric-mean span. Long unstucking requires price at or above the upper
 band times `1 + ema_distance_fraction` (rounded up to the price tick); short unstucking requires price at or

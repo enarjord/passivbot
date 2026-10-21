@@ -443,11 +443,11 @@ def normalize_hsl_risk_unstuck_numerics(
         for key in ("ema_span_0", "ema_span_1"):
             raw = get_grouped_bot_value(bot_side, f"unstuck_{key}")
             if isinstance(raw, bool):
-                raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
+                raise ValueError(f"{unstuck_path}.{key}_minutes must be positive and finite")
             value = float(raw)
             if not math.isfinite(value) or value <= 0.0:
-                raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
-            bot_side["unstuck"][key] = value
+                raise ValueError(f"{unstuck_path}.{key}_minutes must be positive and finite")
+            set_grouped_bot_value(bot_side, f"unstuck_{key}", value)
 
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
@@ -822,18 +822,18 @@ def validate_forager_config(
             )
 
         if pside_enabled and (normalized["volume"] > 0.0):
-            volume_span = float(forager_cfg["volume_ema_span_1m"])
+            volume_span = float(forager_cfg["volume_ema_span_minutes"])
             if not math.isfinite(volume_span) or volume_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager.volume_ema_span_1m must be > 0 when "
+                    f"bot.{pside}.forager.volume_ema_span_minutes must be > 0 when "
                     "forager volume ranking or volume pruning is enabled"
                 )
 
         if pside_enabled and normalized["volatility"] > 0.0:
-            volatility_span = float(forager_cfg["volatility_ema_span_1m"])
+            volatility_span = float(forager_cfg["volatility_ema_span_minutes"])
             if not math.isfinite(volatility_span) or volatility_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager.volatility_ema_span_1m must be > 0 when "
+                    f"bot.{pside}.forager.volatility_ema_span_minutes must be > 0 when "
                     "forager volatility ranking is enabled"
                 )
 

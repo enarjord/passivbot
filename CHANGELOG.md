@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Give EMA horizon fields and inspection context explicit `_minutes` or `_1h_candles` units, spell
+  millisecond controls `_milliseconds`, and use HSL `cooldown_after_red_minutes`.
+  Preserve floating values, native identifiers and candle-interval behavior;
+  explicit released-v8 conversion reports the new paths.
 - Name scale-one configuration shares and price offsets with `_fraction`, including strategy
   sizing, unstuck allowances, simulated fills and live fee/execution policy. Name the absolute
   Forager score gap `score_hysteresis_margin`. Values, native optimizer IDs and trading packets

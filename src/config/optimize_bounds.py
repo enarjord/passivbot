@@ -32,15 +32,15 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     },
     "forager": {
         "score_weights_unilateralness": "forager_score_weights_unilateralness",
-        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
         "score_weights_volatility": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
-        "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-        "volume_ema_span_1m": "forager_volume_ema_span_1m",
+        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
-        "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
+        "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
         "drawdown_ratio_ema_span_minutes": "hsl_drawdown_ratio_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "drawdown_ratio_threshold": "hsl_red_threshold",
@@ -55,8 +55,8 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     "unstuck": {
         "close_fraction": "unstuck_close_pct",
         "ema_distance_fraction": "unstuck_ema_dist",
-        "ema_span_0": "unstuck_ema_span_0",
-        "ema_span_1": "unstuck_ema_span_1",
+        "ema_span_0_minutes": "unstuck_ema_span_0",
+        "ema_span_1_minutes": "unstuck_ema_span_1",
         "loss_allowance_fraction": "unstuck_loss_allowance_pct",
         "exposure_trigger_ratio": "unstuck_threshold",
     },
@@ -79,11 +79,11 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
                 "volatility": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
-            "volatility_ema_span_1m": [10, 2880, 1],
-            "volume_ema_span_1m": [180, 2880, 1]
+            "volatility_ema_span_minutes": [10, 2880, 1],
+            "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
-            "cooldown_minutes_after_red": [2160, 2160, 10],
+            "cooldown_after_red_minutes": [2160, 2160, 10],
             "drawdown_ratio_ema_span_minutes": [720, 720, 1],
             "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
         },
@@ -102,8 +102,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "unstuck": {
             "close_fraction": [0.01, 0.12, 0.001],
             "ema_distance_fraction": [-0.2, 0.01, 0.0001],
-            "ema_span_0": [60, 2880, 10],
-            "ema_span_1": [60, 2880, 10],
+            "ema_span_0_minutes": [60, 2880, 10],
+            "ema_span_1_minutes": [60, 2880, 10],
             "loss_allowance_fraction": [0.005, 0.2, 0.0001],
             "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
@@ -115,11 +115,11 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
                 "volatility": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
-            "volatility_ema_span_1m": [10, 1440, 1],
-            "volume_ema_span_1m": [180, 2880, 1]
+            "volatility_ema_span_minutes": [10, 1440, 1],
+            "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
-            "cooldown_minutes_after_red": [2160, 4320, 10],
+            "cooldown_after_red_minutes": [2160, 4320, 10],
             "drawdown_ratio_ema_span_minutes": [1, 720, 1],
             "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
         },
@@ -138,8 +138,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "unstuck": {
             "close_fraction": [0.01, 0.12, 0.001],
             "ema_distance_fraction": [-0.2, 0.01, 0.0001],
-            "ema_span_0": [60, 2880, 10],
-            "ema_span_1": [60, 2880, 10],
+            "ema_span_0_minutes": [60, 2880, 10],
+            "ema_span_1_minutes": [60, 2880, 10],
             "loss_allowance_fraction": [0.005, 0.2, 0.0001],
             "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },

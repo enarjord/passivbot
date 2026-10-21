@@ -106,7 +106,7 @@ def test_templates_and_canonical_roundtrips_match_schema(validator, strategy, sc
     }]}),
     source(optimize={"scoring": ["adg", {"metric": "adg_strategy_eq", "goal": "max", "scenario": None}],
                      "limits": [{"metric": "adg", "penalize_if": "less_than", "value": 0.0}]}),
-    source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_ms": 123, "since_previous_ms": 0}}}}),
+    source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_milliseconds": 123, "since_previous_milliseconds": 0}}}}),
     source(backtest={"market_settings": {"overrides": {"BTC": {"min_cost": 0.1}},
                                         "overrides_by_exchange": {"bybit": {"ETH": {"c_mult": 1.0}}}}}),
 ])
@@ -120,8 +120,8 @@ def test_sparse_dynamic_forms_validate_without_default_insertion(validator, payl
     {}, {"config_version": "v8.6.0"}, source(unknown=1), source(fitness=0.5),
     {"config": source()}, source(_raw={}), source(bot={"risk": {}}),
     source(bot={"long": {"not_a_field": 1.0}}),
-    source(live={"startup": {"startup_phase_budgets": {"wrong_phase": {"elapsed_ms": 1}}}}),
-    source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_ms": 1.5}}}}),
+    source(live={"startup": {"startup_phase_budgets": {"wrong_phase": {"elapsed_milliseconds": 1}}}}),
+    source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_milliseconds": 1.5}}}}),
     source(live={"startup": {"startup_phase_budgets": {"account": {"bad_key": 1}}}}),
     source(bot={"long": {"universe": {"approved_coins": {"long": ["BTC"], "wrong_side": []}}}}),
     source(optimize={"scoring": [{"metric": "adg", "surprise": True}]}),
@@ -150,8 +150,8 @@ def test_bounds_do_not_open_aliases_or_non_numeric_genes(validator, bounds):
 
 
 @pytest.mark.parametrize("patch", [
-    {"bot.long.unstuck.ema_span_0": 60.5},
-    {"coin_overrides.BTC.bot.long.unstuck.ema_span_0": 60.5},
+    {"bot.long.unstuck.ema_span_0_minutes": 60.5},
+    {"coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes": 60.5},
     {"bot.long.entry_cooldown.max_duration_minutes": None},
 ])
 @pytest.mark.parametrize("owner", ["scenario", "fixed"])
@@ -163,12 +163,12 @@ def test_literal_and_nested_overrides_reuse_known_fields(validator, patch, owner
 
 def test_nested_scenario_overrides_remain_supported(validator):
     validator.validate(source(backtest={"scenarios": [{"overrides": {
-        "bot": {"long": {"unstuck.ema_span_0": 60.5}},
+        "bot": {"long": {"unstuck.ema_span_0_minutes": 60.5}},
     }}]}))
 
 
 @pytest.mark.parametrize("patch", [
-    {"bot.long.not_a_field": 1}, {"long.unstuck.ema_span_0": 1},
+    {"bot.long.not_a_field": 1}, {"long.unstuck.ema_span_0_minutes": 1},
     {"coin_overrides.BTC.bot.long.risk.max_positions": 1},
     {"coin_overrides.BTC.bot.global.loss_gate.max_drawdown_ratio": 0.5},
     {"coin_overrides.BTC.override_config_path": "policy.json"},
@@ -179,7 +179,7 @@ def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, 
 
 
 @pytest.mark.parametrize("patch", [
-    {"bot": {"long": {"unstuck.ema_span_0": 60.5}}},
+    {"bot": {"long": {"unstuck.ema_span_0_minutes": 60.5}}},
     {"bot": {}},
     {"live": {"account.leverage": 2}},
     {"backtest": {"starting_balance": 1000.0}},
@@ -198,7 +198,7 @@ def test_fixed_runtime_schema_reuses_paths_but_rejects_object_pins_and_prefilter
 
 def test_nested_fixed_pin_is_rejected_by_schema_and_runtime(validator):
     payload = source(optimize={"fixed_runtime_overrides": {
-        "bot": {"long": {"unstuck.ema_span_0": 60.5}},
+        "bot": {"long": {"unstuck.ema_span_0_minutes": 60.5}},
     }})
     with pytest.raises(ValidationError):
         validator.validate(payload)
@@ -213,7 +213,7 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
     payload = source(
         coin_overrides={coin: {"bot": {"long": {"unstuck": {"close_fraction": 0.1}}}}},
         backtest={"scenarios": [{"label": "atomic", "overrides": {
-            f"coin_overrides.{coin}": {"bot": {"long": {"unstuck": {"ema_span_0": 42.5}}}},
+            f"coin_overrides.{coin}": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 42.5}}}},
         }}]},
     )
     validator.validate(payload)
@@ -232,7 +232,7 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
 def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
     payload = source(coin_overrides={"BTC": {"override_config_path": "policy.json", "bot": {"long": {
         "wallet_exposure_limit": 0.5, "hsl": {"enabled": False},
-        "unstuck": {"ema_span_0": 15.5},
+        "unstuck": {"ema_span_0_minutes": 15.5},
     }}}})
     validator.validate(payload)
     for scope in ("position_side", "portfolio"):
@@ -274,7 +274,7 @@ def test_metadata_report_is_separate_and_optional_authority_has_no_default(capsy
     assert json.loads(capsys.readouterr().out) == json.loads(json.dumps(report))
     with pytest.raises(KeyError):
         describe_field("bot.global.unknown")
-    patch = describe_field("coin_overrides.BTC.bot.long.unstuck.ema_span_0")
+    patch = describe_field("coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes")
     assert patch["default"] == {"declared": False}
     assert patch["unit"] == "minutes"
     assert patch["optimizer"]["eligible"] is False

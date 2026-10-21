@@ -12,6 +12,7 @@ import numpy as np
 from optimization.gpu import model
 from optimization.gpu.hsl import pack_params, project_bot
 from optimizer_overrides import unstuck_ema_spans_coupled
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 from config.strategy_paths import native_strategy_path_to_public
 
 
@@ -130,7 +131,7 @@ def build_coin_override_parameters(
                 matrix[row, column("UNSTUCK_EMA_START_COLUMN") + offset] = matrix[
                     row, strategy_paths.index((strategy_key, path)),
                 ]
-            elif strategy_key in unstuck_patch:
+            elif _lookup(side_patch, FLAT_BOT_KEY_TO_GROUP_PATH[key]) is not _MISSING:
                 matrix[row, column("UNSTUCK_EMA_START_COLUMN") + offset] = float(effective_bot[key])
 
         hsl_patch = side_patch.get("hsl", {}) or {}

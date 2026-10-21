@@ -410,8 +410,8 @@ compatibility. Prefer `clean-config --mode format` for explicit output paths and
 ## Explain a config setting
 
 ```shell
-passivbot tool config-explain input.json bot.long.unstuck.ema_span_0
-passivbot tool config-explain input.json bot.long.unstuck.ema_span_0 --coin BTC --json
+passivbot tool config-explain input.json bot.long.unstuck.ema_span_0_minutes
+passivbot tool config-explain input.json bot.long.unstuck.ema_span_0_minutes --coin BTC --json
 passivbot tool config-explain input.json bot.long.unstuck.close_fraction --scenario base --optimize
 ```
 
