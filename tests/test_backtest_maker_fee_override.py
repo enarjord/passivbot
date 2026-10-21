@@ -427,6 +427,9 @@ def test_log_backtest_execution_settings_emits_summary(caplog):
 
     assert "[backtest] effective execution settings:" in caplog.text
     assert "market_orders_allowed" in caplog.text
+    assert "market_order_near_touch_fraction =" in caplog.text
+    assert "(bot.global.execution)" in caplog.text
+    assert "market_order_near_touch_threshold =" not in caplog.text
     assert "unstuck_memory_ema_span_minutes" in caplog.text
     assert "loss_gate_memory_ema_span_minutes" in caplog.text
     assert "realized_loss_gate_lookback_minutes" not in caplog.text

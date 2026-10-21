@@ -49,3 +49,28 @@ def test_ratio_units_and_denominators_are_declared_at_the_canonical_path():
     for path, expected in cases.items():
         field = registry.find(path)
         assert (field.unit, field.denominator) == expected
+
+
+def test_trailing_overview_json_names_enforcer_ratios_explicitly():
+    import json
+    from tools import trailing_inspect
+
+    source = get_template_config()
+    risk = source["bot"]["long"]["risk"]
+    risk["position_exposure_enforcer"]["threshold_ratio"] = 0.8
+    risk["total_exposure_enforcer"]["threshold_ratio"] = 0.9
+    overview = trailing_inspect.build_overview(
+        sources={"long": {
+            "params": trailing_inspect._extract_strategy_params(source, "long"),
+            "context": trailing_inspect._extract_side_context(source, "long"),
+        }},
+        parameter_source="test",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.5,),
+    )
+    context = json.loads(json.dumps(overview))["sides"]["long"]["context"]
+    assert context["position_exposure_enforcer_threshold_ratio"] == 0.8
+    assert context["total_exposure_enforcer_threshold_ratio"] == 0.9
+    assert "position_exposure_enforcer_threshold" not in context
+    assert "total_exposure_enforcer_threshold" not in context

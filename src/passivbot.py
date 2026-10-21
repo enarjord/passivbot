@@ -2520,7 +2520,7 @@ class Passivbot:
         if self._live_market_orders_allowed():
             logging.warning(
                 "[order] live market order execution is enabled | "
-                "market_order_near_touch_threshold=%s; crossing/near-touch orders may be "
+                "market_order_near_touch_fraction=%s; crossing/near-touch orders may be "
                 "submitted as market orders and live exchange slippage controls apply",
                 require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction'),
             )
