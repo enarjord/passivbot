@@ -47,8 +47,8 @@ def _base_config():
                     "minimum_coin_age_days": 30
                 },
                 "warmup": {
-                    "ratio": 0.2,
-                    "max_minutes": 0
+                    "span_multiplier": 0.2,
+                    "max_minutes": None
                 }
             }
         },

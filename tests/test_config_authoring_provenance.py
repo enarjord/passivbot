@@ -13,7 +13,7 @@ from config.universe import set_side_universe_sources
 
 
 COINS = ("BTC", "BTC/USDT:USDT", "bybit::BTC/USDT:USDT", "BTC/USD:BTC")
-ROOT_PATH = "bot.long.unstuck.close_pct"
+ROOT_PATH = "bot.long.unstuck.close_fraction"
 
 
 @pytest.fixture(autouse=True)
@@ -32,12 +32,12 @@ def policy():
     set_side_universe_sources(source, "ignored_coins", {"long": [], "short": []})
     source["optimize"]["bounds"] = {}
     source["optimize"]["enable_overrides"] = []
-    source["bot"]["long"]["unstuck"]["close_pct"] = 0.05
+    source["bot"]["long"]["unstuck"]["close_fraction"] = 0.05
     return source
 
 
 def coin_patch(value):
-    return {"bot": {"long": {"unstuck": {"close_pct": value}}}}
+    return {"bot": {"long": {"unstuck": {"close_fraction": value}}}}
 
 
 def write_json(path, value):
@@ -45,7 +45,7 @@ def write_json(path, value):
     return path
 
 
-def selected_report(source, coin, form, *, base, scenario=None, field="close_pct"):
+def selected_report(source, coin, form, *, base, scenario=None, field="close_fraction"):
     path = f"bot.long.unstuck.{field}"
     if form == "direct":
         return explain_config(source, f"coin_overrides.{coin}.{path}",
@@ -130,7 +130,7 @@ def test_coin_layer_sources_match_fixed_and_scenario_authority(tmp_path, coin, f
 
 
 @pytest.mark.parametrize("coin", COINS)
-@pytest.mark.parametrize("field,value", [("close_pct", 0.11), ("ema_span_0_minutes", 17.5)])
+@pytest.mark.parametrize("field,value", [("close_fraction", 0.11), ("ema_span_0_minutes", 17.5)])
 def test_direct_coin_file_query_reports_the_same_source_as_selected_coin(tmp_path, coin, field, value):
     override = write_json(tmp_path / "coin.json", {"bot": {"long": {"unstuck": {field: value}}}})
     source = policy()
@@ -191,7 +191,7 @@ def test_normalized_coin_alias_retains_its_authored_source(tmp_path, selected, f
     report = selected_report(source, selected, form, base=str(tmp_path / "input.json"))
     assert report["value"] == 0.12
     assert report["sources"][-1]["kind"] == ("override_file" if origin == "file" else "coin_override")
-    assert report["sources"][-1]["path"] == "coin_overrides.SHIB.bot.long.unstuck.close_pct"
+    assert report["sources"][-1]["path"] == "coin_overrides.SHIB.bot.long.unstuck.close_fraction"
     if origin == "file":
         assert report["sources"][-1]["file"] == str(override)
     assert report["search"]["status"] == "coin_override"
@@ -204,8 +204,8 @@ def test_alias_scenario_layer_is_visible_under_the_canonical_coin(tmp_path, form
     source = policy()
     source["coin_overrides"] = {"1000SHIB": coin_patch(0.12)}
     if scope == "leaf":
-        selector, value = "coin_overrides.SHIB.bot.long.unstuck.close_pct", 0.31
-        expected_path = "coin_overrides.SHIB.bot.long.unstuck.close_pct"
+        selector, value = "coin_overrides.SHIB.bot.long.unstuck.close_fraction", 0.31
+        expected_path = "coin_overrides.SHIB.bot.long.unstuck.close_fraction"
     elif scope == "coin":
         selector, value = "coin_overrides.SHIB", coin_patch(0.31)
         expected_path = "coin_overrides.SHIB"
@@ -216,7 +216,7 @@ def test_alias_scenario_layer_is_visible_under_the_canonical_coin(tmp_path, form
     original = deepcopy(source)
     expected = suite_policy(source, base=str(tmp_path / "input.json"), scenario="one", optimize=True)
     report = selected_report(source, "SHIB", form, base=str(tmp_path / "input.json"), scenario="one")
-    assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"]["close_pct"] == 0.31
+    assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.31
     assert report["sources"][-1]["kind"] == "scenario_override"
     assert report["sources"][-1]["path"] == expected_path
     assert report["search"]["status"] == "scenario_override"
@@ -231,7 +231,7 @@ def test_alias_scenario_layer_is_visible_under_the_canonical_coin(tmp_path, form
 def test_explain_preserves_strict_fixed_runtime_alias_selector_authority(tmp_path, authored_coin, selector_coin):
     source = policy()
     source["coin_overrides"] = {authored_coin: coin_patch(0.12)}
-    selector = f"coin_overrides.{selector_coin}.bot.long.unstuck.close_pct"
+    selector = f"coin_overrides.{selector_coin}.bot.long.unstuck.close_fraction"
     source["optimize"]["fixed_runtime_overrides"] = {selector: 0.21}
     if authored_coin == "1000SHIB":
         with pytest.raises((KeyError, ValueError), match="Unknown override path") as owner_error:
@@ -241,7 +241,7 @@ def test_explain_preserves_strict_fixed_runtime_alias_selector_authority(tmp_pat
     else:
         expected = suite_policy(source, base=str(tmp_path / "input.json"), optimize=True)
         report = selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"))
-        assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"]["close_pct"] == 0.21
+        assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.21
         assert report["sources"][-1]["kind"] == "fixed_runtime_override"
         assert report["search"]["status"] == "fixed_runtime_override"
 
@@ -249,12 +249,12 @@ def test_explain_preserves_strict_fixed_runtime_alias_selector_authority(tmp_pat
 @pytest.mark.parametrize("authored_coin,canonical_coin", [("BTC", "BTC"), ("1000SHIB", "SHIB")])
 @pytest.mark.parametrize("form", ["selected", "direct"])
 @pytest.mark.parametrize("origin", ["file", "inline"])
-@pytest.mark.parametrize("field", ["close_pct", "ema_span_0_minutes"])
+@pytest.mark.parametrize("field", ["close_fraction", "ema_span_0_minutes"])
 def test_coupling_keeps_untouched_sources_and_identifies_its_generated_span(
     tmp_path, authored_coin, canonical_coin, form, origin, field,
 ):
     source = policy()
-    patch = {"bot": {"long": {"unstuck": {"close_pct": 0.12, "ema_span_0_minutes": 17.5},
+    patch = {"bot": {"long": {"unstuck": {"close_fraction": 0.12, "ema_span_0_minutes": 17.5},
                               "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 321.5}}}}}}
     override = write_json(tmp_path / "coupled.json", patch)
     source["coin_overrides"] = {authored_coin: {"override_config_path": str(override)}
@@ -307,9 +307,9 @@ def test_coupling_scenario_replacement_does_not_reuse_an_earlier_file_source(tmp
     expected = suite_policy(source, base=str(tmp_path / "input.json"), scenario="one", optimize=True)
     report = selected_report(source, "SHIB", "selected", base=str(tmp_path / "input.json"), scenario="one")
     assert report["value"] == expected["coin_overrides"]["SHIB"]["bot"]["long"]["unstuck"].get(
-        "close_pct", expected["bot"]["long"]["unstuck"]["close_pct"],
+        "close_fraction", expected["bot"]["long"]["unstuck"]["close_fraction"],
     )
-    assert report["value"] == (source["bot"]["long"]["unstuck"]["close_pct"]
+    assert report["value"] == (source["bot"]["long"]["unstuck"]["close_fraction"]
                                if replacement == "removed" else 0.31)
     file_events = [event for event in report["sources"] if event["kind"] == "override_file"]
     if replacement == "file":
@@ -341,7 +341,7 @@ def test_alias_coupling_scenario_keeps_the_suite_owner_selector_rejection(tmp_pa
 def test_raw_alias_scenario_selector_does_not_gain_authority_in_explain(tmp_path, scope):
     source = policy()
     source["coin_overrides"] = {"1000SHIB": coin_patch(0.12)}
-    selector = ("coin_overrides.1000SHIB.bot.long.unstuck.close_pct"
+    selector = ("coin_overrides.1000SHIB.bot.long.unstuck.close_fraction"
                 if scope == "leaf" else "coin_overrides.1000SHIB")
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": {
         selector: 0.31 if scope == "leaf" else coin_patch(0.31),
@@ -366,7 +366,7 @@ def test_duplicate_authored_aliases_remain_rejected_by_suite_and_explain(tmp_pat
 def test_whole_coin_alias_queries_report_the_aggregate_authored_and_file_sources(tmp_path, selected, origin):
     source = policy()
     override = write_json(tmp_path / "container.json", {"bot": {"long": {"unstuck": {
-        "close_pct": 0.12, "ema_span_0_minutes": 17.5,
+        "close_fraction": 0.12, "ema_span_0_minutes": 17.5,
     }}}})
     patch = (coin_patch(0.31) if origin == "inline" else {"override_config_path": str(override)})
     if origin == "mixed":

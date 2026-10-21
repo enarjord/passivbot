@@ -42,7 +42,7 @@ def _legacy_replay_config():
     )
     set_side_universe_sources(c, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
     set_side_universe_sources(c, 'ignored_coins', {'long': [], 'short': []})
-    c['bot']['global']['warmup']['ratio'] = 1
+    c['bot']['global']['warmup']['span_multiplier'] = 1
     c['bot']['global']['warmup']['max_minutes'] = 100
     for side in ("long", "short"):
         b = c["bot"][side]

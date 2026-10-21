@@ -362,14 +362,14 @@ def _dummy_config():
     cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"].update(
-            loss_allowance_pct=0.01, exposure_trigger_ratio=0.5,
-            close_pct=0.1, ema_distance_fraction=0.0,
+            loss_allowance_fraction=0.01, exposure_trigger_ratio=0.5,
+            close_fraction=0.1, ema_distance_fraction=0.0,
         )
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
         strategy["entry"]["ema_span_0"] = 1.0
         strategy["entry"]["ema_span_1"] = 1.0
-        strategy["entry"]["threshold_base_pct"] = 0.01
-        strategy["close"]["threshold_base_pct"] = 0.01
+        strategy["entry"]["threshold_base_fraction"] = 0.01
+        strategy["close"]["threshold_base_fraction"] = 0.01
     cfg = format_config(cfg, live_only=True, verbose=False)
     return cfg
 
@@ -3167,7 +3167,7 @@ def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_ord
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
-    bot.config["bot"]["global"]["forager"]["score_hysteresis_pct"] = 0.005
+    bot.config["bot"]["global"]["forager"]["score_hysteresis_margin"] = 0.005
     bot.open_orders[symbol] = [
         {
             "symbol": symbol,

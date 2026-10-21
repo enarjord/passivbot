@@ -12,6 +12,7 @@ import numpy as np
 from optimization.gpu import model
 from optimization.gpu.hsl import pack_params, project_bot
 from optimizer_overrides import unstuck_ema_spans_coupled
+from config.strategy_paths import native_strategy_path_to_public
 
 
 _MISSING = object()
@@ -71,7 +72,7 @@ def build_coin_override_parameters(
                 effective_strategy, payload.bot_params_list[row][side],
             )
         for index, (key, path) in enumerate(strategy_paths):
-            if _lookup(strategy_patch, path) is not _MISSING:
+            if _lookup(strategy_patch, native_strategy_path_to_public(strategy_kind, path)) is not _MISSING:
                 value = float(effective_strategy[key])
                 matrix[row, index] = value
         if (strategy_kind == "trailing_martingale"
@@ -95,7 +96,7 @@ def build_coin_override_parameters(
         if not bool(effective_bot.get("entry_eligible", True)) or "wallet_exposure_limit" in side_patch:
             matrix[row, column("WALLET_EXPOSURE_COLUMN")] = float(effective_bot["wallet_exposure_limit"])
         risk_patch = side_patch.get("risk", {}) or {}
-        if "we_excess_allowance_pct" in risk_patch:
+        if "we_excess_allowance_fraction" in risk_patch:
             matrix[row, column("ALLOWANCE_PCT_COLUMN")] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0,
             )
@@ -104,7 +105,7 @@ def build_coin_override_parameters(
                 matrix[row, column("WEL_ENFORCER_ENABLED_COLUMN")] = float(
                     bool(effective_bot.get("risk_wel_enforcer_enabled", False)),
                 )
-            if "threshold" in risk_patch.get("position_exposure_enforcer", {}):
+            if "threshold_ratio" in risk_patch.get("position_exposure_enforcer", {}):
                 matrix[row, column("WEL_ENFORCER_THRESHOLD_COLUMN")] = float(
                     effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0,
                 )
@@ -113,9 +114,9 @@ def build_coin_override_parameters(
         unstuck_keys = (
             ("enabled", "unstuck_enabled"),
             ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-            ("close_pct", "unstuck_close_pct"),
+            ("close_fraction", "unstuck_close_pct"),
             ("ema_distance_fraction", "unstuck_ema_dist"),
-            ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
+            ("loss_allowance_fraction", "unstuck_loss_allowance_pct"),
             ("exposure_trigger_ratio", "unstuck_threshold"),
         )
         for offset, (key, runtime_key) in enumerate(unstuck_keys):

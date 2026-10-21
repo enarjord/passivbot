@@ -164,7 +164,7 @@ violate an explicit ownership or safety policy.
 | Exchange fetch methods | Propagate | None in fetch method | Caller policy tests |
 | Required EMA | Unavailable/raise | Previous EMA for the same symbol/span only when explicitly implemented | `[ema]` warning, source/age/count, regression tests |
 | Risk-gating input | Fail closed | None unless explicitly approved | `[risk]` visibility and regression tests |
-| Live fill fee normalization | Best-effort contract | Quote fee → fresh conversion → exchange rate → `live.fills.fee_pct_fallback` | Per-fill metadata, warning summary, policy tests |
+| Live fill fee normalization | Best-effort contract | Quote fee → fresh conversion → exchange rate → `live.fills.fallback_fee_fraction` | Per-fill metadata, warning summary, policy tests |
 | Legacy fill-event cache | Repair or rebuild | Safe metadata repair or known exchange repair; otherwise quarantine and exchange rebuild | Backup path, startup migration tests |
 | Other required trading input | Unavailable/raise | Only a documented, approved fallback | Visibility, bounds, regression tests |
 

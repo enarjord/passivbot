@@ -128,15 +128,15 @@ def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
 
 def test_prep_backtest_args_passes_market_order_slippage_pct():
     config = _base_config()
-    config["backtest"]["market_order_slippage_pct"] = 0.0015
+    config["backtest"]["market_order_slippage_fraction"] = 0.0015
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_slippage_pct"] == 0.0015
 
 
-def test_prep_backtest_args_passes_market_order_near_touch_threshold_from_live():
+def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload():
     config = _base_config()
-    config['bot']['global']['execution']['market_order_near_touch_threshold'] = 0.0017
+    config['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.0017
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_near_touch_threshold"] == 0.0017
@@ -343,7 +343,7 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
         "ema_span_0_minutes"
     ] = 321.0
     config["bot"]["short"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = 0.0123
     mss = _base_mss()
 
@@ -363,11 +363,11 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     config['bot']['global']['strategy_kind'] = "ema_anchor"
     config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 3.0
     config["bot"]["long"]["strategy"]["ema_anchor"] = {
-        "base_qty_pct": 0.02,
+        "base_qty_fraction": 0.02,
         "ema_span_0_minutes": 55.0,
         "ema_span_1_minutes": 144.0,
         "entry_double_down_factor": 0.8,
-        "offset": 0.003,
+        "offset_fraction": 0.003,
         "offset_volatility_ema_span_minutes": 30.0,
         "offset_volatility_1m_weight": 2.5,
         "offset_volatility_ema_span_1h_candles": 12.0,
@@ -375,11 +375,11 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
         "offset_psize_weight": 0.2,
     }
     config["bot"]["short"]["strategy"]["ema_anchor"] = {
-        "base_qty_pct": 0.03,
+        "base_qty_fraction": 0.03,
         "ema_span_0_minutes": 34.0,
         "ema_span_1_minutes": 89.0,
         "entry_double_down_factor": 0.5,
-        "offset": 0.004,
+        "offset_fraction": 0.004,
         "offset_volatility_ema_span_minutes": 45.0,
         "offset_volatility_1m_weight": 3.5,
         "offset_volatility_ema_span_1h_candles": 18.0,

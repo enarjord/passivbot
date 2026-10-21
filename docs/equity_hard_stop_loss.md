@@ -24,7 +24,7 @@ TWEL does not directly multiply the HSL budget.
 
 ```text
 base_wel = authored WEL, or side TWEL / applicable slots if automatic
-allowance = min(max(0, we_excess_allowance_pct), max(0, side TWEL / base_wel - 1))
+allowance = min(max(0, we_excess_allowance_fraction), max(0, side TWEL / base_wel - 1))
 budget = raw balance / applicable slots * (1 + allowance)
 ```
 

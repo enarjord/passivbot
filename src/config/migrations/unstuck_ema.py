@@ -17,6 +17,9 @@ from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 
 
 def _price_spans(strategy, kind):
+    # Referenced files can already carry final public paths. Read their
+    # unchanged native horizons without modifying either authored layer.
+    strategy = lower_runtime_strategy_side(kind, strategy)
     return strategy.get("entry", {}) if kind == "trailing_martingale" else strategy
 
 
@@ -56,7 +59,7 @@ def migrate_unstuck_ema_spans(
 ) -> None:
     kind = normalize_strategy_kind(config.get("bot", {}).get("global", {}).get("strategy_kind"))
     defaults = {
-        side: _price_spans(lower_runtime_strategy_side(kind, value), kind)
+        side: _price_spans(value, kind)
         for side, value in get_strategy_defaults(kind).items()
     }
     migrated = {}
@@ -171,7 +174,7 @@ def migrate_unstuck_ema_spans(
     coupled_search = []
     if isinstance(bounds, dict):
         default_strategy_bounds = {
-            side: _price_spans(lower_runtime_strategy_side(kind, value), kind)
+            side: _price_spans(value, kind)
             for side, value in get_strategy_optimize_bounds(kind).items()
         }
         for side, keys in migrated.items():
@@ -208,7 +211,7 @@ def migrate_unstuck_ema_spans(
             "[config] Unstuck EMA migration preserves this config's trading spans, but a 1-to-1 "
             "optimizer-search migration is impossible: strategy spans previously also controlled "
             "unstucking (%s). New unstuck span bounds are fixed at migrated values unless explicitly "
-            "provided. Set optimize.bounds.<side>.unstuck.ema_span_0/1 to tune them independently; "
+            "provided. Set optimize.bounds.<side>.unstuck.ema_span_0_minutes/ema_span_1_minutes to tune them independently; "
             "or add couple_unstuck_ema_spans to optimize.enable_overrides to restore coupled search. "
             "Previous optimizer checkpoints must start a new search.",
             ", ".join(coupled_search),
@@ -216,7 +219,7 @@ def migrate_unstuck_ema_spans(
     if pinned:
         logging.info(
             "[config] Preserved %d coin-specific unstuck EMA span overrides. To optimize a shared "
-            "portfolio pair, deliberately remove coin_overrides.<coin>.bot.<side>.unstuck.ema_span_0/1 "
+            "portfolio pair, deliberately remove coin_overrides.<coin>.bot.<side>.unstuck.ema_span_0_minutes/ema_span_1_minutes "
             "and set the global unstuck bounds.",
             pinned,
         )
@@ -263,7 +266,9 @@ def migrate_unstuck_ema_spans(
                     f"bot.{side}.{key}",
                 ):
                     new_path = f"bot.{side}.unstuck.{key}"
-                    if old_path in leaves and new_path not in leaves:
+                    public_key = FLAT_BOT_KEY_TO_GROUP_PATH[f"unstuck_{key}"][-1]
+                    public_path = f"bot.{side}.unstuck.{public_key}"
+                    if old_path in leaves and new_path not in leaves and public_path not in leaves:
                         overrides[new_path] = _migrate_inactive_zero_span(
                             deepcopy(leaves[old_path]),
                             effective_side,
@@ -275,7 +280,7 @@ def migrate_unstuck_ema_spans(
         ):
             logging.warning(
                 "[config] Unstuck EMA migration cannot guarantee 1-to-1 behavior for scenario %r "
-                "which replaces strategy settings. Set explicit bot.<side>.unstuck.ema_span_0/1 "
+                "which replaces strategy settings. Set explicit bot.<side>.unstuck.ema_span_0_minutes/ema_span_1_minutes "
                 "scenario overrides to match its intended horizons.",
                 scenario.get("label", "<unnamed>"),
             )

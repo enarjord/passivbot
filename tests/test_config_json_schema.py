@@ -211,7 +211,7 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
     from config.load import prepare_config
 
     payload = source(
-        coin_overrides={coin: {"bot": {"long": {"unstuck": {"close_pct": 0.1}}}}},
+        coin_overrides={coin: {"bot": {"long": {"unstuck": {"close_fraction": 0.1}}}}},
         backtest={"scenarios": [{"label": "atomic", "overrides": {
             f"coin_overrides.{coin}": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 42.5}}}},
         }}]},
@@ -292,8 +292,8 @@ def test_schema_cli_is_offline_and_registered():
 @pytest.mark.parametrize("path", [
     "bot.global.strategy_kind", "bot.global.hedge_mode",
     "bot.global.universe.minimum_coin_age_days", "bot.global.universe.filter_by_min_effective_cost",
-    "bot.global.execution.market_orders_allowed", "bot.global.execution.market_order_near_touch_threshold",
-    "bot.global.forager.score_hysteresis_pct", "bot.global.warmup.ratio", "bot.global.warmup.max_minutes",
+    "bot.global.execution.market_orders_allowed", "bot.global.execution.market_order_near_touch_fraction",
+    "bot.global.forager.score_hysteresis_margin", "bot.global.warmup.span_multiplier", "bot.global.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
     "bot.long.forager.always_include",
 ])

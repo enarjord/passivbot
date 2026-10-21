@@ -90,7 +90,7 @@ entry so each strategy side retains the correct quantity, fees, and realized PnL
 before-state evidence also restores the resulting position when cached history starts mid-position.
 
 Reported fee rates use Lighter's millionths scale. Missing fee evidence follows Passivbot's
-observable best-effort fee policy (`live.fills.fee_pct_fallback`), so such fees are estimates rather than
+observable best-effort fee policy (`live.fills.fallback_fee_fraction`), so such fees are estimates rather than
 exact reported amounts. Do not interpret an omitted fee as an authoritative zero.
 
 ## Validation

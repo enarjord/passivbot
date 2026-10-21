@@ -790,7 +790,7 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
     # This legacy span would impose a shared delay beyond the entire test.
     cfg["bot"][side]["forager"]["volume_ema_span_1m"] = 5000.0
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
@@ -819,7 +819,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']['global']['warmup']['ratio'] = 0.0
+    cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
     cfg["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}

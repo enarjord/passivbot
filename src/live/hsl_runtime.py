@@ -694,7 +694,7 @@ def capture(
                 ),
                 total_wallet_exposure_limit=side_config["risk"]["total_wallet_exposure_limit"],
                 we_excess_allowance_pct=override.get("risk", {}).get(
-                    "we_excess_allowance_pct", side_config["risk"]["we_excess_allowance_pct"]
+                    "we_excess_allowance_fraction", side_config["risk"]["we_excess_allowance_fraction"]
                 ),
             )
         else:

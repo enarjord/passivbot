@@ -43,7 +43,7 @@ def test_parse_overrides_keeps_nested_strategy_mods(monkeypatch):
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.05}
+                            "entry": {"threshold_base_fraction": 0.05}
                         }
                     }
                 }
@@ -63,7 +63,7 @@ def test_parse_overrides_keeps_nested_strategy_mods(monkeypatch):
             "long": {
                 "strategy": {
                     "trailing_martingale": {
-                        "entry": {"threshold_base_pct": 0.05}
+                        "entry": {"threshold_base_fraction": 0.05}
                     }
                 }
             }

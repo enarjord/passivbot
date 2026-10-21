@@ -85,3 +85,18 @@ def test_millisecond_cli_uses_explicit_units_without_retired_dotted_aliases():
                  "--fee-conversion-max-age-ms"):
         with pytest.raises(SystemExit):
             parser.parse_args([flag, "123"])
+
+
+@pytest.mark.parametrize("path", [
+    ("live", "api", "recv_window_milliseconds"),
+    ("live", "fills", "fee_conversion_max_age_milliseconds"),
+    ("monitor", "price_tick_min_interval_milliseconds"),
+    ("live", "startup", "startup_phase_budgets", "account", "elapsed_milliseconds"),
+    ("live", "startup", "startup_phase_budgets", "account", "since_previous_milliseconds"),
+])
+def test_explicit_millisecond_fields_declare_integer_time_units(path):
+    from config.field_registry import get_field_registry
+
+    field = get_field_registry().find(path)
+    assert field.unit == "milliseconds"
+    assert field.numeric_type is int

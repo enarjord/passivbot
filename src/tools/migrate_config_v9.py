@@ -158,11 +158,11 @@ def _materialized_coin_patch(overrides, effective):
             continue
         if "override_config_path" in parts[2:]:
             parts = parts[:2]
-        from config.migrations.operational_live import operational_live_selector
+        from config.migrations.final_v9 import released_runtime_selector
 
         # A referenced coin file has already completed sparse conversion,
         # while a file-free released coin patch still uses its source paths.
-        candidates = (parts, operational_live_selector(".".join(parts)).split("."))
+        candidates = (parts, released_runtime_selector(".".join(parts)).split("."))
         for candidate in candidates:
             value = effective
             for part in candidate:
@@ -324,6 +324,18 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     ))
             canonicalize_shared_bot_side(values)
             risk = values.get("risk", {})
+            for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+                block = risk.get(owner)
+                if isinstance(block, dict) and "threshold" in block:
+                    value = block.pop("threshold")
+                    if "threshold_ratio" in block and block["threshold_ratio"] != value:
+                        raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{owner}.threshold conflicts with threshold_ratio")
+                    block["threshold_ratio"] = deepcopy(value)
+                    changes.append(dict(
+                        path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{owner}.threshold",
+                        old=deepcopy(value), new={"threshold_ratio": deepcopy(value)},
+                        reason="explicit released-v8 ratio rename before file/inline merge",
+                    ))
             for owner, leaf in (
                 ("position_exposure_enforcer", "enabled"),
                 ("position_exposure_enforcer", "threshold"),
@@ -336,12 +348,13 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     continue
                 value = risk.pop(old)
                 block = risk.setdefault(owner, {})
-                if not isinstance(block, dict) or (leaf in block and block[leaf] != value):
-                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{leaf}")
-                block[leaf] = deepcopy(value)
+                target = "threshold_ratio" if leaf == "threshold" else leaf
+                if not isinstance(block, dict) or (target in block and block[target] != value):
+                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{target}")
+                block[target] = deepcopy(value)
                 changes.append(dict(
                     path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{old}",
-                    old=deepcopy(value), new={f"{owner}.{leaf}": deepcopy(value)},
+                    old=deepcopy(value), new={f"{owner}.{target}": deepcopy(value)},
                     reason="explicit released-v8 enforcer conversion before file/inline merge",
                 ))
             for group, old, new in (
@@ -360,6 +373,9 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
                     old=deepcopy(value), new={new: deepcopy(value)},
                     reason="explicit released-v8 quantity rename before file/inline merge",
                 ))
+        from config.public_names import rewrite_released_public_names
+
+        rewrite_released_public_names(inline, record=record_operational)
         result["coin_overrides"][coin] = nested_update(patch, inline)
     return result
 

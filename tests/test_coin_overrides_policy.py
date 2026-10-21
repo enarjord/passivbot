@@ -41,7 +41,7 @@ def _parse(overrides, *, loaded=None):
     [
         ("entry_cooldown", "base_duration_minutes", 2.5),
         ("unstuck", "ema_gating_enabled", False),
-        ("unstuck", "loss_allowance_pct", 0.027),
+        ("unstuck", "loss_allowance_fraction", 0.027),
     ],
 )
 def test_added_and_retained_canonical_policy_paths_are_allowed(
@@ -55,7 +55,7 @@ def test_added_and_retained_canonical_policy_paths_are_allowed(
 def test_policy_registry_and_legacy_aliases_are_derived_consistently():
     assert "entry_cooldown.base_duration_minutes" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "unstuck.ema_gating_enabled" in OVERRIDABLE_SHARED_BOT_PATHS
-    assert "unstuck.loss_allowance_pct" in OVERRIDABLE_SHARED_BOT_PATHS
+    assert "unstuck.loss_allowance_fraction" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "risk.we_excess_allowance_mode" not in OVERRIDABLE_SHARED_BOT_PATHS
 
     flat = allowed_flat_bot_side_modification_keys()
@@ -102,7 +102,7 @@ def test_file_then_inline_precedence_and_long_short_independence():
                     "short": {
                         "unstuck": {
                             "ema_gating_enabled": True,
-                            "loss_allowance_pct": 0.031,
+                            "loss_allowance_fraction": 0.031,
                         }
                     },
                 },
@@ -118,7 +118,7 @@ def test_file_then_inline_precedence_and_long_short_independence():
                     "entry_cooldown": {"base_duration_minutes": 7.0},
                     "unstuck": {
                         "ema_gating_enabled": False,
-                        "loss_allowance_pct": 0.029,
+                        "loss_allowance_fraction": 0.029,
                     },
                 },
             }
@@ -130,7 +130,7 @@ def test_file_then_inline_precedence_and_long_short_independence():
     assert bot["long"]["unstuck"]["ema_gating_enabled"] is False
     assert bot["short"]["entry_cooldown"]["base_duration_minutes"] == 7.0
     assert bot["short"]["unstuck"]["ema_gating_enabled"] is True
-    assert bot["short"]["unstuck"]["loss_allowance_pct"] == 0.031
+    assert bot["short"]["unstuck"]["loss_allowance_fraction"] == 0.031
 
 
 def test_new_policy_fields_use_effective_config_and_type_validation():

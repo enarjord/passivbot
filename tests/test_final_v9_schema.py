@@ -291,10 +291,10 @@ def test_local_wallet_limit_is_validated_without_inventing_a_global_field(tmp_pa
 def test_explicit_file_conversion_preserves_sparse_override_inheritance(tmp_path):
     config = v8_config()
     path = tmp_path / "coin.json"
-    path.write_text(json.dumps({"bot": {"long": {"unstuck": {"close_pct": 0.02}}}}))
+    path.write_text(json.dumps({"bot": {"long": {"unstuck": {"close_fraction": 0.02}}}}))
     config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
     result = migrate(config, memory_span_minutes=123.5, base_config_path=str(tmp_path / "base.json"))
-    assert result.config["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"close_pct": 0.02}}}}
+    assert result.config["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"close_fraction": 0.02}}}}
 
 
 def test_released_pymoo_fallback_is_explicitly_materialized():

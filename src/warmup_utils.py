@@ -29,11 +29,19 @@ def _to_float(value, *, context: str) -> float:
     return numeric
 
 
-def _require_max_warmup_minutes(config: dict) -> float:
-    return _to_float(
+def _require_max_warmup_minutes(config: dict) -> float | None:
+    from config.control_sentinels import warmup_cap
+
+    return warmup_cap(
         require_config_value(config, 'bot.global.warmup.max_minutes'),
-        context='bot.global.warmup.max_minutes',
+        path='bot.global.warmup.max_minutes',
     )
+
+
+def live_warmup_cap_minutes(config: dict) -> int:
+    """Adapt to the existing whole-minute acquisition API's internal zero cap."""
+    cap = _require_max_warmup_minutes(config)
+    return 0 if cap is None else int(cap)
 
 
 def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
@@ -462,13 +470,13 @@ def compute_backtest_warmup_minutes(
         max_minutes = max(max_minutes, extracted * 60.0)
 
     warmup_ratio = _to_float(
-        require_config_value(config, 'bot.global.warmup.ratio'),
-        context='bot.global.warmup.ratio',
+        require_config_value(config, 'bot.global.warmup.span_multiplier'),
+        context='bot.global.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
 
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-    if limit > 0:
+    if limit is not None:
         warmup_minutes = min(warmup_minutes, limit)
     if include_rms:
         warmup_minutes = max(
@@ -494,8 +502,8 @@ def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
     warmup_ratio = _to_float(
-        require_config_value(config, 'bot.global.warmup.ratio'),
-        context='bot.global.warmup.ratio',
+        require_config_value(config, 'bot.global.warmup.span_multiplier'),
+        context='bot.global.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
@@ -542,7 +550,7 @@ def compute_per_coin_warmup_minutes(
                 requirements.max_h1_span_hours * 60.0,
             )
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-        if limit > 0:
+        if limit is not None:
             warmup_minutes = min(warmup_minutes, limit)
         if include_rms:
             for side, params in (("long", long_params), ("short", short_params)):

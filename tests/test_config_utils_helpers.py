@@ -143,7 +143,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "market_order_near_touch_threshold" not in loaded["backtest"]
     assert "lookback_ema_span_minutes" not in loaded["backtest"]
     assert "market_orders_allowed" in loaded["bot"]["global"]["execution"]
-    assert "market_order_near_touch_threshold" in loaded["bot"]["global"]["execution"]
+    assert "market_order_near_touch_fraction" in loaded["bot"]["global"]["execution"]
     assert loaded["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "risk_input_max_attempts" not in loaded["live"]
 
@@ -215,17 +215,17 @@ def test_limit_order_create_market_distance_default_and_validation():
     config = get_template_config()
 
     assert config["live"]["execution"][
-        "limit_order_create_max_market_dist_pct"
+        "limit_order_create_max_market_distance_fraction"
     ] == pytest.approx(0.8)
     validate_config(config, verbose=False)
 
     for value in (-0.01, 1.0, float("inf"), "invalid"):
         invalid = get_template_config()
-        invalid["live"]["execution"]["limit_order_create_max_market_dist_pct"] = value
+        invalid["live"]["execution"]["limit_order_create_max_market_distance_fraction"] = value
 
         with pytest.raises(
             (TypeError, ValueError),
-            match="limit_order_create_max_market_dist_pct",
+            match="limit_order_create_max_market_distance_fraction",
         ):
             validate_config(invalid, verbose=False)
 
@@ -282,23 +282,23 @@ def test_order_replacement_churn_gate_defaults_and_validation():
         "order_replacement_churn_gate_stability_minutes"
     ] == pytest.approx(2.0)
     assert live["execution"][
-        "order_replacement_churn_gate_market_dist_pct"
+        "order_replacement_churn_gate_market_distance_fraction"
     ] == pytest.approx(0.005)
-    assert live["execution"]["order_match_tolerance_pct"] == pytest.approx(0.0002)
+    assert live["execution"]["order_match_tolerance_fraction"] == pytest.approx(0.0002)
     validate_config(config, verbose=False)
 
     invalid_cases = (
-        ("order_match_tolerance_pct", True),
-        ("order_match_tolerance_pct", -0.0001),
-        ("order_match_tolerance_pct", 0.010001),
-        ("order_match_tolerance_pct", float("nan")),
-        ("order_match_tolerance_pct", float("inf")),
+        ("order_match_tolerance_fraction", True),
+        ("order_match_tolerance_fraction", -0.0001),
+        ("order_match_tolerance_fraction", 0.010001),
+        ("order_match_tolerance_fraction", float("nan")),
+        ("order_match_tolerance_fraction", float("inf")),
         ("order_replacement_churn_gate_activation_count", True),
         ("order_replacement_churn_gate_activation_count", -1),
         ("order_replacement_churn_gate_window_minutes", 0.0),
         ("order_replacement_churn_gate_stability_minutes", 11.0),
-        ("order_replacement_churn_gate_market_dist_pct", 1.0),
-        ("order_replacement_churn_gate_market_dist_pct", -0.1),
+        ("order_replacement_churn_gate_market_distance_fraction", 1.0),
+        ("order_replacement_churn_gate_market_distance_fraction", -0.1),
     )
     for key, value in invalid_cases:
         invalid = get_template_config()
@@ -308,7 +308,7 @@ def test_order_replacement_churn_gate_defaults_and_validation():
 
     for tolerance in (0.0, 0.01):
         valid = get_template_config()
-        valid["live"]["execution"]["order_match_tolerance_pct"] = tolerance
+        valid["live"]["execution"]["order_match_tolerance_fraction"] = tolerance
         validate_config(valid, verbose=False)
 
 
@@ -328,7 +328,7 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
     live = prepared["live"]["execution"]
 
     assert "initial_entry_exec_max_market_dist_pct" not in live
-    assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
+    assert live["order_replacement_churn_gate_market_distance_fraction"] == pytest.approx(0.005)
     assert live["order_replacement_churn_gate_activation_count"] == 10
     assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
     assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
@@ -360,7 +360,7 @@ def test_retired_disabled_initial_entry_gate_migrates_to_disabled_churn_gate(
 
     assert "initial_entry_exec_max_market_dist_pct" not in live
     assert live["order_replacement_churn_gate_activation_count"] == 0
-    assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
+    assert live["order_replacement_churn_gate_market_distance_fraction"] == pytest.approx(0.005)
 
 
 def test_retired_initial_entry_gate_accepts_matching_new_distance():
@@ -371,7 +371,7 @@ def test_retired_initial_entry_gate_accepts_matching_new_distance():
 
     assert "initial_entry_exec_max_market_dist_pct" not in prepared["live"]
     assert prepared["live"]["execution"][
-        "order_replacement_churn_gate_market_dist_pct"
+        "order_replacement_churn_gate_market_distance_fraction"
     ] == pytest.approx(0.005)
 
 
@@ -515,7 +515,7 @@ def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_pct(tmp_pat
     path.write_text(json.dumps(migration.config), encoding="utf-8")
     loaded = load_config(str(path), verbose=False)
 
-    assert loaded["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
+    assert loaded["backtest"]["market_order_slippage_fraction"] == pytest.approx(0.0015)
     assert "panic_market_slippage_pct" not in loaded["backtest"]
 
 
@@ -561,7 +561,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
         "limits"
     ] = "--lower_bound_drawdown_worst 0.3 --penalize_if_lower_than_gain_btc 0.1"
     config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = [0.1, 0.05]
 
     _apply_non_live_adjustments(config, verbose=False)
@@ -586,7 +586,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert gain_limit["penalize_if"] == "less_than"
     assert gain_limit["value"] == pytest.approx(0.1)
     assert _bound(
-        config, "long", "strategy", "trailing_martingale", "entry", "threshold_base_pct"
+        config, "long", "strategy", "trailing_martingale", "entry", "threshold_base_fraction"
     ) == [0.05, 0.1]
     assert config['bot']["short"]['universe']['approved_coins'] == ["btc", "eth"]
 
@@ -596,7 +596,7 @@ def test_apply_non_live_adjustments_supports_legacy_coins_file():
     set_side_universe_sources(config, 'approved_coins', "configs/approved_coins_topmcap.json")
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = [0.1, 0.2]
     config["backtest"]["end_date"] = "2023-01-01"
     _apply_non_live_adjustments(config, verbose=False)
@@ -675,8 +675,8 @@ def test_migrate_config_version_sets_current_schema_version():
 def test_loss_gate_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
     assert template["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
-    assert template["live"]["fills"]["fee_pct_fallback"] == pytest.approx(0.0002)
-    assert template["live"]["fills"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
+    assert template["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
+    assert template["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
     sparse = {
         "config_version": "v9.0.0",
@@ -688,15 +688,15 @@ def test_loss_gate_default_is_consistent_across_template_and_formatting():
     }
     formatted = format_config(sparse, verbose=False)
     assert formatted["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
-    assert formatted["live"]["fills"]["fee_pct_fallback"] == pytest.approx(0.0002)
-    assert formatted["live"]["fills"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
+    assert formatted["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
+    assert formatted["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
     loaded = load_config(
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
     assert loaded["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == pytest.approx(1.0)
-    assert loaded["live"]["fills"]["fee_pct_fallback"] == pytest.approx(0.0002)
-    assert loaded["live"]["fills"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
+    assert loaded["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
+    assert loaded["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
 
 def test_migrate_btc_collateral_settings_converts_bool():
@@ -1202,7 +1202,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
-        == config['bot']['long']['risk']['position_exposure_enforcer']['threshold']
+        == config['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
         compiled["bot"]["long"]["unstuck_threshold"]
@@ -1840,7 +1840,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(help_text, "--market-orders-allowed", "-moa", "Y/N")
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
@@ -1851,7 +1851,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--bot.long.hsl.enabled" not in help_text
     assert "--optimize_population_size" not in help_text
     assert (
-        "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_pct"
+        "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_fraction"
         not in help_text
     )
     assert "Optimize DEAP:" not in help_text
@@ -1864,14 +1864,14 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
 
     assert "Optimize Bounds:" in help_text
     assert (
-        "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_pct MIN,MAX[,STEP]"
+        "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_fraction MIN,MAX[,STEP]"
         in help_text
     )
     assert "--limits JSON_OR_HJSON" in help_text
     _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
     assert "--bot.long.hsl.enabled Y/N" in help_text
@@ -1923,7 +1923,7 @@ def test_live_default_help_shows_curated_groups():
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
     assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
@@ -1948,7 +1948,7 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(help_text, "--market-orders-allowed", "-moa", "Y/N")
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--loss-gate-max-drawdown-ratio FLOAT" in help_text
     assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
@@ -2263,28 +2263,28 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
 
     parsed_market = parser.parse_args(["-moa", "y"])
     parsed_hedge = parser.parse_args(["-hm", "n"])
-    parsed_near_touch = parser.parse_args(["-montt", "0.002"])
+    parsed_near_touch = parser.parse_args(["-montf", "0.002"])
     parsed_lookback = parser.parse_args(["--unstuck-memory-ema-span-minutes", "14.5"])
     parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-ratio", "0.75"])
-    parsed_fee_fallback = parser.parse_args(["--fee-pct-fallback", "0"])
-    parsed_fee_sanity = parser.parse_args(["--fee-pct-sanity-abs-max", "0.002"])
+    parsed_fee_fallback = parser.parse_args(["--fallback-fee-fraction", "0"])
+    parsed_fee_sanity = parser.parse_args(["--max-abs-fee-fraction", "0.002"])
     parsed_maker_fee = parser.parse_args(["--maker-fee-override", "0.0002"])
     parsed_taker_fee = parser.parse_args(["--taker-fee-override", "0.00055"])
 
     assert getattr(parsed_market, 'bot.global.execution.market_orders_allowed') is True
     assert getattr(parsed_hedge, 'bot.global.hedge_mode') is False
     assert getattr(
-        parsed_near_touch, 'bot.global.execution.market_order_near_touch_threshold'
+        parsed_near_touch, 'bot.global.execution.market_order_near_touch_fraction'
     ) == pytest.approx(0.002)
     assert getattr(parsed_lookback, "bot.global.unstuck.memory_ema_span_minutes") == pytest.approx(
         14.5
     )
     assert getattr(parsed_loss, "bot.global.loss_gate.max_drawdown_ratio") == pytest.approx(0.75)
-    assert getattr(parsed_fee_fallback, "live.fills.fee_pct_fallback") == pytest.approx(
+    assert getattr(parsed_fee_fallback, "live.fills.fallback_fee_fraction") == pytest.approx(
         0.0
     )
     assert getattr(
-        parsed_fee_sanity, "live.fills.fee_pct_sanity_abs_max"
+        parsed_fee_sanity, "live.fills.max_abs_fee_fraction"
     ) == pytest.approx(0.002)
     assert getattr(parsed_maker_fee, "backtest.maker_fee_override") == pytest.approx(
         0.0002
@@ -2299,7 +2299,7 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     help_text = _format_parser_help_with_config("backtest", config, help_all=False)
 
     _assert_help_option_aliases(
-        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+        help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
     assert "--maker-fee-override FLOAT" in help_text
     assert "--taker-fee-override FLOAT" in help_text
@@ -2321,7 +2321,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
     config = project_template_config_for_cli(get_template_config(), "backtest")
 
     assert "market_orders_allowed" in config["bot"]["global"]["execution"]
-    assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
+    assert "market_order_near_touch_fraction" in config["bot"]["global"]["execution"]
     assert "max_minutes" in config["bot"]["global"]["warmup"]
     assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] > 0
     assert "user" not in config["live"].get("account", {})
@@ -2331,7 +2331,7 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
     config = project_template_config_for_cli(get_template_config(), "optimize")
 
     assert "market_orders_allowed" in config["bot"]["global"]["execution"]
-    assert "market_order_near_touch_threshold" in config["bot"]["global"]["execution"]
+    assert "market_order_near_touch_fraction" in config["bot"]["global"]["execution"]
     assert "max_minutes" in config["bot"]["global"]["warmup"]
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, config, command="optimize")

@@ -54,6 +54,7 @@ def enrich_fields(fields):
                 data.update(unit="ratio", denominator="raw balance")
         elif path[:1] == ("backtest",):
             data["consumers"] = ("backtest", "optimize")
+            data.update(_operational_fraction_metadata(path))
         elif path[:1] == ("optimize",):
             data["consumers"] = ("optimize",)
         elif path[:1] == ("live",):
@@ -67,6 +68,21 @@ def enrich_fields(fields):
                                           if command in rule["consumed_by"])
             data["coin_override"] = (CoinOverridePolicy.ALLOWED if path in get_live_coin_override_paths()
                                      else CoinOverridePolicy.FORBIDDEN)
+            if path in {("live", "modes", side) for side in ("long", "short")}:
+                from .control_sentinels import FORCED_MODES
+
+                data.update(domain=FieldDomain(choices=FORCED_MODES),
+                            description="Null leaves the mode unforced; per-coin null clears a root forced mode.")
+            elif path == ("live", "startup", "warmup_concurrency"):
+                data.update(domain=FieldDomain(minimum=1, choices=("auto",)),
+                            description="Auto uses the existing context/exchange concurrency policy; a positive integer is explicit.")
+            data.update(_operational_fraction_metadata(path))
+        if path in {
+            ("live", "api", "recv_window_milliseconds"),
+            ("live", "fills", "fee_conversion_max_age_milliseconds"),
+            ("monitor", "price_tick_min_interval_milliseconds"),
+        }:
+            data["unit"] = "milliseconds"
         if path == ("optimize", "scoring", "*", "goal"):
             from .scoring import OBJECTIVE_GOALS
 
@@ -80,6 +96,22 @@ def enrich_fields(fields):
     return result
 
 
+def _operational_fraction_metadata(path):
+    denominators = {
+        ("backtest", "market_order_slippage_fraction"): "candle close price",
+        ("backtest", "limit_order_fill_buffer_fraction"): "limit order price",
+        ("live", "account", "balance_hysteresis_snap_fraction"): "absolute previous hysteresis balance",
+        ("live", "fills", "fallback_fee_fraction"): "absolute fill quote notional",
+        ("live", "fills", "max_abs_fee_fraction"): "absolute fill quote notional",
+        ("live", "execution", "limit_order_create_max_market_distance_fraction"): "market price",
+        ("live", "execution", "order_match_tolerance_fraction"): "proposed order price or quantity",
+        ("live", "execution", "order_replacement_churn_gate_market_distance_fraction"): "market price",
+    }
+    if path in denominators:
+        return dict(unit="fraction", denominator=denominators[path])
+    return {}
+
+
 def _bot_metadata(path):
     local = ".".join(path[2:])
     name = path[-1]
@@ -90,23 +122,42 @@ def _bot_metadata(path):
             data["unit"] = "minutes"
         elif name in {"volatility_ema_span_1h_candles", "offset_volatility_ema_span_1h_candles"}:
             data["unit"] = "one-hour candles"
-        return data  # Native metadata owns strategy recommendations and choices.
+        if path[3] == "trailing_martingale":
+            denominators = {
+                ("entry", "initial_qty_fraction"): "raw balance times effective per-position wallet exposure limit, converted at entry price",
+                ("entry", "initial_ema_distance_fraction"): "entry EMA band reference price",
+                ("entry", "threshold_base_fraction"): "position entry price",
+                ("entry", "retracement_base_fraction"): "trailing price extremum",
+                ("close", "qty_fraction"): "budget-derived full-position quantity at position entry price",
+                ("close", "threshold_base_fraction"): "position entry price",
+                ("close", "retracement_base_fraction"): "trailing price extremum",
+            }
+            if tuple(path[4:]) in denominators:
+                data.update(unit="fraction", denominator=denominators[tuple(path[4:])])
+                if tuple(path[4:]) == ("close", "qty_fraction"):
+                    data["description"] = "Close slice uses the budget-derived full position plus any over-budget remainder, rounded and capped by the actual position; static nontrailing full-close mode retains its existing behavior."
+        elif path[3] == "ema_anchor" and name in {"base_qty_fraction", "offset_fraction"}:
+            data.update(unit="fraction", denominator=(
+                "raw balance times effective per-position wallet exposure limit, converted at order price"
+                if name == "base_qty_fraction" else "EMA anchor reference price"))
+        return data  # Native metadata still owns defaults, bounds and choices.
     if local == "strategy_kind":
         from .strategy_spec import get_supported_strategy_kinds
 
         data["domain"] = FieldDomain(choices=get_supported_strategy_kinds())
     elif local == "universe.minimum_coin_age_days":
         data.update(unit="days", domain=FieldDomain(minimum=0.0, finite=True))
-    elif local in {"warmup.ratio", "execution.market_order_near_touch_threshold",
-                   "forager.score_hysteresis_pct"}:
-        denominators = {"warmup.ratio": "indicator span",
-                        "execution.market_order_near_touch_threshold": "market price",
-                        "forager.score_hysteresis_pct": "incumbent selection score"}
-        data.update(unit="fraction", denominator=denominators[local],
+    elif local == "forager.score_hysteresis_margin":
+        data.update(unit="normalized score gap", domain=FieldDomain(minimum=0.0, finite=True),
+                    description="Absolute challenger-minus-incumbent ranking score margin required for replacement.")
+    elif local in {"warmup.span_multiplier", "execution.market_order_near_touch_fraction"}:
+        denominators = {"warmup.span_multiplier": "indicator span",
+                        "execution.market_order_near_touch_fraction": "market price"}
+        data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "warmup.max_minutes":
-        data.update(unit="minutes", domain=FieldDomain(minimum=0.0, finite=True),
-                    description="Zero disables the history warmup cap; acquisition and activation retain their existing formulas.")
+        data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
+                    description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")
     elif local == "forager.always_include":
         data["description"] = "Persistent side selection within the eligible universe; operational modes and risk gates retain priority."
     elif local in {"universe.approved_coins", "universe.ignored_coins"}:
@@ -151,23 +202,23 @@ def _bot_metadata(path):
     elif local == "risk.total_wallet_exposure_limit":
         data.update(unit="ratio", denominator="raw balance",
                     domain=FieldDomain(minimum=0.0, finite=True))
-    elif local == "risk.we_excess_allowance_pct":
+    elif local == "risk.we_excess_allowance_fraction":
         data.update(unit="fraction", denominator="effective per-position wallet exposure limit",
                     domain=FieldDomain(minimum=0.0, finite=True))
-    elif local in {"risk.position_exposure_enforcer.threshold", "risk.total_exposure_enforcer.threshold"}:
+    elif local in {"risk.position_exposure_enforcer.threshold_ratio", "risk.total_exposure_enforcer.threshold_ratio"}:
         data.update(unit="ratio", domain=FieldDomain(finite=True),
                     denominator=("effective per-position wallet exposure limit" if "position_exposure_enforcer" in path
                                  else "side total wallet exposure limit"),
                     description="A positive threshold is required when its exposure enforcer is enabled.")
-        if local == "risk.total_exposure_enforcer.threshold":
+        if local == "risk.total_exposure_enforcer.threshold_ratio":
             data.update(domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
                         description="Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.")
     elif local == "risk.total_exposure_enforcer.policy":
         data["domain"] = FieldDomain(choices=("reduce_overweight", "reduce_portfolio"))
-    elif local == "unstuck.close_pct":
-        data.update(unit="fraction", denominator="raw balance times effective per-position wallet exposure limit",
+    elif local == "unstuck.close_fraction":
+        data.update(unit="fraction", denominator="raw balance times effective per-position wallet exposure limit, converted at close price",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, finite=True))
-    elif local == "unstuck.loss_allowance_pct":
+    elif local == "unstuck.loss_allowance_fraction":
         data.update(unit="fraction", denominator="applicable total wallet exposure limit",
                     domain=FieldDomain(minimum=0.0, finite=True),
                     description="Multiplies applicable TWEL in the realized-loss allowance formula.")

@@ -33,14 +33,14 @@ def inputs(*, suite=False, fixed=False, mirror=False):
     config["optimize"]["limits"] = []
     if fixed:
         config["optimize"]["fixed_runtime_overrides"] = {
-            "bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.025,
+            "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
         }
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     spec = SharedArraySpec("candles", candles.shape, candles.dtype.str)
     base = Evaluator({"binance": spec}, {}, {"binance": markets}, config)
     contexts = [SimpleNamespace(label=label, exchanges=["binance"], config=deepcopy(config), msss={"binance": markets},
-                                overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_pct": 0.03}
+                                overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.03}
                                 if label == "stress" else {}) for label in ("base", "stress")]
     evaluator = SuiteEvaluator(base, contexts, {"default": "mean"}) if suite else base
     datasets = []

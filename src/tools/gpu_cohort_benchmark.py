@@ -210,9 +210,9 @@ def _cohort(args, strategy, seed):
             bot = candidate["bot"][side]["strategy"][strategy]
             if strategy == "trailing_martingale":
                 bot = bot["entry"]
-                bot["initial_qty_pct"] = 0.01 + index * 0.001
+                bot["initial_qty_fraction"] = 0.01 + index * 0.001
             else:
-                bot["base_qty_pct"] = 0.01 + index * 0.001
+                bot["base_qty_fraction"] = 0.01 + index * 0.001
             bot["ema_span_0_minutes"] = 5.0 + index * 1.25
         configs.append(candidate)
         parameters.append(prepare_candidate_parameters(candidate, markets, "binance"))

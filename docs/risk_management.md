@@ -79,9 +79,9 @@ Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and ot
 by its effective WEL must be strictly greater than the threshold. It does not specify a target
 remaining position or prevent a close from crossing below that threshold.
 
-`unstuck.close_pct` sizes each chunk from `balance * effective_wel` at the close order's price,
+`unstuck.close_fraction` sizes each chunk from `balance * effective_wel` at the close order's price,
 while wallet exposure uses average entry price. The chunk can therefore reduce the exposure ratio
-by more or less than `close_pct`, before accounting for rounding, exchange minimums, loss allowance
+by more or less than `close_fraction`, before accounting for rounding, exchange minimums, loss allowance
 and balance changes. See the [auto-unstuck formulas](config.bot.md#auto-unstucking) for details.
 
 #### Auto-Unstuck Loss-Allowance Contract
@@ -120,13 +120,13 @@ See the [v9 risk model](v9_risk_model.md) for the exact allowance and sampling r
 While exposure limits prevent *new* orders, it is still possible for existing positions to swell beyond their limits (e.g., the account holds BTC as collateral and the BTC/USD price drops, the user withdraws funds while positions are maxed out, or the account realizes significant losses). To handle this, Passivbot provides three parameters that control how aggressively to cap and trim exposure.
 
 These parameters function on top of the base limits:
-* `position_exposure_enforcer.threshold` (The Position Trimmer)
-* `risk_we_excess_allowance_pct` (The Buffer)
-* `total_exposure_enforcer.threshold` (The Portfolio Trimmer)
+* `position_exposure_enforcer.threshold_ratio` (The Position Trimmer)
+* `risk.we_excess_allowance_fraction` (The Buffer)
+* `total_exposure_enforcer.threshold_ratio` (The Portfolio Trimmer)
 
-#### Position Exposure Enforcer (`position_exposure_enforcer.threshold`)
+#### Position Exposure Enforcer (`position_exposure_enforcer.threshold_ratio`)
 This controls **per-position** trimming. If a single position's exposure exceeds:
-`effective_limit * position_exposure_enforcer.threshold`
+`effective_limit * position_exposure_enforcer.threshold_ratio`
 The bot issues a reduce-only order to trim it back down.
 
 Examples:
@@ -142,8 +142,8 @@ with aggressive entries and a threshold such as `0.95`, the bot may refill towar
 the position limit and repeatedly trim back to 95% without waiting for auto
 unstuck's EMA gate or loss allowance.
 
-#### Excess Allowance (`risk_we_excess_allowance_pct`)
-In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk_we_excess_allowance_pct > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
+#### Excess Allowance (`risk.we_excess_allowance_fraction`)
+In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk.we_excess_allowance_fraction > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
 
 The excess allowance is always bounded. The raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
 
@@ -205,10 +205,10 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
     * Since `1.05 > 1.0` (the TWEL), the bot will gate any new bot-generated entries for that 7th position under the unconditional entry cap, effectively blocking the "excess" allowance for the last few positions.
 
-#### Total Exposure Enforcer (`total_exposure_enforcer.threshold`)
+#### Total Exposure Enforcer (`total_exposure_enforcer.threshold_ratio`)
 This controls **total portfolio** trimming. It monitors the sum of all same-side long or short
 exchange exposure, including manual and panic positions. If the raw-balance total exceeds:
-`total_wallet_exposure_limit * total_exposure_enforcer.threshold`
+`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`
 The bot reduces positions according to `total_exposure_enforcer.policy`.
 
 * `0.95`: Trims the portfolio when it reaches 95% of the total limit.
@@ -218,7 +218,7 @@ The bot reduces positions according to `total_exposure_enforcer.policy`.
 The unconditional entry cap is separate from auto-reduce. Bot-generated
 entries are blocked or cropped before projected snapped-balance TWE, including existing same-side
 exchange positions, can exceed
-`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold)`.
+`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio)`.
 
 Set `total_exposure_enforcer.enabled = false` to disable TWEL auto-reduce. The threshold must be
 finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.

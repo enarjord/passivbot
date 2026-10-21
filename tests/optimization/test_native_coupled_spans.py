@@ -22,7 +22,7 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
     for side in ("long", "short"):
         config["bot"][side]["strategy"] = deepcopy(fixture["bot"][side]["strategy"])
         config["bot"][side]["unstuck"].update(
-            enabled=True, ema_gating_enabled=True, exposure_trigger_ratio=0.0, loss_allowance_pct=0.1,
+            enabled=True, ema_gating_enabled=True, exposure_trigger_ratio=0.0, loss_allowance_fraction=0.1,
         )
         config["optimize"]["bounds"][side]["strategy"] = {strategy: {}}
     strategy_bounds = {"ema_span_0_minutes": [2.0, 20.0]}
@@ -30,7 +30,7 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
         strategy_bounds = {"entry": strategy_bounds}
     config["optimize"]["bounds"]["long"]["strategy"][strategy] = strategy_bounds
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"] if coupled else []
-    config["coin_overrides"] = {"COIN01": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}}}
+    config["coin_overrides"] = {"COIN01": {"bot": {"long": {"unstuck": {"close_fraction": 0.05}}}}}
     if pinned:
         pin = {"ema_span_0_minutes": 7.5}
         if strategy == "trailing_martingale":

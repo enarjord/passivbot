@@ -95,7 +95,9 @@ def _get_ema_anchor_side_params(config: dict, side: str) -> dict:
     )
     if not side_cfg:
         raise KeyError(f"config.bot.{side}.strategy.{EMA_ANCHOR_STRATEGY_KIND} is required")
-    return side_cfg
+    from config.strategy_paths import lower_runtime_strategy_side
+
+    return lower_runtime_strategy_side(EMA_ANCHOR_STRATEGY_KIND, side_cfg)
 
 
 def _calc_quote_series(

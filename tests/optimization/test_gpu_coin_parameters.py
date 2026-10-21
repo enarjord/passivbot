@@ -35,7 +35,7 @@ payload = SimpleNamespace(
                      "equity_hard_stop_loss": {"engine": "hsl", "mode": "coin",
                                                "coins": {"COIN": [policy, policy]}}},
 )
-patch = {"bot": {"long": {"strategy": {"ema_anchor": {"offset": 0.125}}}}}
+patch = {"bot": {"long": {"strategy": {"ema_anchor": {"offset_fraction": 0.125}}}}}
 matrix, contract = build_coin_override_parameters(
     config={}, mss={}, exchange="binance", coins=["COIN"], payload=payload,
     side="long", strategy_kind="ema_anchor", resolve_override=lambda *args: patch,
@@ -43,8 +43,8 @@ matrix, contract = build_coin_override_parameters(
 assert matrix.shape == (1, EMA_ANCHOR_COIN_OVERRIDE_COLS)
 assert np.count_nonzero(np.isfinite(matrix)) == 1
 assert contract["exact_overrides"] == [patch]
-patch["bot"]["long"]["strategy"]["ema_anchor"]["offset"] = 7
-assert contract["exact_overrides"][0]["bot"]["long"]["strategy"]["ema_anchor"]["offset"] == 0.125
+patch["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] = 7
+assert contract["exact_overrides"][0]["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] == 0.125
 assert not any(name in sys.modules for name in forbidden)
 '''
     env = dict(os.environ, PYTHONPATH=str(source), PYTHONDONTWRITEBYTECODE="1")

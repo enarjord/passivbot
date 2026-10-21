@@ -115,6 +115,15 @@ LIVE_OPERATIONAL_PATHS.update(
         "fee_conversion_max_age_ms": ("live", "fills", "fee_conversion_max_age_milliseconds"),
     }
 )
+for _field_id, _public_name in {
+    "balance_hysteresis_snap_pct": "balance_hysteresis_snap_fraction",
+    "fee_pct_fallback": "fallback_fee_fraction",
+    "fee_pct_sanity_abs_max": "max_abs_fee_fraction",
+    "limit_order_create_max_market_dist_pct": "limit_order_create_max_market_distance_fraction",
+    "order_match_tolerance_pct": "order_match_tolerance_fraction",
+    "order_replacement_churn_gate_market_dist_pct": "order_replacement_churn_gate_market_distance_fraction",
+}.items():
+    LIVE_OPERATIONAL_PATHS[_field_id] = (*LIVE_OPERATIONAL_PATHS[_field_id][:-1], _public_name)
 
 
 def live_field_path(field_id: str) -> str:
@@ -135,7 +144,7 @@ _FIELDS_BY_TYPE = {
             max_memory_candles_per_symbol max_n_cancellations_per_batch
             max_n_creations_per_batch max_n_restarts_per_day max_ohlcv_fetches_per_minute
             order_replacement_churn_gate_activation_count
-            recv_window_ms warmup_concurrency
+            recv_window_ms
         """,
         "logging": "backup_count level",
         "monitor": "max_total_bytes price_tick_min_interval_milliseconds",
@@ -146,7 +155,7 @@ _FIELDS_BY_TYPE = {
     FieldType.FLOAT: {
         "backtest": """
             btc_collateral_cap equity_floor_ratio gap_tolerance_ohlcvs_minutes
-            maker_fee_override market_order_slippage_pct limit_order_fill_buffer_pct
+            maker_fee_override market_order_slippage_fraction limit_order_fill_buffer_fraction
             starting_balance taker_fee_override
         """,
         "live": """
@@ -174,9 +183,9 @@ _FIELDS_BY_TYPE = {
         "bot.global.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
         "bot.global.unstuck": "memory_ema_span_minutes",
         "bot.global.universe": "minimum_coin_age_days",
-        "bot.global.execution": "market_order_near_touch_threshold",
-        "bot.global.forager": "score_hysteresis_pct",
-        "bot.global.warmup": "ratio max_minutes",
+        "bot.global.execution": "market_order_near_touch_fraction",
+        "bot.global.forager": "score_hysteresis_margin",
+        "bot.global.warmup": "span_multiplier",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -202,7 +211,7 @@ _FIELDS_BY_TYPE = {
         "": "config_version",
         "backtest": "base_dir end_date hlcvs_data_override_mode start_date",
         "live": """
-            disapproved_position_mode forced_mode_long forced_mode_short margin_mode_preference
+            disapproved_position_mode margin_mode_preference
             market_snapshot_ticker_strategy time_in_force user
         """,
         "logging": "dir",
@@ -233,6 +242,7 @@ _FIELDS_BY_TYPE = {
 
 _NULLABLE_FIELDS = {
     FieldType.FLOAT: (
+        "bot.global.warmup.max_minutes",
         "backtest.btc_collateral_ltv_cap", "backtest.ew_half_life_days",
         "live.balance_override", "live.max_forager_candle_staleness_minutes",
     ),
@@ -240,6 +250,7 @@ _NULLABLE_FIELDS = {
         "live.max_concurrent_api_requests", "optimize.population_size", "optimize.seed",
     ),
     FieldType.STRING: (
+        "live.forced_mode_long", "live.forced_mode_short",
         "backtest.organillo_csv", "backtest.organillo_sha256", "backtest.hlcvs_data_dir",
         "backtest.ohlcv_source_dir", "live.custom_endpoints_path", "optimize.objective_scenario",
     ),
@@ -257,10 +268,10 @@ _SHARED_SIDE_FIELDS = {
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
-        risk.position_exposure_enforcer.threshold risk.total_exposure_enforcer.threshold
-        risk.total_wallet_exposure_limit risk.we_excess_allowance_pct
-        unstuck.close_pct unstuck.ema_distance_fraction unstuck.ema_span_0_minutes unstuck.ema_span_1_minutes
-        unstuck.loss_allowance_pct unstuck.exposure_trigger_ratio
+        risk.position_exposure_enforcer.threshold_ratio risk.total_exposure_enforcer.threshold_ratio
+        risk.total_wallet_exposure_limit risk.we_excess_allowance_fraction
+        unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0_minutes unstuck.ema_span_1_minutes
+        unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
         hsl.enabled hsl.scale_budget_with_excess_allowance
@@ -364,6 +375,7 @@ def get_field_registry() -> FieldRegistry:
     # Union fields have one unambiguous numeric serialization type.
     for path in ("optimize.gpu.batch_size", "optimize.gpu.max_dispatch_candidate_bars"):
         add(path, (FieldType.INTEGER, FieldType.STRING), nullable=True)
+    add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))
     for name in ("mutation_prob", "mutation_prob_per_variable"):

@@ -8389,11 +8389,11 @@ def fee_policy_kwargs_from_config(config: dict) -> Dict[str, object]:
     live = config.get("live", {}) if isinstance(config, dict) else {}
     return {
         "fee_pct_fallback": float(
-            live.get("fills", {}).get("fee_pct_fallback", DEFAULT_FEE_PCT_FALLBACK)
+            live.get("fills", {}).get("fallback_fee_fraction", DEFAULT_FEE_PCT_FALLBACK)
         ),
         "fee_pct_sanity_abs_max": float(
             live.get("fills", {}).get(
-                "fee_pct_sanity_abs_max", DEFAULT_FEE_PCT_SANITY_ABS_MAX
+                "max_abs_fee_fraction", DEFAULT_FEE_PCT_SANITY_ABS_MAX
             )
         ),
         "fee_conversion_max_age_ms": int(

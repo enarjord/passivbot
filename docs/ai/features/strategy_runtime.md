@@ -1,5 +1,17 @@
 # Strategy Runtime Contracts
 
+Public scale-one shares and relative price offsets use `_fraction`; these names do not rescale
+values. Strategy metadata is copied before public path projection, while Rust parameter names,
+optimizer IDs, defaults and native transport keys remain Rust-owned. Runtime builders lower the
+merged public strategy exactly once at the native boundary. Normal loading accepts one public
+spelling; explicit released-v8 conversion reports path changes across all authored layers.
+
+Fraction denominators are declared in the generated configuration reference. In particular,
+Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
+position entry price, plus any over-budget remainder, rounded and capped by the actual position.
+Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
+is an absolute normalized-score gap, without an incumbent-relative denominator.
+
 ## Canonical And Legacy Strategy Schemas
 
 The canonical strategy kind is `trailing_martingale`. The released v7 `trailing_grid` schema is not
@@ -39,7 +51,7 @@ Optimizer selector contract:
 - Selectors match path segments by prefix or suffix, not partial substring. Use `long.strategy`
   to match the whole active strategy subtree, `long.strategy.close` to match only
   `bot.long.strategy.<active_strategy>.close.*`, or a leaf selector such as
-  `we_excess_allowance_pct` to match every bound ending with that parameter name.
+  `we_excess_allowance_fraction` to match every bound ending with that parameter name.
 - `*` is allowed as a one-segment wildcard, for example `*.strategy.close`.
 - Authored `fixed_runtime_overrides` and scenario patches use literal full canonical paths;
   optimizer selector shorthand does not authorize alternate configuration spellings.
@@ -118,8 +130,8 @@ strategy-root paths. Volatility horizons remain shared by entries and closes.
 
 Entries and closes use threshold/retracement fields.
 
-- `retracement_base_pct <= 0.0`: trailing disabled, use passive recursive limit-order behavior.
-- `retracement_base_pct > 0.0`: threshold is the required excursion, retracement is the confirmation move.
+- `retracement_base_fraction <= 0.0`: trailing disabled, use passive recursive limit-order behavior.
+- `retracement_base_fraction > 0.0`: threshold is the required excursion, retracement is the confirmation move.
 - Trailing extrema reset after any fill for the same coin+pside.
 - Passivbot tracks trailing state itself from candle inputs; exchange-native trailing order types are not part of the core contract.
 
@@ -237,7 +249,7 @@ pins. This is optimizer configuration finalization, not a live/backtest coupling
 
 ## Backtest Limit Fill Buffer
 
-`backtest.limit_order_fill_buffer_pct` is a simulation-only ratio, defaulting to `0.0`.
+`backtest.limit_order_fill_buffer_fraction` is a simulation-only ratio, defaulting to `0.0`.
 Limit buys require `low < price * (1 - buffer)` and limit sells require
 `high > price * (1 + buffer)`. Equality never fills. The buffer changes eligibility only:
 filled limit orders retain the original order price and maker fees. Market execution bypasses it.
@@ -257,24 +269,24 @@ values or ratios outside `[0, 1)` before order construction.
 
 ## Live/Backtest Market Slippage Boundary
 
-`backtest.market_order_slippage_pct` is a backtest simulation knob only. Live orchestrator input
-must not read or forward it; live callers intentionally omit `market_order_slippage_pct` and rely
+`backtest.market_order_slippage_fraction` is a backtest simulation knob only. Live orchestrator input
+must not read or forward it; live callers intentionally omit `market_order_slippage_fraction` and rely
 on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
 current bid/ask snapshot plus exchange-side behavior, controlled by `bot.global.execution.market_orders_allowed`
-and `bot.global.execution.market_order_near_touch_threshold`.
+and `bot.global.execution.market_order_near_touch_fraction`.
 
 ## Close Recursion Contract
 
 Close orders are computed recursively when the close threshold depends on wallet exposure:
 
 1. Compute the next close from current position exposure.
-2. Size it up to `close.qty_pct`.
+2. Size it up to `close.qty_fraction`.
 3. Simulate that close as filled.
 4. Recompute wallet-exposure ratio.
 5. Repeat until the position is exhausted or the ladder is complete.
 
-If `close.retracement_base_pct <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
-have the same price. Rust intentionally emits one full-position close in that case; `close.qty_pct`
+If `close.retracement_base_fraction <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
+have the same price. Rust intentionally emits one full-position close in that case; `close.qty_fraction`
 is effectively moot because multiple same-price slices would be redundant.
 
 ## GPU Market Execution Price Preparation

@@ -74,8 +74,8 @@ for the distinction between schema, package version and tags.
 - **equity_floor_ratio**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * equity_floor_ratio`, and `backtest_completion_ratio` will fall below `1.0`. Example: with `starting_balance = 1000` and `equity_floor_ratio = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= equity_floor_ratio < 1.0`.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override`.
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override`.
-- **limit_order_fill_buffer_pct**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
-- **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.global.execution.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
+- **limit_order_fill_buffer_fraction**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
+- **market_order_slippage_fraction**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.global.execution.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
   Fill-activity metrics use the `fills_*` prefix, including fill counts, per-day entry/close and long/short rates, no-fill gap durations, per-position-slot activity, active fill day counts/ratio, analysis duration, active symbol count, and top-symbol fill share.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
@@ -206,7 +206,7 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 - **strategy.trailing_martingale.entry.double_down_factor**:
   - Quantity of the next re-entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
-- **strategy.trailing_martingale.entry.threshold_base_pct**:
+- **strategy.trailing_martingale.entry.threshold_base_fraction**:
   - Re-entry threshold from the current position price.
   - If entry retracement is disabled:
     - `next_reentry_price_long = pos_price * (1 - effective_threshold)`
@@ -214,10 +214,10 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
   - If entry retracement is enabled, price must first move at least this far in the favorable direction before the retracement condition may place an order.
 - **strategy.trailing_martingale.entry.threshold_we_weight**, **threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
   - Entry threshold is widened multiplicatively:
-    - `effective_threshold = threshold_base_pct * max(1, 1 + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
+    - `effective_threshold = threshold_base_fraction * max(1, 1 + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
   - `we_ratio = wallet_exposure / effective_wallet_exposure_limit`.
   - Positive weights make entries less eager as exposure or volatility rises.
-- **strategy.trailing_martingale.entry.retracement_base_pct**:
+- **strategy.trailing_martingale.entry.retracement_base_fraction**:
   - If `<= 0.0`, trailing confirmation is disabled and entries are passive recursive limit orders.
   - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
 - **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
@@ -227,7 +227,7 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
   - The hourly horizon is a floating count of calendar-hour candle samples. The minute horizon
     is converted to base-candle periods when backtests aggregate their input candles.
   - A volatility weight of `0` disables that horizon for the affected threshold or retracement.
-- **strategy.trailing_martingale.entry.initial_ema_dist**:
+- **strategy.trailing_martingale.entry.initial_ema_distance_fraction**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
   - Short initial entry/long unstuck close prices are upper EMA band plus offset.
@@ -238,8 +238,8 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
   - `disabled` places initial/partial-initial entries at best bid/ask and leaves re-entries to normal threshold/retracement logic.
   - `all` gates initial, partial-initial, and re-entry orders. `reentry` gates re-entries only.
   - In one-way mode, when both sides are flat and otherwise eligible, EMA bands are still required for the long-vs-short tie-break even if entry EMA gating is disabled.
-- **strategy.trailing_martingale.entry.initial_qty_pct**:
-  - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
+- **strategy.trailing_martingale.entry.initial_qty_fraction**:
+  - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_fraction`
   - This is the initial sizing fraction used by min-effective-cost checks when
     `bot.global.strategy_kind = "trailing_martingale"`.
 
@@ -247,11 +247,11 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 
 Close threshold/retracement mirrors entries, but close threshold is additive so it can intentionally move through break-even or negative markup as wallet exposure rises.
 
-- **strategy.trailing_martingale.close.qty_pct**:
-  - Recursive close sizing fraction.
+- **strategy.trailing_martingale.close.qty_fraction**:
+  - Fraction of the budget-derived full position at the position entry price, plus any over-budget remainder; rounding, minimums and the actual position cap still apply.
   - When close retracement is disabled and the close threshold does not depend on wallet exposure, recursive closes collapse to the same price. Rust intentionally emits one full-position close in that case because multiple same-price slices are redundant.
-  - When close threshold depends on wallet exposure, `qty_pct` controls the recursive ladder: each synthetic close fill lowers `we_ratio`, then the next close is recomputed.
-- **strategy.trailing_martingale.close.threshold_base_pct**:
+  - When close threshold depends on wallet exposure, `qty_fraction` controls the recursive ladder: each synthetic close fill lowers `we_ratio`, then the next close is recomputed.
+- **strategy.trailing_martingale.close.threshold_base_fraction**:
   - Base close distance from position price.
   - With retracement disabled, this acts as the resting close markup:
     - `close_price_long = pos_price * (1 + effective_threshold)`
@@ -259,18 +259,18 @@ Close threshold/retracement mirrors entries, but close threshold is additive so 
   - With retracement enabled, this is the first trailing condition: market price must first reach the threshold before retracement can trigger the close.
 - **strategy.trailing_martingale.close.threshold_we_weight**:
   - Close threshold is adjusted additively by exposure:
-    - `effective_threshold = threshold_base_pct + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
+    - `effective_threshold = threshold_base_fraction + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
   - Negative values make closes more eager as position exposure grows, including break-even or negative-markup closes.
   - Positive values make closes less eager as exposure grows.
 - **strategy.trailing_martingale.close.threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
   - Positive values shift close thresholds farther from position price during volatile periods.
-- **strategy.trailing_martingale.close.retracement_base_pct**:
+- **strategy.trailing_martingale.close.retracement_base_fraction**:
   - If `<= 0.0`, close trailing is disabled and closes are resting limit orders.
   - If `> 0.0`, the bot waits for price to reach the close threshold and then retrace by the effective retracement.
 - **strategy.trailing_martingale.close.retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
   - Close retracement is widened multiplicatively by volatility only. There is intentionally no close retracement wallet-exposure weight.
 
-The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_pct`. The v7 compatibility strategy is removed.
+The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_fraction`. The v7 compatibility strategy is removed.
 
 ### Unstuck Parameters
 
@@ -279,9 +279,9 @@ If a position is stuck, the bot uses profits from other positions to realize los
 These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
 allowance: `effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)`.
 
-- **unstuck.close_pct**:
+- **unstuck.close_fraction**:
   - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
-  - Before quantity rounding and other constraints, `close_qty_abs = balance * effective_wel * close_pct / (close_price * c_mult)`.
+  - Before quantity rounding and other constraints, `close_qty_abs = balance * effective_wel * close_fraction / (close_price * c_mult)`.
   - Rust applies quantity-step rounding, exchange minimums, remaining-position sizing and loss-allowance scaling. There is no additional cap to stop precisely at `unstuck.exposure_trigger_ratio`.
 - **unstuck.ema_distance_fraction**:
   - Offset for the EMA eligibility trigger, not the submitted order price:
@@ -291,19 +291,19 @@ allowance: `effective_wel = wallet_exposure_limit * (1 + effective_we_excess_all
 - **unstuck.ema_gating_enabled**:
   - Fixed boolean toggle for the auto-unstuck EMA trigger. Default is `true`.
   - When `false`, auto-unstuck skips the EMA trigger/readiness check but still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
-- **unstuck.loss_allowance_pct**:
+- **unstuck.loss_allowance_fraction**:
   - Sets a realized-loss budget weighted by the side's `total_wallet_exposure_limit`.
   - `balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`.
-  - `loss_floor = balance_peak * (1 - loss_allowance_pct * total_wallet_exposure_limit)`; remaining allowance is `max(0, balance - loss_floor)`.
-  - Example: A reconstructed peak balance of `$10,000`, `loss_allowance_pct = 0.02`, and `total_wallet_exposure_limit = 1.5` give a `$9,700` floor. At a current balance of `$9,800`, the remaining allowance is `$100`.
+  - `loss_floor = balance_peak * (1 - loss_allowance_fraction * total_wallet_exposure_limit)`; remaining allowance is `max(0, balance - loss_floor)`.
+  - Example: A reconstructed peak balance of `$10,000`, `loss_allowance_fraction = 0.02`, and `total_wallet_exposure_limit = 1.5` give a `$9,700` floor. At a current balance of `$9,800`, the remaining allowance is `$100`.
   - This is a pacing budget: exchange minimum sizing may exceed it. See the [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
-  - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_pct`; the selected coin+side then uses that percentage in the same account-wide formula.
+  - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_fraction`; the selected coin+side then uses that fraction in the same account-wide formula.
 - **unstuck.exposure_trigger_ratio**:
   - Exposure eligibility trigger: `wallet_exposure / effective_wel > threshold`. Equality does not qualify.
   - Wallet exposure uses the position's average entry price: `abs(position_size) * position_price * c_mult / balance`.
-  - This is not a target remaining exposure or a floor on the close. An eligible position can finish below the threshold after a close sized by `close_pct`.
-  - For an illustrative long at 100% of effective WEL, `threshold = 0.90` and `close_pct = 0.12` would leave about 88% if close price equals entry price and balance is unchanged, before rounding and other constraints. The order is not reduced to leave exactly 90%.
-  - When close price differs from entry price, the exposure reduction also differs from `close_pct`; see the [sizing formulas](config.bot.md#auto-unstucking).
+  - This is not a target remaining exposure or a floor on the close. An eligible position can finish below the threshold after a close sized by `close_fraction`.
+  - For an illustrative long at 100% of effective WEL, `threshold = 0.90` and `close_fraction = 0.12` would leave about 88% if close price equals entry price and balance is unchanged, before rounding and other constraints. The order is not reduced to leave exactly 90%.
+  - When close price differs from entry price, the exposure reduction also differs from `close_fraction`; see the [sizing formulas](config.bot.md#auto-unstucking).
 
 One non-panic protective reducer (TWEL/WEL auto-reduce or auto-unstuck) may coexist with ordinary
 grid, trailing, or EMA-anchor closes for the same position. Passivbot reserves the reducer quantity
@@ -341,14 +341,14 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       ```
       [
         entry.ema_span_0_minutes, entry.ema_span_1_minutes, volatility_ema_span_1h_candles, volatility_ema_span_minutes,
-        entry.double_down_factor, entry.initial_ema_dist, entry.initial_qty_pct,
-        entry.threshold_base_pct, entry.threshold_we_weight,
+        entry.double_down_factor, entry.initial_ema_distance_fraction, entry.initial_qty_fraction,
+        entry.threshold_base_fraction, entry.threshold_we_weight,
         entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,
-        entry.retracement_base_pct, entry.retracement_we_weight,
+        entry.retracement_base_fraction, entry.retracement_we_weight,
         entry.retracement_volatility_1h_weight, entry.retracement_volatility_1m_weight,
-        close.qty_pct, close.threshold_base_pct, close.threshold_we_weight,
+        close.qty_fraction, close.threshold_base_fraction, close.threshold_we_weight,
         close.threshold_volatility_1h_weight, close.threshold_volatility_1m_weight,
-        close.retracement_base_pct,
+        close.retracement_base_fraction,
         close.retracement_volatility_1h_weight, close.retracement_volatility_1m_weight
       ]
       ```
@@ -356,19 +356,19 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       ```
       [
         risk.position_exposure_enforcer.enabled,
-        risk.position_exposure_enforcer.threshold,
+        risk.position_exposure_enforcer.threshold_ratio,
         entry_cooldown.base_duration_minutes,
-        risk.we_excess_allowance_pct,
+        risk.we_excess_allowance_fraction,
         hsl.cooldown_after_red_minutes,
         hsl.drawdown_ratio_ema_span_minutes,
         hsl.enabled,
         hsl.panic_close_order_type,
         hsl.drawdown_ratio_threshold,
-        unstuck.close_pct,
+        unstuck.close_fraction,
         unstuck.ema_distance_fraction,
         unstuck.ema_gating_enabled,
         unstuck.enabled,
-        unstuck.loss_allowance_pct,
+        unstuck.loss_allowance_fraction,
         unstuck.exposure_trigger_ratio,
         wallet_exposure_limit
       ]
@@ -381,8 +381,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     ```
   - Examples:
     - `{"COIN1": {"override_config_path": "path/to/override_config.json"}}` -- Loads the required file and applies all explicitly present eligible parameters from it for COIN1
-    - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", "bot": {"long": {"strategy": {"trailing_martingale": {"close": {"threshold_base_pct": 0.005}}}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply the given close threshold override after.
-    - `{"COIN3": {"bot": {"short": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": 0.01}}}}}, "live": {"modes": {"long": "panic"}}}}` -- Will apply given overrides for COIN3.
+    - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", "bot": {"long": {"strategy": {"trailing_martingale": {"close": {"threshold_base_fraction": 0.005}}}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply the given close threshold override after.
+    - `{"COIN3": {"bot": {"short": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.01}}}}}, "live": {"modes": {"long": "panic"}}}}` -- Will apply given overrides for COIN3.
 - **forced_modes**:
   - Choices: `[n (normal), m (manual), gs (graceful_stop), t (tp_only), p (panic)]`.
     - **Normal mode**: Passivbot manages the position as normal.
@@ -423,7 +423,7 @@ command. Retired `--live...` policy paths are rejected.
 
 - **bot.global.universe.minimum_coin_age_days**: Disallows coins younger than a given number of days.
 
-- **bot.global.forager.score_hysteresis_pct**: Fractional normalized-score tolerance for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
+- **bot.global.forager.score_hysteresis_margin**: Absolute normalized-score margin for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 
 ### Strategy, execution and warmup
 
@@ -434,24 +434,24 @@ command. Retired `--live...` policy paths are rejected.
 - **bot.global.universe.filter_by_min_effective_cost**: If `true`, disallows coins where
   `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
-  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
-  `bot.<side>.strategy.ema_anchor.base_qty_pct`.
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for `ema_anchor`, it is
+  `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 
 - **bot.global.execution.market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
 
-- **bot.global.execution.market_order_near_touch_threshold**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
+- **bot.global.execution.market_order_near_touch_fraction**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
   - Decision rules:
     - non-panic buy with `price >= market_price` => `market`
     - non-panic sell with `price <= market_price` => `market`
-    - otherwise, if `abs(order_price_diff) <= market_order_near_touch_threshold` => `market`
+    - otherwise, if `abs(order_price_diff) <= market_order_near_touch_fraction` => `market`
     - otherwise => `limit`
     - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
-  - Ownership is `config.bot.global.execution`. Backtests always inherit `bot.global.execution.market_orders_allowed` and `bot.global.execution.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
+  - Ownership is `config.bot.global.execution`. Backtests always inherit `bot.global.execution.market_orders_allowed` and `bot.global.execution.market_order_near_touch_fraction`; `config.backtest` does not accept overrides for either field.
 
-- **bot.global.warmup.max_minutes**: Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups. Use `0` to disable the cap; otherwise values above `0` clamp the per-symbol warmup calculated from EMA spans.
+- **bot.global.warmup.max_minutes**: Ceiling on the existing historical warm-up calculation for backtests and live warm-ups. Use `null` for no cap, or a positive finite number of minutes. Zero is rejected. Existing rounding remains: live acquisition truncates the cap to whole minutes, so a cap below one minute becomes internally uncapped; backtest calculation applies the fractional cap before rounding its final window upward.
 
-- **bot.global.warmup.ratio**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + ratio`; backtest warmup and trade activation use the span times `ratio`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.global.warmup.max_minutes` and other history requirements.
+- **bot.global.warmup.span_multiplier**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + span_multiplier`; backtest warmup and trade activation use the span times `span_multiplier`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.global.warmup.max_minutes` and other history requirements.
 
 ## Live Trading Settings
 
@@ -480,7 +480,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.candles.max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **live.candles.candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
 - **live.candles.inactive_coin_candle_ttl_minutes**: How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep inactive symbols fresher at the cost of more network/disk churn.
-- **live.modes.long**, **live.modes.short**: Force all coins long/short to a given mode.
+- **live.modes.long**, **live.modes.short**: Force all coins long/short to a given mode, or use `null` (default) to leave the mode unforced. A per-coin `null` clears the root forced mode; omission inherits it. Empty strings are rejected. CLI `--live.modes.long null` clears the setting explicitly.
   - Choices: `[m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
 - **live.account.leverage**: Leverage set on the exchange. Default is `10`.
 - **live.account.margin_mode_preference**: Preferred live margin mode when a symbol supports both cross and isolated.
@@ -493,16 +493,16 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.api.market_snapshot_ticker_strategy**: Selects the live market-snapshot ticker path. `auto` lets Passivbot choose the exchange-appropriate default, `bulk` requests one broad ticker snapshot when the exchange supports it, and `symbols` fetches tickers symbol by symbol.
 - **live.api.custom_endpoints_path**: Optional live-config path to a custom endpoint override JSON file. Set to `null` to use the default auto-discovery behavior, set to a path such as `configs/custom_endpoints.json` to force that file, or set to `"none"` to disable endpoint overrides even if the default file exists. See [Running live](live.md#custom-exchange-endpoints).
 - **live.candles.forager_ws_candle_rest_audit_minutes**: Maximum time a healthy WebSocket-advanced flat-candidate 1m tail may defer its next REST integrity audit. Default is `30`; accepted values are greater than `0` and at most `60`. Missing basis, internal gaps, WebSocket silence, reconnect gaps, and active position/open-order surfaces continue to use the existing REST readiness and refresh rules.
-- **live.execution.order_match_tolerance_pct**: Fractional relative tolerance used to match near-identical cancel/create pairs and avoid order churn. The accepted range is `0.0` through `0.01` inclusive (0% through 1%). Default is `0.0002`, meaning 0.02% relative price/quantity tolerance. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
+- **live.execution.order_match_tolerance_fraction**: Fractional relative tolerance used to match near-identical cancel/create pairs and avoid order churn. The accepted range is `0.0` through `0.01` inclusive (0% through 1%). Default is `0.0002`, meaning 0.02% relative price/quantity tolerance. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **live.execution.order_replacement_churn_gate_activation_count**: Account-wide connector-bound create-attempt count in the rolling window below which far churn-evidenced ordinary orders may still be placed. Default `10`; `0` disables only this economy deferral. Exact reconciliation and cancel-confirm-refresh-replan safety remain active. Market, risk-critical, and near-market creates never wait for economy capacity but still count.
 - **live.execution.order_replacement_churn_gate_window_minutes**: Window for per-symbol Rust-ideal history and account-wide create-attempt accounting. Default `10.0` minutes. State is RAM-only and resets on bot restart.
 - **live.execution.order_replacement_churn_gate_stability_minutes**: Minimum observed duration needed to prove sustained monotonic price or quantity drift, or repeated exclusive reappearance of the same semantic order cohort. Exclusive switching requires at least three appearances of the current cohort while every recurring cohort retains its ladder cardinality; its duration is fixed from the preceding appearance to the current run's start, while first appearance and first reappearance remain fail-open. A newest contiguous tight-match duration of the same length clears older evidence and its completed stable prefix becomes the symbol's observable switching-history boundary. Default `2.0` minutes.
-- **live.execution.order_replacement_churn_gate_market_dist_pct**: Final side-aware market-distance threshold inside which a current limit order is always exempt from churn-allowance waiting. Default `0.005` (0.5%). This never preserves a stale actual order or bypasses cancel-first sequencing.
-  - Churn history uses `order_match_tolerance_pct`; there is no wider churn-only tolerance.
+- **live.execution.order_replacement_churn_gate_market_distance_fraction**: Final side-aware market-distance threshold inside which a current limit order is always exempt from churn-allowance waiting. Default `0.005` (0.5%). This never preserves a stale actual order or bypasses cancel-first sequencing.
+  - Churn history uses `order_match_tolerance_fraction`; there is no wider churn-only tolerance.
     Normal loading rejects the retired `order_replacement_churn_gate_tracking_tolerance_pct`
     and `initial_entry_exec_max_market_dist_pct` fields.
   - The explicit released-v8 converter removes the retired tracking tolerance. A positive old
-    distance becomes `order_replacement_churn_gate_market_dist_pct`; a `null` or non-positive
+    distance becomes `order_replacement_churn_gate_market_distance_fraction`; a `null` or non-positive
     value becomes `order_replacement_churn_gate_activation_count = 0`. Conflicting authored
     values fail. The pre-v8 `pb_multi` root shape is unsupported.
 - **live.execution.max_n_cancellations_per_batch**: Cancels `n` open orders per execution. Must be greater than `max_n_creations_per_batch` so the bot can make room before posting replacement orders.
@@ -518,8 +518,8 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.candles.max_forager_candle_refresh_seconds**: Wall-time cap for one best-effort broad forager-candidate candle refresh task. Default is `45`. When the cap is reached, Passivbot pauses the broad refresh and retries remaining stale candidates later; active position/open-order candle refreshes are not capped by this setting.
 - **live.startup.defer_broad_candle_warmup**: If `true`, startup warms only trading-critical symbols first and catches up broad approved-coin candles in the background. Set `false` to block startup until broad candle warmup completes.
 - **live.account.balance_override**: Optional numeric override for wallet balance used by the live bot (useful for dry-runs and debugging). When set, the bot will not fetch balance from the exchange. Can also be useful when using BTC collateral and you want to keep an effectively “fixed USD balance” for sizing, instead of having the USD-denominated balance fluctuate with the BTC/USD price.
-- **live.account.balance_hysteresis_snap_pct**: Hysteresis snap percentage applied to balance updates to reduce noise. Set `0.0` to disable hysteresis. Snapped balance is used for sizing and entry-gating surfaces where hysteresis is intentional; raw balance remains the basis for exact exposure-repair surfaces such as WEL/TWEL auto-reduce. Values above roughly `0.05` can make near-boundary behavior less intuitive and are surfaced by `passivbot tool live-config-preflight`.
-- **live.api.recv_window_milliseconds**: Millisecond tolerance for authenticated REST calls (default `5000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
+- **live.account.balance_hysteresis_snap_fraction**: Relative change from the absolute previous hysteresis balance required to snap to a new balance. Set `0.0` to disable hysteresis. Snapped balance is used for sizing and entry-gating surfaces where hysteresis is intentional; raw balance remains the basis for exact exposure-repair surfaces such as WEL/TWEL auto-reduce. Values above roughly `0.05` can make near-boundary behavior less intuitive and are surfaced by `passivbot tool live-config-preflight`.
+- **live.api.recv_window_milliseconds**: Millisecond tolerance for authenticated REST calls (default `10000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
 - **live.fills.fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **live.fills.fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
@@ -530,7 +530,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
   not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
   equivalence from an old rolling duration.
 - **live.startup.risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
-- **position_exposure_enforcer.threshold**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer.threshold`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
+- **position_exposure_enforcer.threshold_ratio**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer.threshold_ratio`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
 - **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+position_side. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
   This field may be overridden per coin+side as
   `coin_overrides.<coin>.bot.<side>.entry_cooldown.base_duration_minutes`.
@@ -547,23 +547,23 @@ Operational controls use eight groups. Shared strategy and selection policy live
   zero-base behavior, per-coin overrides, shared EMA span and GPU screening support.
 - The total-exposure entry cap always applies. Bot-generated entries are blocked or cropped
   before projected snapped-balance TWE, including existing same-side positions, exceeds
-  `min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold)`.
+  `min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio)`.
 - **total_exposure_enforcer.enabled**: Enables TWEL auto-reduce repair for already-over-target same-side exchange exposure. Manual and panic exposure counts toward the trigger, but only managed positions can receive TWEL auto-reduce orders. Disabling repair leaves the unconditional entry cap active.
-- **total_exposure_enforcer.policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer.threshold / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
-- **total_exposure_enforcer.threshold**: Fraction of the configured `total_wallet_exposure_limit` used by the unconditional entry cap and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
-- **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
+- **total_exposure_enforcer.policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
+- **total_exposure_enforcer.threshold_ratio**: Fraction of the configured `total_wallet_exposure_limit` used by the unconditional entry cap and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
+- **risk.we_excess_allowance_fraction**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
 - **bot.global.loss_gate.max_drawdown_ratio**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
   - Default: `1.0` (disabled).
   - `0.0`: block all lossy closes; negative or nonfinite values are invalid.
   - `>= 1.0`: disable the gate.
   - Example: with raw balance `$10,000`, remembered realized loss D=`$200` and r=`0.05`, remaining allowance is `$310`. Ordered net fills and elapsed-minute decay change D; deposits and UPNL do not.
-- **live.fills.fee_pct_fallback**: Fallback fee percentage used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
-- **live.fills.fee_pct_sanity_abs_max**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fee_pct_fallback`.
+- **live.fills.fallback_fee_fraction**: Fallback fee fraction of absolute quote notional used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
+- **live.fills.max_abs_fee_fraction**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fallback_fee_fraction`.
 - **live.fills.fee_conversion_max_age_milliseconds**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
 - **live.startup.warmup_jitter_seconds**: Random startup delay spread applied before warm-up work begins. This helps multiple bots sharing one machine or cache avoid stampeding the same files and APIs at the same second.
-- **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `0` lets Passivbot auto-select; positive values bound how many symbols are warmed in parallel.
+- **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `"auto"` (default) retains the context/exchange policy; a positive integer sets an explicit cap. Zero, null and booleans are rejected.
 - **live.api.max_concurrent_api_requests**: Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set an integer to throttle authenticated and public request fan-out more aggressively.
-- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.global.warmup.ratio`, indicator spans, and `bot.global.warmup.max_minutes`.
+- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.global.warmup.span_multiplier`, indicator spans, and `bot.global.warmup.max_minutes`.
 - **live.execution.time_in_force**: Default is Good-Till-Cancelled.
 - **live.account.user**: Fetch API key/secret from `api-keys.json`.
 
@@ -682,10 +682,10 @@ after migration.
 
 - **compress_results_file**: If `true`, compresses optimize output results file to save space.
 - **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
-  - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_pct` > `strategy.trailing_martingale.close.retracement_base_pct`. This prevents retracement from triggering before reaching the minimum profit threshold.
+  - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_fraction` > `strategy.trailing_martingale.close.retracement_base_fraction`. This prevents retracement from triggering before reaching the minimum profit threshold.
   - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These retired overrides are rejected.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.global.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
-- **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_pct` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
+- **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
 - **iters**: Number of backtests per optimize session.
 - **n_cpus**: Number of CPU cores utilized in parallel.

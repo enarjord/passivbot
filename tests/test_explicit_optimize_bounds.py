@@ -504,7 +504,7 @@ def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
     source["optimize"]["bounds"] = {
         "global": {"unknown": {"future": [2.0, 3.0]}},
         "long": {
-            "risk": {"position_exposure_enforcer": {"threshold": [0.9, 0.95], "future": [4.0, 5.0]}},
+            "risk": {"position_exposure_enforcer": {'threshold_ratio': [0.9, 0.95], "future": [4.0, 5.0]}},
             "forager": {"score_weights": {"volume": [0.2, 0.8], "future": [6.0, 7.0]}},
         },
     }

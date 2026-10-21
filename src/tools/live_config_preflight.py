@@ -77,15 +77,15 @@ DIFF_SETTING_PATHS = (
     ),
     (
         "forager",
-        "bot.global.forager.score_hysteresis_pct",
-        ("bot", "global", "forager", "score_hysteresis_pct"),
+        "bot.global.forager.score_hysteresis_margin",
+        ("bot", "global", "forager", "score_hysteresis_margin"),
     ),
     (
         "cache",
         "bot.global.warmup.max_minutes",
         ("bot", "global", "warmup", "max_minutes"),
     ),
-    ("cache", "bot.global.warmup.ratio", ("bot", "global", "warmup", "ratio")),
+    ("cache", "bot.global.warmup.span_multiplier", ("bot", "global", "warmup", "span_multiplier")),
 )
 
 
@@ -477,7 +477,7 @@ def _balance_hysteresis_report(
     live: dict[str, Any],
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    raw_value = live.get("account", {}).get("balance_hysteresis_snap_pct", _MISSING)
+    raw_value = live.get("account", {}).get("balance_hysteresis_snap_fraction", _MISSING)
     report: dict[str, Any] = {
         "present": raw_value is not _MISSING,
         "default_value": 0.02,
@@ -498,8 +498,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid_bool",
-                "live.account.balance_hysteresis_snap_pct should be a non-negative number, not a boolean",
-                path="live.account.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative number, not a boolean",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -512,8 +512,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.account.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.account.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -524,8 +524,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.account.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.account.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -536,9 +536,9 @@ def _balance_hysteresis_report(
                 "warning",
                 "balance_hysteresis_snap_pct_high",
                 (
-                    "live.account.balance_hysteresis_snap_pct is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
+                    "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
                 ),
-                path="live.account.balance_hysteresis_snap_pct",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
     else:
@@ -588,7 +588,7 @@ def _cache_readiness_report(
 ) -> dict[str, Any]:
     checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
     warmup = config.get("bot", {}).get("global", {}).get("warmup", {})
-    checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "ratio")})
+    checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -652,22 +652,23 @@ def _cache_readiness_report(
                 f"{live_field_path(key)} is {status}; candle cache readiness may be degraded",
             )
 
-    max_minutes_status = _numeric_status(_setting_value(warmup, "max_minutes"), allow_zero=True)
+    cap = _setting_value(warmup, "max_minutes")
+    max_minutes_status = "present" if cap is None else _numeric_status(cap)
     if max_minutes_status != "present":
         _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
                           f"bot.global.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
-    warmup_ratio_status = _numeric_status(_setting_value(warmup, "ratio"), allow_zero=True)
+    warmup_ratio_status = _numeric_status(_setting_value(warmup, "span_multiplier"), allow_zero=True)
     if warmup_ratio_status == "missing":
         _append_attention(
             candles,
             "warmup_ratio_missing",
-            "bot.global.warmup.ratio is missing; EMA warmup buffer intent is implicit",
+            "bot.global.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
         )
     elif warmup_ratio_status != "present":
         _append_attention(
             candles,
             f"warmup_ratio_{warmup_ratio_status}",
-            f"bot.global.warmup.ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"bot.global.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
         )
 
     archive_status = _bool_status(
@@ -1208,7 +1209,7 @@ def build_live_config_preflight_report(
         "forager": {
             "live_settings": _selected_live_values(live, FORAGER_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("global", {}).get("forager", {}), ("score_hysteresis_pct",)
+                bot.get("global", {}).get("forager", {}), ("score_hysteresis_margin",)
             ),
             "sides": forager_by_side,
             "total_configured_max_positions": sum(
@@ -1216,12 +1217,12 @@ def build_live_config_preflight_report(
             ),
         },
         "risk": {
-            "balance_hysteresis_snap_pct": balance_hysteresis_report,
+            "balance_hysteresis_snap_fraction": balance_hysteresis_report,
         },
         "cache": {
             "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("global", {}).get("warmup", {}), ("max_minutes", "ratio")
+                bot.get("global", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
             ),
             "readiness": _cache_readiness_report(
                 live,

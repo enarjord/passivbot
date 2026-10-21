@@ -1060,7 +1060,7 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
         shared["strategy"] = {kind: shared["strategy"][kind]}
         shared["risk"]["max_positions"] = shared["risk"].pop("n_positions")
         for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
-            shared["risk"][owner] = {"threshold": shared["risk"].pop(f"{owner}_threshold")}
+            shared["risk"][owner] = {"threshold_ratio": shared["risk"].pop(f"{owner}_threshold")}
         shared["unstuck"]["exposure_trigger_ratio"] = shared["unstuck"].pop("threshold")
         shared["unstuck"]["ema_distance_fraction"] = shared["unstuck"].pop("ema_dist")
         shared["forager"].pop("volume_drop_pct", None)
@@ -1073,6 +1073,9 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
         else:
             shared["hsl"]["drawdown_ratio_threshold"] = shared["hsl"].pop("red_threshold")
             shared["hsl"]["drawdown_ratio_ema_span_minutes"] = shared["hsl"].pop("ema_span_minutes")
+    from config.public_names import rewrite_released_public_names
+
+    rewrite_released_public_names({"optimize": {"bounds": defaults}})
     original = config.setdefault("optimize", {}).get("bounds", {})
     rebuilt = deepcopy(original)
 

@@ -14,7 +14,7 @@ def make_bot(overrides):
     bot.exchange = "bitget"
     bot.config = {
         "coin_overrides": overrides,
-        "live": {"modes": {"long": "", "short": ""}},
+        "live": {"modes": {"long": None, "short": None}},
     }
     bot.markets_dict = {"AAA/USDT:USDT": {"active": True}}
     bot.positions = {}

@@ -151,7 +151,7 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
         # the scalar worsens continuously as this proposed gene moves down.
         qty = next(iter(configs.values()))[0]["bot"]["long"]["strategy"][
             "trailing_martingale"
-        ]["entry"]["initial_qty_pct"]
+        ]["entry"]["initial_qty_fraction"]
         if qty < 0.03:
             return (0.03 - qty) * 1e6, [{"metric": "fixture_constraint", "value": qty}]
         return 0.0, []
@@ -168,7 +168,7 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
         population = []
         for qty in (0.01, 0.02, 0.04, 0.05):
             config = deepcopy(base.config)
-            config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = qty
+            config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = qty
             population.append(optimize.config_to_individual(config, base.bounds,
                               optimization_shape=base.optimization_shape))
         monkeypatch.setattr(backend, "_build_random_sampling", lambda *_args: np.asarray(population))

@@ -248,16 +248,16 @@ def optimizer_overrides(overrides_list, config, pside=None, *, trace=None):
             strategy_cfg = _require_trailing_martingale_side(config, pside)
             threshold = require_config_value(
                 config,
-                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.threshold_base_pct",
+                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.threshold_base_fraction",
             )
             retracement = require_config_value(
                 config,
-                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.retracement_base_pct",
+                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.retracement_base_fraction",
             )
-            strategy_cfg.setdefault("close", {})["threshold_base_pct"] = max(threshold, retracement)
+            strategy_cfg.setdefault("close", {})["threshold_base_fraction"] = max(threshold, retracement)
             if trace is not None:
-                target = ("bot", pside, "strategy", DEFAULT_STRATEGY_KIND, "close", "threshold_base_pct")
-                dependency = (*target[:-1], "retracement_base_pct")
+                target = ("bot", pside, "strategy", DEFAULT_STRATEGY_KIND, "close", "threshold_base_fraction")
+                dependency = (*target[:-1], "retracement_base_fraction")
                 trace(override, target, (target, dependency), max(threshold, retracement), "max")
 
     return config

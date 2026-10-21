@@ -792,8 +792,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             canonicalize_reducer_mapping(section, path=path)
 
     # Released configurations without this setting used strict crossing at zero.
-    old_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
-    new_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
+    old_bt.setdefault("limit_order_fill_buffer_fraction", 0.0)
+    new_bt.setdefault("limit_order_fill_buffer_fraction", 0.0)
     old_bt.setdefault("ew_half_life_days", None)
     new_bt.setdefault("ew_half_life_days", None)
     old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
@@ -820,8 +820,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "hlcvs_data_override_mode",
         "equity_floor_ratio",
         "maker_fee_override",
-        "market_order_slippage_pct",
-        "limit_order_fill_buffer_pct",
+        "market_order_slippage_fraction",
+        "limit_order_fill_buffer_fraction",
         "market_settings",
         "market_settings_sources",
         "ohlcv_source_dir",

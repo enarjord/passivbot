@@ -41,7 +41,7 @@ def _parse(overrides, *, loaded=None, symbol_normalizer=lambda coin: coin):
 def test_explicit_inline_values_equal_to_global_are_retained():
     template = get_template_config()
     threshold = template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ]
     enabled = template["bot"]["long"]["unstuck"]["enabled"]
     parsed = _parse(
@@ -51,7 +51,7 @@ def test_explicit_inline_values_equal_to_global_are_retained():
                     "long": {
                         "strategy": {
                             "trailing_martingale": {
-                                "entry": {"threshold_base_pct": threshold}
+                                "entry": {"threshold_base_fraction": threshold}
                             }
                         },
                         "unstuck": {"enabled": enabled},
@@ -63,7 +63,7 @@ def test_explicit_inline_values_equal_to_global_are_retained():
 
     override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
     assert (
-        override["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"]
+        override["strategy"]["trailing_martingale"]["entry"]["threshold_base_fraction"]
         == threshold
     )
     assert override["unstuck"]["enabled"] is enabled
@@ -82,7 +82,7 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
                 "long": {
                     "unstuck": {
                         "enabled": True,
-                        "loss_allowance_pct": 0.02,
+                        "loss_allowance_fraction": 0.02,
                     }
                 }
             }
@@ -95,7 +95,7 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
             "long": {
                 "unstuck": {
                     "enabled": False,
-                    "loss_allowance_pct": 0.02,
+                    "loss_allowance_fraction": 0.02,
                 }
             }
         }
@@ -124,7 +124,7 @@ def test_non_finite_override_values_fail(value):
                         "long": {
                             "strategy": {
                                 "trailing_martingale": {
-                                    "entry": {"threshold_base_pct": value}
+                                    "entry": {"threshold_base_fraction": value}
                                 }
                             }
                         }
@@ -147,7 +147,7 @@ def test_effective_config_cross_field_validation_fails_with_coin_context():
                             "risk": {
                                 "position_exposure_enforcer": {
                                     "enabled": True,
-                                    "threshold": 0.0,
+                                    'threshold_ratio': 0.0,
                                 },
                             }
                         }
@@ -174,7 +174,7 @@ def test_effective_validation_normalization_is_retained_in_patch():
 def test_runtime_compilation_must_follow_override_parsing():
     source = get_template_config()
     source["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.25}}}}
+        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.25}}}}
     }
     runtime_config = prepare_config(
         source,
@@ -194,7 +194,7 @@ def test_runtime_compilation_must_follow_override_parsing():
         target="live",
     )
     parsed = parse_overrides(canonical_config, verbose=False)
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_pct"] == 0.25
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_fraction"] == 0.25
 
 
 def test_retired_volume_filter_fails_before_runtime_compilation():
@@ -248,7 +248,7 @@ def test_strategy_kind_mismatch_fails_in_inline_patch():
 def test_inactive_strategy_subtrees_in_full_override_file_are_ignored():
     loaded = get_template_config()
     loaded["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = 0.123
     parsed = _parse(
         {"BTC": {"override_config_path": "unused-by-test.json"}},
@@ -257,7 +257,7 @@ def test_inactive_strategy_subtrees_in_full_override_file_are_ignored():
 
     strategy = parsed["coin_overrides"]["BTC"]["bot"]["long"]["strategy"]
     assert set(strategy) == {"trailing_martingale"}
-    assert strategy["trailing_martingale"]["entry"]["threshold_base_pct"] == 0.123
+    assert strategy["trailing_martingale"]["entry"]["threshold_base_fraction"] == 0.123
 
 
 def test_override_file_strategy_kind_mismatch_fails():
@@ -322,7 +322,7 @@ def test_wallet_exposure_limit_from_partial_file_is_retained_and_validated():
 
 def test_parse_overrides_is_idempotent():
     parsed_once = _parse(
-        {"BTC": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.02}}}}}
+        {"BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.02}}}}}
     )
     parsed_twice = parse_overrides(
         parsed_once,
@@ -337,7 +337,7 @@ def test_programmatic_override_added_after_prepare_is_retained():
     prepared = _prepared_config({})
     assert prepared["_raw"]["coin_overrides"] == {}
     prepared["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.027}}}}
+        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.027}}}}
     }
 
     parsed = parse_overrides(
@@ -348,14 +348,14 @@ def test_programmatic_override_added_after_prepare_is_retained():
     )
 
     assert (
-        parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_pct"]
+        parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_fraction"]
         == 0.027
     )
 
 
 def test_canonical_grouped_patch_has_live_and_backtest_consumer_parity():
     parsed = _parse(
-        {"BTC": {"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.031}}}}}
+        {"BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.031}}}}}
     )
     override_side = parsed["coin_overrides"]["BTC"]["bot"]["long"]
     merged = merge_runtime_bot_side(
@@ -395,24 +395,24 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                         },
                         "entry_cooldown": deepcopy(side["entry_cooldown"]),
                         "risk": {
-                            "we_excess_allowance_pct": side["risk"][
-                                "we_excess_allowance_pct"
+                            "we_excess_allowance_fraction": side["risk"][
+                                "we_excess_allowance_fraction"
                             ],
                             "position_exposure_enforcer": {
                                 "enabled": side["risk"]["position_exposure_enforcer"][
                                     "enabled"
                                 ],
-                                "threshold": side["risk"]["position_exposure_enforcer"][
-                                    "threshold"
+                                'threshold_ratio': side["risk"]["position_exposure_enforcer"][
+                                    "threshold_ratio"
                                 ],
                             },
                         },
                         "unstuck": {
-                            "close_pct": side["unstuck"]["close_pct"],
+                            "close_fraction": side["unstuck"]["close_fraction"],
                             "ema_distance_fraction": side["unstuck"]["ema_distance_fraction"],
                             "ema_gating_enabled": side["unstuck"]["ema_gating_enabled"],
                             "enabled": side["unstuck"]["enabled"],
-                            "loss_allowance_pct": side["unstuck"]["loss_allowance_pct"],
+                            "loss_allowance_fraction": side["unstuck"]["loss_allowance_fraction"],
                             "exposure_trigger_ratio": side["unstuck"][
                                 "exposure_trigger_ratio"
                             ],
@@ -421,7 +421,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                     }
                 },
                 "live": {
-                    "modes": {"long": "", "short": "normal"},
+                    "modes": {"long": None, "short": "normal"},
                     "account": {"leverage": template["live"]["account"]["leverage"]},
                 },
             }

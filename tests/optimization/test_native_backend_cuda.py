@@ -104,7 +104,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         for side in ("long", "short"):
             config["bot"][side]["unstuck"].update(enabled=True, ema_gating_enabled=True)
         config["coin_overrides"] = {
-            "COIN01": {"bot": {"long": {"unstuck": {"close_pct": 0.05}}}},
+            "COIN01": {"bot": {"long": {"unstuck": {"close_fraction": 0.05}}}},
             "COIN02": {"bot": {"long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0_minutes": 7.5},
             }}}}},
@@ -117,7 +117,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {
-                "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_pct": 0.1},
+                "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
             }}},
         }
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},

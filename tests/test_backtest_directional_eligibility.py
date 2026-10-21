@@ -21,7 +21,7 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
     set_side_universe_sources(config, 'approved_coins', {'long': ['LONGCOIN'], 'short': ['SHORTCOIN']})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']['global']['hedge_mode'] = hedge_mode
-    config['bot']['global']['warmup']['ratio'] = 1.0
+    config['bot']['global']['warmup']['span_multiplier'] = 1.0
     config['bot']['global']['warmup']['max_minutes'] = 10
     config["backtest"].update(
         {
@@ -49,8 +49,8 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
             {
                 "ema_span_0_minutes": 2.0,
                 "ema_span_1_minutes": 3.0,
-                "base_qty_pct": 0.2,
-                "offset": 0.001,
+                "base_qty_fraction": 0.2,
+                "offset_fraction": 0.001,
                 "offset_psize_weight": 0.0,
                 "entry_double_down_factor": 0.0,
                 "offset_volatility_ema_span_minutes": 2.0,

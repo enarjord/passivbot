@@ -528,7 +528,7 @@ substrings.
 The leading `bot.` may be omitted for side-local paths, so `long.risk` is equivalent to
 `bot.long.risk`. A `*` segment may be used as a one-segment wildcard, for example
 `*.strategy.close` matches both long and short active-strategy close params. A leaf selector
-such as `we_excess_allowance_pct` matches every bound whose config path ends with that
+such as `we_excess_allowance_fraction` matches every bound whose config path ends with that
 parameter name.
 
 ```bash

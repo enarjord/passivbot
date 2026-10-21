@@ -19,7 +19,7 @@ from config_utils import format_config, get_template_config
         },
         {
             "HYPEUSDT": {
-                "bot": {"long": {"unstuck": {"loss_allowance_pct": 0.005}}},
+                "bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.005}}},
             },
         },
     ],

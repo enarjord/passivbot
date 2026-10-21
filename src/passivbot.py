@@ -220,7 +220,8 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
-from warmup_utils import compute_per_coin_warmup_minutes
+from warmup_utils import compute_per_coin_warmup_minutes, live_warmup_cap_minutes
+from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
     STRATEGY_WARMUP_H1_PROBE_KEYS,
@@ -2522,7 +2523,7 @@ class Passivbot:
                 "[order] live market order execution is enabled | "
                 "market_order_near_touch_threshold=%s; crossing/near-touch orders may be "
                 "submitted as market orders and live exchange slippage controls apply",
-                require_config_value(self.config, 'bot.global.execution.market_order_near_touch_threshold'),
+                require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction'),
             )
 
     def _format_duration(self, ms: int) -> str:
@@ -4466,13 +4467,16 @@ class Passivbot:
                     if path[2] == "entry_cooldown_weights_minutes":
                         return {**self.bot_value(path[1], path[2]), **grouped_value}
                     return grouped_value
+            override_found = True
             for p in path:
                 if isinstance(d, dict) and p in d:
                     d = d[p]
                 else:
                     d = None
+                    override_found = False
                     break
-            if d is not None:
+            explicit_unforced_mode = override_found and tuple(path) in FORCED_MODE_PATHS
+            if d is not None or explicit_unforced_mode:
                 log_key = (symbol, ".".join(path))
                 if not hasattr(self, "_override_hits_logged"):
                     self._override_hits_logged = set()
@@ -4815,16 +4819,11 @@ class Passivbot:
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
+        max_warmup_minutes = live_warmup_cap_minutes(self.config)
         large_span_threshold = (
             2 * 24 * 60
         )  # minutes; match CandlestickManager large-span logic
@@ -5378,16 +5377,11 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
+        max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
@@ -5541,16 +5535,11 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
+        max_warmup_minutes = live_warmup_cap_minutes(self.config)
 
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
@@ -6115,13 +6104,12 @@ class Passivbot:
 
     def _candle_fetch_concurrency(self, *, context: str = "runtime") -> int:
         """Return a conservative candle-fetch concurrency for non-critical bulk work."""
-        cfg_concurrency = get_optional_live_value(self.config, "warmup_concurrency", 0)
-        try:
-            cfg_concurrency = int(cfg_concurrency) if cfg_concurrency else 0
-        except Exception:
-            cfg_concurrency = 0
-        if cfg_concurrency > 0:
-            return max(1, cfg_concurrency)
+        from config.control_sentinels import warmup_concurrency
+        from config.access import require_live_value
+
+        cfg_concurrency = warmup_concurrency(require_live_value(self.config, "warmup_concurrency"))
+        if cfg_concurrency != "auto":
+            return cfg_concurrency
         exchange_lower = str(getattr(self, "exchange", "") or "").lower()
         if str(context).lower() in {"background warmup", "background_warmup"}:
             return 1
@@ -7552,7 +7540,7 @@ class Passivbot:
                     incumbent_short.add(idx)
 
         score_hysteresis_pct = float(
-            require_config_value(self.config, 'bot.global.forager.score_hysteresis_pct') or 0.0
+            require_config_value(self.config, 'bot.global.forager.score_hysteresis_margin') or 0.0
         )
         return {
             "peek_hints": {
@@ -10074,16 +10062,11 @@ class Passivbot:
         )
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
+        max_warmup_minutes = live_warmup_cap_minutes(self.config)
         span_buffer = 1.0 + max(0.0, warmup_ratio)
         max_span = max(span_volume, span_volatility)
         window_candles = (
@@ -17851,7 +17834,7 @@ class Passivbot:
             "timestamp_ms": now_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
-            # Deliberately omit backtest.market_order_slippage_pct in live.
+            # Deliberately omit backtest.market_order_slippage_fraction in live.
             # Rust defaults it to 0.0 for live loss projections; the backtest
             # value is a simulation knob, not a live slippage cap.
             "global": {
@@ -17860,7 +17843,7 @@ class Passivbot:
                 ),
                 "market_orders_allowed": bool(require_config_value(self.config, 'bot.global.execution.market_orders_allowed')),
                 "market_order_near_touch_threshold": float(
-                    require_config_value(self.config, 'bot.global.execution.market_order_near_touch_threshold')
+                    require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction')
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
@@ -18935,16 +18918,11 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0) or 0.0
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0) or 0.0
             )
         except Exception:
             warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
+        max_warmup_minutes = live_warmup_cap_minutes(self.config)
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             refreshable_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
@@ -19735,16 +19713,11 @@ class Passivbot:
         span = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.ratio', 0.0)
+                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_config_value(self.config, 'bot.global.warmup.max_minutes', 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
+        max_warmup_minutes = live_warmup_cap_minutes(self.config)
         span_buffer = 1.0 + max(0.0, warmup_ratio)
         window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
         if max_warmup_minutes > 0:

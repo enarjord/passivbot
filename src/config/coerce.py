@@ -242,6 +242,9 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
 
 
 def normalize_validation_fields(config: dict, *, raw_optimize=None) -> None:
+    from .control_sentinels import normalize_control_values
+
+    normalize_control_values(config)
     require_config_dict(config, "monitor")
     config["bot"]["global"]["hsl"]["scope"] = normalize_hsl_signal_mode(
         config["bot"]["global"]["hsl"]["scope"]

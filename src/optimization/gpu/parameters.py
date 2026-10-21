@@ -17,12 +17,12 @@ def _single_coin_exposure_params(
 ) -> dict[str, float]:
     return {
         "we_excess_allowance_pct": float(
-            risk.get("we_excess_allowance_pct", 0.0) or 0.0
+            risk.get("we_excess_allowance_fraction", 0.0) or 0.0
         ),
         "hsl_scale_budget_with_excess_allowance": float(scale_hsl_budget),
         "twel_entry_gate_enabled": 1.0,
         "twel_enforcer_threshold": float(
-            risk.get('total_exposure_enforcer', {}).get('threshold', 1.0) or 0.0
+            risk.get('total_exposure_enforcer', {}).get('threshold_ratio', 1.0) or 0.0
         ),
     }
 
@@ -32,13 +32,13 @@ def _position_exposure_enforcer_params(risk: dict, *, side: str) -> dict[str, fl
         risk.get('position_exposure_enforcer', {}).get('enabled', risk.get('risk_wel_enforcer_enabled', False))
     )
     threshold = float(
-        risk.get('position_exposure_enforcer', {}).get('threshold', risk.get('risk_wel_enforcer_threshold', 0.0))
+        risk.get('position_exposure_enforcer', {}).get('threshold_ratio', risk.get('risk_wel_enforcer_threshold', 0.0))
         or 0.0
     )
     if enabled and (not np.isfinite(threshold) or threshold <= 0.0):
         raise ValueError(
             "MPS proxy requires a finite positive "
-            f"bot.{side}.risk.position_exposure_enforcer.threshold when the "
+            f"bot.{side}.risk.position_exposure_enforcer.threshold_ratio when the "
             "position exposure enforcer is enabled"
         )
     return {

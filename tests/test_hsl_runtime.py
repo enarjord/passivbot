@@ -1601,7 +1601,7 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     value = bot(side=side)
     risk = value.config["bot"][side]["risk"]
     risk.update(
-        max_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_pct=0.0
+        max_positions=10, total_wallet_exposure_limit=2.5, we_excess_allowance_fraction=0.07
     )
     value.positions[SYMBOL][side]["size"] = 1 if side == "long" else -1
     value.config["bot"][side]["hsl"]["drawdown_ratio_threshold"] = 0.2
@@ -1610,9 +1610,21 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
     ordinary, unavailable = run(value, marks=marks)
     assert not unavailable and ordinary[0].action == "panic"
     value.config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
+    root_scaled, unavailable = run(value, marks=marks)
+    assert not unavailable and root_scaled[0].action == "panic"
     value.coin_overrides[SYMBOL] = {
-        "bot": {side: {"risk": {"we_excess_allowance_pct": 0.44}}}
+        "bot": {side: {"risk": {"we_excess_allowance_fraction": 0.44}}}
     }
+    original = deepcopy((value.config, value.coin_overrides))
+    requests, unavailable = capture(
+        value, marks, {}, symbols={"long": [SYMBOL], "short": [SYMBOL]},
+        now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000,
+    )
+    assert not unavailable
+    native_budget = json.loads(requests[0].payload)["exposure_budget"]
+    assert native_budget["we_excess_allowance_pct"] == 0.44
+    assert "we_excess_allowance_fraction" not in native_budget
     scaled, unavailable = run(value, marks=marks)
     assert not unavailable and scaled[0].action == "normal"
     assert run(value, marks=marks)[0] == scaled
+    assert (value.config, value.coin_overrides) == original
