@@ -44,7 +44,7 @@ def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
     assert source == before
     assert len(json.dumps(compact)) < len(json.dumps(source)) * 0.7
     assert "logging" not in compact
-    assert "warmup" not in compact["bot"].get("global", {})
+    assert compact["bot"]["global"]["warmup"] == {"max_minutes": None}
     assert effective(compact) == effective(source)
     assert compact_config(compact) == compact
 

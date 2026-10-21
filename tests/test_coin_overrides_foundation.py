@@ -421,7 +421,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                     }
                 },
                 "live": {
-                    "modes": {"long": "", "short": "normal"},
+                    "modes": {"long": None, "short": "normal"},
                     "account": {"leverage": template["live"]["account"]["leverage"]},
                 },
             }

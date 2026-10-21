@@ -42,6 +42,9 @@ class FieldDomain:
     exclusive_maximum: bool = False
     finite: bool | None = None
     choices: tuple[Any, ...] = ()
+    # A pattern describes accepted authored strings; choices then provide
+    # canonical examples rather than an exhaustive raw-input enumeration.
+    string_pattern: str | None = None
 
 
 @dataclass(frozen=True)

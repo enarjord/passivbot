@@ -42,7 +42,7 @@ def _make_optimizer_config() -> dict:
     """
     config = get_template_config()
     config['bot']['global']['warmup']['span_multiplier'] = 0.3
-    config['bot']['global']['warmup']['max_minutes'] = 0
+    config['bot']['global']['warmup']['max_minutes'] = None
     set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
     config["backtest"]["exchanges"] = ["combined"]
     config["backtest"]["coins"] = {"combined": ["HYPE"]}

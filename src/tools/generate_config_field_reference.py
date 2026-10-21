@@ -49,6 +49,8 @@ def _metadata_labels(field):
             domain.append("finite")
         if value.choices:
             domain.append(", ".join(f"`{choice}`" for choice in value.choices))
+        if value.string_pattern is not None:
+            domain.append("authored string pattern; choices show canonical examples")
     return [unit, scope, optimizer, field.coin_override.value if field.coin_override else "—",
             "; ".join(domain) or "—"]
 

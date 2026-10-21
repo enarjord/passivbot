@@ -446,7 +446,7 @@ command. Retired `--live...` policy paths are rejected.
     - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
   - Ownership is `config.bot.global.execution`. Backtests always inherit `bot.global.execution.market_orders_allowed` and `bot.global.execution.market_order_near_touch_fraction`; `config.backtest` does not accept overrides for either field.
 
-- **bot.global.warmup.max_minutes**: Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups. Use `0` to disable the cap; otherwise values above `0` clamp the per-symbol warmup calculated from EMA spans.
+- **bot.global.warmup.max_minutes**: Ceiling on the existing historical warm-up calculation for backtests and live warm-ups. Use `null` for no cap, or a positive finite number of minutes. Zero is rejected. Existing rounding remains: live acquisition truncates the cap to whole minutes, so a cap below one minute becomes internally uncapped; backtest calculation applies the fractional cap before rounding its final window upward.
 
 - **bot.global.warmup.span_multiplier**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + span_multiplier`; backtest warmup and trade activation use the span times `span_multiplier`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.global.warmup.max_minutes` and other history requirements.
 
@@ -477,8 +477,8 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.candles.max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **live.candles.candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
 - **live.candles.inactive_coin_candle_ttl_minutes**: How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep inactive symbols fresher at the cost of more network/disk churn.
-- **live.modes.long**, **live.modes.short**: Force all coins long/short to a given mode.
-  - Choices: `[m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
+- **live.modes.long**, **live.modes.short**: Force all coins long/short to a given mode, or use `null` (default) to leave the mode unforced. A per-coin `null` clears the root forced mode; omission inherits it. Empty strings are rejected. CLI `--live.modes.long null` clears the setting explicitly.
+  - Modes: `normal` (`n`), `manual` (`m`), `graceful_stop` (`gs`, `graceful-stop`), `panic` (`p`), and `tp_only` (`t`, `tp`, `tp-only`). Mode inputs ignore case and surrounding whitespace; loader and editor validation accept the same spellings.
 - **live.account.leverage**: Leverage set on the exchange. Default is `10`.
 - **live.account.margin_mode_preference**: Preferred live margin mode when a symbol supports both cross and isolated.
   - `auto` / `auto_cross`: prefer cross when both modes are available.
@@ -558,7 +558,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.fills.fee_pct_sanity_abs_max**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fee_pct_fallback`.
 - **live.fills.fee_conversion_max_age_ms**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
 - **live.startup.warmup_jitter_seconds**: Random startup delay spread applied before warm-up work begins. This helps multiple bots sharing one machine or cache avoid stampeding the same files and APIs at the same second.
-- **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `0` lets Passivbot auto-select; positive values bound how many symbols are warmed in parallel.
+- **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `"auto"` (default) retains the context/exchange policy; a positive integer sets an explicit cap. Zero, null and booleans are rejected.
 - **live.api.max_concurrent_api_requests**: Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set an integer to throttle authenticated and public request fan-out more aggressively.
 - **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.global.warmup.span_multiplier`, indicator spans, and `bot.global.warmup.max_minutes`.
 - **live.execution.time_in_force**: Default is Good-Till-Cancelled.

@@ -284,7 +284,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             },
             "global": {
                 "strategy_kind": "ema_anchor",
-                "warmup": {'span_multiplier': 1.0, "max_minutes": 0},
+                "warmup": {"span_multiplier": 1.0, "max_minutes": None},
                 "universe": {"minimum_coin_age_days": 365},
             },
         },
@@ -339,7 +339,7 @@ def test_run_signature_changes_for_optimize_changes():
             "short": {"universe": {"approved_coins": []}},
             "global": {
                 "strategy_kind": "ema_anchor",
-                "warmup": {'span_multiplier': 0.0, "max_minutes": 0},
+                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
                 "universe": {"minimum_coin_age_days": 365},
             },
         },

@@ -93,7 +93,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.universe.filter_by_min_effective_cost` | boolean | `true` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.universe.minimum_coin_age_days` | float | `60.0` | days | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
-| `bot.global.warmup.max_minutes` | float | `0.0` | minutes | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.global.warmup.max_minutes` | float \| null | `null` | minutes | global; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
 | `bot.global.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | long; live, backtest, optimize | Eligible (`long_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
@@ -297,8 +297,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.fills.fills_confirmation_overlap_minutes` | float | `60.0` | — | — | — | forbidden | — | python |
 | `live.fills.fills_recent_overlap_minutes` | float | `10.0` | — | — | — | forbidden | — | python |
 | `live.modes.disapproved_position` | string | `"graceful_stop"` | — | — | — | forbidden | — | python |
-| `live.modes.long` | string | `""` | — | — | — | allowed | — | python |
-| `live.modes.short` | string | `""` | — | — | — | allowed | — | python |
+| `live.modes.long` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only`; authored string pattern; choices show canonical examples | python |
+| `live.modes.short` | string \| null | `null` | — | — | — | allowed | `normal`, `manual`, `graceful_stop`, `panic`, `tp_only`; authored string pattern; choices show canonical examples | python |
 | `live.recovery.exchange_symbol_unavailable_cooldown_hours` | float | `6.0` | — | —; live | — | forbidden | — | python |
 | `live.recovery.max_n_restarts_per_day` | integer | `10` | — | — | — | forbidden | — | python |
 | `live.startup.defer_broad_candle_warmup` | boolean | `true` | — | — | — | forbidden | — | python |
@@ -308,7 +308,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `live.startup.startup_phase_budgets.*` | object | Not declared | — | — | — | forbidden | — | python |
 | `live.startup.startup_phase_budgets.*.elapsed_ms` | integer | Not declared | milliseconds | — | — | forbidden | >= 0 | python |
 | `live.startup.startup_phase_budgets.*.since_previous_ms` | integer | Not declared | milliseconds | — | — | forbidden | >= 0 | python |
-| `live.startup.warmup_concurrency` | integer | `0` | — | — | — | forbidden | — | python |
+| `live.startup.warmup_concurrency` | integer \| string | `"auto"` | — | — | — | forbidden | >= 1; `auto` | python |
 | `live.startup.warmup_jitter_seconds` | float | `30.0` | — | — | — | forbidden | — | python |
 
 ## logging

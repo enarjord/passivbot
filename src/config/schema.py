@@ -369,7 +369,7 @@ def _build_template_config():
                         "market_order_near_touch_fraction": 0.001,
                     },
                     "forager": {"score_hysteresis_pct": 0.02},
-                    "warmup": {'span_multiplier': 0.3, "max_minutes": 0},
+                    "warmup": {"span_multiplier": 0.3, "max_minutes": None},
                     "hsl": {"scope": "coin"},
                     "loss_gate": {
                         "max_drawdown_ratio": 1.0,
@@ -427,7 +427,7 @@ def _build_template_config():
                     "force_cold_startup": False,
                     "risk_bootstrap_max_lookback_minutes": 129600.0,
                     "startup_phase_budgets": {},
-                    "warmup_concurrency": 0,
+                    "warmup_concurrency": "auto",
                     "warmup_jitter_seconds": 30,
                 },
                 "fills": {
@@ -455,8 +455,8 @@ def _build_template_config():
                 },
                 "modes": {
                     "disapproved_position": "graceful_stop",
-                    "long": "",
-                    "short": "",
+                    "long": None,
+                    "short": None,
                 },
             },
             "logging": {

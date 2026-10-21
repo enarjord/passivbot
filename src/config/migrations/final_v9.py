@@ -625,6 +625,9 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         migrate_entry_ema_tree(result)
         move_shared_policy(result, record=record)
         move_operational_live(result, record=record)
+        from .control_sentinels import migrate_control_sentinels
+
+        migrate_control_sentinels(result, record=record)
         for side in ("long", "short"):
             canonicalize_shared_bot_side(result.get("bot", {}).get(side))
         return result
@@ -652,6 +655,9 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     migrate_entry_ema_spans(result)
     migrate_unstuck_ema_spans(result, verbose=False)
     move_operational_live(result, record=record)
+    from .control_sentinels import migrate_control_sentinels
+
+    migrate_control_sentinels(result, record=record)
     preserve_forced_normal_selection(result, record=record)
     for side in ("long", "short"):
         canonicalize_shared_bot_side(result.get("bot", {}).get(side))

@@ -1110,7 +1110,7 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
         "bot": {
             "long": {},
             "short": {},
-            "global": {"warmup": {'span_multiplier': 0.0, "max_minutes": 0.0}},
+            "global": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}},
         },
         "optimize": {"bounds": {}},
     }

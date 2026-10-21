@@ -99,7 +99,7 @@
             "strategy_kind": "trailing_martingale",
             "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 180.0},
             "unstuck": {"memory_ema_span_minutes": 43200.0},
-            "warmup": {"max_minutes": 0, "span_multiplier": 0.3}
+            "warmup": {"max_minutes": null, "span_multiplier": 0.3}
         },
         "long": {
             "entry_cooldown": {
@@ -308,7 +308,7 @@
             "force_cold_startup": false,
             "risk_bootstrap_max_lookback_minutes": 129600.0,
             "startup_phase_budgets": {},
-            "warmup_concurrency": 0,
+            "warmup_concurrency": "auto",
             "warmup_jitter_seconds": 30
         },
         "fills": {
@@ -335,8 +335,8 @@
             "max_n_restarts_per_day": 10
         },
         "modes": {
-            "long": "",
-            "short": "",
+            "long": null,
+            "short": null,
             "disapproved_position": "graceful_stop"
         }
     },

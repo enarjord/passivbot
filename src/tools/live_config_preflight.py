@@ -652,7 +652,8 @@ def _cache_readiness_report(
                 f"{live_field_path(key)} is {status}; candle cache readiness may be degraded",
             )
 
-    max_minutes_status = _numeric_status(_setting_value(warmup, "max_minutes"), allow_zero=True)
+    cap = _setting_value(warmup, "max_minutes")
+    max_minutes_status = "present" if cap is None else _numeric_status(cap)
     if max_minutes_status != "present":
         _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
                           f"bot.global.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")

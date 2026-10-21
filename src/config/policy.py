@@ -40,7 +40,6 @@ def validate_shared_bot_policy(config):
         "bot.global.execution.market_order_near_touch_fraction",
         "bot.global.forager.score_hysteresis_pct",
         "bot.global.warmup.span_multiplier",
-        "bot.global.warmup.max_minutes",
     ):
         value = require_config_value(config, path)
         if (

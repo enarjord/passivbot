@@ -1110,10 +1110,13 @@
                   "type": "object",
                   "properties": {
                     "max_minutes": {
-                      "type": "number",
-                      "default": 0,
-                      "description": "Zero disables the history warmup cap; acquisition and activation retain their existing formulas.",
-                      "minimum": 0.0,
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "default": null,
+                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
+                      "exclusiveMinimum": 0.0,
                       "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "global",
                       "x-passivbot-consumers": [
@@ -4441,13 +4444,39 @@
                   "x-passivbot-coin-override": "forbidden"
                 },
                 "long": {
-                  "type": "string",
-                  "default": "",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null,
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "normal",
+                    "manual",
+                    "graceful_stop",
+                    "panic",
+                    "tp_only",
+                    null
+                  ],
                   "x-passivbot-coin-override": "allowed"
                 },
                 "short": {
-                  "type": "string",
-                  "default": "",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null,
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "normal",
+                    "manual",
+                    "graceful_stop",
+                    "panic",
+                    "tp_only",
+                    null
+                  ],
                   "x-passivbot-coin-override": "allowed"
                 }
               },
@@ -4530,8 +4559,25 @@
                   }
                 },
                 "warmup_concurrency": {
-                  "type": "integer",
-                  "default": 0,
+                  "type": [
+                    "integer",
+                    "string"
+                  ],
+                  "default": "auto",
+                  "description": "Auto uses the existing context/exchange concurrency policy; a positive integer is explicit.",
+                  "minimum": 1,
+                  "anyOf": [
+                    {
+                      "type": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "enum": [
+                        "auto"
+                      ]
+                    }
+                  ],
                   "x-passivbot-coin-override": "forbidden"
                 },
                 "warmup_jitter_seconds": {
@@ -9837,11 +9883,37 @@
               "additionalProperties": false,
               "properties": {
                 "long": {
-                  "type": "string",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "normal",
+                    "manual",
+                    "graceful_stop",
+                    "panic",
+                    "tp_only",
+                    null
+                  ],
                   "x-passivbot-coin-override": "allowed"
                 },
                 "short": {
-                  "type": "string",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "normal",
+                    "manual",
+                    "graceful_stop",
+                    "panic",
+                    "tp_only",
+                    null
+                  ],
                   "x-passivbot-coin-override": "allowed"
                 }
               }
@@ -12061,11 +12133,37 @@
               "additionalProperties": false,
               "properties": {
                 "long": {
-                  "type": "string",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "normal",
+                    "manual",
+                    "graceful_stop",
+                    "panic",
+                    "tp_only",
+                    null
+                  ],
                   "x-passivbot-coin-override": "allowed"
                 },
                 "short": {
-                  "type": "string",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.",
+                  "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[nN]|[nN][oO][rR][mM][aA][lL]|[mM]|[mM][aA][nN][uU][aA][lL]|[gG][sS]|[gG][rR][aA][cC][eE][fF][uU][lL]_[sS][tT][oO][pP]|[gG][rR][aA][cC][eE][fF][uU][lL]-[sS][tT][oO][pP]|[pP]|[pP][aA][nN][iI][cC]|[tT]|[tT][pP]|[tT][pP]_[oO][nN][lL][yY]|[tT][pP]-[oO][nN][lL][yY])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
+                  "examples": [
+                    "normal",
+                    "manual",
+                    "graceful_stop",
+                    "panic",
+                    "tp_only",
+                    null
+                  ],
                   "x-passivbot-coin-override": "allowed"
                 }
               }

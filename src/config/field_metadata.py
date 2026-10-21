@@ -67,6 +67,14 @@ def enrich_fields(fields):
                                           if command in rule["consumed_by"])
             data["coin_override"] = (CoinOverridePolicy.ALLOWED if path in get_live_coin_override_paths()
                                      else CoinOverridePolicy.FORBIDDEN)
+            if path in {("live", "modes", side) for side in ("long", "short")}:
+                from .control_sentinels import FORCED_MODES, forced_mode_input_pattern
+
+                data.update(domain=FieldDomain(choices=FORCED_MODES, string_pattern=forced_mode_input_pattern()),
+                            description="Null leaves the mode unforced; per-coin null clears a root forced mode. Supported shorthand is case-insensitive; surrounding whitespace is ignored.")
+            elif path == ("live", "startup", "warmup_concurrency"):
+                data.update(domain=FieldDomain(minimum=1, choices=("auto",)),
+                            description="Auto uses the existing context/exchange concurrency policy; a positive integer is explicit.")
         if path == ("optimize", "scoring", "*", "goal"):
             from .scoring import OBJECTIVE_GOALS
 
@@ -100,8 +108,8 @@ def _bot_metadata(path):
         data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
     elif local == "warmup.max_minutes":
-        data.update(unit="minutes", domain=FieldDomain(minimum=0.0, finite=True),
-                    description="Zero disables the history warmup cap; acquisition and activation retain their existing formulas.")
+        data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
+                    description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")
     elif local == "forager.always_include":
         data["description"] = "Persistent side selection within the eligible universe; operational modes and risk gates retain priority."
     elif local in {"universe.approved_coins", "universe.ignored_coins"}:

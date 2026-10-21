@@ -338,6 +338,10 @@ def _extract_allowed_patch(
 
     def visit(value, policy, path: tuple[str, ...]):
         if policy is True:
+            from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
+
+            if path in FORCED_MODE_PATHS:
+                return optional_forced_mode(value, path=_format_override_path(coin, path))
             if value is None and path[-2:] != ("entry_cooldown", "max_duration_minutes"):
                 raise TypeError(f"{_format_override_path(coin, path)} may not be null")
             return deepcopy(value)
@@ -405,6 +409,11 @@ def _validate_patch_leaf_types(
     template = get_template_config()
     for path, value in _iter_patch_leaves(patch):
         display_path = f"{_format_override_path(coin, path)} ({origin})"
+        from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
+
+        if path in FORCED_MODE_PATHS:
+            optional_forced_mode(value, path=display_path)
+            continue
         reference = _get_nested_value(config, path)
         if reference is None:
             reference = _get_nested_value(template, path)
@@ -888,15 +897,9 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
 
 
 def expand_PB_mode(mode: str) -> str:
+    from .control_sentinels import MODE_ALIASES
+
     lowered = mode.lower()
-    if lowered in ["gs", "graceful_stop", "graceful-stop"]:
-        return "graceful_stop"
-    if lowered in ["m", "manual"]:
-        return "manual"
-    if lowered in ["n", "normal"]:
-        return "normal"
-    if lowered in ["p", "panic"]:
-        return "panic"
-    if lowered in ["t", "tp", "tp_only", "tp-only"]:
-        return "tp_only"
+    if lowered in MODE_ALIASES:
+        return MODE_ALIASES[lowered]
     raise Exception(f"unknown passivbot mode {mode}")

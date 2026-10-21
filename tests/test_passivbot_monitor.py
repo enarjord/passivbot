@@ -3027,7 +3027,7 @@ async def test_candle_disk_coverage_audit_emits_structured_events(monkeypatch):
     bot.user = "okx_01"
     bot.bot_id = "bot_1"
     bot.cm = FakeCandleManager()
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"global": {"warmup": {"max_minutes": None}}}}
     bot.active_symbols = ["BTC/USDT:USDT"]
     bot.open_orders = {}
     bot.positions = {}
