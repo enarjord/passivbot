@@ -1470,11 +1470,11 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
     assert bot._max_configured_entry_cooldown_minutes() == 60.0
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 61 * 60000)
     # All and unresolved sources remain conservative even with a resolved current set.
-    bot.config["_coins_sources"] = {"approved_coins": "all"}
+    bot.config["bot"][side]["universe"]["approved_coins"] = "all"
     assert bot._max_configured_entry_cooldown_minutes() == 14400.0
-    bot.config["_coins_sources"] = {"approved_coins": {side: ["all"]}}
+    bot.config["bot"][side]["universe"]["approved_coins"] = ["all"]
     assert bot._max_configured_entry_cooldown_minutes() == 14400.0
-    bot.config.pop("_coins_sources")
+    bot.config["bot"][side]["universe"]["approved_coins"] = ["BTC", "ETH"]
     bot.approved_coins_minus_ignored_coins = {}
     assert bot._max_configured_entry_cooldown_minutes() == 14400.0
 
@@ -1523,10 +1523,8 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
     bot.positions = {}
     # Nonempty unresolved selection still retains its conservative default horizon.
-    if source_kind == "original":
-        bot.config["_coins_sources"]["approved_coins"][side] = ["BTC"]
-    else:
-        bot.config["bot"][side]["universe"]["approved_coins"] = ["BTC"]
+    # Provenance, when present, cannot override this public policy edit.
+    bot.config["bot"][side]["universe"]["approved_coins"] = ["BTC"]
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
 
 
