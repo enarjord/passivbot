@@ -3149,7 +3149,8 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
 
 
 @pytest.mark.asyncio
-async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeypatch):
+@pytest.mark.parametrize("cap,expected", [(60, 60), (5.5, 6), (1.0, 1), (0.5, 1), (None, 500)])
+async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeypatch, cap, expected):
     import passivbot as pb_mod
 
     now_ms = 12 * 60 * 60_000
@@ -3184,7 +3185,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
     class FakeBot:
         config = {
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
-            "bot": {"global": {"warmup": {"max_minutes": 60}}},
+            "bot": {"global": {"warmup": {"max_minutes": cap}}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
@@ -3223,7 +3224,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
     assert len(bot.cm.calls) == 1
     _, kwargs = bot.cm.calls[0]
     assert kwargs["timeframe"] == "1m"
-    assert kwargs["max_lookback_candles"] == 60
+    assert kwargs["max_lookback_candles"] == expected
 
 
 @pytest.mark.asyncio

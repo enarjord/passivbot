@@ -220,7 +220,11 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
-from warmup_utils import compute_per_coin_warmup_minutes, live_warmup_cap_minutes
+from warmup_utils import (
+    ceil_warmup_minutes,
+    compute_per_coin_warmup_minutes,
+    live_warmup_cap_minutes,
+)
 from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
@@ -760,7 +764,7 @@ def compute_live_warmup_windows(
     forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
     warmup_ratio: float = 0.0,
-    max_warmup_minutes: Optional[int] = None,
+    max_warmup_minutes: Optional[float] = None,
     span_buffer: Optional[float] = None,
     large_span_threshold: int = 2 * 24 * 60,
 ) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, bool]]:
@@ -791,7 +795,7 @@ def compute_live_warmup_windows(
     cap_minutes = None
     try:
         cap_minutes = (
-            int(max_warmup_minutes) if max_warmup_minutes is not None else None
+            ceil_warmup_minutes(max_warmup_minutes) if max_warmup_minutes is not None else None
         )
     except Exception:
         cap_minutes = None

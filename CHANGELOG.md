@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Round positive fractional warmup caps upward to whole acquisition minutes in live mode,
+  matching backtests: `0.5` stays capped at one minute and `5.5` allows six. Null remains uncapped;
+  floating EMA spans, shorter history requirements and native hourly alignment are unchanged.
+
 - Preserve released-v8 example migration by discarding reported, unused backtest warmup caps
   without changing the shared live cap.
   Convert numeric fee strings to the same finite numeric values. Editor validation now accepts

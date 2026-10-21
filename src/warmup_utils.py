@@ -38,10 +38,15 @@ def _require_max_warmup_minutes(config: dict) -> float | None:
     )
 
 
+def ceil_warmup_minutes(minutes: float) -> int:
+    """Round history up at the whole-minute candle acquisition boundary."""
+    return math.ceil(minutes)
+
+
 def live_warmup_cap_minutes(config: dict) -> int:
-    """Adapt to the existing whole-minute acquisition API's internal zero cap."""
+    """Return a whole-minute acquisition cap; internal zero means uncapped."""
     cap = _require_max_warmup_minutes(config)
-    return 0 if cap is None else int(cap)
+    return 0 if cap is None else ceil_warmup_minutes(cap)
 
 
 def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
@@ -495,7 +500,7 @@ def compute_backtest_warmup_minutes(
                 default=0,
             ),
         )
-    return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+    return ceil_warmup_minutes(warmup_minutes) if warmup_minutes > 0.0 else 0
 
 
 def compute_per_coin_warmup_minutes(
@@ -563,7 +568,7 @@ def compute_per_coin_warmup_minutes(
                         ranking_possible=rms_pairs[coin, side],
                     ),
                 )
-        per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+        per_coin[coin] = ceil_warmup_minutes(warmup_minutes) if warmup_minutes > 0.0 else 0
     return per_coin
 
 

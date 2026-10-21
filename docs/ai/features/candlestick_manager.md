@@ -46,6 +46,12 @@
 
 ## Non-Obvious Details
 
+Span-based warmup acquisition rounds positive `bot.global.warmup.max_minutes` caps upward to
+whole minutes in live and backtest paths; `0.5` means one minute, never uncapped. Null remains
+uncapped. Round only the acquisition window, preserving fractional EMA spans and naturally shorter
+requirements. Native hourly acquisition retains whole-hour alignment, and independent RMS history
+requirements are unchanged.
+
 Ordinary native higher-timeframe reads reuse verified persisted rows and fetch only missing spans,
 with one source bucket of overlap on each side. Overlapping requests are coalesced; the overlap
 retains within-response evidence for KuCoin's no-tick gaps. Pages persisted before a deadline or

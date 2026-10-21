@@ -140,7 +140,7 @@ def test_optimizer_and_suite_apply_explicit_controls_before_actual_consumers():
     assert source == original
 
 
-def test_uncapped_and_positive_warmup_keep_the_existing_calculation():
+def test_uncapped_and_positive_warmup_round_up_at_acquisition():
     source = get_template_config()
     uncapped = compute_backtest_warmup_minutes(source, include_rms=False)
     assert uncapped > 1
@@ -148,9 +148,9 @@ def test_uncapped_and_positive_warmup_keep_the_existing_calculation():
     source["bot"]["global"]["warmup"]["max_minutes"] = 1.0
     assert compute_backtest_warmup_minutes(source, include_rms=False) == 1
     source["bot"]["global"]["warmup"]["max_minutes"] = 5.5
-    assert live_warmup_cap_minutes(source) == 5
+    assert live_warmup_cap_minutes(source) == 6
     source["bot"]["global"]["warmup"]["max_minutes"] = 0.5
-    assert live_warmup_cap_minutes(source) == 0
+    assert live_warmup_cap_minutes(source) == 1
     assert compute_backtest_warmup_minutes(source, include_rms=False) == 1
     source["bot"]["global"]["warmup"]["max_minutes"] = 0
     with pytest.raises(ValueError, match="positive finite"):
