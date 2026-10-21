@@ -2,8 +2,8 @@
 
 This document describes the pre-v8 `trailing_grid` strategy. V8 is a clean schema break and the
 canonical strategy kind is now `trailing_martingale`; `*_trailing_grid_ratio` is not part of that
-strategy. Use `strategy.trailing_martingale.entry.retracement_base_pct` and
-`strategy.trailing_martingale.close.retracement_base_pct` to choose trailing behavior, and set the
+strategy. Use `strategy.trailing_martingale.entry.retracement_base_fraction` and
+`strategy.trailing_martingale.close.retracement_base_fraction` to choose trailing behavior, and set the
 retracement to `0.0` or less for passive recursive limit/grid behavior.
 
 `*_trailing_grid_ratio` (entry and close) controls how much of the allowed wallet exposure is placed

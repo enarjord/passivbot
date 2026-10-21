@@ -9,6 +9,7 @@ import pytest
 from config.shared_bot import flatten_shared_bot_side
 from config.hsl import native_hsl_policy
 from config.schema import get_template_config
+from config.strategy_paths import lower_runtime_strategy_side
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
@@ -1097,7 +1098,9 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         ],
         strategy_params_list=[
             {
-                side: dict(config["bot"][side]["strategy"][strategy_kind])
+                side: lower_runtime_strategy_side(
+                    strategy_kind, config["bot"][side]["strategy"][strategy_kind]
+                )
                 for side in ("long", "short")
             }
             for _ in range(2)
