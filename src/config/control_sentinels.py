@@ -1,12 +1,30 @@
 """Canonical control values shared by authored policy and its consumers."""
 
 import math
+from types import MappingProxyType
 
 
 FORCED_MODE_PATHS = frozenset({("live", "modes", side) for side in ("long", "short")})
-FORCED_MODES = ("normal", "manual", "graceful_stop", "panic", "tp_only")
+MODE_ALIASES = MappingProxyType({
+    "n": "normal", "normal": "normal",
+    "m": "manual", "manual": "manual",
+    "gs": "graceful_stop", "graceful_stop": "graceful_stop", "graceful-stop": "graceful_stop",
+    "p": "panic", "panic": "panic",
+    "t": "tp_only", "tp": "tp_only", "tp_only": "tp_only", "tp-only": "tp_only",
+})
+FORCED_MODES = tuple(dict.fromkeys(MODE_ALIASES.values()))
 WARMUP_CAP_PATH = ("bot", "global", "warmup", "max_minutes")
 WARMUP_CONCURRENCY_PATH = ("live", "startup", "warmup_concurrency")
+
+
+def forced_mode_input_pattern():
+    """Portable JSON Schema pattern for the existing strip/lower input domain."""
+    # Python strip includes these Unicode whitespace characters. Spell them
+    # explicitly because JavaScript and Python disagree on what \s includes.
+    whitespace = r"[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*"
+    alternatives = ["".join(f"[{char}{char.upper()}]" if char.isalpha() else char
+                            for char in alias) for alias in MODE_ALIASES]
+    return "^" + whitespace + "(?:" + "|".join(alternatives) + ")" + whitespace + "$"
 
 
 def optional_forced_mode(value, *, path):

@@ -897,15 +897,9 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
 
 
 def expand_PB_mode(mode: str) -> str:
+    from .control_sentinels import MODE_ALIASES
+
     lowered = mode.lower()
-    if lowered in ["gs", "graceful_stop", "graceful-stop"]:
-        return "graceful_stop"
-    if lowered in ["m", "manual"]:
-        return "manual"
-    if lowered in ["n", "normal"]:
-        return "normal"
-    if lowered in ["p", "panic"]:
-        return "panic"
-    if lowered in ["t", "tp", "tp_only", "tp-only"]:
-        return "tp_only"
+    if lowered in MODE_ALIASES:
+        return MODE_ALIASES[lowered]
     raise Exception(f"unknown passivbot mode {mode}")
