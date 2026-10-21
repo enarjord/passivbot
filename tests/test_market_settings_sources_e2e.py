@@ -35,7 +35,8 @@ def get_test_config():
     # Single coin for simplicity
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["ETH"], "short": []})
     set_side_universe_sources(cfg, 'ignored_coins', {"long": [], "short": []})
-    cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    for side in ("long", "short"):
+        cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0
 
     # Minimal bot params
     cfg["bot"]["long"]["n_positions"] = 1

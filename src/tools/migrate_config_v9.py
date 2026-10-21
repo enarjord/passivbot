@@ -285,6 +285,14 @@ def _materialize_files(source, *, base_config_path, span, acknowledge, changes,
             strict=False, strategy_kind=result.get("live", {}).get("strategy_kind", "trailing_martingale"),
             hsl_signal_mode=mode,
         )
+        for side in ("long", "short"):
+            universe = migrated.get("bot", {}).get(side, {}).get("universe", {})
+            if "minimum_coin_age_days" in universe:
+                changes.append(dict(
+                    path=f"{_change_prefix}coin_overrides.{coin}.override_config_path::bot.{side}.universe.minimum_coin_age_days",
+                    old=deepcopy(universe["minimum_coin_age_days"]), new=None,
+                    reason="ignored shared age policy in a released coin file; side universe admission is not coin overridable",
+                ))
         inline = deepcopy(inline)
         inline.pop("override_config_path")
         from config.migrations.operational_live import move_operational_live

@@ -91,6 +91,18 @@ also uses minutes and requires completed one-minute candles. Hourly volatility i
 counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
 not rescale values, round derived spans or change native parameter IDs.
 
+## Side Age Admission
+
+`bot.<side>.universe.minimum_coin_age_days` is fixed, finite nonnegative policy, with float
+values preserved. Rust owns the initial-entry predicate: zero bypasses it; otherwise inception
+must be known, positive, not in the future, and elapsed factual time must be at least the
+configured days. Apply admission before static/Forager/forced-normal selection and one-way
+side arbitration. It must not mark a whole symbol nontradable or disapprove an existing
+position; held DCA, closes and risk protection retain their existing gates. Pre-eligibility
+history may warm indicators. Backtest and GPU preparation transport inception separately from
+shared candle validity and warmup. GPU side admission indices are derived by the same Rust
+predicate on the native decision clock and must have an exact integer representation.
+
 ## Forager Readiness Stages
 
 Live health distinguishes three stages:

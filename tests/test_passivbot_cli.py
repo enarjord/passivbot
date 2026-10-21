@@ -998,7 +998,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "BTC,ETH",
                 "--bot.short.universe.ignored_coins",
                 "DOGE",
-                "--bot.global.universe.minimum_coin_age_days",
+                "--bot.long.universe.minimum_coin_age_days",
                 "5",
                 "--bot.global.universe.filter_by_min_effective_cost",
                 "y",

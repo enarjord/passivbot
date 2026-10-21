@@ -654,7 +654,7 @@ def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_pat
         "inline": hsl,
         "file": {"coin_overrides": {"TEST": {"override_config_path": "coin.json"}}},
         "legacy_file": {"live.coin_flags.TEST": "-lc coin.json"},
-        "non_hsl": {'bot.global.universe.minimum_coin_age_days': 30},
+        "non_hsl": {'bot.long.universe.minimum_coin_age_days': 30},
     }
     scenarios = [{"label": "external", "overrides": patches[patch_kind]}]
     path = tmp_path / "suite.json"

@@ -6,7 +6,6 @@ from copy import deepcopy
 LIVE_POLICY_PATHS = {
     "strategy_kind": "bot.global.strategy_kind",
     "hedge_mode": "bot.global.hedge_mode",
-    "minimum_coin_age_days": "bot.global.universe.minimum_coin_age_days",
     "filter_by_min_effective_cost": "bot.global.universe.filter_by_min_effective_cost",
     "market_orders_allowed": "bot.global.execution.market_orders_allowed",
     "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_fraction",
@@ -19,6 +18,8 @@ COIN_SOURCE_FIELDS = ("approved_coins", "ignored_coins")
 
 def shared_policy_selector(path):
     """Retarget exact released selectors; runtime paths have no alias fallback."""
+    if path == "live.minimum_coin_age_days":
+        return "bot.*.universe.minimum_coin_age_days"
     for field, target in LIVE_POLICY_PATHS.items():
         old = f"live.{field}"
         if path == old or path.startswith(old + "."):
@@ -71,6 +72,13 @@ def move_shared_policy(document, *, record):
             "shared live/backtest policy moved to bot ownership",
         )
 
+    if "minimum_coin_age_days" in live:
+        value = live.pop("minimum_coin_age_days")
+        for side in ("long", "short"):
+            put(f"bot.{side}.universe.minimum_coin_age_days", value, "live.minimum_coin_age_days")
+        record("live.minimum_coin_age_days", value,
+               {f"bot.{side}.universe.minimum_coin_age_days": value for side in ("long", "short")},
+               "age now gates initial entries in every live/backtest selection mode; pre-eligibility history remains available for warmup")
     for field, path in LIVE_POLICY_PATHS.items():
         if field in live:
             put(path, live.pop(field), f"live.{field}")

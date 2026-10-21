@@ -34,15 +34,15 @@ def _base_config(cache_dir, *, mode="dataset"):
             "long": {
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
-                "universe": {"approved_coins": ["BTC"]},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
             },
             "short": {
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
-                "universe": {"approved_coins": []},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
             "global": {
-                "universe": {"minimum_coin_age_days": 0},
+                "universe": {},
                 "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },

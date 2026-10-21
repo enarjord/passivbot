@@ -1073,20 +1073,6 @@
                       ],
                       "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "forbidden"
-                    },
-                    "minimum_coin_age_days": {
-                      "type": "number",
-                      "default": 60.0,
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "days",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
                     }
                   },
                   "additionalProperties": false
@@ -2535,6 +2521,21 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "minimum_coin_age_days": {
+                      "type": "number",
+                      "default": 60.0,
+                      "description": "Initial-entry minimum age in every selection mode; zero bypasses the gate, unknown inception fails a positive gate, and held positions remain manageable.",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "days",
+                      "x-passivbot-scope": "long",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
                     }
                   },
                   "additionalProperties": false
@@ -4077,6 +4078,21 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "minimum_coin_age_days": {
+                      "type": "number",
+                      "default": 60.0,
+                      "description": "Initial-entry minimum age in every selection mode; zero bypasses the gate, unknown inception fails a positive gate, and held positions remain manageable.",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "days",
+                      "x-passivbot-scope": "short",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
                     }
                   },
                   "additionalProperties": false
@@ -14481,9 +14497,6 @@
         "bot.global.universe.filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },
-        "bot.global.universe.minimum_coin_age_days": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
-        },
         "bot.global.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
         },
@@ -14735,6 +14748,9 @@
         },
         "bot.long.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
+        "bot.long.universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/minimum_coin_age_days"
         },
         "bot.long.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck"
@@ -14999,6 +15015,9 @@
         },
         "bot.short.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        },
+        "bot.short.universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/minimum_coin_age_days"
         },
         "bot.short.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/unstuck"
@@ -16579,9 +16598,6 @@
         "global.universe.filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },
-        "global.universe.minimum_coin_age_days": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
-        },
         "global.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
         },
@@ -16833,6 +16849,9 @@
         },
         "long.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
+        "long.universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/minimum_coin_age_days"
         },
         "long.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck"
@@ -17098,6 +17117,9 @@
         "short.universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
         },
+        "short.universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/minimum_coin_age_days"
+        },
         "short.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/unstuck"
         },
@@ -17195,9 +17217,6 @@
         "universe.filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
         },
-        "universe.minimum_coin_age_days": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
-        },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.global.unstuck"
         },
@@ -17289,9 +17308,6 @@
       "properties": {
         "filter_by_min_effective_cost": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/filter_by_min_effective_cost"
-        },
-        "minimum_coin_age_days": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/minimum_coin_age_days"
         }
       },
       "patternProperties": {},
@@ -17556,6 +17572,9 @@
         },
         "universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
+        "universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/minimum_coin_age_days"
         },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.long.unstuck"
@@ -18104,6 +18123,9 @@
         },
         "ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/ignored_coins"
+        },
+        "minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/minimum_coin_age_days"
         }
       },
       "patternProperties": {},
@@ -18376,6 +18398,9 @@
         },
         "universe.ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        },
+        "universe.minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/minimum_coin_age_days"
         },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.short.unstuck"
@@ -18924,6 +18949,9 @@
         },
         "ignored_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/ignored_coins"
+        },
+        "minimum_coin_age_days": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/universe/properties/minimum_coin_age_days"
         }
       },
       "patternProperties": {},

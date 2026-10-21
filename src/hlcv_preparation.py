@@ -113,7 +113,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 8
+HLCV_PREPARATION_ALGORITHM_VERSION = 9
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
@@ -1407,8 +1407,6 @@ async def try_prepare_hlcvs_v2_local(
     effective_start_ts = max(0, requested_start_ts - warmup_ms)
     effective_start_ts = (effective_start_ts // minute_ms) * minute_ms
     effective_start_date = ts_to_date(effective_start_ts)
-    minimum_coin_age_days = float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
-    min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
     logging.info(
         "[%s] starting local v2 HLCV preparation for %d candidate coins (%s -> %s)",
         exchange,
@@ -1448,28 +1446,10 @@ async def try_prepare_hlcvs_v2_local(
             if not om.has_coin(coin):
                 logging.info("[%s] v2 local skip missing coin %s", exchange, coin)
                 continue
-            if coin not in first_timestamps_unified:
-                logging.info("[%s] v2 local skip missing unified inception %s", exchange, coin)
+            first_ts_guess = _coerce_positive_ts(om.load_first_timestamp(coin)) or _coerce_positive_ts(first_timestamps_unified.get(coin))
+            if first_ts_guess is not None and first_ts_guess > end_ts:
                 continue
-            if minimum_coin_age_days > 0.0 and not _coerce_positive_ts(
-                first_timestamps_unified.get(coin)
-            ):
-                logging.info("[%s] v2 local skip unknown inception %s", exchange, coin)
-                continue
-
-            first_ts_guess = om.load_first_timestamp(coin)
-            if not first_ts_guess:
-                first_ts_guess = float(first_timestamps_unified[coin])
-            if first_ts_guess > end_ts:
-                continue
-
-            adjusted_start_ts = max(
-                int(effective_start_ts),
-                int(first_timestamps_unified[coin] + min_coin_age_ms),
-                int(first_ts_guess),
-            )
-            if adjusted_start_ts > end_ts:
-                continue
+            adjusted_start_ts = max(int(effective_start_ts), int(first_ts_guess or 0))
 
             symbol = om.get_symbol(coin)
             rng = await _resolve_v2_store_range(
@@ -1492,6 +1472,7 @@ async def try_prepare_hlcvs_v2_local(
             coin_symbols[coin] = symbol
             coin_source_windows[coin] = (int(rng.timestamps[0]), int(rng.timestamps[-1]))
             mss[coin] = om.get_market_specific_settings(coin)
+            mss[coin]["inception_timestamp_ms"] = _coerce_positive_ts(first_timestamps_unified.get(coin))
             global_start_ts = adjusted_start_ts if global_start_ts is None else min(global_start_ts, adjusted_start_ts)
 
         if not coin_symbols:
@@ -4071,7 +4052,6 @@ async def prepare_hlcvs_internal(
     end_ts,
     om: HLCVManager,
 ):
-    minimum_coin_age_days = float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
     interval_ms = 60_000
 
     first_timestamps_unified = await get_first_timestamps_unified(
@@ -4084,7 +4064,6 @@ async def prepare_hlcvs_internal(
     global_start_time = float("inf")
     global_end_time = float("-inf")
     await om.load_markets()
-    min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
     tradfi_for_stock_perps = _has_stock_perp_calendar_context(
         config.get("backtest", {}).get("ohlcv_source_dir")
     )
@@ -4105,65 +4084,6 @@ async def prepare_hlcvs_internal(
                 if not om.has_coin(coin):
                     _pct_log("info", progress.pct(), f"{exchange} coin {coin} missing, skipping")
                     return None
-
-                if coin not in first_timestamps_unified and not (
-                    is_stock_perp_coin and tradfi_for_stock_perps
-                ):
-                    _pct_log(
-                        "info",
-                        progress.pct(),
-                        f"coin {coin} missing from first_timestamps_unified, skipping",
-                    )
-                    return None
-
-                # Minimum coin age validation
-                if minimum_coin_age_days > 0.0 and not (
-                    is_stock_perp_coin and tradfi_for_stock_perps
-                ):
-                    unified_first_ts = _coerce_positive_ts(
-                        first_timestamps_unified.get(coin)
-                    )
-                    if unified_first_ts is None:
-                        _pct_log(
-                            "info",
-                            progress.pct(),
-                            f"{exchange} coin {coin} has no authoritative inception; skipping",
-                        )
-                        return None
-                    fetch_stage = "get_first_timestamp"
-                    first_ts = await om.get_first_timestamp(coin)
-
-                    if first_ts >= end_ts:
-                        _pct_log(
-                            "info",
-                            progress.pct(),
-                            f"{exchange} Coin {coin} too young, start date {ts_to_date(first_ts)}. Skipping",
-                        )
-                        return None
-
-                    coin_age_days = int(
-                        round(utc_ms() - unified_first_ts) / (1000 * 60 * 60 * 24)
-                    )
-                    if coin_age_days < minimum_coin_age_days:
-                        _pct_log(
-                            "info",
-                            progress.pct(),
-                            f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days. "
-                            f"{coin} is {coin_age_days} days old. Skipping",
-                        )
-                        return None
-
-                    new_adjusted_start_ts = max(
-                        unified_first_ts + min_coin_age_ms, first_ts
-                    )
-                    if new_adjusted_start_ts > adjusted_start_ts:
-                        _pct_log(
-                            "info",
-                            progress.pct(),
-                            f"{exchange} Coin {coin}: Adjusting start date from {ts_to_date(adjusted_start_ts)} "
-                            f"to {ts_to_date(new_adjusted_start_ts)}",
-                        )
-                        adjusted_start_ts = int(new_adjusted_start_ts)
 
                 # Fetch OHLCV data
                 fetch_stage = "get_ohlcvs"
@@ -4279,6 +4199,7 @@ async def prepare_hlcvs_internal(
     mss = {}
     for coin in sorted(valid_coin_data):
         meta = om.get_market_specific_settings(coin)
+        meta["inception_timestamp_ms"] = _coerce_positive_ts(first_timestamps_unified.get(coin))
         first_idx, last_idx = valid_index_ranges.get(
             coin, (n_timesteps, n_timesteps)
         )
@@ -4523,9 +4444,7 @@ async def _prepare_hlcvs_combined_impl(
     else:
         exchanges_to_consider = sorted(list(om_dict.keys()))
     normalization_candidate_exchanges = list(normalization_candidate_exchanges or ())
-    minimum_coin_age_days = float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
     interval_ms = 60_000
-    min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
     tradfi_for_stock_perps = _has_stock_perp_calendar_context(
         config.get("backtest", {}).get("ohlcv_source_dir")
     )
@@ -4568,8 +4487,6 @@ async def _prepare_hlcvs_combined_impl(
             base_start_ts=base_start_ts,
             end_ts=end_ts,
             first_timestamps_unified=first_timestamps_unified,
-            minimum_coin_age_days=minimum_coin_age_days,
-            min_coin_age_ms=min_coin_age_ms,
             tradfi_for_stock_perps=tradfi_for_stock_perps,
             forced_sources=forced_sources,
             market_settings_sources=market_settings_sources,
@@ -4600,6 +4517,7 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[result.coin] = result.best_df
         chosen_mss_per_coin[result.coin] = result.market_settings
+        chosen_mss_per_coin[result.coin]["inception_timestamp_ms"] = _coerce_positive_ts(first_timestamps_unified.get(result.coin))
         chosen_candidates_per_coin[result.coin] = result.candidates
         selected_candidate = next(
             candidate
@@ -4868,50 +4786,16 @@ def _plan_combined_coin(
     base_start_ts: int,
     end_ts: int,
     first_timestamps_unified: dict,
-    minimum_coin_age_days: float,
-    min_coin_age_ms: int,
     tradfi_for_stock_perps: bool,
     forced_sources: Dict[str, str],
     exchanges_to_consider: Sequence[str],
     normalization_candidate_exchanges: Sequence[str] = (),
 ) -> Optional[CombinedCoinPlan]:
-    is_stock_perp_coin = coin.startswith("xyz:")
-    if coin not in first_timestamps_unified and not (is_stock_perp_coin and tradfi_for_stock_perps):
-        return None
-
-    if is_stock_perp_coin and tradfi_for_stock_perps:
-        effective_start_ts = int(base_start_ts)
-        coin_fts = None
-    else:
-        coin_fts = _coerce_positive_ts(first_timestamps_unified[coin])
-        if minimum_coin_age_days > 0.0 and coin_fts is None:
-            logging.info(
-                "%s: skipping - no authoritative inception for min_age=%d days",
-                coin,
-                int(minimum_coin_age_days),
-            )
-            return None
-        coin_fts = int(coin_fts or 0)
-        effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
+    # Listing/source availability still bounds actual rows; admission age is
+    # applied independently by Rust and must not crop either side's history.
+    effective_start_ts = int(base_start_ts)
     if effective_start_ts > end_ts:
-        logging.info(
-            "%s: skipping - effective start %s > end %s (coin first available: %s, min_age=%d days)",
-            coin,
-            ts_to_date(effective_start_ts),
-            ts_to_date(end_ts),
-            ts_to_date(coin_fts) if coin_fts is not None else "tradfi",
-            int(minimum_coin_age_days),
-        )
         return None
-    if effective_start_ts > base_start_ts:
-        logging.info(
-            "%s: adjusting start from %s to %s (coin first available: %s, min_age=%d days)",
-            coin,
-            ts_to_date(base_start_ts),
-            ts_to_date(effective_start_ts),
-            ts_to_date(coin_fts) if coin_fts is not None else "tradfi",
-            int(minimum_coin_age_days),
-        )
 
     forced_exchange = forced_sources.get(coin)
     if forced_exchange is None and coin.startswith("xyz:"):
@@ -5155,8 +5039,6 @@ async def _resolve_combined_coin(
     base_start_ts: int,
     end_ts: int,
     first_timestamps_unified: dict,
-    minimum_coin_age_days: float,
-    min_coin_age_ms: int,
     tradfi_for_stock_perps: bool,
     forced_sources: Dict[str, str],
     market_settings_sources: Dict[str, str],
@@ -5177,8 +5059,6 @@ async def _resolve_combined_coin(
             base_start_ts=base_start_ts,
             end_ts=end_ts,
             first_timestamps_unified=first_timestamps_unified,
-            minimum_coin_age_days=minimum_coin_age_days,
-            min_coin_age_ms=min_coin_age_ms,
             tradfi_for_stock_perps=tradfi_for_stock_perps,
             forced_sources=forced_sources,
             exchanges_to_consider=exchanges_to_consider,

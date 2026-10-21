@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Move minimum coin age to `bot.long.universe.minimum_coin_age_days` and the matching short
+  path. Both default to `60.0`; fractional days and zero bypass are preserved. Rust now gates
+  new initial entries consistently across live/backtest/optimizer selection modes, including
+  static and forced-normal selection, with exact threshold equality and unknown inception
+  failing positive gates. Held-position management remains available. Shared history retains
+  pre-eligibility warmup rather than adding age and warmup delays. Direct released-v8 migration
+  copies the old live age to both sides and reports the changed admission semantics.
+
 - Round positive fractional warmup caps upward to whole acquisition minutes in live mode,
   matching backtests: `0.5` stays capped at one minute and `5.5` allows six. Null remains uncapped;
   positive caps limit rather than extend a shorter candidate-refresh request. Live ranking

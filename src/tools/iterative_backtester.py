@@ -420,7 +420,6 @@ def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "bot": {
             "universe": {side: deepcopy(bot_cfg.get(side, {}).get("universe", {}))
                          for side in ("long", "short")},
-            "minimum_coin_age_days": global_policy.get("universe", {}).get("minimum_coin_age_days"),
             "warmup": deepcopy(global_policy.get("warmup", {})),
         },
         "warmup": {

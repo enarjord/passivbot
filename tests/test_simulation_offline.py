@@ -207,7 +207,8 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
                               compress_cache=False, gap_tolerance_ohlcvs_minutes=0)
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
-    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
     config['bot']['global']['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(tmp_path / "caches/ohlcvs/catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches/ohlcvs", catalog)
@@ -320,7 +321,7 @@ async def test_combined_offline_never_swallows_missing_coin(monkeypatch, empty):
         await hp._resolve_combined_coin(
             coin="BTC", sem=asyncio.Semaphore(1), base_start_ts=START,
             end_ts=START + 600000, first_timestamps_unified={"BTC": START - 60000},
-            minimum_coin_age_days=0, min_coin_age_ms=0, tradfi_for_stock_perps=False,
+            tradfi_for_stock_perps=False,
             forced_sources={}, market_settings_sources={}, exchanges_to_consider=["binance"],
             normalization_candidate_exchanges=[], om_dict={"binance": object()},
             per_coin_warmups={}, default_warm=0, force_refetch_gaps=False,
@@ -488,7 +489,8 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
     set_side_universe_sources(config, 'approved_coins', {'long': ['ETH', 'UNLISTED'], 'short': []})
-    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
     config['bot']['global']['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
     store = OhlcvStore(cache / "ohlcvs", catalog)
@@ -595,7 +597,8 @@ async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeyp
     )
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
-    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
     config['bot']['global']['warmup']['max_minutes'] = 1
     monkeypatch.setattr(backtest, "coin_to_symbol", lambda *args, **kwargs: SYMBOL)
     ts = START + np.arange(10, dtype=np.int64) * 60000

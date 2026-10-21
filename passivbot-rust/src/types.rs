@@ -294,6 +294,8 @@ impl Default for EquityHardStopLossConfig {
 
 #[derive(Clone, Debug)]
 pub struct BacktestParams {
+    pub minimum_coin_age_days: [f64; 2],
+    pub inception_timestamps_ms: Vec<Option<u64>>,
     pub starting_balance: f64,
     pub maker_fee: f64,
     pub taker_fee: f64,

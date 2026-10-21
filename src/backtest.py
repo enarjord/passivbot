@@ -69,6 +69,7 @@ from config.access import (
     require_config_value,
     require_live_value,
 )
+from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.risk_memory import (
     normalize_memory_ema_span_minutes,
 )
@@ -1724,7 +1725,7 @@ def check_keys(dict0, dict1):
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     data_coins = effective_backtest_data_coins(config)
-    minimum_coin_age = require_config_value(config, 'bot.global.universe.minimum_coin_age_days')
+    minimum_coin_age = {side: minimum_coin_age_days(config, side) for side in POSITION_SIDES}
     coin_sources = config.get("backtest", {}).get("coin_sources") or {}
     coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
     market_settings_sources = (
@@ -1763,6 +1764,7 @@ def get_cache_hash(config, exchange):
         "start_date": require_config_value(config, "backtest.start_date"),
         "exchange": exchanges_cfg if exchange == "combined" else exchange,
         "minimum_coin_age_days": minimum_coin_age,
+        "age_admission_contract": 1,
         "gap_tolerance_ohlcvs_minutes": require_config_value(
             config, "backtest.gap_tolerance_ohlcvs_minutes"
         ),
@@ -2750,7 +2752,11 @@ def prep_backtest_args(
             }
             for coin in coins
         ]
+    age_days = [minimum_coin_age_days(config, side) for side in POSITION_SIDES]
+    inception_facts = [inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) for coin in coins]
     if backtest_params is not None:
+        if backtest_params.get("minimum_coin_age_days") != age_days or backtest_params.get("inception_timestamps_ms") != inception_facts:
+            raise ValueError("cached age admission inputs differ from the effective config or market facts")
         if backtest_params.get("ew_half_life_days") != ew_half_life_days:
             raise ValueError("cached EW half-life differs from the effective config")
         supplied_hsl = backtest_params["equity_hard_stop_loss"]
@@ -2796,6 +2802,8 @@ def prep_backtest_args(
                 config, "backtest.hsl_detailed_report"
             ),
             "skip_btc_analysis": False,
+            "minimum_coin_age_days": age_days,
+            "inception_timestamps_ms": inception_facts,
             "filter_by_min_effective_cost": effective_minimum_cost_filter(config),
             "dynamic_wel_by_tradability": bool(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")

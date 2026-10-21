@@ -598,6 +598,8 @@ mod tests {
             coins: BTreeMap::new(),
         };
         BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.001,
             taker_fee: 0.002,

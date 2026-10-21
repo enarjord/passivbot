@@ -178,7 +178,7 @@ def test_ema_anchor_wizard_state_cannot_reload_unsupported_snapshot(
 
 
 def _hype_trailing_martingale_close_inputs():
-    return {
+    return {"minimum_coin_age_days": 0.0,
         "symbol": "HYPE/USDT:USDT",
         "pside": "long",
         "current_price": 60.6695,

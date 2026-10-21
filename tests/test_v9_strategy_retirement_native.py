@@ -33,7 +33,7 @@ def test_native_registry_and_metadata_expose_only_supported_strategies(
 def test_martingale_close_diagnostics_remain_available(
     require_real_passivbot_rust_module, side, sign,
 ):
-    payload = {
+    payload = {"minimum_coin_age_days": 0.0,
         "pside": side,
         "exchange": {
             "qty_step": 0.01, "price_step": 0.01, "min_qty": 0.01,

@@ -71,10 +71,10 @@ async def test_download_cli_applies_side_sources_before_offline_preparation(monk
         captured.append(config)
     monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", prepared_only)
     monkeypatch.setattr("sys.argv", ["download", "-s", "BTC", "--bot.short.universe.approved_coins", "ETH",
-                                    "--bot.global.universe.minimum_coin_age_days", "5"])
+                                    "--bot.long.universe.minimum_coin_age_days", "5"])
     await ohlcv_download.main()
     assert len(captured) == 1
     config = captured[0]
     assert config["bot"]["long"]["universe"]["approved_coins"] == ["BTC"]
     assert config["bot"]["short"]["universe"]["approved_coins"] == ["ETH"]
-    assert config["bot"]["global"]["universe"]["minimum_coin_age_days"] == 5.0
+    assert config["bot"]["long"]["universe"]["minimum_coin_age_days"] == 5.0

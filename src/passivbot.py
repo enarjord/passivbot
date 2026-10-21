@@ -225,6 +225,7 @@ from warmup_utils import (
     compute_per_coin_warmup_minutes,
     live_warmup_cap_minutes,
 )
+from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
@@ -1406,13 +1407,6 @@ class Passivbot:
         # Legacy pnls_cache_filepath removed; FillEventsManager handles caching
         self.quote = "USDT"
 
-        self.minimum_market_age_millis = (
-            float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
-            * 24
-            * 60
-            * 60
-            * 1000
-        )
         # Legacy EMA caches removed; use CandlestickManager EMA helpers
         # Legacy ohlcvs_1m fields removed in favor of CandlestickManager
         self.stop_signal_received = False
@@ -9319,7 +9313,7 @@ class Passivbot:
             return False
         if symbol in self.ignored_coins[pside]:
             return False
-        if not self.is_old_enough(pside, symbol):
+        if not self.has_position(pside=pside, symbol=symbol) and not self.is_old_enough(pside, symbol):
             return False
         return True
 
@@ -9649,15 +9643,12 @@ class Passivbot:
         return True
 
     def is_old_enough(self, pside, symbol):
-        """Return True if the market age exceeds the configured minimum for forager mode."""
-        if self.is_forager_mode(pside) and self.minimum_market_age_millis > 0:
-            first_timestamp = self.get_first_timestamp(symbol)
-            if first_timestamp:
-                return utc_ms() - first_timestamp > self.minimum_market_age_millis
-            else:
-                return False
-        else:
-            return True
+        """Apply the native admission predicate to factual inception in every selection mode."""
+        return pbr.coin_age_eligible(
+            int(self.get_exchange_time()),
+            inception_timestamp_ms(getattr(self, "first_timestamps", {}).get(symbol)),
+            minimum_coin_age_days(self.config, pside),
+        )
 
     async def update_tickers(self):
         """Fetch latest ticker data and fill in missing bid/ask/last values."""
@@ -9691,7 +9682,7 @@ class Passivbot:
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
-        if any(self.is_forager_mode(pside) for pside in ("long", "short")):
+        if any(minimum_coin_age_days(self.config, side) > 0 for side in ("long", "short") if self.is_pside_enabled(side)):
             await self.update_first_timestamps()
         self._assert_supported_live_state()
         self.active_symbols = self._build_live_symbol_universe()
@@ -17915,6 +17906,7 @@ class Passivbot:
                     self, symbol, pside
                 )
                 return {
+                    "minimum_coin_age_days": minimum_coin_age_days(self.config, pside),
                     "mode": mode,
                     "position": {
                         "size": float(pos["size"]),
@@ -17956,6 +17948,7 @@ class Passivbot:
             input_dict["symbols"].append(
                 {
                     "symbol_idx": int(idx),
+                    "inception_timestamp_ms": inception_timestamp_ms(getattr(self, "first_timestamps", {}).get(symbol)),
                     "order_book": {"bid": bid, "ask": ask},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,

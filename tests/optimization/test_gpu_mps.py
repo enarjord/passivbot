@@ -1436,7 +1436,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         dtype=torch.int8 if gpu_device() == "cuda" else torch.int32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 1.0
     coin_settings[0, 1] = 1.0
     coin_settings[0, 2] = 1.0
@@ -1616,7 +1616,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         dtype=torch.float32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((3, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((3, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[:, 7] = 10.0
     coin_settings[1, 7] = 1.0
     coin_overrides = _tm_probe_full(
@@ -1758,7 +1758,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         dtype=torch.int8 if gpu_device() == "cuda" else torch.int32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -1869,7 +1869,7 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         coin_settings, 1, 2
     );
     output[2] = float(count_ema_multicoin_tradable_coins(
-        bars, coin_settings, coin_overrides, 1, 2
+        bars, coin_settings, coin_overrides, 1, 2, false, long_side.psize
     ));
     output[3] = ema_multicoin_side_has_position(long_side, 2) ? 1.0f : 0.0f;
     output[4] = ema_multicoin_side_has_position(short_side, 2) ? 1.0f : 0.0f;
@@ -1891,7 +1891,7 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         dtype=torch.float32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((2, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((2, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[:, 4] = 1.0
     coin_settings[:, 7] = 10.0
     coin_overrides = torch.full(
@@ -2020,7 +2020,7 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
         short_side, short_config, bars, hour_log_ranges, coin_settings, 1, 2
     );
     output[2] = float(count_tm_multicoin_tradable_coins(
-        bars, coin_settings, coin_overrides, 1, 2
+        bars, coin_settings, coin_overrides, 1, 2, false, long_side.psize
     ));
     output[3] = tm_multicoin_side_has_position(long_side, 2) ? 1.0f : 0.0f;
     output[4] = tm_multicoin_side_has_position(short_side, 2) ? 1.0f : 0.0f;
@@ -2050,7 +2050,7 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
         dtype=torch.float32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((2, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((2, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[:, 4] = 1.0
     coin_settings[:, 7] = 10.0
     coin_overrides = _tm_probe_full(
@@ -2196,7 +2196,7 @@ kernel void passivbot_ema_multicoin_shared_fill_phase_probe(
     fill_ticks = torch.tensor(
         [[[100, 100]], [[110, 90]]], dtype=torch.int32, device=gpu_device()
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 1.0
     coin_settings[0, 1] = 1.0
     coin_settings[0, 4] = 1.0
@@ -2378,7 +2378,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         dtype=torch.float32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((3, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((3, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[:, 7] = 10.0
     coin_settings[0, 7] = 1.0
     coin_settings[:, 12] = 1.0
@@ -2486,7 +2486,7 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
         dtype=torch.int32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -9744,7 +9744,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
         dtype=torch.int8 if gpu_device() == "cuda" else torch.int32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -9877,7 +9877,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
         dtype=torch.int8 if gpu_device() == "cuda" else torch.int32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -10120,7 +10120,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         dtype=torch.int8 if gpu_device() == "cuda" else torch.int32,
         device=gpu_device(),
     )
-    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
+    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.1
     coin_settings[0, 1] = 0.1
     coin_settings[0, 2] = 0.1

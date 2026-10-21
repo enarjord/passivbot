@@ -21,6 +21,7 @@ _MARKET_FIELDS = (
     "qty_step", "price_step", "min_qty", "min_cost", "c_mult",
     "maker", "maker_fee", "taker", "taker_fee",
     "first_valid_index", "last_valid_index", "warmup_minutes", "trade_start_index",
+    "inception_timestamp_ms",
 )
 _BUNDLE_FIELDS = (
     "data_interval_minutes", "candle_interval_offset_bars",

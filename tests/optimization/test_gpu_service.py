@@ -78,6 +78,7 @@ def _complete_hsl_payload(payload):
     payload.backtest_params = params
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
     params.setdefault("dynamic_wel_by_tradability", True)
+    params.setdefault("minimum_coin_age_days", [0.0, 0.0])
     params.setdefault("unstuck_memory_ema_span_minutes", 1440.0)
     params.setdefault("loss_gate_memory_ema_span_minutes", 1440.0)
     old = params.get("equity_hard_stop_loss", {})
@@ -155,7 +156,7 @@ def test_single_coin_candle_interval_rejects_invalid_values(raw_interval):
 
 
 def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
-    backtest_params = {
+    backtest_params = {"minimum_coin_age_days": [0.0, 0.0],
         "coins": ["BTC"],
         "starting_balance": 10_000.0,
         "candle_interval_minutes": 1,
@@ -1117,7 +1118,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             }
             for _ in range(2)
         ],
-        backtest_params={
+        backtest_params={"minimum_coin_age_days": [0.0, 0.0],
             "candle_interval_minutes": interval_minutes,
             "dynamic_wel_by_tradability": dynamic_wel_by_tradability,
             "forager_score_hysteresis_pct": 0.0,

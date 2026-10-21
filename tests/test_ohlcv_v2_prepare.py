@@ -45,16 +45,16 @@ def _minimal_bot_config(approved_coins):
     return {
         "global": {
             "strategy_kind": "trailing_martingale",
-            "universe": {"minimum_coin_age_days": 0.0},
+            "universe": {},
             "warmup": {"span_multiplier": 0.0, "max_minutes": None},
         },
         "long": {
             "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
-            "universe": {"approved_coins": approved_coins["long"], "ignored_coins": []},
+            "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["long"], "ignored_coins": []},
         },
         "short": {
             "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
-            "universe": {"approved_coins": approved_coins["short"], "ignored_coins": []},
+            "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["short"], "ignored_coins": []},
         },
     }
 

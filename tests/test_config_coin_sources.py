@@ -27,7 +27,7 @@ def _base_config():
                     "max_positions": 4,
                     "total_wallet_exposure_limit": 1.0
                 },
-                "universe": {
+                "universe": {"minimum_coin_age_days": 30,
                     "approved_coins": [],
                     "ignored_coins": []
                 }
@@ -37,15 +37,13 @@ def _base_config():
                     "max_positions": 0,
                     "total_wallet_exposure_limit": 0.0
                 },
-                "universe": {
+                "universe": {"minimum_coin_age_days": 30,
                     "approved_coins": [],
                     "ignored_coins": []
                 }
             },
             "global": {
-                "universe": {
-                    "minimum_coin_age_days": 30
-                },
+                "universe": {},
                 "warmup": {
                     "span_multiplier": 0.2,
                     "max_minutes": None

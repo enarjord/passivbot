@@ -421,7 +421,14 @@ Use `--bot.long.universe.approved_coins BTC,ETH` or the corresponding short/igno
 change one side. A per-side option takes precedence over a both-side convenience in the same
 command. Retired `--live...` policy paths are rejected.
 
-- **bot.global.universe.minimum_coin_age_days**: Disallows coins younger than a given number of days.
+- **bot.<side>.universe.minimum_coin_age_days**: Initial-entry age gate for that side in every
+  live, backtest and optimizer selection mode, including static lists and forced-normal selection.
+  Default `60.0`; any finite nonnegative fractional number of days is allowed. `0.0` disables
+  the gate. A positive threshold requires known inception and admits the side when elapsed time
+  is at least the threshold. Unknown or future inception remains ineligible. The gate does not
+  stop held-position DCA, exits or protection. Pre-eligibility history may warm indicators;
+  there is no added age-plus-warmup waiting period. This is fixed policy, outside optimizer bounds
+  and coin overrides; fixed runtime and scenario overrides can set either side independently.
 
 - **bot.global.forager.score_hysteresis_margin**: Absolute normalized-score margin for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 

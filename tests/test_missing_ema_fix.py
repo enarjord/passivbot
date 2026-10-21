@@ -203,14 +203,14 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     },
                     "h1": {"close": [], "log_range": [], "volume": []},
                 },
-                "long": {
+                "long": {"minimum_coin_age_days": 0.0,
                     "mode": "normal",
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,
                     "bot_params": _rust_bot_params(),
                     "strategy_params": _rust_strategy_params(),
                 },
-                "short": {
+                "short": {"minimum_coin_age_days": 0.0,
                     "mode": "manual",
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,

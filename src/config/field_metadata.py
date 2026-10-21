@@ -146,7 +146,8 @@ def _bot_metadata(path):
 
         data["domain"] = FieldDomain(choices=get_supported_strategy_kinds())
     elif local == "universe.minimum_coin_age_days":
-        data.update(unit="days", domain=FieldDomain(minimum=0.0, finite=True))
+        data.update(unit="days", domain=FieldDomain(minimum=0.0, finite=True),
+                    description="Initial-entry minimum age in every selection mode; zero bypasses the gate, unknown inception fails a positive gate, and held positions remain manageable.")
     elif local == "forager.score_hysteresis_margin":
         data.update(unit="normalized score gap", domain=FieldDomain(minimum=0.0, finite=True),
                     description="Absolute challenger-minus-incumbent ranking score margin required for replacement.")

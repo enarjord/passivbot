@@ -283,14 +283,14 @@ def make_symbol(
             m1_volume=[[10.0, 1_000.0]],
             m1_log_range=[[10.0, 0.01]],
         ),
-        "long": {
+        "long": {"minimum_coin_age_days": 0.0,
             "mode": long_mode,
             "position": {"size": long_pos_size, "price": long_pos_price},
             "trailing": trailing_bundle(),
             "bot_params": bot_params(**long_bot_overrides),
             "strategy_params": long_strategy,
         },
-        "short": {
+        "short": {"minimum_coin_age_days": 0.0,
             "mode": short_mode,
             "position": {"size": short_pos_size, "price": short_pos_price},
             "trailing": trailing_bundle(),

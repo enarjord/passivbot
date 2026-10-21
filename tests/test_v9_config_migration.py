@@ -249,7 +249,7 @@ def test_v8_equal_released_section_aliases_preserve_authored_value(section, old,
     source[section].update({old: value, new: value})
     result = migrate(source, memory_span_minutes=123.5)
     if new == "minimum_coin_age_days":
-        assert result.config["bot"]["global"]["universe"][new] == value
+        assert result.config["bot"]["long"]["universe"][new] == value
     elif new == "inactive_coin_candle_ttl_minutes":
         assert result.config["live"]["candles"][new] == value
     else:
@@ -1161,7 +1161,7 @@ def test_legacy_coin_flag_files_are_materialized_with_flags_and_authorization(
         assert not any("coin_flags" in key for key in scenario_patch)
         output = deepcopy(output)
         _set_patch(output, scenario_patch, scenario=True)
-        assert output["bot"]["global"]["universe"]["minimum_coin_age_days"] == 7.0
+        assert output["bot"]["long"]["universe"]["minimum_coin_age_days"] == 7.0
     patch = output["coin_overrides"]["AAA"]
     assert "override_config_path" not in patch
     assert patch["live"]["modes"]["long"] == "graceful_stop"

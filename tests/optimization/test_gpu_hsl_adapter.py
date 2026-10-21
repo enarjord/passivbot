@@ -404,7 +404,7 @@ def test_pending_native_entry_checks_current_scope_permission(native_entry_progr
 def test_terminal_completed_mark_survives_a_start_fill(native_entry_program, mode, topology):
     torch, library, device, _ = native_entry_program
     params = torch.tensor([1, .08, 1, 0, 3, mode, 0], dtype=torch.float32, device=device)
-    settings = torch.zeros((1, 13), dtype=torch.float32, device=device)
+    settings = torch.zeros((1, 15), dtype=torch.float32, device=device)
     settings[:, 4] = 1
     bars = torch.tensor([[2, 1, 1, 1]], dtype=torch.float32, device=device)
     output = torch.full((5,), float("nan"), dtype=torch.float32, device=device)
