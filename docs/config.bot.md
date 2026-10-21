@@ -34,6 +34,20 @@ Throughout:
   An authored base WEL already above TWEL receives no excess headroom; the headroom
   clamp does not reduce that authored base itself.
 
+Age admission is side-owned at `bot.long.universe.minimum_coin_age_days` and the corresponding
+short path. Both default to `60.0` days. Rust applies this fixed initial-entry gate in static,
+Forager and forced-normal selection. Fractional days are preserved; zero bypasses the gate,
+positive thresholds require factual inception, and equality admits the side. Held-position
+management and indicator warmup are independent of this gate.
+Unresolved inception remains retryable in live operation and automatic prepared caches. Live
+lookup runs in a bounded background task; missing facts block new initial entries without delaying
+held-position planning. Automatic caches request facts only for enabled positive-age sides and
+their approved, non-ignored markets. Optimizer preparation includes sides that its candidate bounds
+can activate. Suite contexts freeze source memberships once and request only their applicable
+coins; a zero-age scenario does not make unrelated coins require inception. A supplied
+dataset override remains an immutable input; missing inception in that dataset keeps positive age
+gates closed.
+
 ## Trailing Martingale Entries
 
 Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0_minutes`

@@ -6,13 +6,29 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Add shared approval sources under `bot.global.universe.approved_coins`. Side omission/null inherits; explicit side sources replace the shared selection and empty lists approve nothing. File refresh, scenario/fixed overrides and reloadable exports preserve source binding and explicit pins; released-v8 conversion reports the final shared or directional ownership.
+- Move minimum coin age to `bot.long.universe.minimum_coin_age_days` and the matching short
+  path. Both default to `60.0`; fractional days and zero bypass are preserved. Rust now gates
+  new initial entries consistently across live/backtest/optimizer selection modes, including
+  static and forced-normal selection, with exact threshold equality and unknown inception
+  failing positive gates while live lookups and automatic prepared caches retry unresolved facts,
+  including positive gates enabled by assigned suite scenarios after shared data preparation.
+  Fact acquisition covers only approved, non-ignored coins on reachable positive-age sides;
+  disjoint zero-age scenarios do not require unused listing facts. Scenario source memberships
+  resolve once and remain frozen through preload and execution. Live lookup runs as a tracked,
+  bounded background task so held-position planning does not wait for missing listing facts.
+  Verified known inception survives unrelated
+  candle-cache rebuilds, and rejected caches do not materialize large arrays first.
+  Held-position management remains available. Shared history retains
+  pre-eligibility warmup rather than adding age and warmup delays. Direct released-v8 migration
+  copies the old live age to both sides and reports the changed admission semantics.
 
 - Configure minimum-effective-cost filtering independently under each side's `bot.<side>.universe`.
   Both flags default to true. A null backtest override inherits them independently; an explicit
   boolean still overrides both. Live, Rust backtests and supported GPU replay use the corresponding
   flag before flat-entry selection and one-way arbitration, while held-position management and
   exchange minima are preserved. Released-v8 conversion copies and reports the shared flag to both sides.
+
+- Add shared approval sources under `bot.global.universe.approved_coins`. Side omission/null inherits; explicit side sources replace the shared selection and empty lists approve nothing. File refresh, scenario/fixed overrides and reloadable exports preserve source binding and explicit pins; released-v8 conversion reports the final shared or directional ownership.
 
 - Round positive fractional warmup caps upward to whole acquisition minutes in live mode,
   matching backtests: `0.5` stays capped at one minute and `5.5` allows six. Null remains uncapped;

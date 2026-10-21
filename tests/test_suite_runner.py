@@ -750,8 +750,8 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
         },
         "live": {},
         "bot": {
-            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
-            "short": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "long": {"universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC"], "ignored_coins": []}},
         },
     }
     scenarios = [
@@ -782,7 +782,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
     ]
     calls = []
 
-    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False, inception_fact_coins=None):
         calls.append(
             (
                 exchange,
@@ -835,7 +835,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
 
 @pytest.mark.asyncio
 async def test_prepare_master_datasets_preserves_combined_source_exchanges(monkeypatch):
-    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False, inception_fact_coins=None):
         assert exchange == "combined"
         timestamps = np.array([0, 60_000], dtype=np.int64)
         return (
@@ -862,8 +862,8 @@ async def test_prepare_master_datasets_preserves_combined_source_exchanges(monke
         },
         "live": {},
         "bot": {
-            "long": {"universe": {"approved_coins": ["ETH"], "ignored_coins": []}},
-            "short": {"universe": {"approved_coins": ["ETH"], "ignored_coins": []}},
+            "long": {"universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["ETH"], "ignored_coins": []}},
+            "short": {"universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["ETH"], "ignored_coins": []}},
         },
     }
     scenarios = [

@@ -229,14 +229,14 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         "bot": {
             "long": {
                 "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
-                "universe": {"approved_coins": ["BTC/USDT:USDT"]},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC/USDT:USDT"]},
             },
             "short": {
                 "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
-                "universe": {"approved_coins": []},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
             "global": {
-                "universe": {"minimum_coin_age_days": 0},
+                "universe": {},
                 "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
@@ -319,14 +319,14 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         "bot": {
             "long": {
                 "risk": {"max_positions": 2, "total_wallet_exposure_limit": 1.0},
-                "universe": {"approved_coins": ["BTC", "ETH"]},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC", "ETH"]},
             },
             "short": {
                 "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
-                "universe": {"approved_coins": []},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
             "global": {
-                "universe": {"minimum_coin_age_days": 0},
+                "universe": {},
                 "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },
@@ -408,14 +408,14 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
                 "n_positions": 3,
                 "total_wallet_exposure_limit": 1.0,
                 "wallet_exposure_limit": 1.0 / 3.0,
-                "universe": {"approved_coins": coins},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": coins},
             },
             "short": {
                 "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
-                "universe": {"approved_coins": []},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
             "global": {
-                "universe": {"minimum_coin_age_days": 0},
+                "universe": {},
                 "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },

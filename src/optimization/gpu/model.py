@@ -486,6 +486,41 @@ class ProxyRun:
     first_valid_idx: int
     last_valid_idx: int
     requested_end_ts_ms: int | None = None
+    age_eligible_indices: tuple[int, int] = (0, 0)
+
+
+def validate_age_eligible_indices(indices, candle_count):
+    """GPU settings carry exact decision-bar indices, including an ineligible end sentinel."""
+    if not isinstance(indices, (tuple, list)) or len(indices) != 2:
+        raise ValueError("GPU age admission requires long/short indices")
+    for index in indices:
+        if (isinstance(index, bool) or not isinstance(index, (int, np.integer))
+                or not 0 <= index <= min(candle_count, 2**31 - 1)
+                or int(np.float32(index)) != index):
+            raise ValueError("GPU age admission index must be an exact float32 integer within the replay")
+
+
+def native_age_admission_indices(timestamps, backtest_params, coin_count):
+    """Compile fixed per-side policy with the same Rust predicate as CPU/live."""
+    import passivbot_rust as pbr
+    from config.age_policy import inception_timestamp_ms
+
+    ages = backtest_params["minimum_coin_age_days"]
+    if len(ages) != 2:
+        raise ValueError("GPU age policy requires long/short minimum days")
+    inceptions = backtest_params.get("inception_timestamps_ms", [None] * coin_count)
+    if len(inceptions) != coin_count:
+        raise ValueError("GPU inception facts must match the prepared coin count")
+    interval_ms = int(backtest_params["candle_interval_minutes"]) * 60_000
+    decision_times = int(backtest_params["first_timestamp_ms"]) + np.arange(len(timestamps), dtype=np.int64) * interval_ms
+    if not np.array_equal(timestamps, decision_times):
+        raise ValueError("GPU candle timestamps must match the native decision clock")
+    times = decision_times.tolist()
+    result = [tuple(pbr.coin_age_first_eligible_index(times, inception_timestamp_ms(inception), age) for age in ages)
+              for inception in inceptions]
+    for pair in result:
+        validate_age_eligible_indices(pair, len(times))
+    return result
 
 
 def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
@@ -985,7 +1020,7 @@ def build_mps_multicoin_data(
                     first_hour_observed[coin] = int(np.flatnonzero(valid)[0])
                 hourly[valid, coin] = ranges[valid]
             arrays["hour_log_ranges"] = hourly
-    coin_settings = np.empty((coin_count, 13), dtype=np.float32)
+    coin_settings = np.empty((coin_count, 15), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
             raise ValueError("MPS multicoin runs must use one shared candle interval")
@@ -1001,6 +1036,7 @@ def build_mps_multicoin_data(
             if high_seed > 0.0 and low_seed > 0.0 and seed_close > 0.0
             else max(seed_close, 1.0)
         )
+        validate_age_eligible_indices(run.age_eligible_indices, candle_count)
         coin_settings[coin] = (
             market.qty_step,
             market.price_step,
@@ -1015,6 +1051,7 @@ def build_mps_multicoin_data(
             volume_seed * typical_seed,
             market.taker_fee,
             max_effective_min_cost,
+            *run.age_eligible_indices,
         )
 
     invariant_bytes = candle_count * coin_count * (

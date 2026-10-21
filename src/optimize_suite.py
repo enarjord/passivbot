@@ -38,6 +38,7 @@ from suite_runner import (
     _normalize_date_to_ts,
     _determine_needed_individual_exchanges,
     _coalesce_master_coins,
+    _prepare_scenario_universes,
 )
 from utils import (
     format_approved_ignored_coins,
@@ -158,6 +159,11 @@ async def prepare_suite_contexts(
     base_config = deepcopy(config)
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
+    prepared_universes = _prepare_scenario_universes(
+        base_config, scenarios, master_coins=master_coins_list, master_ignored=master_ignored_list,
+        available_exchanges=exchanges_list, base_coin_sources=suite_coin_sources,
+        base_coins=base_coins_list, base_ignored=base_ignored_list,
+    )
     master_config = deepcopy(base_config)
     from config.universe import materialize_side_universe_sources
     materialize_side_universe_sources(
@@ -175,6 +181,8 @@ async def prepare_suite_contexts(
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
         scenarios=scenarios,
+        prepared_universes=prepared_universes,
+        scenario_policy_config=base_config,
         allow_internal_nan_gaps=allow_internal_nan_gaps,
     )
     available_coins = set()
@@ -287,6 +295,7 @@ async def prepare_suite_contexts(
                 base_coin_sources=suite_coin_sources,
                 base_coins=base_coins_list,
                 base_ignored=base_ignored_list,
+                prepared_universe=prepared_universes[scenario.label],
             )
         except ValueError as exc:
             raise ValueError(f"Suite scenario {scenario.label} could not be prepared: {exc}") from exc

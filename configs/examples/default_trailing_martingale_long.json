@@ -217,8 +217,7 @@
                     "ARB",
                     "APT",
                     "INJ"
-                ],
-                "minimum_coin_age_days": 60.0
+                ]
             },
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
@@ -296,6 +295,7 @@
             },
             "universe": {
                 "filter_by_min_effective_cost": true,
+                "minimum_coin_age_days": 60.0,
                 "approved_coins": null,
                 "ignored_coins": []
             },
@@ -383,6 +383,7 @@
             },
             "universe": {
                 "filter_by_min_effective_cost": true,
+                "minimum_coin_age_days": 60.0,
                 "approved_coins": null,
                 "ignored_coins": []
             },

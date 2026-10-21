@@ -269,7 +269,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                         "offset_fraction": 0.003,
                     }
                 },
-                "universe": {"approved_coins": ["BTC"]},
+                "universe": {"minimum_coin_age_days": 365, "approved_coins": ["BTC"]},
             },
             "short": {
                 "strategy": {
@@ -280,12 +280,12 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                         "offset_fraction": 0.003,
                     }
                 },
-                "universe": {"approved_coins": []},
+                "universe": {"minimum_coin_age_days": 365, "approved_coins": []},
             },
             "global": {
                 "strategy_kind": "ema_anchor",
                 "warmup": {"span_multiplier": 1.0, "max_minutes": None},
-                "universe": {"minimum_coin_age_days": 365},
+                "universe": {},
             },
         },
         "live": {},
@@ -334,13 +334,13 @@ def test_run_signature_changes_for_optimize_changes():
         "bot": {
             "long": {
                 "strategy": {"ema_anchor": {"ema_span_0_minutes": 48}},
-                "universe": {"approved_coins": ["BTC"]},
+                "universe": {"minimum_coin_age_days": 365, "approved_coins": ["BTC"]},
             },
-            "short": {"universe": {"approved_coins": []}},
+            "short": {"universe": {"minimum_coin_age_days": 365, "approved_coins": []}},
             "global": {
                 "strategy_kind": "ema_anchor",
                 "warmup": {"span_multiplier": 0.0, "max_minutes": None},
-                "universe": {"minimum_coin_age_days": 365},
+                "universe": {},
             },
         },
         "live": {},

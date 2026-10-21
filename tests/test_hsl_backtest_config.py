@@ -29,6 +29,7 @@ def inputs(mode="coin"):
     cfg["backtest"]["starting_balance"] = 1000.0
     cfg["backtest"]["btc_collateral_cap"] = 0.0
     for side in ("long", "short"):
+        cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
         cfg["bot"][side]["hsl"].update(enabled=False)
         cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1)
         # This minute-scale HSL fixture starts trading before an hourly candle

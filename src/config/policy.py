@@ -58,7 +58,6 @@ def validate_shared_bot_policy(config):
             "config.backtest.filter_by_min_effective_cost must be a boolean or null"
         )
     for path in (
-        "bot.global.universe.minimum_coin_age_days",
         "bot.global.execution.market_order_near_touch_fraction",
         "bot.global.forager.score_hysteresis_margin",
         "bot.global.warmup.span_multiplier",
@@ -71,7 +70,9 @@ def validate_shared_bot_policy(config):
             or value < 0
         ):
             raise ValueError(f"config.{path} must be a finite nonnegative number")
+    from .age_policy import minimum_coin_age_days
     for side in ("long", "short"):
+        minimum_coin_age_days(config, side)
         minimum_cost_filter(config, side)
         forager = require_config_value(config, f"bot.{side}.forager")
         forager["always_include"] = normalize_always_include(

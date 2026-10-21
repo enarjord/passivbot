@@ -39,7 +39,7 @@ def test_resume_rejects_changed_shared_bot_simulation_inputs(key, value):
     old = _record(config)
     from config.migrations.shared_policy import LIVE_POLICY_PATHS
     node = config
-    parts = LIVE_POLICY_PATHS[key].split(".")
+    parts = ("bot.long.universe.minimum_coin_age_days" if key == "minimum_coin_age_days" else LIVE_POLICY_PATHS[key]).split(".")
     for part in parts[:-1]:
         node = node[part]
     assert node[parts[-1]] != value

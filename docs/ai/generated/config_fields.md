@@ -91,7 +91,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.global.strategy_kind` | string | `"trailing_martingale"` | — | global; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
 | `bot.global.universe.approved_coins` | array \| string | 41 items (see template) | — | global; live, backtest, optimize | No | forbidden | — | python |
-| `bot.global.universe.minimum_coin_age_days` | float | `60.0` | days | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.global.warmup.max_minutes` | float \| null | `null` | minutes | global; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
 | `bot.global.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
@@ -161,6 +160,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.universe.approved_coins` | array \| string \| null | `null` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.filter_by_min_effective_cost` | boolean | `true` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.universe.ignored_coins` | array \| string \| null | `[]` | — | long; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.universe.minimum_coin_age_days` | float | `60.0` | days | long; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.long.unstuck.close_fraction` | float | `0.041` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | long; live, backtest, optimize | Eligible (`long_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
 | `bot.long.unstuck.ema_distance_fraction` | float | `-0.0269` | fraction / unstuck EMA band reference | long; live, backtest, optimize | Eligible (`long_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | > -1.0; finite | python |
 | `bot.long.unstuck.ema_gating_enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
@@ -235,6 +235,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.short.universe.approved_coins` | array \| string \| null | `null` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.filter_by_min_effective_cost` | boolean | `true` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.universe.ignored_coins` | array \| string \| null | `[]` | — | short; live, backtest, optimize | No | forbidden | — | python |
+| `bot.short.universe.minimum_coin_age_days` | float | `60.0` | days | short; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.short.unstuck.close_fraction` | float | `0.01` | fraction / raw balance times effective per-position wallet exposure limit, converted at close price | short; live, backtest, optimize | Eligible (`short_unstuck_close_pct`); recommended `[0.01, 0.12, 0.001]` | allowed | >= 0.0; <= 1.0; finite | python |
 | `bot.short.unstuck.ema_distance_fraction` | float | `-0.2` | fraction / unstuck EMA band reference | short; live, backtest, optimize | Eligible (`short_unstuck_ema_dist`); recommended `[-0.2, 0.01, 0.0001]` | allowed | < 1.0; finite | python |
 | `bot.short.unstuck.ema_gating_enabled` | boolean | `true` | — | short; live, backtest, optimize | No | allowed | — | python |

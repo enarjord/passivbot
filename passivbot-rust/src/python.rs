@@ -226,8 +226,6 @@ fn attach_ew_analysis(
     Ok(())
 }
 
-
-
 fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
     analysis.fills_active_days_count = metrics.fills_active_days_count;
     analysis.fills_active_days_ratio = metrics.fills_active_days_ratio;
@@ -2198,6 +2196,41 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
     })
 }
 
+pub(crate) fn age_timestamp_from_py(value: &PyAny) -> PyResult<u64> {
+    if value.is_instance_of::<pyo3::types::PyBool>()
+        || !value.is_instance_of::<pyo3::types::PyLong>()
+    {
+        return Err(PyValueError::new_err(
+            "age admission timestamps must be nonnegative integers",
+        ));
+    }
+    value.extract::<u64>()
+}
+
+pub(crate) fn minimum_age_days_from_py(value: &PyAny) -> PyResult<f64> {
+    if value.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyValueError::new_err(
+            "minimum_coin_age_days must be a finite nonnegative number",
+        ));
+    }
+    let days = value.extract::<f64>()?;
+    crate::age_admission::validate_minimum_days(days).map_err(PyValueError::new_err)?;
+    Ok(days)
+}
+
+fn minimum_age_pair_from_dict(dict: &PyDict) -> PyResult<[f64; 2]> {
+    let values: Vec<&PyAny> = extract_value(dict, "minimum_coin_age_days")?;
+    if values.len() != 2 {
+        return Err(PyValueError::new_err(
+            "minimum_coin_age_days requires long/short values",
+        ));
+    }
+    Ok([
+        minimum_age_days_from_py(values[0])?,
+        minimum_age_days_from_py(values[1])?,
+    ])
+}
+
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     if dict.contains("calculate_legacy_w")? {
         return Err(PyValueError::new_err("calculate_legacy_w is retired; only ordinary and explicit _ew metrics remain"));
@@ -2282,6 +2315,15 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        minimum_coin_age_days: minimum_age_pair_from_dict(dict)?,
+        inception_timestamps_ms: match dict.get_item("inception_timestamps_ms")? {
+            Some(item) => item
+                .extract::<Vec<Option<&PyAny>>>()?
+                .into_iter()
+                .map(|value| value.map(age_timestamp_from_py).transpose())
+                .collect::<PyResult<_>>()?,
+            None => Vec::new(),
+        },
         filter_by_min_effective_cost: {
             let pair = dict
                 .get_item("filter_by_min_effective_cost")?
@@ -2377,6 +2419,16 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
                 .map_err(|_| PyValueError::new_err("risk timestamp exceeds i64"))?,
         )
         .map_err(PyValueError::new_err)?;
+    }
+    for days in params.minimum_coin_age_days {
+        crate::age_admission::validate_minimum_days(days).map_err(PyValueError::new_err)?;
+    }
+    if !params.inception_timestamps_ms.is_empty()
+        && params.inception_timestamps_ms.len() != params.coins.len()
+    {
+        return Err(PyValueError::new_err(
+            "inception_timestamps_ms must match coins",
+        ));
     }
     crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
         .map_err(PyValueError::new_err)?;

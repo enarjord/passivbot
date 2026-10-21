@@ -45,16 +45,16 @@ def _minimal_bot_config(approved_coins):
     return {
         "global": {
             "strategy_kind": "trailing_martingale",
-            "universe": {"minimum_coin_age_days": 0.0},
+            "universe": {},
             "warmup": {"span_multiplier": 0.0, "max_minutes": None},
         },
         "long": {
             "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
-            "universe": {"approved_coins": approved_coins["long"], "ignored_coins": []},
+            "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["long"], "ignored_coins": []},
         },
         "short": {
             "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
-            "universe": {"approved_coins": approved_coins["short"], "ignored_coins": []},
+            "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["short"], "ignored_coins": []},
         },
     }
 
@@ -2218,6 +2218,7 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["binance"],
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
@@ -2279,6 +2280,7 @@ async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["binance"],
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
@@ -2491,6 +2493,7 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["hyperliquid"],
             "ohlcv_source_dir": str(source_dir),
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
@@ -2556,6 +2559,7 @@ async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["binance"],
             "ohlcv_source_dir": str(source_dir),
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
@@ -2730,6 +2734,7 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["hyperliquid"],
             "ohlcv_source_dir": str(source_dir),
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",

@@ -39,7 +39,8 @@ def runtime_inputs(mode):
     cfg, markets, candles = inputs(mode)
     cfg['bot']['global']['warmup']['span_multiplier'] = 1.0
     cfg['bot']['global']['warmup']['max_minutes'] = 1
-    cfg['bot']['global']['universe']['minimum_coin_age_days'] = 0.0
+    for side in ("long", "short"):
+        cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
     cfg["backtest"].update(start_date="2024-01-01", end_date="2024-01-01T02:40:00")
     timestamps = 1704067200000 + np.arange(len(candles), dtype=np.int64) * 60000
     return cfg, markets, candles, timestamps

@@ -21,14 +21,14 @@ def _base_config():
         "bot": {
             "long": {
                 "risk": {"max_positions": 4},
-                "universe": {"approved_coins": [], "ignored_coins": []},
+                "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
             },
             "short": {
                 "risk": {"max_positions": 4},
-                "universe": {"approved_coins": [], "ignored_coins": []},
+                "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
             },
             "global": {
-                "universe": {"minimum_coin_age_days": 30},
+                "universe": {},
                 "warmup": {"span_multiplier": 0.2, "max_minutes": None},
             },
         },

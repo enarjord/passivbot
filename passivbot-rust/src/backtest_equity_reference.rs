@@ -62,6 +62,8 @@ fn equity_shared_references_match_current_producers() {
     let hs = EquityHardStopLossConfig::default();
 
     let backtest_params = BacktestParams {
+        minimum_coin_age_days: [0.0; 2],
+        inception_timestamps_ms: vec![],
         starting_balance: 100.0,
         maker_fee: 0.0,
         taker_fee: 0.0,

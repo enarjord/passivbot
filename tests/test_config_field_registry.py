@@ -58,7 +58,7 @@ def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
     [
         "backtest.starting_balance",
         "backtest.gap_tolerance_ohlcvs_minutes",
-        "bot.global.universe.minimum_coin_age_days",
+        "bot.long.universe.minimum_coin_age_days",
         "bot.global.warmup.max_minutes",
         "live.candles.candle_lock_timeout_seconds",
         "live.execution.execution_delay_seconds",

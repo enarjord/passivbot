@@ -14,7 +14,7 @@ from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
-CONTRACT_VERSION = 7
+CONTRACT_VERSION = 8
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -107,6 +107,7 @@ def build_evaluation_contract(config: dict) -> dict:
         }
     contract = {
         "version": CONTRACT_VERSION,
+        "age_admission": "side_initial_entry_v1",
         "risk_model": "v9_independent_loss_memories_currency_drawdown_ratio_ema_finite_cooldown",
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),

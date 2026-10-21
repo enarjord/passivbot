@@ -101,7 +101,7 @@
             },
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "trailing_martingale",
-            "universe": {"approved_coins": [], "minimum_coin_age_days": 180.0},
+            "universe": {"approved_coins": []},
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
         },
@@ -176,7 +176,7 @@
                     "volatility_ema_span_minutes": 60.0
                 }
             },
-            "universe": {"filter_by_min_effective_cost": true, "approved_coins": ["XMR"], "ignored_coins": []},
+            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 180.0, "approved_coins": ["XMR"], "ignored_coins": []},
             "unstuck": {
                 "close_fraction": 0.00651,
                 "ema_distance_fraction": 0.00654,
@@ -259,7 +259,7 @@
                     "volatility_ema_span_minutes": 60.0
                 }
             },
-            "universe": {"filter_by_min_effective_cost": true, "approved_coins": ["XMR"], "ignored_coins": []},
+            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 180.0, "approved_coins": ["XMR"], "ignored_coins": []},
             "unstuck": {
                 "close_fraction": 0.0286,
                 "ema_distance_fraction": -0.0532,

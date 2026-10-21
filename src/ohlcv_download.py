@@ -70,16 +70,11 @@ async def main() -> None:
         metavar="CSV_OR_PATH",
         help="Ignored coins. CSV, a JSON/HJSON per-side object or a JSON coin list file. An empty value clears ignores; null is not supported.",
     )
-    parser.add_argument(
-        "--minimum-coin-age-days",
-        "-mcad",
-        "--bot.global.universe.minimum_coin_age_days",
-        dest='bot.global.universe.minimum_coin_age_days',
-        type=float,
-        default=None,
-        metavar="FLOAT",
-        help="Minimum coin age in days required before a coin is eligible to trade.",
-    )
+    for side in ("long", "short"):
+        parser.add_argument(
+            f"--bot.{side}.universe.minimum_coin_age_days", type=float,
+            default=None, metavar="FLOAT", help=f"Minimum {side} initial-entry age in days.",
+        )
     side_source_keys = {
         f"bot.{side}.universe.{field}"
         for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
@@ -123,7 +118,8 @@ async def main() -> None:
             *side_source_keys,
             "approved_coins",
             "ignored_coins",
-            'bot.global.universe.minimum_coin_age_days',
+            'bot.long.universe.minimum_coin_age_days',
+            'bot.short.universe.minimum_coin_age_days',
             "backtest.exchanges",
             "backtest.start_date",
             "backtest.end_date",

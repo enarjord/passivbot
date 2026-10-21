@@ -480,6 +480,14 @@ inline void prepare_coin_hsl_budgets(
 
 #pragma STDC FP_CONTRACT ON
 
+// Age is initial-entry admission, independent of indicator/data readiness.
+// Columns are exact replay indices prepared by the Rust age predicate.
+inline bool passes_multicoin_age(
+    constant float* coin_settings, int coin_offset, int k, bool short_side
+) {
+    return k >= int(coin_settings[coin_offset + (short_side ? 14 : 13)]);
+}
+
 inline bool passes_multicoin_min_effective_cost(
     bool enabled, float balance, float wel,
     float initial_qty_pct, float price,

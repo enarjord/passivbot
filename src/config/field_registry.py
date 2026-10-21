@@ -182,7 +182,6 @@ _FIELDS_BY_TYPE = {
         "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
         "bot.global.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
         "bot.global.unstuck": "memory_ema_span_minutes",
-        "bot.global.universe": "minimum_coin_age_days",
         "bot.global.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
         "bot.global.warmup": "span_multiplier",
@@ -259,6 +258,7 @@ _SHARED_SIDE_FIELDS = {
     FieldType.INTEGER: "risk.max_positions",
     FieldType.ARRAY: "forager.always_include",
     FieldType.FLOAT: """
+        universe.minimum_coin_age_days
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
         forager.score_weights.volatility forager.score_weights.volume
         forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes

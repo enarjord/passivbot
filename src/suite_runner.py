@@ -35,7 +35,10 @@ from config.reducers import canonicalize_reducer_mapping, reducer_mapping_from_a
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from materialized_cache import release_materialized_payload
-from backtest_universe import normalize_backtest_coin
+from backtest_universe import (
+    normalize_backtest_coin,
+    reconcile_backtest_coin_identifiers as _reconcile_suite_identifiers_to_available,
+)
 from utils import (
     MarketIdentifierExchangeMismatch,
     UnknownMarketIdentifier,
@@ -96,6 +99,7 @@ _SCENARIO_KEYS = frozenset(
 
 from config.universe import require_side_universe_sources
 from config.universe import set_side_universe_sources
+from config.universe import PreparedUniverseSnapshot, ResolvedCoinList
 
 @dataclass(frozen=True)
 class SuiteScenario:
@@ -107,6 +111,117 @@ class SuiteScenario:
     exchanges: Optional[List[str]] = None
     coin_sources: Optional[Dict[str, str]] = None
     overrides: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class _PreparedScenarioUniverse:
+    """Internal, immutable source bindings and memberships for one parsed recipe."""
+    label: str
+    recipe: str
+    shared_source: str | tuple[str, ...] | None
+    sources: tuple
+    membership: PreparedUniverseSnapshot
+    inception_coins: frozenset[str]
+
+
+def _freeze_coin_source(source):
+    if isinstance(source, list):
+        return tuple(source)
+    if source is None or isinstance(source, str):
+        return source
+    raise TypeError("prepared coin source must be a string, list or null")
+
+
+def _thaw_coin_source(source):
+    return list(source) if isinstance(source, tuple) else source
+
+
+def _scenario_universe_recipe(base_config, scenario):
+    from config.universe import raw_side_universe_sources, universe_source_view
+    from config.age_policy import minimum_coin_age_days
+    from backtest_universe import backtest_side_enabled
+    base_membership = [
+        (field, side, list(value)) for field in ("approved_coins", "ignored_coins")
+        for side, value in require_side_universe_sources(base_config, field).items()
+        if type(value) is ResolvedCoinList
+    ]
+    source = universe_source_view(base_config)
+    base_sources = {
+        "shared": source.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", []),
+        **{field: raw_side_universe_sources(source, field) for field in ("approved_coins", "ignored_coins")},
+    }
+    for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
+        if value is not None:
+            set_side_universe_sources(source, field, value)
+    apply_scenario_overrides(source, scenario.overrides)
+    paths = [("bot", side, "universe", field) for side in ("long", "short")
+             for field in ("approved_coins", "ignored_coins")]
+    paths.append(("bot", "global", "universe", "approved_coins"))
+    declared = set()
+    for selector in scenario.overrides or ():
+        selected = tuple(selector.split("."))
+        declared.update(path for path in paths if selected[:len(path)] == path or path[:len(selected)] == selected)
+    return json.dumps({
+        "base": base_sources,
+        "effective": {"shared": source["bot"].get("global", {}).get("universe", {}).get("approved_coins", []),
+                      **{field: raw_side_universe_sources(source, field) for field in ("approved_coins", "ignored_coins")}},
+        "label": scenario.label, "coins": scenario.coins, "ignored": scenario.ignored_coins,
+        "exchanges": scenario.exchanges, "coin_sources": scenario.coin_sources,
+        "base_exchanges": base_config["backtest"]["exchanges"],
+        "base_coin_sources": base_config["backtest"].get("coin_sources", {}),
+        "declared": sorted(declared), "base_path": base_config.get("live", {}).get("base_config_path", ""),
+        "base_membership": base_membership,
+        "demand_sides": [minimum_coin_age_days(source, side) > 0 and backtest_side_enabled(source, side)
+                         for side in ("long", "short")],
+    }, sort_keys=True)
+
+
+def _prepare_scenario_universes(
+    base_config, scenarios, *, master_coins, master_ignored, available_exchanges,
+    base_coin_sources=None, base_coins=None, base_ignored=None,
+):
+    """Resolve each scenario once through the execution owner before shared acquisition."""
+    from config.age_policy import minimum_coin_age_days
+    from backtest_universe import backtest_side_enabled
+    from config.universe import raw_side_universe_sources, runtime_universe_snapshot
+    prepared = {}
+    for scenario in scenarios:
+        if scenario.label in prepared:
+            raise ValueError(f"duplicate scenario label: {scenario.label}")
+        effective, columns = apply_scenario(
+            base_config, scenario, master_coins, master_ignored, available_exchanges,
+            set(master_coins), base_coin_sources, base_coins=base_coins, base_ignored=base_ignored, quiet=True,
+        )
+        approved = require_side_universe_sources(effective, "approved_coins")
+        required = frozenset(
+            coin for side in ("long", "short")
+            if minimum_coin_age_days(effective, side) > 0 and backtest_side_enabled(effective, side)
+            for coin in approved[side] if coin in columns
+        )
+        prepared[scenario.label] = _PreparedScenarioUniverse(
+            scenario.label,
+            _scenario_universe_recipe(base_config, scenario),
+            _freeze_coin_source(effective["bot"].get("global", {}).get("universe", {}).get("approved_coins", [])),
+            tuple((field, side, _freeze_coin_source(source))
+                  for field in ("approved_coins", "ignored_coins")
+                  for side, source in raw_side_universe_sources(effective, field).items()),
+            runtime_universe_snapshot(effective, available_coins=columns), required,
+        )
+    return prepared
+
+
+def _install_prepared_scenario_universe(config, prepared, *, available_coins, columns, exchanges):
+    from config.universe import materialize_side_universe_sources
+    config["bot"].setdefault("global", {}).setdefault("universe", {})["approved_coins"] = _thaw_coin_source(prepared.shared_source)
+    for field in ("approved_coins", "ignored_coins"):
+        sources = {side: _thaw_coin_source(source) for name, side, source in prepared.sources if name == field}
+        values = {}
+        for name, side, members in prepared.membership:
+            if name != field:
+                continue
+            members = _reconcile_suite_identifiers_to_available(members, available_coins, exchanges)
+            values[side] = [coin for coin in members if field != "approved_coins" or coin in columns]
+        materialize_side_universe_sources(config, field, values, sources=sources)
 
 
 @dataclass
@@ -340,42 +455,6 @@ def _normalized_coin_set(value: Any, exchanges: Sequence[str] = ()) -> set[str]:
                 continue
         out.update(resolved_symbols or {coin})
     return out
-
-
-def _reconcile_suite_identifiers_to_available(
-    identifiers: Sequence[str],
-    available_coins: set[str],
-    exchanges: Sequence[str],
-) -> list[str]:
-    """Match exact/alias scenario identifiers to prepared dataset coin keys."""
-    reconciled = []
-    for identifier in identifiers:
-        raw = str(identifier)
-        if raw in available_coins:
-            reconciled.append(raw)
-            continue
-        matches = set()
-        for exchange in exchanges:
-            try:
-                target_symbol = coin_to_symbol(raw, exchange, verbose=False)
-            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
-                continue
-            for available_coin in available_coins:
-                try:
-                    if (
-                        coin_to_symbol(available_coin, exchange, verbose=False)
-                        == target_symbol
-                    ):
-                        matches.add(available_coin)
-                except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
-                    continue
-        if len(matches) > 1:
-            raise ValueError(
-                f"suite identifier {raw!r} matches multiple prepared coins: "
-                f"{sorted(matches)}"
-            )
-        reconciled.append(next(iter(matches)) if matches else raw)
-    return list(dict.fromkeys(reconciled))
 
 
 def _reconcile_suite_coin_sources(
@@ -929,14 +1008,33 @@ async def prepare_master_datasets(
     needed_individual_exchanges: Optional[Set[str]] = None,
     candle_interval_minutes: int = 1,
     scenarios: Optional[Sequence[SuiteScenario]] = None,
+    prepared_universes: Optional[Dict[str, _PreparedScenarioUniverse]] = None,
+    scenario_policy_config: Optional[Dict[str, Any]] = None,
     allow_internal_nan_gaps: bool = False,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
     datasets: Dict[str, ExchangeDataset] = {}
+    policy_config = base_config if scenario_policy_config is None else scenario_policy_config
+    if scenarios is not None and prepared_universes is None:
+        prepared_universes = _prepare_scenario_universes(
+            policy_config, scenarios,
+            master_coins=_collect_union((s.coins for s in scenarios), _flatten_coin_list(require_side_universe_sources(base_config, "approved_coins"))),
+            master_ignored=_collect_union((s.ignored_coins for s in scenarios), _flatten_coin_list(require_side_universe_sources(base_config, "ignored_coins"))),
+            available_exchanges=exchanges,
+        )
+    for scenario in scenarios or ():
+        context = prepared_universes.get(scenario.label)
+        if (type(context) is not _PreparedScenarioUniverse or context.label != scenario.label
+                or context.recipe != _scenario_universe_recipe(policy_config, scenario)):
+            raise ValueError(f"Scenario {scenario.label} requires its typed prepared universe")
 
-    async def _prepare_dataset(config, exchange):
+    async def _prepare_dataset(config, exchange, assigned_scenarios):
         kwargs = {"allow_internal_nan_gaps": True} if allow_internal_nan_gaps else {}
+        if assigned_scenarios is not None:
+            kwargs["inception_fact_coins"] = frozenset().union(
+                *(prepared_universes[scenario.label].inception_coins for scenario in assigned_scenarios)
+            )
         if config["backtest"].get("organillo_csv") is not None:
             # Masters serve scenarios with different schedules and date windows.
             # Apply each schedule after slicing, rather than pruning a shared master.
@@ -1036,9 +1134,9 @@ async def prepare_master_datasets(
         combined_window = dataset_windows["combined"]
         _log_dataset_window("combined", combined_window)
         combined_config = _config_for_dataset_window(base_config, combined_window)
+        assigned_combined = None if scenarios is None else combined_scenarios
         combined_config = _config_for_dataset_coins(
-            combined_config,
-            combined_scenarios or list(scenarios or []),
+            combined_config, combined_scenarios or list(scenarios or []),
         )
         (
             coins,
@@ -1048,7 +1146,7 @@ async def prepare_master_datasets(
             cache_dir,
             btc_usd_prices,
             timestamps,
-        ) = await _prepare_dataset(combined_config, "combined")
+        ) = await _prepare_dataset(combined_config, "combined", assigned_combined)
         prepared_hlcvs = hlcvs
         if candle_interval_minutes > 1:
             hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
@@ -1108,7 +1206,10 @@ async def prepare_master_datasets(
                     ex_cache_dir,
                     ex_btc_usd_prices,
                     ex_timestamps,
-                ) = await _prepare_dataset(exchange_config, exchange)
+                ) = await _prepare_dataset(
+                    exchange_config, exchange,
+                    None if scenarios is None else individual_scenarios.get(str(exchange), []),
+                )
                 prepared_ex_hlcvs = ex_hlcvs
                 if candle_interval_minutes > 1:
                     ex_hlcvs, ex_timestamps, ex_btc_usd_prices = (
@@ -1162,7 +1263,9 @@ async def prepare_master_datasets(
                 cache_dir,
                 btc_usd_prices,
                 timestamps,
-            ) = await _prepare_dataset(exchange_config, exchange)
+            ) = await _prepare_dataset(
+                exchange_config, exchange, None if scenarios is None else exchange_scenarios,
+            )
             prepared_hlcvs = hlcvs
             if candle_interval_minutes > 1:
                 hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
@@ -1311,7 +1414,13 @@ def apply_scenario(
     base_coins: Optional[List[str]] = None,
     base_ignored: Optional[List[str]] = None,
     quiet: bool = False,
+    prepared_universe: Optional[_PreparedScenarioUniverse] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
+    if prepared_universe is not None and (
+        type(prepared_universe) is not _PreparedScenarioUniverse
+        or prepared_universe.recipe != _scenario_universe_recipe(base_config, scenario)
+    ):
+        raise ValueError(f"Scenario {scenario.label} prepared universe does not match its source recipe")
     cfg = deepcopy(base_config)
     tracker = ConfigTransformTracker()
     bot_section = cfg.setdefault("bot", {})
@@ -1430,10 +1539,16 @@ def apply_scenario(
     for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
         if value is not None:
             replacement_paths.extend(("bot", side, "universe", field) for side in ("long", "short"))
-    _materialize_scenario_universe(
-        cfg, prepared_base, available_coins=available_coins,
-        exchanges=scenario_exchanges, columns=set(filtered_coins), replacement_paths=replacement_paths,
-    )
+    if prepared_universe is None:
+        _materialize_scenario_universe(
+            cfg, prepared_base, available_coins=available_coins,
+            exchanges=scenario_exchanges, columns=set(filtered_coins), replacement_paths=replacement_paths,
+        )
+    else:
+        _install_prepared_scenario_universe(
+            cfg, prepared_universe, available_coins=available_coins,
+            exchanges=scenario_exchanges, columns=set(filtered_coins),
+        )
     validate_suite_side_coin_lists(cfg, scenario_exchanges)
 
     if cfg["backtest"].get("organillo_csv") is not None:
@@ -1562,6 +1677,7 @@ async def run_backtest_scenario(
     base_coin_sources: Optional[Dict[str, str]] = None,
     base_coins: Optional[List[str]] = None,
     base_ignored: Optional[List[str]] = None,
+    prepared_universe: Optional[_PreparedScenarioUniverse] = None,
 ) -> ScenarioResult:
     from backtest import (
         BacktestPlotContext,
@@ -1580,6 +1696,7 @@ async def run_backtest_scenario(
         base_coin_sources=base_coin_sources,
         base_coins=base_coins,
         base_ignored=base_ignored,
+        prepared_universe=prepared_universe,
     )
     scenario_config["disable_plotting"] = disable_plotting
 
@@ -2148,6 +2265,7 @@ def _suite_session_inputs(
     suite_coin_sources,
     base_coins,
     base_ignored,
+    prepared_universes=None,
 ):
     """Describe actual scenario slices without retaining copied market arrays."""
     inputs, run_configs, coins, sources = [], [], set(), set()
@@ -2164,6 +2282,7 @@ def _suite_session_inputs(
             base_coins=base_coins,
             base_ignored=base_ignored,
             quiet=True,
+            prepared_universe=(prepared_universes or {}).get(scenario.label),
         )
         allowed = (set(scenario.exchanges) & actual) if scenario.exchanges else actual
         allowed = allowed or actual
@@ -2269,6 +2388,11 @@ async def run_backtest_suite_async(
     base_config = deepcopy(config)
     base_config.setdefault("backtest", {})
     base_config["backtest"]["coin_sources"] = suite_coin_sources
+    prepared_universes = _prepare_scenario_universes(
+        base_config, scenarios, master_coins=master_coins, master_ignored=master_ignored,
+        available_exchanges=exchanges_list, base_coin_sources=suite_coin_sources,
+        base_coins=base_coins, base_ignored=base_ignored,
+    )
     master_config = deepcopy(base_config)
     if isinstance(require_side_universe_sources(master_config, 'approved_coins'), dict):
         from config.universe import materialize_side_universe_sources
@@ -2289,6 +2413,8 @@ async def run_backtest_suite_async(
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
         scenarios=scenarios,
+        prepared_universes=prepared_universes,
+        scenario_policy_config=base_config,
     )
     available_coins: set[str] = set()
     for dataset in datasets.values():
@@ -2316,6 +2442,7 @@ async def run_backtest_suite_async(
             base_coins=base_coins,
             base_ignored=base_ignored,
             quiet=True,
+            prepared_universe=prepared_universes[scenario.label],
         )
         coin_exchange = _compute_effective_coin_exchange(
             scenario, scenario_coins, datasets, dataset_available_exchanges
@@ -2345,6 +2472,7 @@ async def run_backtest_suite_async(
         suite_coin_sources,
         base_coins,
         base_ignored,
+        prepared_universes,
     )
     span, span_metadata = date_span(run_configs)
     source = "combined" if len(run_sources) > 1 else run_sources[0]
@@ -2408,6 +2536,7 @@ async def run_backtest_suite_async(
             base_coin_sources=suite_coin_sources,
             base_coins=base_coins,
             base_ignored=base_ignored,
+            prepared_universe=prepared_universes[scenario.label],
         )
         results.append(result)
         logging.info(

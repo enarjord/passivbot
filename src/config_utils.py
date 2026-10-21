@@ -238,8 +238,17 @@ FIELD_RUNTIME_RULES = {
         },
     },
     "bot.global.universe.approved_coins": {"owner": "bot", "consumed_by": {"live", "backtest", "optimize"}, "cli_exposed_on": {"live", "backtest", "optimize"}, "help_group": {"backtest": "Coin Selection", "optimize": "Coin Selection"}},
-    "bot.global.universe.minimum_coin_age_days": {
-        "owner": "live",
+    "bot.long.universe.minimum_coin_age_days": {
+        "owner": "bot",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+    },
+    "bot.short.universe.minimum_coin_age_days": {
+        "owner": "bot",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
         "help_group": {
@@ -993,9 +1002,9 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Ignored coin sources for both sides. CSV, a JSON/HJSON per-side object, or a JSON coin list file. Use an empty value to clear ignores; null is not supported.",
     },
-    "bot.global.universe.minimum_coin_age_days": {
-        "visible": ["--minimum-coin-age-days", "-mcad"],
-        "hidden": ["--bot_global_universe_minimum_coin_age_days"],
+    "bot.long.universe.minimum_coin_age_days": {
+        "visible": ["--minimum-coin-age-days-long"],
+        "hidden": ["--bot_long_universe_minimum_coin_age_days"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1004,7 +1013,20 @@ RESERVED_CLI_ARGS = {
             "backtest": "Coin Selection",
             "optimize": "Coin Selection",
         },
-        "help": "Minimum coin age in days required before a coin is eligible to trade.",
+        "help": "Minimum coin age in days for initial entries on this side; zero bypasses, held management is retained.",
+    },
+    "bot.short.universe.minimum_coin_age_days": {
+        "visible": ["--minimum-coin-age-days-short"],
+        "hidden": ["--bot_short_universe_minimum_coin_age_days"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Coin Selection",
+            "backtest": "Coin Selection",
+            "optimize": "Coin Selection",
+        },
+        "help": "Minimum coin age in days for initial entries on this side; zero bypasses, held management is retained.",
     },
     "bot.global.forager.score_hysteresis_margin": {
         "visible": ["--forager-score-hysteresis-margin"],
@@ -1840,7 +1862,8 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "approved_coins",
         'bot.global.forager.score_hysteresis_margin',
         "ignored_coins",
-        'bot.global.universe.minimum_coin_age_days',
+        'bot.long.universe.minimum_coin_age_days',
+        'bot.short.universe.minimum_coin_age_days',
     }
     behavior = {
         "bot.long.universe.filter_by_min_effective_cost",

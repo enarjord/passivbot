@@ -707,7 +707,7 @@ mod tests {
         assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 27"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("coin_override_or"));
-        assert!(source.contains("constant int COIN_COLS = 13"));
+        assert!(source.contains("constant int COIN_COLS = 15"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
         assert!(source.contains("filter_by_min_effective_cost, account.balance"));
         assert!(!source.contains("min_cost_exact_open_uncertain"));
@@ -928,7 +928,7 @@ mod tests {
         assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 43"));
         assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 44"));
         assert!(source.contains("apply_coin_hsl_overrides("));
-        assert!(source.contains("constant int COIN_COLS = 13"));
+        assert!(source.contains("constant int COIN_COLS = 15"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
         assert!(source.contains("filter_by_min_effective_cost, account.balance"));
         assert!(!source.contains("min_cost_exact_open_uncertain"));

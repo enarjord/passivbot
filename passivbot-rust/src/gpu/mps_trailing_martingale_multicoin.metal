@@ -32,7 +32,7 @@ constant int HSL_OVERRIDE_START = 34;
 constant int GATE_INITIAL_OVERRIDE_COL = 42;
 constant int GATE_REENTRY_OVERRIDE_COL = 43;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 44;
-constant int COIN_COLS = 13;
+constant int COIN_COLS = 15;
 #if PASSIVBOT_BTC_RISK_ENABLED
 constant int DAILY_COLS = 12 + PASSIVBOT_RAW_STRATEGY_RISK_ENABLED + 2 * PASSIVBOT_RAW_STRATEGY_GROWTH_ENABLED;
 #else
@@ -3223,7 +3223,9 @@ inline int count_tm_multicoin_tradable_coins(
     constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
     int k,
-    int coin_count
+    int coin_count,
+    bool short_side,
+    thread const float* psize
 #ifdef PASSIVBOT_ORGANILLO
     , bool apply_eligibility = true
 #endif
@@ -3237,6 +3239,7 @@ inline int count_tm_multicoin_tradable_coins(
         if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(close) && coin_wel != 0.0f
+            && (psize[c] > 0.0f || passes_multicoin_age(coin_settings, coin_offset, k, short_side))
 
 #ifdef PASSIVBOT_ORGANILLO
             && (!apply_eligibility || ORGANILLO_ALLOWED(k, c, coin_count))
@@ -3496,6 +3499,7 @@ inline void update_tm_multicoin_side_selection(
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_override_or(coin_overrides, c, 24, -1.0f) != 0.0f
+            && (psize[c] > 0.0f || passes_multicoin_age(coin_settings, coin_offset, k, short_side))
 #ifdef PASSIVBOT_ORGANILLO
             && ORGANILLO_ALLOWED(k, c, coin_count)
 #endif
@@ -3541,6 +3545,7 @@ inline void update_tm_multicoin_side_selection(
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_wel != 0.0f
+            && (psize[c] > 0.0f || passes_multicoin_age(coin_settings, coin_offset, k, short_side))
             && (psize[c] > 0.0f || min_cost_eligible)
             && (!config.coin_hsl_mode || (
                 coin_hsl_entry_blocked_mask & (1ul << ulong(c))
@@ -3936,10 +3941,12 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(close);
         const bool long_eligible = long_can_generate && coin_tradable
+            && passes_multicoin_age(coin_settings, coin_offset, k, false)
             && long_wel != 0.0f
             && long_min_cost_eligible
             && long_coin_mode == 0;
         const bool short_eligible = short_can_generate && coin_tradable
+            && passes_multicoin_age(coin_settings, coin_offset, k, true)
             && short_wel != 0.0f
             && short_min_cost_eligible
             && short_coin_mode == 0;
@@ -4674,7 +4681,8 @@ inline void generate_tm_multicoin_side_orders(
             && last_increase_k[c] > -1.0e19f
             && float(k) < last_increase_k[c] + coin_cooldown_min;
         bool initial_entry_allowed = !flat
-            || (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul;
+            || (passes_multicoin_age(coin_settings, coin_offset, k, short_side)
+                && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul);
         if (!selected[c] || !initial_entry_allowed
             || cooldown || balance <= 0.0f
             || coin_initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
@@ -5849,10 +5857,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             k > max(global_warmup, 1) && k >= requested_start_k
         );
         int long_tradable_count = count_tm_multicoin_tradable_coins(
-            bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C, false, long_side.psize
         );
         int short_tradable_count = count_tm_multicoin_tradable_coins(
-            bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C, true, short_side.psize
         );
         const bool post_fill_balance_depleted =
             isfinite(account.balance) && account.balance <= 0.0f;
@@ -5888,10 +5896,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         if (!equity_started && alive && past_activation_guard) {
             equity_started = (long_config.n_positions > 0 && long_config.twel > 0.0f
                 && count_tm_multicoin_tradable_coins(
-                    bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C, false) > 0)
+                    bars, coin_settings ORGANILLO_PASS, long_coin_overrides, k, C, false, long_side.psize, false) > 0)
                 || (short_config.n_positions > 0 && short_config.twel > 0.0f
                 && count_tm_multicoin_tradable_coins(
-                    bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C, false) > 0);
+                    bars, coin_settings ORGANILLO_PASS, short_coin_overrides, k, C, true, short_side.psize, false) > 0);
         }
 #endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED
@@ -7107,7 +7115,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         );
 
         int tradable_count = count_tm_multicoin_tradable_coins(
-            bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C
+            bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C, short_side, side.psize
         );
         const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
         const bool past_activation_guard =
@@ -7127,7 +7135,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         // The sticky clock avoids rescanning after its first ready candle.
         if (!equity_started && alive && past_activation_guard && n_positions > 0) {
             equity_started = count_tm_multicoin_tradable_coins(
-                bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C, false) > 0;
+                bars, coin_settings ORGANILLO_PASS, coin_overrides, k, C, short_side, side.psize, false) > 0;
         }
 #endif
 #if PASSIVBOT_EXPOSURE_RMS_ENABLED

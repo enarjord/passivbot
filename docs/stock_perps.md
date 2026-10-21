@@ -241,14 +241,12 @@ Minimal test config for stock perps:
     "bot": {
         "global": {
             "strategy_kind": "trailing_martingale",
-            "hedge_mode": false,
-            "universe": {
-                "filter_by_min_effective_cost": false,
-                "minimum_coin_age_days": 0.0
-            }
+            "hedge_mode": false
         },
         "long": {
             "universe": {
+                "filter_by_min_effective_cost": false,
+                "minimum_coin_age_days": 0.0,
                 "approved_coins": [
                     "TSLA"
                 ]
@@ -287,7 +285,7 @@ Minimal test config for stock perps:
 Key settings explained:
 - `live.account.leverage: 2` - Safe starting point, meets isolated margin requirements
 - `bot.<side>.universe.filter_by_min_effective_cost: false` - Allow trading even if balance is low
-- `bot.global.universe.minimum_coin_age_days: 0.0` - Stock perps are new, don't filter by age
+- `bot.long.universe.minimum_coin_age_days: 0.0` - Stock perps are new, don't filter by age
 - `bot.long.strategy.trailing_martingale.entry.initial_qty_fraction: 0.4` - Larger initial entries (fewer grid levels with small balance)
 
 ## Oracle Pricing Behavior

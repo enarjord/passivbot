@@ -1366,6 +1366,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 let trailing_short = self.trailing_prices.short[idx].clone();
 
                 orchestrator::SymbolInput {
+                    inception_timestamp_ms: self
+                        .backtest_params
+                        .inception_timestamps_ms
+                        .get(idx)
+                        .copied()
+                        .flatten(),
                     symbol_idx: idx,
                     order_book,
                     exchange,
@@ -1378,6 +1384,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     emas,
                     forager_m1: None,
                     long: orchestrator::SymbolSideInput {
+                        minimum_coin_age_days: self.backtest_params.minimum_coin_age_days[LONG],
                         mode: mode_long,
                         position: pos_long,
                         trailing: trailing_long,
@@ -1390,6 +1397,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         runtime_budget: Some(self.runtime_budget[idx].long.clone()),
                     },
                     short: orchestrator::SymbolSideInput {
+                        minimum_coin_age_days: self.backtest_params.minimum_coin_age_days[SHORT],
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
@@ -1654,6 +1662,14 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         );
         crate::limit_fills::validate_buffer(backtest_params.limit_order_fill_buffer_pct)
             .expect("invalid backtest fill buffer");
+        for days in backtest_params.minimum_coin_age_days {
+            crate::age_admission::validate_minimum_days(days).expect("invalid minimum coin age");
+        }
+        assert!(
+            backtest_params.inception_timestamps_ms.is_empty()
+                || backtest_params.inception_timestamps_ms.len() == bot_params.len(),
+            "inception timestamps must match the active coin count"
+        );
         let mut balance = Balance::default();
         balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
         balance.btc_collateral_ltv_cap = backtest_params.btc_collateral_ltv_cap;
@@ -2337,6 +2353,16 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .filter(|&idx| {
                 self.bot_params_original[idx].long.entry_eligible
                     && self.bot_params_original[idx].long.wallet_exposure_limit != 0.0
+                    && (self.positions.long[idx].size != 0.0
+                        || crate::age_admission::eligible(
+                            self.first_timestamp_ms + k as u64 * self.interval_ms,
+                            self.backtest_params
+                                .inception_timestamps_ms
+                                .get(idx)
+                                .copied()
+                                .flatten(),
+                            self.backtest_params.minimum_coin_age_days[LONG],
+                        ))
             })
             .collect();
         let eligible_short: Vec<usize> = eligible
@@ -2345,6 +2371,16 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .filter(|&idx| {
                 self.bot_params_original[idx].short.entry_eligible
                     && self.bot_params_original[idx].short.wallet_exposure_limit != 0.0
+                    && (self.positions.short[idx].size != 0.0
+                        || crate::age_admission::eligible(
+                            self.first_timestamp_ms + k as u64 * self.interval_ms,
+                            self.backtest_params
+                                .inception_timestamps_ms
+                                .get(idx)
+                                .copied()
+                                .flatten(),
+                            self.backtest_params.minimum_coin_age_days[SHORT],
+                        ))
             })
             .collect();
 
@@ -4885,6 +4921,8 @@ mod tests {
 
     fn ordinary_ema_fixture_params(n: usize, interval: u64) -> BacktestParams {
         BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -5423,6 +5461,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 1.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -5501,6 +5541,8 @@ mod tests {
         bp_pair.short.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -5567,6 +5609,8 @@ mod tests {
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -5670,6 +5714,8 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0002,
             taker_fee: 0.00055,
@@ -5754,6 +5800,8 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0002,
             taker_fee: 0.00055,
@@ -5839,6 +5887,8 @@ mod tests {
         bp_pair.short.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.001,
@@ -5933,6 +5983,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0002,
             taker_fee: 0.00099,
@@ -6015,6 +6067,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.00099,
             taker_fee: 0.00055,
@@ -6109,6 +6163,8 @@ mod tests {
         bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
         bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.00099,
             taker_fee: 0.00055,
@@ -6378,6 +6434,8 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 100.0,
             maker_fee: 0.0,
             taker_fee: 0.0,
@@ -6532,6 +6590,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -6594,6 +6654,8 @@ mod tests {
             bp_pair.long.ema_span_1 = 20.0;
 
             let backtest_params = BacktestParams {
+                minimum_coin_age_days: [0.0; 2],
+                inception_timestamps_ms: vec![],
                 starting_balance: 1000.0,
                 maker_fee: 0.0,
                 taker_fee: 0.00055,
@@ -6664,6 +6726,8 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 100.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -6738,6 +6802,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 1.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 100.0,
             maker_fee: 0.0,
             taker_fee: 0.0,
@@ -6818,6 +6884,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -6893,6 +6961,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -6976,6 +7046,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -7075,6 +7147,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -7189,6 +7263,8 @@ mod tests {
         short_only.long.wallet_exposure_limit = 0.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -7347,6 +7423,8 @@ mod tests {
         bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
         bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.00099,
             taker_fee: 0.00055,
@@ -7453,6 +7531,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -7567,6 +7647,8 @@ mod tests {
         short_only.long.wallet_exposure_limit = 0.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -7649,6 +7731,8 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,
@@ -7729,6 +7813,8 @@ mod tests {
         bp_pair.short.unstuck_ema_span_0 = 10.0;
         bp_pair.short.unstuck_ema_span_1 = 20.0;
         let backtest_params = BacktestParams {
+            minimum_coin_age_days: [0.0; 2],
+            inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
             maker_fee: 0.0,
             taker_fee: 0.00055,

@@ -175,7 +175,8 @@ def fixture_inputs(args):
     config['bot']['global']['strategy_kind'] = args.fixture
     config['bot']['global']['hedge_mode'] = args.sides == 'both'
     config['bot']['global']['warmup']['max_minutes'] = 60
-    config['bot']['global']['universe']['minimum_coin_age_days'] = 0
+    for side in ('long', 'short'):
+        config['bot'][side]['universe']['minimum_coin_age_days'] = 0.0
     config['bot']['global']['execution']['market_orders_allowed'] = args.market_orders
     set_side_universe_sources(config, 'approved_coins', {side: coins if side in active else [] for side in ('long', 'short')})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})

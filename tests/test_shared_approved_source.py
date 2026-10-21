@@ -315,7 +315,7 @@ def test_unrelated_universe_filter_patch_does_not_discard_prepared_source_member
         from suite_runner import apply_scenario_overrides as apply
     else:
         from optimization.warmup import _apply_config_overrides as apply
-    apply(config, {'bot.global.universe.minimum_coin_age_days': 2.5})
+    apply(config, {'bot.long.universe.minimum_coin_age_days': 2.5})
     assert isinstance(config['bot']['long']['universe']['approved_coins'], ResolvedCoinList)
     assert get_side_universe_sources(config, 'approved_coins') == {'long':['BTC'], 'short':[]}
     assert universe_source_view(config)['bot']['long']['universe']['approved_coins'] is None

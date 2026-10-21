@@ -640,6 +640,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "liquidation_threshold",
         "limit_order_fill_buffer_pct",
         "filter_by_min_effective_cost",
+        "minimum_coin_age_days",
+        "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
         "hedge_mode",
         "max_realized_loss_pct",
@@ -660,7 +662,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee",
     )
     contract = {
-        "version": 7,
+        "version": 8,
+        "age_admission_abi": 1,
         "minimum_cost_filter_abi": 2,
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
         "market_ema_bootstrap_count_abi": 1,
@@ -1769,6 +1772,8 @@ class SharedAccountReplay:
             for item in payload.exchange_params
         ]
         interval_ms = candle_interval_minutes * 60_000
+        from optimization.gpu.model import native_age_admission_indices
+        age_indices = native_age_admission_indices(timestamps, backtest_params, coin_count)
         runs = [
             ProxyRun(
                 starting_balance=float(backtest_params["starting_balance"]),
@@ -1792,6 +1797,7 @@ class SharedAccountReplay:
                 ),
                 first_valid_idx=int(backtest_params["first_valid_indices"][coin]),
                 last_valid_idx=int(backtest_params["last_valid_indices"][coin]),
+                age_eligible_indices=age_indices[coin],
             )
             for coin in range(coin_count)
         ]

@@ -1,3 +1,4 @@
+mod age_admission;
 mod analysis;
 mod backtest;
 mod closes;
@@ -35,6 +36,48 @@ use pyo3::types::PyDict;
 use pyo3::wrap_pyfunction;
 use python::*;
 use utils::*;
+
+#[pyfunction]
+#[pyo3(signature = (now_ms, inception_ms, minimum_days))]
+fn coin_age_eligible(
+    now_ms: &PyAny,
+    inception_ms: Option<&PyAny>,
+    minimum_days: &PyAny,
+) -> PyResult<bool> {
+    let minimum_days = python::minimum_age_days_from_py(minimum_days)?;
+    let now_ms = python::age_timestamp_from_py(now_ms)?;
+    let inception_ms = inception_ms
+        .map(python::age_timestamp_from_py)
+        .transpose()?;
+    Ok(age_admission::eligible(now_ms, inception_ms, minimum_days))
+}
+
+#[pyfunction]
+#[pyo3(signature = (timestamps, inception_ms, minimum_days))]
+fn coin_age_first_eligible_index(
+    timestamps: Vec<&PyAny>,
+    inception_ms: Option<&PyAny>,
+    minimum_days: &PyAny,
+) -> PyResult<usize> {
+    let minimum_days = python::minimum_age_days_from_py(minimum_days)?;
+    let timestamps: Vec<u64> = timestamps
+        .into_iter()
+        .map(python::age_timestamp_from_py)
+        .collect::<PyResult<_>>()?;
+    let inception_ms = inception_ms
+        .map(python::age_timestamp_from_py)
+        .transpose()?;
+    if timestamps.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "age admission requires increasing timestamps",
+        ));
+    }
+    Ok(age_admission::first_eligible_index(
+        &timestamps,
+        inception_ms,
+        minimum_days,
+    ))
+}
 
 #[pyfunction]
 fn gpu_ema_bootstrap_counts_py<'py>(
@@ -97,10 +140,11 @@ fn mps_strategy_eq_recovery_distribution_source_py() -> &'static str {
     gpu::mps_strategy_eq_recovery_distribution_source()
 }
 
-
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(coin_age_eligible, m)?)?;
+    m.add_function(wrap_pyfunction!(coin_age_first_eligible_index, m)?)?;
     m.add_function(wrap_pyfunction!(
         config_prefilter::config_prefilter_metrics_json,
         m
@@ -148,8 +192,14 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(utils::gpu_decimal_metadata_py, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_ema_bootstrap_counts_py, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_gpu_market_execution_ticks, m)?)?;
-    m.add("GPU_MARKET_EXECUTION_SELL_LANE", GPU_MARKET_EXECUTION_SELL_LANE)?;
-    m.add("GPU_MARKET_EXECUTION_BUY_LANE", GPU_MARKET_EXECUTION_BUY_LANE)?;
+    m.add(
+        "GPU_MARKET_EXECUTION_SELL_LANE",
+        GPU_MARKET_EXECUTION_SELL_LANE,
+    )?;
+    m.add(
+        "GPU_MARKET_EXECUTION_BUY_LANE",
+        GPU_MARKET_EXECUTION_BUY_LANE,
+    )?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;

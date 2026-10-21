@@ -226,6 +226,7 @@ from warmup_utils import (
     compute_per_coin_warmup_minutes,
     live_warmup_cap_minutes,
 )
+from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
@@ -272,6 +273,9 @@ FILL_EVENT_FETCH_OVERLAP_COUNT = 20
 FILL_EVENT_FETCH_OVERLAP_MAX_MS = 86_400_000  # 24 hours
 FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
 PENDING_PNL_AUTHORITATIVE_RETRY_BASE_SECONDS = 1.0
+FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS = 60.0
+FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS = 30.0
+FIRST_TIMESTAMP_REFRESH_BATCH_SIZE = 10
 PENDING_PNL_AUTHORITATIVE_RETRY_MAX_SECONDS = 60.0
 FILL_COVERAGE_AUTHORITATIVE_RETRY_BASE_SECONDS = 30.0
 FILL_COVERAGE_AUTHORITATIVE_RETRY_MAX_SECONDS = 300.0
@@ -1407,13 +1411,6 @@ class Passivbot:
         # Legacy pnls_cache_filepath removed; FillEventsManager handles caching
         self.quote = "USDT"
 
-        self.minimum_market_age_millis = (
-            float(require_config_value(config, 'bot.global.universe.minimum_coin_age_days'))
-            * 24
-            * 60
-            * 60
-            * 1000
-        )
         # Legacy EMA caches removed; use CandlestickManager EMA helpers
         # Legacy ohlcvs_1m fields removed in favor of CandlestickManager
         self.stop_signal_received = False
@@ -3828,8 +3825,6 @@ class Passivbot:
         self.set_market_specific_settings()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
-        if self.is_forager_mode():
-            await self.update_first_timestamps()
 
     def log_once(self, msg: str):
         if not hasattr(self, "log_once_set"):
@@ -5274,16 +5269,115 @@ class Passivbot:
             elapsed_s,
         )
 
-    async def update_first_timestamps(self, symbols=[]):
-        """Fetch and cache first trade timestamps for the provided symbols."""
+    def _repair_first_timestamp_aliases(self):
         if not hasattr(self, "first_timestamps"):
             self.first_timestamps = {}
-        symbols = sorted(
-            set(symbols + flatten(self.approved_coins_minus_ignored_coins.values()))
-        )
-        if all([s in self.first_timestamps for s in symbols]):
+        for symbol in sorted(self.first_timestamps):
+            symbolf = self.coin_to_symbol(symbol, verbose=False)
+            if symbolf not in self.markets_dict:
+                continue
+            if (
+                inception_timestamp_ms(self.first_timestamps[symbol]) is not None
+                and inception_timestamp_ms(self.first_timestamps.get(symbolf)) is None
+            ):
+                self.first_timestamps[symbolf] = self.first_timestamps[symbol]
+
+    def _required_first_timestamp_symbols(self):
+        return sorted({
+            symbol
+            for side in ("long", "short")
+            if self.is_pside_enabled(side)
+            and minimum_coin_age_days(self.config, side) > 0
+            for symbol in self.approved_coins_minus_ignored_coins[side]
+            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+        })
+
+    async def _first_timestamp_refresh_task(self, *, deadline):
+        """Acquire a bounded batch sequence without delaying protective planning."""
+        try:
+            symbols = self._required_first_timestamp_symbols()
+            for offset in range(0, len(symbols), FIRST_TIMESTAMP_REFRESH_BATCH_SIZE):
+                if (
+                    Passivbot._shutdown_requested(self)
+                    or asyncio.get_running_loop().time() >= deadline
+                ):
+                    return
+                # Policy can change while another batch is in flight.
+                required = set(self._required_first_timestamp_symbols())
+                batch = [
+                    symbol
+                    for symbol in symbols[offset:offset + FIRST_TIMESTAMP_REFRESH_BATCH_SIZE]
+                    if symbol in required
+                ]
+                if batch:
+                    await self.update_first_timestamps(batch)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.warning(
+                "[age] inception acquisition failed | error_type=%s action=retry_unknown",
+                bounded_exception_type(exc),
+            )
+        finally:
+            self._first_timestamp_refresh_retry_after = (
+                asyncio.get_running_loop().time() + FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS
+            )
+
+    def _schedule_first_timestamp_refresh(self):
+        """Keep at most one owned acquisition, including cancellation-resistant work."""
+        if Passivbot._shutdown_requested(self):
             return
-        if self.exchange == "fake":
+        self._repair_first_timestamp_aliases()
+        if not hasattr(self, "maintainers") or not isinstance(self.maintainers, dict):
+            self.maintainers = {}
+        key = "first_timestamp_refresh"
+        existing = self.maintainers.get(key)
+        if existing is not None and not existing.done():
+            return
+        loop = asyncio.get_running_loop()
+        if loop.time() < getattr(self, "_first_timestamp_refresh_retry_after", 0.0):
+            return
+        if not self._required_first_timestamp_symbols():
+            return
+        deadline_at = loop.time() + FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS
+        task = loop.create_task(self._first_timestamp_refresh_task(deadline=deadline_at))
+        self.maintainers[key] = task
+
+        def expire():
+            if not task.done():
+                logging.warning(
+                    "[age] inception acquisition timed out | timeout_seconds=%g action=retry_unknown",
+                    FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS,
+                )
+                task.cancel()
+
+        deadline = loop.call_at(deadline_at, expire)
+
+        def harvest(finished):
+            deadline.cancel()
+            if not finished.cancelled():
+                error = finished.exception()
+                if error is not None:
+                    logging.error(
+                        "[age] inception acquisition task failed | error_type=%s action=retry_unknown",
+                        bounded_exception_type(error),
+                    )
+
+        task.add_done_callback(harvest)
+
+    async def update_first_timestamps(self, symbols=None):
+        """Acquire required inception facts, or exactly the explicitly requested symbols."""
+        self._repair_first_timestamp_aliases()
+        if symbols is None:
+            symbols = self._required_first_timestamp_symbols()
+        symbols = [
+            symbol
+            for symbol in sorted(set(symbols))
+            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+        ]
+        if not symbols:
+            first_timestamps = {}
+        elif self.exchange == "fake":
             first_timestamps = {}
             for symbol in symbols:
                 symbolf = self.coin_to_symbol(symbol, verbose=False)
@@ -5303,13 +5397,11 @@ class Passivbot:
             first_timestamps = await get_first_timestamps_unified(
                 symbols, exchange=self.exchange
             )
-        self.first_timestamps.update(first_timestamps)
-        for symbol in sorted(self.first_timestamps):
-            symbolf = self.coin_to_symbol(symbol, verbose=False)
-            if symbolf not in self.markets_dict:
-                continue
-            if symbolf not in self.first_timestamps:
-                self.first_timestamps[symbolf] = self.first_timestamps[symbol]
+        for symbol, value in first_timestamps.items():
+            if (inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+                    and inception_timestamp_ms(value) is not None):
+                self.first_timestamps[symbol] = value
+        self._repair_first_timestamp_aliases()
         for symbol in symbols:
             if symbol not in self.first_timestamps:
                 logging.info(
@@ -9319,7 +9411,7 @@ class Passivbot:
             return False
         if symbol in self.ignored_coins[pside]:
             return False
-        if not self.is_old_enough(pside, symbol):
+        if not self.has_position(pside=pside, symbol=symbol) and not self.is_old_enough(pside, symbol):
             return False
         return True
 
@@ -9649,15 +9741,12 @@ class Passivbot:
         return True
 
     def is_old_enough(self, pside, symbol):
-        """Return True if the market age exceeds the configured minimum for forager mode."""
-        if self.is_forager_mode(pside) and self.minimum_market_age_millis > 0:
-            first_timestamp = self.get_first_timestamp(symbol)
-            if first_timestamp:
-                return utc_ms() - first_timestamp > self.minimum_market_age_millis
-            else:
-                return False
-        else:
-            return True
+        """Apply the native admission predicate to factual inception in every selection mode."""
+        return pbr.coin_age_eligible(
+            int(self.get_exchange_time()),
+            inception_timestamp_ms(getattr(self, "first_timestamps", {}).get(symbol)),
+            minimum_coin_age_days(self.config, pside),
+        )
 
     async def update_tickers(self):
         """Fetch latest ticker data and fill in missing bid/ask/last values."""
@@ -9691,8 +9780,7 @@ class Passivbot:
         await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
-        if any(self.is_forager_mode(pside) for pside in ("long", "short")):
-            await self.update_first_timestamps()
+        self._schedule_first_timestamp_refresh()
         self._assert_supported_live_state()
         self.active_symbols = self._build_live_symbol_universe()
         for symbol in self.active_symbols:
@@ -17916,6 +18004,7 @@ class Passivbot:
                     self, symbol, pside
                 )
                 return {
+                    "minimum_coin_age_days": minimum_coin_age_days(self.config, pside),
                     "mode": mode,
                     "position": {
                         "size": float(pos["size"]),
@@ -17957,6 +18046,7 @@ class Passivbot:
             input_dict["symbols"].append(
                 {
                     "symbol_idx": int(idx),
+                    "inception_timestamp_ms": inception_timestamp_ms(getattr(self, "first_timestamps", {}).get(symbol)),
                     "order_book": {"bid": bid, "ask": ask},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,
@@ -19676,6 +19766,7 @@ class Passivbot:
 
     async def start_data_maintainers(self):
         """Spawn background tasks responsible for market metadata and order watching."""
+        inception_task = getattr(self, "maintainers", {}).get("first_timestamp_refresh")
         if hasattr(self, "maintainers"):
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]
@@ -19693,6 +19784,11 @@ class Passivbot:
             name: asyncio.create_task(getattr(self, name)())
             for name in maintainer_names
         }
+        if inception_task is not None:
+            # Keep ownership until cancellation actually finishes; never overlap
+            # a resistant startup request with a replacement worker.
+            self.maintainers["first_timestamp_refresh"] = inception_task
+        self._schedule_first_timestamp_refresh()
 
     async def maintain_forager_ws_candles(self):
         """Maintain persistent finalized 1m WS ingestion for flat forager candidates."""

@@ -825,6 +825,7 @@ async def test_replacing_maintainers_preserves_shared_quote_readers(strategy):
     await started.wait()
     shared = provider.pending_tasks()[0]
     bot = Passivbot.__new__(Passivbot)
+    bot._schedule_first_timestamp_refresh = lambda: None
     bot.market_snapshot_provider = provider
     bot.ws_enabled = False
     bot.maintain_hourly_cycle = lambda: asyncio.Event().wait()

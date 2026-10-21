@@ -392,6 +392,7 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SymbolSideInput {
+        pub minimum_coin_age_days: f64,
         /// `None` means “forager-eligible default”.
         /// `Some(Normal)` means “forced Normal” (always selected).
         pub mode: Option<TradingMode>,
@@ -438,6 +439,9 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SymbolInput {
+        /// Authoritative market inception; absent/zero never proves a positive age.
+        #[serde(default)]
+        pub inception_timestamp_ms: Option<u64>,
         pub symbol_idx: usize,
         pub order_book: OrderBook, // must have bid>0 and ask>0
         pub exchange: ExchangeParams,
@@ -904,8 +908,16 @@ mod core {
         }
     }
 
-    fn symbol_side_eligible(s: &SymbolInput, pside: PositionSide) -> bool {
-        s.tradable && symbol_side_input(s, pside).bot_params.wallet_exposure_limit != 0.0
+    fn symbol_side_eligible(s: &SymbolInput, pside: PositionSide, now_ms: u64) -> bool {
+        let side = symbol_side_input(s, pside);
+        s.tradable
+            && side.bot_params.wallet_exposure_limit != 0.0
+            && (side.position.size != 0.0
+                || crate::age_admission::eligible(
+                    now_ms,
+                    s.inception_timestamp_ms,
+                    side.minimum_coin_age_days,
+                ))
     }
 
     fn ema_lookup(map: &EmaBySpan, span: f64) -> Option<f64> {
@@ -2199,11 +2211,12 @@ mod core {
     fn fill_forced_normal_indices(
         symbols: &[SymbolInput],
         pside: PositionSide,
+        now_ms: u64,
         out: &mut Vec<usize>,
     ) {
         out.clear();
         for s in symbols {
-            if symbol_side_eligible(s, pside)
+            if symbol_side_eligible(s, pside, now_ms)
                 && symbol_side_input(s, pside).mode == Some(TradingMode::Normal)
             {
                 out.push(s.symbol_idx);
@@ -2245,6 +2258,7 @@ mod core {
     fn collect_enabled_forager_candidate_indices_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
+        now_ms: u64,
         strategy_kind: StrategyKind,
         hedge_mode: bool,
         filter_enabled: bool,
@@ -2286,7 +2300,7 @@ mod core {
                 &runtime_budgets[s.symbol_idx],
                 strategy_initial_qty_pct(&strategy_params),
             );
-            let eligible_without_min_cost = symbol_side_eligible(s, pside)
+            let eligible_without_min_cost = symbol_side_eligible(s, pside, now_ms)
                 && !already_active
                 && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
                 && can_open_initial;
@@ -3464,6 +3478,14 @@ mod core {
         // - symbols must be indexed by `symbol_idx` for O(1) access in hot loops
         let n_symbols = input.symbols.len();
         for (pos, s) in input.symbols.iter().enumerate() {
+            for side in [&s.long, &s.short] {
+                crate::age_admission::validate_minimum_days(side.minimum_coin_age_days).map_err(
+                    |_| OrchestratorError::NonFiniteInput {
+                        field: "minimum_coin_age_days",
+                        symbol_idx: Some(s.symbol_idx),
+                    },
+                )?;
+            }
             if let Some(candle) = &s.next_candle {
                 crate::limit_fills::validate_buffer(candle.limit_order_fill_buffer_pct).map_err(
                     |details| OrchestratorError::InvalidNextCandle {
@@ -3502,23 +3524,25 @@ mod core {
         fill_forced_normal_indices(
             &input.symbols,
             PositionSide::Long,
+            input.timestamp_ms,
             &mut workspace.forced_long,
         );
         fill_forced_normal_indices(
             &input.symbols,
             PositionSide::Short,
+            input.timestamp_ms,
             &mut workspace.forced_short,
         );
 
         let eligible_long = input
             .symbols
             .iter()
-            .filter(|s| symbol_side_eligible(s, PositionSide::Long))
+            .filter(|s| symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms))
             .count();
         let eligible_short = input
             .symbols
             .iter()
-            .filter(|s| symbol_side_eligible(s, PositionSide::Short))
+            .filter(|s| symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms))
             .count();
 
         let enp_long = compute_effective_n_positions(
@@ -3605,6 +3629,7 @@ mod core {
                 collect_enabled_forager_candidate_indices_into(
                     &input.symbols,
                     PositionSide::Long,
+                    input.timestamp_ms,
                     input.global.strategy_kind,
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost.long,
@@ -3701,6 +3726,7 @@ mod core {
                 collect_enabled_forager_candidate_indices_into(
                     &input.symbols,
                     PositionSide::Short,
+                    input.timestamp_ms,
                     input.global.strategy_kind,
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost.short,
@@ -3796,10 +3822,10 @@ mod core {
                 } else {
                     // No position on either side - decide based on eligibility and EMA band distance
                     let long_enabled = enabled_long
-                        && symbol_side_eligible(s, PositionSide::Long)
+                        && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                         && should_generate_entries(effective_mode(s.long.mode, false), false, true);
                     let short_enabled = enabled_short
-                        && symbol_side_eligible(s, PositionSide::Short)
+                        && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                         && should_generate_entries(
                             effective_mode(s.short.mode, false),
                             false,
@@ -3975,7 +4001,7 @@ mod core {
                     &s.long,
                 )?;
 
-                let allow_initial = symbol_side_eligible(s, PositionSide::Long)
+                let allow_initial = symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4071,7 +4097,7 @@ mod core {
                     &s.short,
                 )?;
 
-                let allow_initial = symbol_side_eligible(s, PositionSide::Short)
+                let allow_initial = symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                     && actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4729,7 +4755,7 @@ mod core {
                     .as_ref()
                     .map(|state| state.mode)
                     .unwrap_or_else(|| effective_mode(s.short.mode, s.short.position.size != 0.0));
-                let long_allow_initial = symbol_side_eligible(s, PositionSide::Long)
+                let long_allow_initial = symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && workspace.actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4743,7 +4769,7 @@ mod core {
                             .map(|params| strategy_initial_qty_pct(&params))
                             .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
-                if symbol_side_eligible(s, PositionSide::Long)
+                if symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && workspace.actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && s.long.position.size == 0.0
@@ -4764,7 +4790,7 @@ mod core {
                             .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 }
-                let short_allow_initial = symbol_side_eligible(s, PositionSide::Short)
+                let short_allow_initial = symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                     && workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4778,7 +4804,7 @@ mod core {
                             .map(|params| strategy_initial_qty_pct(&params))
                             .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
                     );
-                if symbol_side_eligible(s, PositionSide::Short)
+                if symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                     && workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && s.short.position.size == 0.0
@@ -4804,14 +4830,14 @@ mod core {
                     long: SymbolSideStateDiagnostic {
                         input_mode: s.long.mode,
                         effective_mode: long_mode,
-                        active: symbol_side_eligible(s, PositionSide::Long)
+                        active: symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                             && workspace.actives_long[s.symbol_idx],
                         allow_initial: long_allow_initial,
                     },
                     short: SymbolSideStateDiagnostic {
                         input_mode: s.short.mode,
                         effective_mode: short_mode,
-                        active: symbol_side_eligible(s, PositionSide::Short)
+                        active: symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                             && workspace.actives_short[s.symbol_idx],
                         allow_initial: short_allow_initial,
                     },
@@ -4889,6 +4915,7 @@ mod core {
             bp.entry_initial_qty_pct = 1.0;
 
             SymbolInput {
+                inception_timestamp_ms: None,
                 symbol_idx: idx,
                 order_book: OrderBook {
                     bid: 100.0,
@@ -4911,6 +4938,7 @@ mod core {
                 emas,
                 forager_m1: None,
                 long: SymbolSideInput {
+                    minimum_coin_age_days: 0.0,
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
@@ -4922,6 +4950,7 @@ mod core {
                     runtime_budget: None,
                 },
                 short: SymbolSideInput {
+                    minimum_coin_age_days: 0.0,
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
@@ -6383,6 +6412,93 @@ mod core {
             let out = compute_ideal_orders_for_test(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
             assert!(out.orders.iter().all(|o| is_close_order_type(o.order_type)));
+        }
+
+        #[test]
+        fn age_admission_is_directional_before_one_way_and_forced_selection() {
+            const DAY: u64 = 86_400_000;
+            for hedge_mode in [false, true] {
+                for forced in [false, true] {
+                    for young_side in [PositionSide::Long, PositionSide::Short] {
+                        let mut sym = make_basic_symbol(0);
+                        sym.inception_timestamp_ms = Some(DAY);
+                        sym.long.minimum_coin_age_days = if young_side == PositionSide::Long {
+                            7.0
+                        } else {
+                            60.0
+                        };
+                        sym.short.minimum_coin_age_days = if young_side == PositionSide::Short {
+                            7.0
+                        } else {
+                            60.0
+                        };
+                        if forced {
+                            sym.long.mode = Some(TradingMode::Normal);
+                            sym.short.mode = Some(TradingMode::Normal);
+                        }
+                        let mut pair = BotParamsPair::default();
+                        pair.long = sym.long.bot_params.clone();
+                        pair.short = sym.short.bot_params.clone();
+                        let input = OrchestratorInput {
+                            balance: 1000.0,
+                            balance_raw: 1000.0,
+                            timestamp_ms: 11 * DAY,
+                            global: OrchestratorGlobal {
+                                filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
+                                market_orders_allowed: false,
+                                market_order_near_touch_threshold: 0.001,
+                                market_order_slippage_pct: 0.0,
+                                panic_close_market: false,
+                                auto_unstuck_allowed: Some(true),
+                                unstuck_allowance_long: 0.0,
+                                unstuck_allowance_short: 0.0,
+                                max_realized_loss_pct: 1.0,
+                                unstuck_realized_pnl_drawdown: 0.0,
+                                loss_gate_realized_pnl_drawdown: 0.0,
+                                sort_global: true,
+                                global_bot_params: pair,
+                                hedge_mode,
+                                strategy_kind: StrategyKind::TrailingMartingale,
+                            },
+                            symbols: vec![sym],
+                            peek_hints: None,
+                            forager_hysteresis: None,
+                        };
+                        let out = compute_ideal_orders_for_test(&input).unwrap();
+                        let entries: Vec<_> = out
+                            .orders
+                            .iter()
+                            .filter(|o| !is_close_order_type(o.order_type))
+                            .collect();
+                        assert!(
+                            !entries.is_empty(),
+                            "eligible side must receive initial orders"
+                        );
+                        assert!(entries.iter().all(|o| o.pside == young_side));
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn unknown_age_never_blocks_held_side_dca_or_closes() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.minimum_coin_age_days = 60.0;
+            sym.short.minimum_coin_age_days = 60.0;
+            sym.long.position = Position {
+                size: 1.0,
+                price: 100.0,
+            };
+            // Age is not a mode transition; normal held DCA and protective close construction remain available.
+            assert!(symbol_side_eligible(&sym, PositionSide::Long, 123_000));
+            assert!(!symbol_side_eligible(&sym, PositionSide::Short, 123_000));
+            sym.long.mode = Some(TradingMode::GracefulStop);
+            assert!(should_generate_entries(
+                effective_mode(sym.long.mode, true),
+                true,
+                false
+            ));
+            assert!(symbol_side_eligible(&sym, PositionSide::Long, 123_000));
         }
 
         #[test]

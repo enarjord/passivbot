@@ -133,7 +133,7 @@ async def test_combined_candidate_frames_are_released_after_normalization(monkey
     config = {
         "backtest": {},
         "live": {},
-        "bot": {"global": {"universe": {"minimum_coin_age_days": 0.0}}},
+        "bot": {},
     }
     _mss, output_timestamps, aligned = await hp._prepare_hlcvs_combined_impl(
         config,

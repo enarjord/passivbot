@@ -1837,7 +1837,9 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     assert "--clear-limits" in help_text
     assert "--reducer-default MODE" in help_text
-    _assert_help_option_aliases(help_text, "--minimum-coin-age-days", "-mcad", "FLOAT")
+    for position_side in ("long", "short"):
+        assert f"--minimum-coin-age-days-{position_side} FLOAT" in help_text
+    assert "--minimum-coin-age-days FLOAT" not in help_text
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(help_text, "--market-orders-allowed", "-moa", "Y/N")
     _assert_help_option_aliases(
@@ -1921,7 +1923,9 @@ def test_live_default_help_shows_curated_groups():
     assert "Runtime:" in help_text
     _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     assert "--ignored-coins CSV_OR_PATH" in help_text
-    assert "--minimum-coin-age-days FLOAT" in help_text
+    for position_side in ("long", "short"):
+        assert f"--minimum-coin-age-days-{position_side} FLOAT" in help_text
+    assert "--minimum-coin-age-days FLOAT" not in help_text
     assert "--hedge-mode Y/N" in help_text
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
@@ -1945,7 +1949,9 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "Suite:" in help_text
     _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     assert "--ignored-coins CSV_OR_PATH" in help_text
-    _assert_help_option_aliases(help_text, "--minimum-coin-age-days", "-mcad", "FLOAT")
+    for position_side in ("long", "short"):
+        assert f"--minimum-coin-age-days-{position_side} FLOAT" in help_text
+    assert "--minimum-coin-age-days FLOAT" not in help_text
     _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
     _assert_help_option_aliases(help_text, "--market-orders-allowed", "-moa", "Y/N")
     _assert_help_option_aliases(

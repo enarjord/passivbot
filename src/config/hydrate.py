@@ -91,7 +91,8 @@ def seed_missing_default_sections(
                 seeded["total_wallet_exposure_limit"] = 0.0
             result["bot"][pside] = seeded
             result["bot"][pside]["universe"] = {
-                "approved_coins": None, "ignored_coins": [], "filter_by_min_effective_cost": True,
+                "approved_coins": None, "ignored_coins": [],
+                "filter_by_min_effective_cost": True, "minimum_coin_age_days": 60.0,
             }
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)

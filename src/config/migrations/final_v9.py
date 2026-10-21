@@ -574,6 +574,15 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                     converted[target] = deepcopy(source)
                 record(f"{path}.{key}", value, converted, "preserved whole-source replacement with explicit shared binding or directional pins")
                 continue
+            if key == "live.minimum_coin_age_days":
+                targets = {f"bot.{side}.universe.minimum_coin_age_days": deepcopy(value) for side in ("long", "short")}
+                for target, age in targets.items():
+                    if target in converted and converted[target] != age:
+                        raise ValueError(f"{path}.{key} conflicts with {target}")
+                    converted[target] = age
+                record(f"{path}.{key}", value, targets,
+                       "side-owned age gates initial entries in every selection mode; retain pre-eligibility warmup")
+                continue
             targets = minimum_cost_policy_targets(key)
             if targets:
                 if type(value) is not bool:

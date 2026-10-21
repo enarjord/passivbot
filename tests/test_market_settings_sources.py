@@ -38,14 +38,14 @@ def _base_config():
         "bot": {
             "long": {
                 "n_positions": 1,
-                "universe": {"approved_coins": ["ETH"], "ignored_coins": []},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["ETH"], "ignored_coins": []},
             },
             "short": {
                 "n_positions": 1,
-                "universe": {"approved_coins": [], "ignored_coins": []},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": [], "ignored_coins": []},
             },
             "global": {
-                "universe": {"minimum_coin_age_days": 0},
+                "universe": {},
                 "warmup": {"span_multiplier": 0.0, "max_minutes": None},
             },
         },

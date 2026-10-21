@@ -31,7 +31,7 @@ async def test_update_first_timestamps_scopes_discovery_to_live_exchange(monkeyp
     bot.markets_dict = {symbol: {}}
     bot.coin_to_symbol = lambda value, verbose=False: value
 
-    await bot.update_first_timestamps()
+    await bot.update_first_timestamps([symbol])
 
     assert captured == {
         "symbols": [symbol],
@@ -67,7 +67,7 @@ async def test_update_first_timestamps_uses_fake_harness_ohlcv(monkeypatch):
     bot.markets_dict = {symbol: {}}
     bot.coin_to_symbol = lambda value, verbose=False: value
 
-    await bot.update_first_timestamps()
+    await bot.update_first_timestamps([symbol])
 
     assert bot.cca.calls == [(symbol, "1m", 1)]
     assert bot.first_timestamps[symbol] == 1700000000000
