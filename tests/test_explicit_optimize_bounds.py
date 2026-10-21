@@ -524,8 +524,8 @@ def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
      ("long", "unstuck", "ema_span_0"), 42.5, [100.0, 200.0]),
     ("mirror_short_from_long", ("risk", "total_wallet_exposure_limit"),
      ("short", "risk", "total_wallet_exposure_limit"), 0.0, [0.5, 1.5]),
-    ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_pct"),
-     ("long", "strategy", "trailing_martingale", "close", "threshold_base_pct"), 0.0, [0.01, 0.02]),
+    ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_fraction"),
+     ("long", "strategy", "trailing_martingale", "close", "threshold_base_fraction"), 0.0, [0.01, 0.02]),
 ])
 def test_explicit_relationships_derive_effective_targets_without_opening_target_genes(
     transform, source_parts, target_parts, configured, domain,
