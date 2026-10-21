@@ -74,7 +74,7 @@
             },
             "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "trailing_martingale",
-            "universe": {},
+            "universe": {"approved_coins": []},
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.2}
         },

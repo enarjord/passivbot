@@ -131,7 +131,8 @@ def cleanup_config(
 
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
-    payload = extract_result_config(source, allow_unmarked_wrapper=True)
+    from config.universe import universe_source_view
+    payload = universe_source_view(extract_result_config(source, allow_unmarked_wrapper=True))
     if not _allow_sparse and (not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
     )):
@@ -175,7 +176,8 @@ def cleanup_config(
     for key in ("approved_coins", "ignored_coins"):
         from config.universe import require_side_universe_sources, set_side_universe_sources
 
-        set_side_universe_sources(cleaned, key, require_side_universe_sources(prepared, key))
+        from config.universe import raw_side_universe_sources
+        set_side_universe_sources(cleaned, key, raw_side_universe_sources(prepared, key))
     # Preserve null as explicit inheritance of the shared bot policy.
     cleaned["backtest"]["filter_by_min_effective_cost"] = prepared["backtest"][
         "filter_by_min_effective_cost"
@@ -228,6 +230,9 @@ def render_source(
                                  destination_path=str(destination) if destination else "")
     else:
         cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
+        if destination is not None and mode != "resolved":
+            from config.authoring import _rebase_override_files
+            _rebase_override_files(cleaned, str(source), str(destination))
     return (
         json_dumps_streamlined(
             normalize_export_numbers(cleaned),

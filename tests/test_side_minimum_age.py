@@ -261,6 +261,8 @@ def test_actual_native_held_dca_and_close_intent_does_not_change_with_unknown_ag
                          long_pos_price=100.0, long_mode=mode)
     packet = make_input(balance=1000.0, symbols=[symbol])
     packet["timestamp_ms"] = BASE
+    packet["global"]["filter_by_min_effective_cost"] = {"long": True, "short": True}
+    packet["symbols"][0]["effective_min_cost"] = 5000.0
     before = compute(pbr, packet)["orders"]
     assert any(order["order_type"].startswith("close_") for order in before)
     assert any(order["order_type"].startswith("entry_grid") for order in before)

@@ -662,7 +662,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee",
     )
     contract = {
-        "version": 7,
+        "version": 8,
         "age_admission_abi": 1,
         "minimum_cost_filter_abi": 2,
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,

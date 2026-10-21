@@ -242,6 +242,9 @@ from multiprocessing_utils import ignore_sigint_in_worker
 
 
 def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    from config.universe import restore_universe_sources, universe_sources_affected
+    if universe_sources_affected(overrides):
+        restore_universe_sources(config)
     if not overrides:
         return
     for dotted_path, value in overrides.items():
@@ -400,7 +403,8 @@ def _propagate_optimizer_dataset_override(
             "HLCV dataset override metadata missing effective date range"
         ) from exc
 
-    set_side_universe_sources(config, "approved_coins", side_membership)
+    from config.universe import materialize_side_universe_sources
+    materialize_side_universe_sources(config, "approved_coins", side_membership)
     backtest = config.setdefault("backtest", {})
     backtest["start_date"] = ts_to_date(effective_start_ts)
     backtest["end_date"] = ts_to_date(effective_end_ts)
@@ -760,7 +764,8 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
         individual, optimizer_overrides, overrides_list, evaluator_config
     )
     anchor_meta = config.get("_optimizer_anchor")
-    entry = clean_config(strip_config_metadata(config))
+    from config.universe import anchored_universe_source_view
+    entry = clean_config(strip_config_metadata(anchored_universe_source_view(config)))
     # Prepared dataset membership is result provenance, not user configuration.
     # Cleaning strips it, but single-run resume compares the exact membership.
     if "coins" in config.get("backtest", {}):
@@ -2061,13 +2066,22 @@ class SuiteEvaluator:
         scenario_config["backtest"] = backtest_cfg
 
         scenario_config["bot"] = deepcopy(config["bot"])
+        from config.universe import raw_side_universe_sources
+        scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(ctx.config["bot"]["global"]["universe"]["approved_coins"])
         for field in ("approved_coins", "ignored_coins"):
-            set_side_universe_sources(scenario_config, field, require_side_universe_sources(ctx.config, field))
+            set_side_universe_sources(scenario_config, field, raw_side_universe_sources(ctx.config, field))
         scenario_config["disable_plotting"] = True
 
         if ctx.overrides:
             scenario_config = deepcopy(scenario_config)
             _apply_config_overrides(scenario_config, ctx.overrides)
+        # Context creation already resolved authority and prepared membership.
+        # Candidate replay keeps that immutable view without re-reading files.
+        from config.universe import materialize_side_universe_sources
+        for field in ("approved_coins", "ignored_coins"):
+            materialize_side_universe_sources(
+                scenario_config, field, require_side_universe_sources(ctx.config, field),
+            )
         from optimizer_overrides import (
             apply_coupled_unstuck_ema_spans,
             unstuck_ema_spans_coupled,

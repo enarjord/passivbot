@@ -48,8 +48,13 @@ def normalize_config(
     from .authored import validate_authored_config
     from .migrations.v9 import require_v9_runtime_config
 
+    from .universe import restore_universe_sources
+    restore_universe_sources(config)
+    config.pop("_coins_sources", None)  # Input metadata never grants eligibility.
     require_v9_runtime_config(config)
     validate_authored_config(config, get_template_config())
+    if "bot" in config:
+        config["bot"].setdefault("global", {}).setdefault("universe", {}).setdefault("approved_coins", [])
     flavor = "canonical"
     source_payload = config
     require_current_hsl_schema(source_payload, base_config_path=base_config_path)
@@ -68,6 +73,8 @@ def normalize_config(
     )
     live_coin_sources_input = {}
     template = normalization_template(get_template_config(), source_payload)
+    if "bot" not in config:
+        template["bot"]["global"]["universe"]["approved_coins"] = []
     result = deepcopy(config)
     source_sections = set(config)
     for section, defaults in template.items():
@@ -139,6 +146,8 @@ def normalize_config(
 
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
+    from .universe import normalize_universe_source_bindings
+    normalize_universe_source_bindings(result)
     preserve_coin_sources(result, live_sources_input=live_coin_sources_input)
 
     if not live_only:

@@ -360,7 +360,7 @@ def _build_template_config():
                 "global": {
                     "strategy_kind": "trailing_martingale",
                     "hedge_mode": False,
-                    "universe": {},
+                    "universe": {"approved_coins": list(DEFAULT_APPROVED_COINS)},
                     "execution": {
                         "market_orders_allowed": False,
                         "market_order_near_touch_fraction": 0.001,
@@ -380,7 +380,7 @@ def _build_template_config():
                     "universe": {
                         "filter_by_min_effective_cost": True,
                         "minimum_coin_age_days": 60.0,
-                        "approved_coins": list(DEFAULT_APPROVED_COINS),
+                        "approved_coins": None,
                         "ignored_coins": [],
                     },
                 },
@@ -390,7 +390,7 @@ def _build_template_config():
                     "universe": {
                         "filter_by_min_effective_cost": True,
                         "minimum_coin_age_days": 60.0,
-                        "approved_coins": list(DEFAULT_APPROVED_COINS),
+                        "approved_coins": None,
                         "ignored_coins": [],
                     },
                 },

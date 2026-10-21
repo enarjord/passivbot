@@ -1790,15 +1790,14 @@ async def _format_approved_ignored_coins(
 
     if isinstance(exchanges, str):
         exchanges = [exchanges]
+    from config.universe import raw_side_universe_sources, resolve_universe_sources, materialize_side_universe_sources
+    raw_sources = {field: raw_side_universe_sources(config, field) for field in ("approved_coins", "ignored_coins")}
     before_approved = deepcopy(get_side_universe_sources(config, 'approved_coins'))
     before_ignored = deepcopy(get_side_universe_sources(config, 'ignored_coins'))
     before_sources = deepcopy(config.get("_coins_sources", {}))
     coin_sources = config.setdefault("_coins_sources", {})
-    approved_source = coin_sources.get("approved_coins", get_side_universe_sources(config, 'approved_coins'))
-    if approved_source is None:
-        approved_source = require_side_universe_sources(config, 'approved_coins')
-    coin_sources["approved_coins"] = deepcopy(approved_source)
-    ac = normalize_coins_source(approved_source, allow_all=True)
+    coin_sources["approved_coins"] = deepcopy(raw_sources["approved_coins"])
+    ac, _ = resolve_universe_sources(config, "approved_coins")
     needs_market_expansion = any(
         _coins_source_side_is_all(ac[pside]) for pside in ("long", "short")
     )
@@ -1836,11 +1835,9 @@ async def _format_approved_ignored_coins(
         else:
             config['bot'][pside]['universe']['approved_coins'] = _preserve_market_identifiers(ac[pside])
 
-    ignored_source = coin_sources.get("ignored_coins", get_side_universe_sources(config, 'ignored_coins'))
-    if ignored_source is None:
-        ignored_source = require_side_universe_sources(config, 'ignored_coins')
-    coin_sources["ignored_coins"] = deepcopy(ignored_source)
-    ic = normalize_coins_source(ignored_source, allow_all=False)
+    coin_sources["ignored_coins"] = deepcopy(raw_sources["ignored_coins"])
+    # Resolve against the original source, not the materialized approved view.
+    ic, _ = resolve_universe_sources(config, "ignored_coins")
     set_side_universe_sources(config, 'ignored_coins', {
         pside: _preserve_market_identifiers(ic[pside]) for pside in ic
     })
@@ -1870,6 +1867,8 @@ async def _format_approved_ignored_coins(
         include_backtest_coin_source_venues=prefer_backtest_coin_source_keys,
     )
 
+    for field in ("approved_coins", "ignored_coins"):
+        materialize_side_universe_sources(config, field, require_side_universe_sources(config, field), sources=raw_sources[field])
     approved_diff = _diff_snapshot(before_approved, require_side_universe_sources(config, 'approved_coins'))
     ignored_diff = _diff_snapshot(before_ignored, require_side_universe_sources(config, 'ignored_coins'))
     sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))
@@ -1890,9 +1889,10 @@ def _coins_source_side_is_all(value) -> bool:
     return isinstance(value, list) and len(value) == 1 and str(value[0]).strip().lower() == "all"
 
 
-def normalize_coins_source(src, *, allow_all: bool = True):
+def normalize_coins_source(src, *, allow_all: bool = True, resolve_files: bool = True):
     """
-    Always return: {'long': [symbols…], 'short': [symbols…]}
+    Always return: {'long': [symbols…], 'short': [symbols…]}.
+    resolve_files=False tokenizes already loaded source contents without file discovery.
     – Handles:
         • direct coin lists or comma-separated strings
         • lists/tuples containing paths or strings
@@ -1954,6 +1954,9 @@ def normalize_coins_source(src, *, allow_all: bool = True):
         readable file path, load it with `read_external_coins_lists`.
         Otherwise just return *x* unchanged.
         """
+
+        if not resolve_files:
+            return x
 
         def _maybe_read(path_candidate):
             resolved = _resolve_coins_file_path(path_candidate)

@@ -103,8 +103,10 @@ def validate_authored_config(config, template, *, policy_context=None):
         if parts in AGE_PATHS:
             validate_age_value(value, path=".".join(parts))
         path = "config" + ("." + ".".join(parts) if parts else "")
-        if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"long", "short"}
+        if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"global", "long", "short"}
                 and parts[2] == "universe" and parts[3] in {"approved_coins", "ignored_coins"}):
+            if parts[1] == "global" and value is None:
+                raise TypeError(f"{path} must be a coin list or source string; null is only side inheritance")
             _coin_source(value, path, allow_sides=False)
             return
         if parts == ("coin_overrides",):

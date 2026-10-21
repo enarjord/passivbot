@@ -33,14 +33,14 @@ def test_shared_policy_flags_and_directional_sources_apply_to_every_consumer(com
 
 def test_one_side_cli_source_keeps_the_other_side_file_refreshable(tmp_path):
     config = get_template_config()
-    config["_coins_sources"] = {"approved_coins": {"long": "long.json", "short": "short.json"}}
+    config["bot"]["short"]["universe"]["approved_coins"] = "short.json"
     previous_short = deepcopy(config["bot"]["short"]["universe"])
     source = tmp_path / "coins.json"
     source.write_text('["BTC", "XRP"]')
     parser, keys = parser_for("live")
     args = parser.parse_args(["--bot.long.universe.approved_coins", str(source)])
     update_config_with_args(config, args, allowed_keys=keys)
-    assert config["bot"]["long"]["universe"]["approved_coins"] == ["BTC", "XRP"]
+    assert config["bot"]["long"]["universe"]["approved_coins"] == [str(source)]
     assert config["bot"]["short"]["universe"] == previous_short
     assert config["_coins_sources"]["approved_coins"] == {"long": [str(source)], "short": "short.json"}
 

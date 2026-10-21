@@ -1059,6 +1059,81 @@
                   "x-passivbot-optimizable": false,
                   "x-passivbot-coin-override": "forbidden"
                 },
+                "universe": {
+                  "type": "object",
+                  "properties": {
+                    "approved_coins": {
+                      "type": [
+                        "array",
+                        "string"
+                      ],
+                      "default": [
+                        "BTC",
+                        "ETH",
+                        "BNB",
+                        "XRP",
+                        "SOL",
+                        "TRX",
+                        "HYPE",
+                        "DOGE",
+                        "ZEC",
+                        "XLM",
+                        "ADA",
+                        "LINK",
+                        "XMR",
+                        "CC",
+                        "BCH",
+                        "TON",
+                        "GRAM",
+                        "LTC",
+                        "HBAR",
+                        "SUI",
+                        "AVAX",
+                        "NEAR",
+                        "UNI",
+                        "TAO",
+                        "ASTER",
+                        "ONDO",
+                        "AAVE",
+                        "DOT",
+                        "WLD",
+                        "MNT",
+                        "MORPHO",
+                        "POL",
+                        "ATOM",
+                        "RENDER",
+                        "KAS",
+                        "ENA",
+                        "ALGO",
+                        "FIL",
+                        "ARB",
+                        "APT",
+                        "INJ"
+                      ],
+                      "description": "Shared approval list, all sentinel or reloadable common-list file; sparse config omission approves nothing, while the starter declares its list.",
+                      "x-passivbot-scope": "global",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden",
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
                 "unstuck": {
                   "type": "object",
                   "properties": {
@@ -2406,50 +2481,8 @@
                         "string",
                         "null"
                       ],
-                      "default": [
-                        "BTC",
-                        "ETH",
-                        "BNB",
-                        "XRP",
-                        "SOL",
-                        "TRX",
-                        "HYPE",
-                        "DOGE",
-                        "ZEC",
-                        "XLM",
-                        "ADA",
-                        "LINK",
-                        "XMR",
-                        "CC",
-                        "BCH",
-                        "TON",
-                        "GRAM",
-                        "LTC",
-                        "HBAR",
-                        "SUI",
-                        "AVAX",
-                        "NEAR",
-                        "UNI",
-                        "TAO",
-                        "ASTER",
-                        "ONDO",
-                        "AAVE",
-                        "DOT",
-                        "WLD",
-                        "MNT",
-                        "MORPHO",
-                        "POL",
-                        "ATOM",
-                        "RENDER",
-                        "KAS",
-                        "ENA",
-                        "ALGO",
-                        "FIL",
-                        "ARB",
-                        "APT",
-                        "INJ"
-                      ],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "default": null,
+                      "description": "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.",
                       "x-passivbot-scope": "long",
                       "x-passivbot-consumers": [
                         "live",
@@ -2493,7 +2526,7 @@
                         "null"
                       ],
                       "default": [],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "description": "Side-owned exclusions subtracted from effective approval; null or [] means none.",
                       "x-passivbot-scope": "long",
                       "x-passivbot-consumers": [
                         "live",
@@ -3976,50 +4009,8 @@
                         "string",
                         "null"
                       ],
-                      "default": [
-                        "BTC",
-                        "ETH",
-                        "BNB",
-                        "XRP",
-                        "SOL",
-                        "TRX",
-                        "HYPE",
-                        "DOGE",
-                        "ZEC",
-                        "XLM",
-                        "ADA",
-                        "LINK",
-                        "XMR",
-                        "CC",
-                        "BCH",
-                        "TON",
-                        "GRAM",
-                        "LTC",
-                        "HBAR",
-                        "SUI",
-                        "AVAX",
-                        "NEAR",
-                        "UNI",
-                        "TAO",
-                        "ASTER",
-                        "ONDO",
-                        "AAVE",
-                        "DOT",
-                        "WLD",
-                        "MNT",
-                        "MORPHO",
-                        "POL",
-                        "ATOM",
-                        "RENDER",
-                        "KAS",
-                        "ENA",
-                        "ALGO",
-                        "FIL",
-                        "ARB",
-                        "APT",
-                        "INJ"
-                      ],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "default": null,
+                      "description": "Null inherits the shared approval source; an explicit source replaces it and [] approves nothing.",
                       "x-passivbot-scope": "short",
                       "x-passivbot-consumers": [
                         "live",
@@ -4063,7 +4054,7 @@
                         "null"
                       ],
                       "default": [],
-                      "description": "Side-owned coin identifiers or a reloadable local coin-list source.",
+                      "description": "Side-owned exclusions subtracted from effective approval; null or [] means none.",
                       "x-passivbot-scope": "short",
                       "x-passivbot-consumers": [
                         "live",
@@ -14499,6 +14490,12 @@
         "bot.global.strategy_kind": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
         },
+        "bot.global.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
+        },
+        "bot.global.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "bot.global.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
         },
@@ -16600,6 +16597,12 @@
         "global.strategy_kind": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
         },
+        "global.universe": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
+        },
+        "global.universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "global.unstuck": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
         },
@@ -17219,6 +17222,12 @@
         "strategy_kind": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
         },
+        "universe": {
+          "$ref": "#/$defs/scenarioPatch:bot.global.universe"
+        },
+        "universe.approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
+        },
         "unstuck": {
           "$ref": "#/$defs/scenarioPatch:bot.global.unstuck"
         },
@@ -17300,6 +17309,16 @@
         },
         "memory_ema_span_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.global.universe": {
+      "type": "object",
+      "properties": {
+        "approved_coins": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
         }
       },
       "patternProperties": {},
@@ -22345,6 +22364,7 @@
                 "bot.global.forager",
                 "bot.global.hsl",
                 "bot.global.loss_gate",
+                "bot.global.universe",
                 "bot.global.unstuck",
                 "bot.global.warmup",
                 "bot.long",
@@ -22576,6 +22596,7 @@
                 "global.forager",
                 "global.hsl",
                 "global.loss_gate",
+                "global.universe",
                 "global.unstuck",
                 "global.warmup",
                 "long",
@@ -22632,6 +22653,7 @@
                 "forager",
                 "hsl",
                 "loss_gate",
+                "universe",
                 "unstuck",
                 "warmup"
               ]
@@ -22683,6 +22705,19 @@
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:bot.global.loss_gate"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.global.universe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.global.universe"
         },
         {
           "type": "object",

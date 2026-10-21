@@ -14,7 +14,7 @@ from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
-CONTRACT_VERSION = 7
+CONTRACT_VERSION = 8
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -51,7 +51,8 @@ def has_unresolved_override_files(config: dict) -> bool:
 
 def build_evaluation_contract(config: dict) -> dict:
     """Retain fixed policy while excluding values owned by the candidate vector."""
-    effective = clean_config(config)
+    from config.universe import anchored_universe_source_view
+    effective = clean_config(anchored_universe_source_view(config))
     _apply_config_overrides(
         effective, effective.get("optimize", {}).get("fixed_runtime_overrides", {})
     )

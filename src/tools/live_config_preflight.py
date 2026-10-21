@@ -863,8 +863,8 @@ def _cache_readiness_report(
 
 
 def _coin_value_for_side(config: dict[str, Any], group_name: str, side: str) -> Any:
-    value = _path_value(config, ("bot", side, "universe", group_name))
-    return None if value is _MISSING else value
+    from config.universe import get_side_universe_sources
+    return get_side_universe_sources(config, group_name, {}).get(side)
 
 
 def _universe_diff_changes(

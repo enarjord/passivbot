@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from config.universe import require_side_universe_sources, set_side_universe_sources
+from config.universe import (
+    fixed_runtime_universe_view, require_side_universe_sources, set_side_universe_sources,
+)
 from config.authoring import compact_config, resolved_config, explain_config
 from config.load import prepare_config
 from config.overrides import parse_overrides
@@ -26,7 +28,9 @@ def policy():
 
 def effective(source, base=""):
     prepared = prepare_config(source, base_config_path=base, verbose=False)
-    result = strip_config_metadata(parse_overrides(prepared, verbose=False))
+    # This helper compares execution membership, rather than reloadable source spelling.
+    snapshot = fixed_runtime_universe_view(parse_overrides(prepared, verbose=False))
+    result = strip_config_metadata(snapshot)
     result["live"].pop("base_config_path", None)
     return result
 

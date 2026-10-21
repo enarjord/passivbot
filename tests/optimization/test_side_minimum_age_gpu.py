@@ -87,6 +87,8 @@ def test_both_strategy_sources_and_cuda_translation_keep_age_before_side_arbitra
 
 
 def combined_policy_inputs(kind, eligible_side, allow_entry):
+    from config import prepare_config
+    from config_utils import clean_config
     from tools.gpu_parity import build_parser, fixture_inputs
 
     args = build_parser().parse_args(["--fixture", kind, "--hsl", "disabled", "--sides", "both",
@@ -95,9 +97,11 @@ def combined_policy_inputs(kind, eligible_side, allow_entry):
     config["backtest"]["filter_by_min_effective_cost"] = None
     config["bot"]["global"]["hedge_mode"] = False
     config["bot"]["global"]["warmup"]["max_minutes"] = 1.0
+    config["bot"]["global"]["universe"]["approved_coins"] = ["COIN00"]
     for side in ("long", "short"):
         bot = config["bot"][side]
         bot["universe"]["minimum_coin_age_days"] = 5.5 / 1440 if side == eligible_side else 60.0
+        bot["universe"]["approved_coins"] = None if side == eligible_side else ["COIN00", "COIN01"]
         # No side passes both gates unless the eligible side's cost filter is disabled.
         bot["universe"]["filter_by_min_effective_cost"] = side == eligible_side and not allow_entry
         bot["risk"]["max_positions"] = 1
@@ -111,6 +115,9 @@ def combined_policy_inputs(kind, eligible_side, allow_entry):
             strategy["entry"].update(initial_qty_fraction=0.001, initial_ema_distance_fraction=0.0, double_down_factor=0.0)
             for group in ("entry", "close"):
                 strategy[group].update(threshold_volatility_1h_weight=0.0, retracement_volatility_1h_weight=0.0)
+    membership = config["backtest"]["coins"]
+    config = prepare_config(clean_config(config), verbose=False)
+    config["backtest"]["coins"] = membership
     for coin, market in markets.items():
         if coin != "__meta__":
             market.update(inception_timestamp_ms=int(timestamps[0]), warmup_minutes=1, min_cost=100.0)
@@ -125,10 +132,14 @@ def test_native_one_way_combines_age_and_cost_before_selecting(kind, eligible_si
 
     args, config, candles, markets, btc, timestamps = combined_policy_inputs(kind, eligible_side, allow_entry)
     payload = build_backtest_payload(candles, markets, config, args.exchange, btc, timestamps)
+    assert [row[eligible_side]["entry_eligible"] for row in payload.bot_params_list] == [True, False]
+    other = "short" if eligible_side == "long" else "long"
+    assert [row[other]["entry_eligible"] for row in payload.bot_params_list] == [True, True]
     fills, _, _ = execute_backtest(payload, config)
     entries = [row for row in fills if str(row[13]).startswith("entry_")]
     assert bool(entries) is allow_entry
     assert all(str(row[13]).endswith("_" + eligible_side) for row in entries)
+    assert all(row[2] == "COIN00" for row in entries)
     assert all(int(row[1]) >= int(timestamps[7]) for row in entries)
 
 
@@ -144,6 +155,7 @@ def test_actual_gpu_one_way_combines_age_and_cost(monkeypatch, kind, eligible_si
 
     args, config, candles, markets, btc, timestamps = combined_policy_inputs(kind, eligible_side, allow_entry)
     payload = build_backtest_payload(candles, markets, config, args.exchange, btc, timestamps)
+    assert [row[eligible_side]["entry_eligible"] for row in payload.bot_params_list] == [True, False]
     fills, _, native = execute_backtest(payload, config)
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
                                 exchange=args.exchange, batch_size=1, needed_metrics={"fills_per_day"})

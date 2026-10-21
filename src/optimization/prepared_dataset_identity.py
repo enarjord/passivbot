@@ -11,6 +11,7 @@ from shared_arrays import attach_shared_array
 
 
 PREPARED_DATASET_KEY = "_optimizer_prepared_dataset_identity"
+PREPARED_DATASET_VERSION = 2
 _HASH_BUFFER_BYTES = 1024 * 1024
 
 # These are prepared market/bundle fields consumed by backtest payload construction,
@@ -123,8 +124,12 @@ def build_prepared_dataset_identity(
         indices = list(range(len(coins))) if indices is None else list(indices)
         if len(coins) != len(indices) or not coins:
             raise ValueError(f"Prepared coin mapping is incomplete for optimizer exchange {ex}")
+        from config.universe import runtime_universe_snapshot
+        universe = runtime_universe_snapshot(run_config, available_coins=coins)
         result = {
             "coins": coins,
+            "universe": {field: {side: list(members) for name, side, members in universe if name == field}
+                         for field in ("approved_coins", "ignored_coins")},
             "hlcvs": [array_hash(hlcv_spec, time_slice, int(index)) for index in indices],
             "btc_usd": array_hash(btc_spec, time_slice),
             "timestamps": _array_identity(ts),
@@ -166,7 +171,7 @@ def build_prepared_dataset_identity(
             if not exchanges:
                 raise ValueError("Missing prepared optimizer datasets")
             scenarios.append({"exchanges": exchanges})
-        return {"version": 1, "scenarios": scenarios}
+        return {"version": PREPARED_DATASET_VERSION, "scenarios": scenarios}
     finally:
         for attachment in attachments.values():
             attachment.close()

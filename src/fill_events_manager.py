@@ -8373,8 +8373,8 @@ def _parse_log_level(value: str) -> int:
 def _extract_symbol_pool(config: dict, override: Optional[List[str]]) -> List[str]:
     if override:
         return sorted({sym for sym in override if sym})
-    approved = {side: config.get("bot", {}).get(side, {}).get("universe", {}).get("approved_coins", [])
-                for side in ("long", "short")}
+    from config.universe import get_side_universe_sources
+    approved = get_side_universe_sources(config, "approved_coins", {})
     symbols: List[str] = []
     if isinstance(approved, dict):
         for vals in approved.values():

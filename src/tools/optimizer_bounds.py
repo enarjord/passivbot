@@ -12,9 +12,11 @@ from pathlib import Path
 def _anchor_file_references(config, *, base_config_path):
     """Retain file authority without depending on the exported config's location."""
     from config.overrides import _resolve_override_config_path
-    from utils import _resolve_coins_file_path
+    from config.universe import normalize_universe_source_bindings, resolve_universe_source_path
 
     base = base_config_path or config.get("live", {}).get("base_config_path", "")
+
+    normalize_universe_source_bindings(config, anchor_all=True, base_config_path=base)
 
     def visit(node, prefix=()):
         if isinstance(node, list):
@@ -30,11 +32,11 @@ def _anchor_file_references(config, *, base_config_path):
                     }
                     node[key] = _resolve_override_config_path(context, "source")
                 elif (len(parts) >= 4 and parts[-4] == "bot"
-                      and parts[-3] in ("long", "short") and parts[-2] == "universe"
+                      and parts[-3] in ("global", "long", "short") and parts[-2] == "universe"
                       and parts[-1] in ("approved_coins", "ignored_coins")):
                     candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
                     if isinstance(candidate, str):
-                        resolved = _resolve_coins_file_path(candidate)
+                        resolved = resolve_universe_source_path(candidate, base_config_path=base, discover_ambiguous=True, allow_all=parts[-1] == "approved_coins")
                         if resolved is not None:
                             node[key] = [str(resolved)] if isinstance(value, list) else str(resolved)
                 else:
