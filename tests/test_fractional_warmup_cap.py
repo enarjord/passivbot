@@ -161,3 +161,39 @@ def test_fractional_cap_preserves_independently_required_rms_history():
     assert compute_backtest_warmup_minutes(config) == 46
     assert compute_per_coin_warmup_minutes(config)["__default__"] == 46
     assert config == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reader", ["calc_volumes_and_log_ranges", "calc_log_range"])
+@pytest.mark.parametrize("span,cap,expected", [
+    (5.25, 5.5, 6), (3.25, 5.5, 4), (5.25, 0.5, 1), (3.25, 60, 4), (3.25, None, 4),
+])
+async def test_direct_ranking_readers_keep_float_spans_until_acquisition(reader, span, cap, expected):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+
+    calls = []
+
+    class CandleReader:
+        async def get_latest_ema_metrics(self, symbol, spans, **kwargs):
+            calls.append((symbol, spans, kwargs))
+            return {"qv": 100.0, "log_range": 0.25}
+
+    config = {"bot": {"global": {"warmup": {"span_multiplier": 0.0, "max_minutes": cap}}}}
+    original = deepcopy(config)
+    bot = SimpleNamespace(
+        config=config,
+        cm=CandleReader(),
+        bot_value=lambda _side, key: 2.25 if key == "forager_volume_ema_span_1m" else span,
+        _compute_fetch_budget_ttls=lambda symbols, *_: ({s: 60_000 for s in symbols}, set()),
+    )
+    result = await getattr(Passivbot, reader)(bot, "long", ["BTC/USDT:USDT"])
+    assert result
+    assert len(calls) == 1
+    symbol, spans, kwargs = calls[0]
+    assert symbol == "BTC/USDT:USDT"
+    assert spans["log_range"] == span
+    if reader == "calc_volumes_and_log_ranges":
+        assert spans["qv"] == 2.25
+    assert kwargs["window_candles"] == expected
+    assert config == original

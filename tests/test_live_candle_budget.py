@@ -3149,8 +3149,11 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cap,expected", [(60, 60), (5.5, 6), (1.0, 1), (0.5, 1), (None, 500)])
-async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeypatch, cap, expected):
+@pytest.mark.parametrize("cap,span,expected", [
+    (60, 500.0, 60), (5.5, 500.0, 6), (1.0, 500.0, 1), (0.5, 500.0, 1),
+    (None, 500.0, 500), (5.5, 3.25, 4), (60, 3.25, 4), (None, 3.25, 120),
+])
+async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeypatch, cap, span, expected):
     import passivbot as pb_mod
 
     now_ms = 12 * 60 * 60_000
@@ -3210,7 +3213,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
 
         def bp(self, _pside, key, _symbol):
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
-                return 500.0
+                return span
             return 0.0
 
         _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget

@@ -50,7 +50,9 @@ Span-based warmup acquisition rounds positive `bot.global.warmup.max_minutes` ca
 whole minutes in live and backtest paths; `0.5` means one minute, never uncapped. Null remains
 uncapped. Round only the acquisition window, preserving fractional EMA spans and naturally shorter
 requirements. Native hourly acquisition retains whole-hour alignment, and independent RMS history
-requirements are unchanged.
+requirements are unchanged. Positive integer and fractional caps are ceilings rather than minimum
+requests; only uncapped background candidate refresh retains its default minimum window. Direct
+live ranking readers pass floating EMA spans through to the candle manager without rounding them.
 
 Ordinary native higher-timeframe reads reuse verified persisted rows and fetch only missing spans,
 with one source bucket of overlap on each side. Overlapping requests are coalesced; the overlap

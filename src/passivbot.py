@@ -10060,9 +10060,13 @@ class Passivbot:
         return cached data without hitting the API. Symbols with no usable current or
         bounded cached value are omitted from the returned maps.
         """
-        span_volume = int(round(self.bot_value(pside, "forager_volume_ema_span_1m")))
-        span_volatility = int(
-            round(self.bot_value(pside, "forager_volatility_ema_span_1m"))
+        span_volume = Passivbot._positive_finite_warmup_value(
+            self.bot_value(pside, "forager_volume_ema_span_1m"),
+            context=f"forager {pside}.forager_volume_ema_span_1m", symbol=None,
+        )
+        span_volatility = Passivbot._positive_finite_warmup_value(
+            self.bot_value(pside, "forager_volatility_ema_span_1m"),
+            context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
         )
         try:
             warmup_ratio = float(
@@ -18948,11 +18952,8 @@ class Passivbot:
             default_win = int(getattr(self.cm, "default_window_candles", 120) or 120)
         except Exception:
             default_win = 120
-        minimum_1m_window = (
-            min(default_win, max_warmup_minutes)
-            if max_warmup_minutes > 0
-            else default_win
-        )
+        # A positive cap limits acquisition; it must not become a minimum.
+        minimum_1m_window = 1 if max_warmup_minutes > 0 else default_win
         for sym in per_symbol_win:
             per_symbol_win[sym] = max(minimum_1m_window, int(per_symbol_win[sym]))
         now = utc_ms()
@@ -19714,7 +19715,10 @@ class Passivbot:
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
+        span = Passivbot._positive_finite_warmup_value(
+            self.bot_value(pside, "forager_volatility_ema_span_1m"),
+            context=f"forager {pside}.forager_volatility_ema_span_1m", symbol=None,
+        )
         try:
             warmup_ratio = float(
                 get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
