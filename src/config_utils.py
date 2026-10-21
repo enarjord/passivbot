@@ -771,7 +771,8 @@ def clean_config(config: dict) -> dict:
     # Source validation and template preparation are read-only. The projection
     # below copies retained values, so a full input copy would be redundant.
     from config.universe import universe_source_view
-    source = universe_source_view(config or {})
+    source = universe_source_view({key: value for key, value in (config or {}).items()
+                                   if not isinstance(key, str) or not key.startswith("_")})
     from config.migrations.v9 import require_v9_runtime_config, reject_retired_v9_fields
 
     if "config_version" in source:

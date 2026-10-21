@@ -410,12 +410,19 @@ operational execution, exchange I/O and startup settings.
   its approved universe explicitly. Omitting an entire side still disables it by exposure policy.
   Refresh rereads files and blocks affected new-entry eligibility when a source is unavailable;
   independent pinned sides and protective position management retain their existing policies.
+
 - **bot.<side>.universe.ignored_coins**: A coin list or external coin-list file. The side's
   tradable universe is its approved coins minus ignored coins, subject to age/market checks.
 - **bot.<side>.forager.always_include**: Ordered, deduplicated coin/market identifiers that
   remain selected by Forager. They must still pass approval, ignored-coin, minimum-age,
   market-availability, risk, HSL and operational mode checks. This list does not add coins to
   the approved universe and does not override a live forced mode.
+
+Coin lists contain literal identifiers, including singleton lists. Use explicit file syntax such as
+`"./coinlist"`, `"coins.json"`, or an absolute path when wrapping a file reference in a singleton
+list. A bare scalar string may select an existing file during initial preparation; otherwise it
+becomes a literal token list. Later file creation cannot reinterpret those prepared tokens.
+The released-v8 converter anchors historical singleton-list file bindings explicitly.
 
 ```json
 "bot": {

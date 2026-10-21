@@ -94,7 +94,7 @@ def _rebase_override_files(config, source, destination):
                 source_leaf = key.split(".")[-1]
                 candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
                 from .universe import resolve_universe_source_path
-                source_file = (resolve_universe_source_path(candidate, base_config_path=source, discover_ambiguous=True, allow_all=source_leaf == "approved_coins")
+                source_file = (resolve_universe_source_path(candidate, base_config_path=source, discover_ambiguous=not isinstance(value, list), allow_all=source_leaf == "approved_coins")
                                if source_leaf in COIN_SOURCE_FIELDS else None)
                 coin_source = source_leaf in COIN_SOURCE_FIELDS and isinstance(candidate, str) and (
                     source_file is not None or candidate.startswith(("./", "../", "/", "~"))
@@ -105,7 +105,7 @@ def _rebase_override_files(config, source, destination):
                     reference = Path(value).expanduser()
                     if not reference.is_absolute():
                         candidates = (base / reference, Path.cwd() / reference)
-                        resolved = (source_file.resolve() if source_file is not None else None) if coin_source else next((path.resolve() for path in candidates if path.is_file()), None)
+                        resolved = (source_file.absolute() if source_file is not None else None) if coin_source else next((path.resolve() for path in candidates if path.is_file()), None)
                         if resolved is None:
                             raise FileNotFoundError(f"{source_leaf} file not found: {value}")
                         selected = str(resolved) if shared_file_aliases else os.path.relpath(resolved, output)

@@ -107,6 +107,10 @@ def validate_authored_config(config, template, *, policy_context=None):
                 and parts[2] == "universe" and parts[3] in {"approved_coins", "ignored_coins"}):
             if parts[1] == "global" and value is None:
                 raise TypeError(f"{path} must be a coin list or source string; null is only side inheritance")
+            if parts[1] == "global":
+                text = value if isinstance(value, str) else ",".join(value) if isinstance(value, list) and all(isinstance(x, str) for x in value) else ""
+                if text.strip().startswith("{") and text.strip().endswith("}"):
+                    raise TypeError(f"{path} must be one common coin list, all, or file; use explicit side source paths for directional selections")
             _coin_source(value, path, allow_sides=False)
             return
         if parts == ("coin_overrides",):

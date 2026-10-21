@@ -583,7 +583,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
             reason="anchored retained coin-list file binding before export"))
 
     normalize_universe_source_bindings(transformed.config, base_config_path=base_config_path,
-                                       on_change=binding_change)
+                                       on_change=binding_change,
+                                       released_wrapped_files=payload.get("config_version") != V9_SCHEMA_VERSION)
     prepared = prepare_config(
         transformed.config, verbose=False, target="canonical", runtime=None,
         base_config_path=base_config_path,

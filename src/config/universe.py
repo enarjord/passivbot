@@ -132,14 +132,14 @@ def resolve_universe_source_path(source, *, base_config_path="", discover_ambigu
     return None
 
 
-def bind_universe_source(value, *, field, base_config_path="", anchor_all=False):
+def bind_universe_source(value, *, field, base_config_path="", anchor_all=False, released_wrapped_files=False):
     """Bind file syntax at preparation; never rediscover literals during replay."""
     if isinstance(value, ResolvedCoinList):
         return value
     if not anchor_all and isinstance(value, list) and len(value) > 1:
         for item in value:
             if isinstance(item, str) and resolve_universe_source_path(
-                item, base_config_path=base_config_path, discover_ambiguous=True,
+                item, base_config_path=base_config_path,
                 allow_all=field == "approved_coins",
             ) is not None:
                 raise ValueError("a coin-list file remains unresolved inside a multi-item source; use a single list-file source or explicit coin identifiers")
@@ -154,23 +154,29 @@ def bind_universe_source(value, *, field, base_config_path="", anchor_all=False)
         base = Path(base_config_path).absolute().parent.resolve() if base_config_path else Path.cwd()
         bound = str(path if path.is_absolute() else base / path)
     else:
-        if explicit:
-            return value
+        if explicit or isinstance(value, list) and not released_wrapped_files:
+            return value  # V9 lists contain literal tokens unless file syntax is explicit.
         selected = resolve_universe_source_path(
             candidate, base_config_path=base_config_path, discover_ambiguous=True,
             allow_all=field == "approved_coins",
         )
         if selected is None:
+            if isinstance(value, str):
+                from utils import normalize_coins_source
+                tokens = normalize_coins_source(value, allow_all=field == "approved_coins", resolve_files=False, parse_jsonish=False)
+                if tokens["long"] == tokens["short"]:
+                    return tokens["long"]  # Scalar literals become unambiguous before a later reload.
             return value
         bound = str(selected.absolute())
     return [bound] if isinstance(value, list) else bound
 
 
-def normalize_universe_source_bindings(config, *, anchor_all=False, base_config_path=None, on_change=None):
+def normalize_universe_source_bindings(config, *, anchor_all=False, base_config_path=None, on_change=None, released_wrapped_files=False):
     """Bind ambiguous files once; result writers anchor known path syntax only.
 
     No file contents or membership are cached. Refresh always reads explicit
     bound files, while later local-file creation cannot reinterpret literal coins.
+    Only the released-v8 converter discovers historical singleton-list file refs.
     """
     base_path = (config.get("live", {}).get("base_config_path", "")
                  if base_config_path is None else base_config_path)
@@ -186,7 +192,8 @@ def normalize_universe_source_bindings(config, *, anchor_all=False, base_config_
                 field = key.split(".")[-1]
                 if field in COIN_SOURCE_FIELDS:
                     bound = bind_universe_source(value, field=field,
-                        base_config_path=base_path, anchor_all=anchor_all)
+                        base_config_path=base_path, anchor_all=anchor_all,
+                        released_wrapped_files=released_wrapped_files)
                     if bound != value:
                         node[key] = bound
                         if on_change is not None:
@@ -247,7 +254,7 @@ def resolve_universe_sources(config, field, *, allow_partial=False):
         candidate = source[0] if isinstance(source, list) and len(source) == 1 else source
         if field == "approved_coins" and isinstance(candidate, str) and candidate.strip().lower() == "all":
             return {side: ["all"] for side in ("long", "short")}
-        return normalize_coins_source(source, allow_all=field == "approved_coins", resolve_files=False)
+        return normalize_coins_source(source, allow_all=field == "approved_coins", resolve_files=False, parse_jsonish=False)
 
     values, errors = {}, {}
     inherited = [side for side in ("long", "short") if field == "approved_coins" and sources.get(side) is None]

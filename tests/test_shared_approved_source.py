@@ -250,7 +250,9 @@ def test_semantic_cli_export_rebases_shared_and_side_sources_but_format_only_pre
     shared_name, side_name = 'shared' + suffix, 'side' + suffix
     (original / shared_name).write_text('["BTC"]')
     (original / side_name).write_text('["ETH"]')
-    config = source([shared_name] if wrapped else shared_name, short=[side_name] if wrapped else side_name)
+    shared_ref = './' + shared_name if wrapped and not suffix else shared_name
+    side_ref = './' + side_name if wrapped and not suffix else side_name
+    config = source([shared_ref] if wrapped else shared_ref, short=[side_ref] if wrapped else side_ref)
     text = json.dumps(config)
     selected = original / 'input.json'
     selected.write_text(text)
@@ -284,16 +286,24 @@ def test_explain_distinguishes_inherited_file_source_from_equal_explicit_pin(tmp
 
 
 @pytest.mark.parametrize('scope', ['global', 'long', 'ignored'])
-def test_mixed_inline_sources_reject_existing_extensionless_files(tmp_path, scope):
+@pytest.mark.parametrize('explicit', [False, True])
+def test_mixed_inline_sources_distinguish_literal_tokens_and_explicit_files(tmp_path, scope, explicit):
     (tmp_path / 'coinlist').write_text('["ETH"]')
-    config = source(['BTC', 'coinlist'])
+    items = ['BTC', './coinlist' if explicit else 'coinlist']
+    config = source(items)
     if scope == 'long':
-        config = source([], long=['BTC', 'coinlist'])
+        config = source([], long=items)
     elif scope == 'ignored':
         config = source(['BTC'])
-        config['bot']['long']['universe']['ignored_coins'] = ['BTC', 'coinlist']
-    with pytest.raises(ValueError, match='multi-item source'):
-        prepare_config(config, base_config_path=str(tmp_path/'input.json'), verbose=False)
+        config['bot']['long']['universe']['ignored_coins'] = items
+    if explicit:
+        with pytest.raises(ValueError, match='multi-item source'):
+            prepare_config(config, base_config_path=str(tmp_path/'input.json'), verbose=False)
+    else:
+        prepared = prepare_config(config, base_config_path=str(tmp_path/'input.json'), verbose=False)
+        field = 'ignored_coins' if scope == 'ignored' else 'approved_coins'
+        side = 'global' if scope == 'global' else 'long'
+        assert universe_source_view(prepared)['bot'][side]['universe'][field] == items
 
 
 @pytest.mark.parametrize('owner', ['scenario', 'fixed'])
@@ -412,7 +422,7 @@ def test_cli_rebinds_only_explicitly_assigned_source_leaves(tmp_path):
     assert resolve_universe_sources(config, 'approved_coins')[0] == {'long':['BTC'],'short':['BTC']}
     update_config_with_args(config, SimpleNamespace(**{'bot.global.universe.approved_coins':['SOL']}), verbose=False)
     assert resolve_universe_sources(config, 'approved_coins')[0] == {'long':['BTC'],'short':['SOL']}
-    update_config_with_args(config, SimpleNamespace(**{'bot.long.universe.approved_coins':['BTC']}), verbose=False)
+    update_config_with_args(config, SimpleNamespace(**{'bot.long.universe.approved_coins':'BTC'}), verbose=False)
     assert resolve_universe_sources(config, 'approved_coins')[0] == {'long':['ETH'],'short':['SOL']}
 
 
@@ -421,3 +431,76 @@ def test_explicit_side_file_keeps_existing_plain_text_format(tmp_path):
     selected.write_text('BTC, ETH\nSOL')
     config = prepare_config(source([], long='coins.txt'), base_config_path=str(tmp_path/'input.json'), verbose=False)
     assert get_side_universe_sources(config, 'approved_coins') == {'long':['BTC','ETH','SOL'], 'short':[]}
+
+
+@pytest.mark.parametrize('owner', ['helper', 'public'])
+@pytest.mark.parametrize('literal', [['BTC'], 'BTC'])
+def test_bounds_anchoring_keeps_prepared_literal_membership_after_late_file(tmp_path, owner, literal):
+    from tools.optimizer_bounds import _anchor_file_references
+    config = prepare_config(source(literal, long=literal),
+        base_config_path=str(tmp_path/'input.json'), verbose=False)
+    (tmp_path/'BTC').write_text('["ETH"]')
+    if owner == 'helper':
+        exported = universe_source_view(config)
+        _anchor_file_references(exported, base_config_path=str(tmp_path/'input.json'))
+    else:
+        from tools.optimizer_bounds import apply_recommended_bounds
+        exported = apply_recommended_bounds(config, base_config_path=str(tmp_path/'input.json'))
+    assert exported['bot']['global']['universe']['approved_coins'] == ['BTC']
+    assert exported['bot']['long']['universe']['approved_coins'] == ['BTC']
+    assert resolve_universe_sources(exported, 'approved_coins')[0] == {'long':['BTC'], 'short':['BTC']}
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_shared_source_rejects_json_encoded_directional_object(wrapped):
+    encoded = '{"long":["BTC"],"short":[]}'
+    with pytest.raises(TypeError, match='one common coin list'):
+        prepare_config(source([encoded] if wrapped else encoded), verbose=False)
+
+
+@pytest.mark.parametrize('mode', ['full', 'compact'])
+def test_semantic_export_preserves_reloadable_coin_file_symlink_alias(tmp_path, mode):
+    from tools.clean_config import render_source
+    original = tmp_path/'input'
+    original.mkdir()
+    first, second = original/'first.json', original/'second.json'
+    first.write_text('["BTC"]')
+    second.write_text('["ETH"]')
+    alias = original/'coins.json'
+    alias.symlink_to(first.name)
+    selected = original/'config.json'
+    text = json.dumps(source('coins.json'))
+    selected.write_text(text)
+    destination = tmp_path/'output'/'config.json'
+    destination.parent.mkdir()
+    exported = json.loads(render_source(text, source=selected, mode=mode, destination=destination))
+    retained = exported['bot']['global']['universe']['approved_coins']
+    assert Path(retained).name == alias.name
+    alias.unlink()
+    alias.symlink_to(second.name)
+    reloaded = prepare_config(exported, base_config_path=str(destination), verbose=False)
+    assert resolve_universe_sources(reloaded, 'approved_coins')[0] == {'long':['ETH'], 'short':['ETH']}
+    assert selected.read_text() == text
+
+
+@pytest.mark.parametrize('encoded', [
+    '{"long":["BTC"],"short":[]}',
+    '{"long":["BTC"],"short":["BTC"]}',
+    '["BTC"]',
+])
+def test_shared_file_members_remain_literal_tokens_not_json_shorthand(tmp_path, encoded):
+    (tmp_path/'coins.json').write_text(json.dumps([encoded]))
+    config = prepare_config(source('coins.json'), base_config_path=str(tmp_path/'input.json'), verbose=False)
+    values, _ = resolve_universe_sources(config, 'approved_coins')
+    assert values['long'] == values['short']
+    assert 'BTC' not in values['long']  # An encoded structure grants no membership to its contents.
+    assert universe_source_view(config)['bot']['global']['universe']['approved_coins'] == 'coins.json'
+
+
+def test_literal_source_owner_does_not_change_legacy_jsonish_helper_default():
+    from utils import normalize_coins_source
+    encoded = '{"long":["BTC"],"short":[]}'
+    assert normalize_coins_source(encoded, resolve_files=False) == {'long':['BTC'], 'short':[]}
+    literal = normalize_coins_source(encoded, resolve_files=False, parse_jsonish=False)
+    assert literal['long'] == literal['short']
+    assert 'BTC' not in literal['long']
