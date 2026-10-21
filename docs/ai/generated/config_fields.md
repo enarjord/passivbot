@@ -68,7 +68,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `backtest.starting_balance` | float | `100000.0` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.suite_enabled` | boolean | `false` | — | —; backtest, optimize | — | — | — | python |
 | `backtest.taker_fee_override` | float \| null | `0.00055` | — | —; backtest, optimize | — | — | — | python |
-| `backtest.visible_metrics` | array | 12 items (see template) | — | —; backtest, optimize | — | — | — | python |
+| `backtest.visible_metrics` | array \| null | 12 items (see template) | — | —; backtest, optimize | — | — | — | python |
 | `backtest.volume_normalization` | boolean | `true` | — | —; backtest, optimize | — | — | — | python |
 
 ## bot

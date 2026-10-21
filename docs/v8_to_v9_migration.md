@@ -41,6 +41,8 @@ before backtesting a proposed replacement.
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |
 | Empty forced modes, zero warmup cap, zero warmup concurrency | `null` modes, `bot.global.warmup.max_minutes: null`, and `live.startup.warmup_concurrency: "auto"`; each conversion is reported in every authored layer |
+| Stale `backtest.max_warmup_minutes` | Removed and reported; released v8 read the shared cap from `live.max_warmup_minutes`, even when the stale value differed |
+| Numeric strings in `backtest.maker_fee_override`/`taker_fee_override` | Reported as the same finite numeric fees; `null` retains exchange fees, and booleans require an explicit numeric choice |
 | `forager.volume_drop_pct` | Removed; volume-based ranking remains |
 | Optional total-exposure entry gate | Removed; the entry cap always applies |
 | `trailing_grid_v7`, Defx and Paradex | Removed; select a retained strategy/venue explicitly |
@@ -117,6 +119,13 @@ passivbot tool migrate-config-v9 input.v8.json output.v9.json \
 This example deliberately selects ordinary full-period growth. `_ew` is another distinct,
 opt-in formula and requires `backtest.ew_half_life_days`. Neither is an alias for `_w`.
 Objectives, limits, visibility lists and reducer mappings all require explicit choices.
+Best-effort migration can infer a supported `_ew` formula, but still requires
+`--metric-replacement` when no supported exponential counterpart exists. Selecting an ordinary
+full-period metric remains a different formula, including when another objective already uses it.
+Existing scoring normalization consolidates duplicate objectives created by an explicit choice;
+inspect the resulting objective list before starting a new search.
+`backtest.visible_metrics: null` is retained: it derives displayed metrics from objectives and
+limits. An empty list instead displays all metrics.
 DEAP inputs additionally require an authored `optimize.pymoo.shared` policy and
 `--acknowledge-search-backend-change`; outer genetic gates and offspring policies are
 not equivalent. Existing pymoo fallback settings are materialized in the report.

@@ -331,6 +331,7 @@ def get_field_registry() -> FieldRegistry:
                 add(path, kind, nullable=path in {
                     "backtest.filter_by_min_effective_cost",
                     "backtest.maker_fee_override", "backtest.taker_fee_override",
+                    "backtest.visible_metrics",
                 })
     for kind, paths in _NULLABLE_FIELDS.items():
         for path in paths:
