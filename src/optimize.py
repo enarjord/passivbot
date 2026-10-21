@@ -465,6 +465,21 @@ def _register_exchange_data(
     return coins, mss
 
 
+def _propagate_prepared_optimizer_universe(config: dict, data_config: dict) -> None:
+    """Carry prepared source policy/membership without copying widened numeric gates."""
+    if config.get("_hlcvs_dataset_override_meta"):
+        return  # The verified dataset manifest already supplied its replay membership.
+    from config.universe import materialize_side_universe_sources, raw_side_universe_sources
+    config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
+        data_config["bot"]["global"]["universe"]["approved_coins"]
+    )
+    for field in ("approved_coins", "ignored_coins"):
+        materialize_side_universe_sources(
+            config, field, require_side_universe_sources(data_config, field),
+            sources=raw_side_universe_sources(data_config, field),
+        )
+
+
 class ResultRecorder:
     def __init__(
         self,
@@ -3757,11 +3772,41 @@ async def main():
             source_config=source_config,
             base_config_path=base_config_path,
         )
+    from config.universe import raw_side_universe_sources, universe_sources_affected
+    from optimization.warmup import apply_optimizer_universe_sources
+    fixed_sources = source_config.get("optimize", {}).get("fixed_runtime_overrides", {})
+    authored_effective = deepcopy(source_config.get("_raw_effective", source_config))
+    if universe_sources_affected(fixed_sources):
+        staged = prepare_config(
+            source_config, base_config_path=base_config_path, live_only=True,
+            verbose=False, raw_snapshot=raw_snapshot, effective_snapshot=authored_effective,
+        )
+        apply_optimizer_universe_sources(staged)
+        # Only source policy crosses staging. Hydrated numeric values, bounds
+        # and limits must not acquire authored authority in normal preparation.
+        omitted_sides = [side for side in ("long", "short")
+                         if "bot" in source_config and side not in source_config["bot"]]
+        source_config = deepcopy(source_config)
+        source_config.setdefault("bot", {}).setdefault("global", {}).setdefault("universe", {})["approved_coins"] = deepcopy(
+            staged["bot"]["global"]["universe"]["approved_coins"]
+        )
+        for field in ("approved_coins", "ignored_coins"):
+            set_side_universe_sources(source_config, field, raw_side_universe_sources(staged, field))
+        for side in omitted_sides:
+            # Adding source leaves must not bypass the loader's omitted-side
+            # disablement. Explicit search bounds may still activate that side.
+            source_config["bot"][side].setdefault("risk", {})["total_wallet_exposure_limit"] = 0.0
+        for selector in fixed_sources:
+            if universe_sources_affected({selector: fixed_sources[selector]}):
+                source_config["optimize"]["fixed_runtime_overrides"][selector] = deepcopy(
+                    staged["optimize"]["fixed_runtime_overrides"][selector]
+                )
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
         verbose=False,
         raw_snapshot=raw_snapshot,
+        effective_snapshot=authored_effective,
     )
     from config.hsl import require_runtime_support
 
@@ -4037,6 +4082,8 @@ async def main():
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
                     candle_coins_dict[exchange] = tuple(source_coins)
+        if not suite_enabled:
+            _propagate_prepared_optimizer_universe(config, data_config)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
             hlcvs_specs=hlcvs_specs,

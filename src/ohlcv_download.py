@@ -58,7 +58,7 @@ async def main() -> None:
         help=(
             "Approved coins. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
             "coin list file, or a JSON/HJSON per-side object like "
-            '{"long":["BTC"],"short":"all"}. Use coin tickers, not exchange symbols.'
+            '{"long":["BTC"],"short":"all"}. An empty value approves nothing; null is reserved for explicit side approved_coins flags.'
         ),
     )
     parser.add_argument(
@@ -68,7 +68,7 @@ async def main() -> None:
         type=str,
         default=None,
         metavar="CSV_OR_PATH",
-        help="Ignored coins. Comma-separated coins or path to a JSON coin list file.",
+        help="Ignored coins. CSV, a JSON/HJSON per-side object or a JSON coin list file. An empty value clears ignores; null is not supported.",
     )
     parser.add_argument(
         "--minimum-coin-age-days",
