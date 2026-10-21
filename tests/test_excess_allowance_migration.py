@@ -175,6 +175,6 @@ def test_released_v8_requires_explicit_selector_removal_before_conversion(mode):
     reviewed["bot"]["long"]["risk"].pop("we_excess_allowance_mode")
     converted = migrate_config_v9(reviewed, memory_span_minutes=43200.0).config
     prepared = prepare_config(converted, verbose=False)
-    assert prepared["bot"]["long"]["risk"]["we_excess_allowance_pct"] == 0.5
+    assert prepared["bot"]["long"]["risk"]["we_excess_allowance_fraction"] == 0.5
     assert "we_excess_allowance_mode" not in prepared["bot"]["long"]["risk"]
     assert source == original

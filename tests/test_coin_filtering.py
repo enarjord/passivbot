@@ -270,7 +270,7 @@ class _CMStaleCacheStub:
 @pytest.mark.asyncio
 async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"global": {"warmup": {"max_minutes": None}}}}
     bot.cm = _CMColdCacheOnlyStub()
     bot.open_orders = {}
     bot.positions = {}
@@ -293,7 +293,7 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
 @pytest.mark.asyncio
 async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_symbols():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"global": {"warmup": {"max_minutes": None}}}}
     bot.cm = _CMColdCacheOnlyStub()
     bot.open_orders = {}
     bot.positions = {}
@@ -317,7 +317,7 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
 @pytest.mark.asyncio
 async def test_calc_volumes_and_log_ranges_carries_cached_values_for_stale_symbols():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"global": {"warmup": {"max_minutes": None}}}}
     bot.cm = _CMStaleCacheStub()
     bot.open_orders = {}
     bot.positions = {}

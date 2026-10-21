@@ -1647,6 +1647,7 @@ async def test_forager_due_ws_audit_forces_rest_overlap(monkeypatch):
 
     class _AuditBot:
         config = {
+            "bot": {"global": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 4,
