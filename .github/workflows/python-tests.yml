@@ -1,0 +1,129 @@
+name: Python tests
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  shards:
+    name: Python ${{ inputs.python-version }} shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      RAYON_NUM_THREADS: "1"
+      MPLBACKEND: Agg
+      PYTHONPATH: .github/ci:src
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-live.txt
+            requirements-full.txt
+            requirements-dev.txt
+            requirements-rust.txt
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Build and verify the Python Rust extension
+        run: |
+          .venv/bin/python -c "from rust_utils import check_and_maybe_compile; check_and_maybe_compile(force=True)"
+          .venv/bin/python -c "import passivbot_rust; from rust_utils import verify_loaded_runtime_extension; print(verify_loaded_runtime_extension())"
+
+      - name: Validate AI documentation
+        if: matrix.shard == 0
+        run: |
+          .venv/bin/python src/tools/check_ai_docs.py
+          .venv/bin/python src/tools/generate_live_event_registry.py --check
+          .venv/bin/python -m pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
+
+      - name: Run Python test shard
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: >-
+          .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
+          -p ci_pytest_shard --ci-shard-index=${{ matrix.shard }} --ci-shard-count=8
+          --ci-shard-manifest=${{ runner.temp }}/shard-${{ matrix.shard }}.json
+
+      - name: Run release CLI smokes
+        if: matrix.shard == 0
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+        run: |
+          .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v9', '--help']))"
+          .venv/bin/python src/tools/run_fake_live.py \
+            configs/examples/fake_live_hsl.json \
+            scenarios/fake_live/hsl_long_red_restart.hjson \
+            --user ci_fake_hsl_restart \
+            --output-dir "${{ runner.temp }}/fake-live"
+
+      - name: Upload collection manifest
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-${{ inputs.python-version }}-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  coverage:
+    name: Verify Python ${{ inputs.python-version }} coverage
+    if: ${{ always() }}
+    needs: shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every shard and its extra checks
+        env:
+          RESULT: ${{ needs.shards.result }}
+        run: test "$RESULT" = success
+
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Download this version's collection manifests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: python-${{ inputs.python-version }}-shard-*
+          path: ${{ runner.temp }}/collection
+          merge-multiple: true
+
+      - name: Verify complete disjoint collection
+        run: >-
+          python .github/ci/ci_sharding.py "${{ runner.temp }}/collection"
+          --shard-count=8 --python-version=${{ inputs.python-version }}
