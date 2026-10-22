@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from backtest_universe import effective_backtest_data_coins
-from config_utils import get_template_config
+from config.schema import get_expanded_config_prototype as get_template_config
 from config.optimize_bounds import set_flat_optimize_bound
 from optimization.warmup import (
     _apply_config_overrides,
@@ -26,6 +26,14 @@ from warmup_utils import compute_per_coin_warmup_minutes
 
 def _set_bounds(config, entries):
     """Author nested config bounds using the optimizer gene-path writer."""
+    from config.inherited_bounds import get_bound_plan, apply_inherited_bounds_patch
+    from config.param_paths import resolve_optimizer_key_path
+    if get_bound_plan(config) is not None:
+        apply_inherited_bounds_patch(config, {
+            ".".join(("optimize", "bounds", *resolve_optimizer_key_path(config, key)[1:])): value
+            for key, value in entries.items()
+        })
+        return
     for key, value in entries.items():
         set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']["portfolio"]['strategy_kind'], key, value)
 
@@ -232,12 +240,11 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
-    bounds = cfg["optimize"]["bounds"]["long"]
-    bounds["forager"]["unilateralness_ema_span_minutes"] = [1.0, 60.0]
+    _set_bounds(cfg, {"long_unilateralness_ema_span_1m": [1.0, 60.0]})
     if consumer == "forager":
-        bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
+        _set_bounds(cfg, {"long_forager_score_weights_unilateralness": [0.0, 1.0]})
     else:
-        bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 10.0]}
+        _set_bounds(cfg, {"long_entry_cooldown_weights_minutes_adverse_directionality": [0.0, 10.0]})
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     # Only one selected coin is long-eligible, so score-only history is dormant.
@@ -721,8 +728,8 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
     shape = build_optimization_shape(config)
     for anchor_index, anchor_weights in enumerate((zero, positive)):
         vector = [float(anchor_index) if key == ANCHOR_GENE_KEY else
-                  risk_value if key == "long_total_wallet_exposure_limit" else bound.low
-                  for (key, _), bound in zip(shape.key_paths, shape.bounds, strict=True)]
+                  risk_value if path == ("bot", "long", "risk", "total_wallet_exposure_limit") else bound.low
+                  for (key, path), bound in zip(shape.key_paths, shape.bounds, strict=True)]
         candidate = build_optimizer_vector_config(
             vector, config, overrides_list=["mirror_short_from_long"] if mirror else [],
         )

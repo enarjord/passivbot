@@ -1314,13 +1314,14 @@ def config_to_individual(
             key_paths = optimization_shape.key_paths
     values = []
     key_paths = key_paths or get_optimization_key_paths(config)
-    for _, path in key_paths:
+    binding_targets = optimization_shape.binding_targets if optimization_shape is not None else ()
+    for index, (_, path) in enumerate(key_paths):
         if path == (ANCHOR_GENE_KEY,) or path == [ANCHOR_GENE_KEY]:
             values.append(0 if anchor_id is None else int(anchor_id))
             continue
-        target = config
-        for part in path:
-            target = target[part]
+        target = _optimizer_binding_seed_value(
+            config, path, binding_targets[index] if binding_targets else (),
+        )
         values.append(target)
     enforced = enforce_bounds(
         [
@@ -1353,6 +1354,17 @@ def config_to_individual(
         if clamp_collector is None:
             _flush_seed_bounds_adjustments(adjustments)
     return enforced
+
+
+def _optimizer_binding_seed_value(config, path, targets=()):
+    """A shared coordinate can represent only one effective anchor/seed value."""
+    values = [_get_path_value(config, target) for target in targets] if targets else [_get_path_value(config, path)]
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError(
+            f"starting config has different effective values for shared coordinate {'.'.join(path)}; "
+            "declare explicit side bounds to tune those values independently"
+        )
+    return values[0]
 
 
 def _optimizer_anchor_id(config: dict) -> int | None:
@@ -3083,6 +3095,9 @@ def install_anchored_fine_tune_plan(
             base_key_paths, extract_bounds_tuple_list_from_config(config)
         )
     }
+    from config.inherited_bounds import get_bound_plan
+    binding_plan = get_bound_plan(config)
+    binding_by_key = {binding.key: binding for binding in binding_plan.bindings} if binding_plan is not None else {}
     sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
     clamp_collector = {}
     starting_configs = (
@@ -3113,7 +3128,10 @@ def install_anchored_fine_tune_plan(
                 if path is None or bound is None:
                     continue
                 anchor_path = resolve_optimization_bound_path(anchor_cfg, key) or path
-                original = _get_path_value(anchor_cfg, anchor_path)
+                original = _optimizer_binding_seed_value(
+                    anchor_cfg, anchor_path,
+                    binding_by_key[key].effective_targets if key in binding_by_key else (),
+                )
                 adjusted = _clamp_seed_value(original, bound, sig_digits)
                 _record_seed_bounds_adjustment(
                     source=source,
@@ -3215,9 +3233,12 @@ def _format_starting_seed_bot(bot, live=None):
     seed enablement and old fitness are never runtime authority.
     """
     from config.authored import validate_authored_config
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy
     from config.migrations.v9 import reject_retired_v9_fields
+    from config.schema import get_expanded_config_prototype
 
     bot = deepcopy(bot)
+    source_bot = deepcopy(bot)
     live = deepcopy(live) if isinstance(live, dict) else {}
     template = get_template_config()
     try:
@@ -3230,7 +3251,7 @@ def _format_starting_seed_bot(bot, live=None):
     # runtime policy first, or replace an invalid suggestion with a default.
     for field in _starting_live_numeric_seed(live):
         live[field] = deepcopy(template["live"][field])
-    defaults = template["bot"]["long"]["hsl"]
+    defaults = get_expanded_config_prototype()["bot"]["long"]["hsl"]
     numeric_fields = (
         "drawdown_ratio_threshold", "memory_ema_span_minutes",
         "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes",
@@ -3251,6 +3272,7 @@ def _format_starting_seed_bot(bot, live=None):
             numeric_seeds[(*path, key)] = number
 
     for scope, path in (
+        ("global", ("global", "hsl")),
         ("long", ("long", "hsl")),
         ("short", ("short", "hsl")),
         ("portfolio", ("portfolio", "hsl")),
@@ -3277,12 +3299,17 @@ def _format_starting_seed_bot(bot, live=None):
         remember(block, ("memory_ema_span_minutes",), path)
         if "memory_ema_span_minutes" in block:
             block["memory_ema_span_minutes"] = default["memory_ema_span_minutes"]
-    formatted = format_bot_config(bot, live_cfg=live, verbose=False, warn_deprecations=False)
+    effective = resolve_bot_policy(bot, get_side_field_catalog()).effective_view()
+    formatted = format_bot_config(effective, live_cfg=live, verbose=False, warn_deprecations=False)
     for path, value in numeric_seeds.items():
         block = formatted
         for key in path[:-1]:
             block = block[key]
         block[path[-1]] = value
+        if path[0] == "global":
+            for side in ("long", "short"):
+                if path[-1] not in source_bot.get(side, {}).get(path[1], {}):
+                    formatted[side][path[1]][path[-1]] = value
     return formatted
 
 
@@ -3366,7 +3393,9 @@ def _build_starting_seed_config(cfg):
         extracted = {**cfg, "bot": _format_starting_seed_bot(cfg["bot"], cfg.get("live"))}
     else:
         extracted = _extract_starting_config(cfg)
-    seed = get_template_config()
+    from config.schema import get_expanded_config_prototype
+
+    seed = get_expanded_config_prototype()
     seed["bot"] = deep_updated(seed["bot"], deepcopy(extracted["bot"]))
     if isinstance(extracted.get("live"), dict):
         seed["live"] = deep_updated(seed["live"], deepcopy(extracted["live"]))
@@ -3611,6 +3640,18 @@ def configs_to_individuals_streaming(
     for anchor_idx, cfg in enumerate(cfgs):
         raw_count += 1
         try:
+            seed_shape = optimization_shape
+            if seed_shape is None and key_paths is None:
+                from config.inherited_bounds import get_bound_plan
+
+                if get_bound_plan(cfg) is not None:
+                    prepared_shape = build_optimization_shape(cfg)
+                    if len(prepared_shape.bounds) != len(bounds):
+                        raise ValueError("seed bounds do not match its prepared binding plan")
+                    seed_shape = OptimizationShape(
+                        bounds=tuple(bounds), key_paths=prepared_shape.key_paths,
+                        sig_digits=sig_digits, binding_targets=prepared_shape.binding_targets,
+                    )
             fcfg = _build_starting_seed_config(cfg)
             resolved_anchor_id = None
             if anchored_shape:
@@ -3633,7 +3674,7 @@ def configs_to_individuals_streaming(
                 bounds,
                 sig_digits,
                 key_paths=key_paths,
-                optimization_shape=optimization_shape,
+                optimization_shape=seed_shape,
                 anchor_id=resolved_anchor_id,
                 clamp_context="starting config",
                 source=(
