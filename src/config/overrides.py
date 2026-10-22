@@ -636,11 +636,35 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
         prepare_config(validation, base_config_path=resolved_path, verbose=False,
                        log_config_transforms=False)
         patch = _extract_allowed_patch(
-            raw, coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
+            _project_declared_file_defaults(raw, strategy_kind=strategy_kind),
+            coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
             hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")),
         )
         _validate_patch_leaf_types(config, patch, coin=coin, origin=source)
         return _validate_effective_coin_config(config, patch, coin=coin, origin=source)
+
+
+def _project_declared_file_defaults(document, *, strategy_kind):
+    """Project only declared, coin-eligible common file values onto each side.
+
+    A referenced config is validated as a config first. Its global defaults may
+    supply coin parameter leaves, but neither hydration nor this projection can
+    authorize portfolio, activation or universe changes. Inline patches keep
+    their stricter, side-only permission boundary.
+    """
+    result = deepcopy(document)
+    bot = result.get("bot", {})
+    common = bot.get("global", {}) if isinstance(bot, dict) else {}
+    if not isinstance(common, dict):
+        return result  # The authored validator reports malformed config trees.
+    for side in ("long", "short"):
+        allowed = deepcopy(get_allowed_modifications(hsl_signal_mode="coin")["bot"][side])
+        allowed["strategy"] = {strategy_kind: allowed["strategy"][strategy_kind]}
+        inherited = apply_allowed_modifications({}, common, allowed, return_full=False)
+        if inherited:
+            explicit = bot.get(side, {})
+            bot[side] = nested_update(inherited, deepcopy(explicit))
+    return result
 
 
 def _resolve_override_config_path(config, coin):

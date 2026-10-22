@@ -21,12 +21,15 @@ from .universe import COIN_SOURCE_FIELDS
 
 _MISSING = object()
 _UNIVERSE_PATHS = tuple(("bot", side, "universe", field)
-                        for side in ("long", "short") for field in sorted(COIN_SOURCE_FIELDS)) + (("bot", "global", "universe", "approved_coins"),)
+                        for side in ("global", "long", "short") for field in sorted(COIN_SOURCE_FIELDS))
 _PROTECTED = (
     ("coin_overrides",), ("optimize", "bounds"),
     ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
     ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),
     ("backtest", "scenarios"), *_UNIVERSE_PATHS,
+    # A declaration is a pin even when its current value equals the common
+    # default. Compact output must not turn it into future inheritance.
+    ("bot", "long"), ("bot", "short"),
     *(("bot", side, "forager", "always_include") for side in ("long", "short")),
     ("bot", "portfolio", "hsl"),
 )
@@ -170,34 +173,44 @@ def compact_config(source, *, base_config_path="", destination_path=""):
 def _resolve_coin_sources(config, *, require_complete):
     result = deepcopy(config)
     unresolved = []
-
-    from .universe import resolve_universe_sources, raw_side_universe_sources
-    raw = raw_side_universe_sources(result, "approved_coins")
-    approved, _ = resolve_universe_sources(result, "approved_coins")
-    ignored, _ = resolve_universe_sources(result, "ignored_coins")
-    inherited = [side for side in ("long", "short") if raw.get(side) is None]
-    if inherited:
-        selected = approved[inherited[0]]
-        if selected == ["all"]:
-            unresolved.append("bot.global.universe.approved_coins")
+    from .bot_inheritance import apply_bot_policy_patch, install_bot_policy, reconciled_bot_policy
+    from .universe import (resolve_universe_sources, raw_side_universe_sources,
+                           source_inherits_shared, universe_source_view)
+    source = universe_source_view(result)
+    replacements = {}
+    for field in sorted(COIN_SOURCE_FIELDS):
+        raw = raw_side_universe_sources(result, field)
+        values, _ = resolve_universe_sources(result, field)
+        inherited = [side for side in ("long", "short") if source_inherits_shared(field, raw, side)]
+        if inherited:
+            common = values[inherited[0]]
         else:
-            result["bot"]["global"]["universe"]["approved_coins"] = selected
-    for side in ("long", "short"):
-        if raw.get(side) is not None:
-            if approved[side] == ["all"]:
-                unresolved.append(f"bot.{side}.universe.approved_coins")
+            # Unused common files still need a portable resolved export, but
+            # their contents never replace independently pinned side sources.
+            probe = deepcopy(source)
+            probe.setdefault("bot", {}).setdefault("long", {}).setdefault("universe", {}).pop(field, None)
+            selected, _ = resolve_universe_sources(probe, field, position_sides=("long",))
+            common = selected["long"]
+        common_path = ("bot", "global", "universe", field)
+        if field == "approved_coins" and common == ["all"]:
+            unresolved.append(".".join(common_path))
+        elif _get(source, common_path) is not _MISSING and _get(source, common_path) is not None:
+            replacements[".".join(common_path)] = common
+        for side in ("long", "short"):
+            # Omission and each field's null semantics remain source policy.
+            if side not in raw or raw[side] is None:
+                continue
+            path = f"bot.{side}.universe.{field}"
+            if field == "approved_coins" and values[side] == ["all"]:
+                unresolved.append(path)
             else:
-                result["bot"][side]["universe"]["approved_coins"] = approved[side]
-        result["bot"][side]["universe"]["ignored_coins"] = ignored[side]
-    # Even an unused shared source must become portable in a resolved export.
-    if not inherited:
-        probe = deepcopy(result)
-        probe["bot"]["long"]["universe"]["approved_coins"] = None
-        common, _ = resolve_universe_sources(probe, "approved_coins")
-        if common["long"] == ["all"]:
-            unresolved.append("bot.global.universe.approved_coins")
-        else:
-            result["bot"]["global"]["universe"]["approved_coins"] = common["long"]
+                replacements[path] = values[side]
+    policy = reconciled_bot_policy(result)
+    if policy is not None:
+        install_bot_policy(result, apply_bot_policy_patch(policy, replacements))
+    else:
+        for selector, value in replacements.items():
+            _set(result, tuple(selector.split(".")), value)
     if require_complete and unresolved:
         raise ValueError(
             "offline resolved export cannot expand approved_coins='all'; "
@@ -223,7 +236,8 @@ def _resolved_patch_value(value, parts, effective):
         coin = next(iter(normalize_coin_override_keys({parts[1]: {}}, verbose=False)))
         return deepcopy(effective["coin_overrides"][coin])
     if parts in _UNIVERSE_PATHS:
-        return deepcopy(_get(effective, parts))
+        from .universe import universe_source_view
+        return deepcopy(_get(universe_source_view(effective), parts))
     if isinstance(value, dict):
         return {name: _resolved_patch_value(child, (*parts, name), effective)
                 for name, child in value.items()}
@@ -260,6 +274,22 @@ def resolved_config(source, *, base_config_path=""):
 
 def _intersects(left, right):
     return left[:len(right)] == right or right[:len(left)] == left
+
+
+def _inherited_sources(config, parts):
+    """Inspection may expand values without changing declared source authority."""
+    from .bot_inheritance import reconciled_bot_policy
+    policy = reconciled_bot_policy(config)
+    if policy is not None:
+        return [(origin.target, origin.source) for origin in policy.resolve()[1]
+                if origin.source is not None and origin.source[:2] == ("bot", "global")
+                and origin.target[:len(parts)] == parts]
+    from .universe import raw_side_universe_sources, source_inherits_shared
+    if len(parts) == 4 and parts[:1] == ("bot",) and parts[1] in {"long", "short"} and parts[2] == "universe" and parts[3] in COIN_SOURCE_FIELDS:
+        sources = raw_side_universe_sources(config, parts[3])
+        if source_inherits_shared(parts[3], sources, parts[1]):
+            return [(parts, ("bot", "global", "universe", parts[3]))]
+    return []
 
 
 def _bound_target(config, path):
@@ -466,15 +496,14 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     # The same non-live loader resolves null inheritance, ignored lists and
     # dynamic dates without fetching market data.
     effective = prepare_config(effective, base_config_path=base_config_path, verbose=False, log_config_transforms=False)
-    inherited_approval = (parts in {("bot", side, "universe", "approved_coins")
-                                   for side in ("long", "short")}
-                          and _get(context, parts) is None)
-    if inherited_approval:
-        common = ("bot", "global", "universe", "approved_coins")
+    inherited_sources = _inherited_sources(context, parts)
+    inherited_paths = {common for _, common in inherited_sources}
+    for target, common in inherited_sources:
         events.append({"kind": "inherited", "path": ".".join(common),
+                       "target": ".".join(target),
                        "value": deepcopy(_get(effective, common))})
     for prefix in _UNIVERSE_PATHS:
-        if not (_intersects(parts, prefix) or inherited_approval and prefix == ("bot", "global", "universe", "approved_coins")):
+        if not (_intersects(parts, prefix) or prefix in inherited_paths):
             continue
         from .universe import resolve_universe_source_path
 

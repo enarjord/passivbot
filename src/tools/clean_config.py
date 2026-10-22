@@ -173,11 +173,17 @@ def cleanup_config(
     # These schema leaves accept mappings, lists, sentinel strings and file
     # references. Template-shaped cleaning alone would replace a string/list
     # with the default mapping, even though live normalization preserves it.
-    for key in ("approved_coins", "ignored_coins"):
-        from config.universe import require_side_universe_sources, set_side_universe_sources
-
-        from config.universe import raw_side_universe_sources
-        set_side_universe_sources(cleaned, key, raw_side_universe_sources(prepared, key))
+    from config.bot_inheritance import bot_policy_source_view
+    from config.universe import COIN_SOURCE_FIELDS
+    declared = universe_source_view(bot_policy_source_view(prepared, include_defaults=True))
+    for scope in ("global", "long", "short"):
+        sources = declared.get("bot", {}).get(scope, {}).get("universe", {})
+        target_sources = cleaned.get("bot", {}).get(scope, {}).get("universe", {})
+        for key in COIN_SOURCE_FIELDS:
+            if key in sources:
+                cleaned.setdefault("bot", {}).setdefault(scope, {}).setdefault("universe", {})[key] = deepcopy(sources[key])
+            else:
+                target_sources.pop(key, None)
     # Preserve null as explicit inheritance of the shared bot policy.
     cleaned["backtest"]["filter_by_min_effective_cost"] = prepared["backtest"][
         "filter_by_min_effective_cost"

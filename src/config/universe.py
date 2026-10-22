@@ -1,4 +1,4 @@
-"""Shared approval binding, side-owned sources and persistent selections."""
+"""Inherited source bindings, prepared membership and persistent selections."""
 
 from copy import deepcopy
 from pathlib import Path
@@ -30,31 +30,84 @@ def restore_universe_sources(config):
     bot = config.get("bot", {})
     if not isinstance(bot, dict):
         return config  # The authored validator owns malformed structure errors.
-    for side in ("long", "short"):
+    from .bot_inheritance import reconciled_bot_policy
+
+    policy = reconciled_bot_policy(config)
+    authored = policy.source_view() if policy is not None else None
+    for side in ("global", "long", "short"):
         node = bot.get(side, {})
         universe = node.get("universe", {}) if isinstance(node, dict) else {}
         if not isinstance(universe, dict):
             continue
         for field in COIN_SOURCE_FIELDS:
+            if authored is not None:
+                source = authored.get(side, {}).get("universe", {})
+                if field in source:
+                    universe[field] = deepcopy(source[field])
+                else:
+                    universe.pop(field, None)
+                continue
             value = universe.get(field)
-            if isinstance(value, ResolvedCoinList):
-                universe[field] = deepcopy(value.source)
+            if type(value) is ResolvedCoinList:
+                if value.source_present:
+                    universe[field] = deepcopy(value.source)
+                else:
+                    universe.pop(field, None)
     return config
 
 
-def universe_source_view(config):
-    return restore_universe_sources(deepcopy(config))
+def universe_source_view(config, *, candidate=False, include_defaults=False):
+    from .bot_inheritance import bot_policy_source_view
+
+    return restore_universe_sources(bot_policy_source_view(
+        config, candidate=candidate, include_defaults=include_defaults,
+    ))
+
+
+def shared_universe_source(config, field):
+    """Return this field's common binding, without opening files or granting pins."""
+    if field not in COIN_SOURCE_FIELDS:
+        raise KeyError(field)
+    from .bot_inheritance import reconciled_bot_policy
+
+    policy = reconciled_bot_policy(config)
+    bot = policy.source_view() if policy is not None else config.get("bot", {})
+    common = bot.get("global", {}).get("universe", {})
+    if field in common:
+        value = common[field]
+    elif policy is not None:
+        value = policy.catalog.find(("universe", field)).default_value()
+    else:
+        value = []
+    if field == "approved_coins" and value is None:
+        raise TypeError("bot.global.universe.approved_coins does not accept null")
+    return [] if field == "ignored_coins" and value is None else deepcopy(value)
+
+
+def source_inherits_shared(field, sources, side):
+    """Omission inherits both sources; approved null also inherits, ignored null clears."""
+    if field not in COIN_SOURCE_FIELDS:
+        raise KeyError(field)
+    return side not in sources or field == "approved_coins" and sources[side] is None
 
 
 def raw_side_universe_sources(config, field):
     if field not in COIN_SOURCE_FIELDS:
         raise KeyError(field)
+    from .bot_inheritance import reconciled_bot_policy
+
+    policy = reconciled_bot_policy(config)
+    bot = policy.source_view() if policy is not None else config.get("bot", {})
     result = {}
     for side in ("long", "short"):
-        universe = config.get("bot", {}).get(side, {}).get("universe", {})
+        universe = bot.get(side, {}).get("universe", {})
         if field in universe:
             value = universe[field]
-            result[side] = deepcopy(value.source if isinstance(value, ResolvedCoinList) else value)
+            if type(value) is ResolvedCoinList:
+                if value.source_present:
+                    result[side] = deepcopy(value.source)
+            else:
+                result[side] = deepcopy(value)
     return result
 
 
@@ -62,14 +115,22 @@ def get_side_universe_sources(config, field, default=None):
     if field not in COIN_SOURCE_FIELDS:
         raise KeyError(field)
     result = {}
-    shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
+    shared = shared_universe_source(config, field)
+    sources = raw_side_universe_sources(config, field)
     for side in ("long", "short"):
         universe = config.get("bot", {}).get(side, {}).get("universe", {})
-        if field in universe:
-            value = universe[field]
-            if field == "approved_coins" and isinstance(value, ResolvedCoinList) and value.source is None and value.shared_source != shared:
-                value = None
-            result[side] = shared if field == "approved_coins" and value is None else value
+        value = universe.get(field)
+        inherited = source_inherits_shared(field, sources, side)
+        if type(value) is ResolvedCoinList and (
+            value.source_present == (side in sources)
+            and value.source == sources.get(side)
+            and (not inherited or value.shared_source == shared)
+        ):
+            result[side] = value
+        elif inherited:
+            result[side] = deepcopy(shared)
+        else:
+            result[side] = [] if field == "ignored_coins" and sources[side] is None else deepcopy(sources[side])
     return result if result else default
 
 
@@ -94,17 +155,27 @@ def set_side_universe_sources(config, field, sources):
 
 def materialize_side_universe_sources(config, field, values, *, sources=None):
     """Build the existing runtime list view without losing source bindings."""
+    from .bot_inheritance import reconciled_bot_policy, install_bot_policy, with_prepared_bot_sources
+
+    policy = reconciled_bot_policy(config)
     sources = raw_side_universe_sources(config, field) if sources is None else sources
-    set_side_universe_sources(config, field, {
-        side: ResolvedCoinList(value, sources.get(side), config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])) for side, value in values.items()
-    })
+    shared = shared_universe_source(config, field)
+    for side, value in values.items():
+        if side not in {"long", "short"}:
+            raise ValueError(f"{field} membership must contain only long/short")
+        config.setdefault("bot", {}).setdefault(side, {}).setdefault("universe", {})[field] = ResolvedCoinList(
+            value, sources.get(side), shared, source_present=side in sources,
+        )
+    if policy is not None:
+        captured = with_prepared_bot_sources(policy, config["bot"])
+        install_bot_policy(config, captured)
 
 
 def universe_sources_affected(overrides):
     """Whether replacement authority intersects a source leaf, not other filters."""
     paths = [("bot", side, "universe", field)
              for side in ("long", "short") for field in COIN_SOURCE_FIELDS]
-    paths.append(("bot", "global", "universe", "approved_coins"))
+    paths.extend(("bot", "global", "universe", field) for field in COIN_SOURCE_FIELDS)
     for selector in overrides or ():
         if not isinstance(selector, str):
             continue  # The override owner reports malformed selector types.
@@ -214,9 +285,11 @@ def normalize_universe_source_bindings(config, *, anchor_all=False, base_config_
     return config
 
 
-def anchored_universe_source_view(config):
+def anchored_universe_source_view(config, *, candidate=False, include_defaults=False):
     """Reloadable semantic output with source files bound before context is removed."""
-    return normalize_universe_source_bindings(universe_source_view(config), anchor_all=True)
+    return normalize_universe_source_bindings(universe_source_view(
+        config, candidate=candidate, include_defaults=include_defaults,
+    ), anchor_all=True)
 
 
 def resolve_universe_sources(config, field, *, allow_partial=False, position_sides=None):
@@ -232,7 +305,7 @@ def resolve_universe_sources(config, field, *, allow_partial=False, position_sid
     if any(side not in {"long", "short"} for side in positions):
         raise ValueError("position_sides must contain only long/short")
     sources = raw_side_universe_sources(config, field)
-    shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
+    shared = shared_universe_source(config, field)
     base = config.get("live", {}).get("base_config_path", "")
 
     def parse(source, *, common=False):
@@ -255,7 +328,8 @@ def resolve_universe_sources(config, field, *, allow_partial=False, position_sid
             selected = resolve_universe_source_path(candidate, base_config_path=base, allow_all=field == "approved_coins")
             if selected is not None:
                 if common:
-                    message = "shared approved_coins file must contain one coin list; use bot.long.universe.approved_coins and bot.short.universe.approved_coins for directional files"
+                    message = (f"shared {field} file must contain one coin list; use "
+                               f"bot.long.universe.{field} and bot.short.universe.{field} for directional files")
                     with selected.open() as stream:
                         text = stream.read()
                     try:
@@ -284,7 +358,7 @@ def resolve_universe_sources(config, field, *, allow_partial=False, position_sid
         return normalize_coins_source(source, allow_all=field == "approved_coins", resolve_files=False, parse_jsonish=False)
 
     values, errors = {}, {}
-    inherited = [side for side in positions if field == "approved_coins" and sources.get(side) is None]
+    inherited = [side for side in positions if source_inherits_shared(field, sources, side)]
     if inherited:
         try:
             common = parse(shared, common=True)
@@ -387,7 +461,9 @@ def runtime_universe_snapshot(config, *, available_coins=None) -> PreparedUniver
 
 
 def materialize_universe_snapshot(config, snapshot):
-    result = universe_source_view(config)
+    # Execution retains the expanded parameter view. Only the source owner
+    # replaces membership; authored serialization uses universe_source_view.
+    result = deepcopy(config)
     for field in ("approved_coins", "ignored_coins"):
         values = {side: list(value) for name, side, value in snapshot if name == field}
         materialize_side_universe_sources(result, field, values)
@@ -396,7 +472,11 @@ def materialize_universe_snapshot(config, snapshot):
 
 def fixed_runtime_universe_view(config, *, snapshot=None, available_coins=None):
     snapshot = runtime_universe_snapshot(config, available_coins=available_coins) if snapshot is None else snapshot
-    result = universe_source_view(config)
+    result = restore_universe_sources(deepcopy(config))
+    # This deliberately fixed execution view is not reloadable source policy.
+    # Keep the expanded numeric tree, without a policy envelope which would
+    # restore inherited bindings during its internal formatting.
+    result["bot"] = dict(result["bot"])
     for field in ("approved_coins", "ignored_coins"):
         set_side_universe_sources(result, field, {side: list(value) for name, side, value in snapshot if name == field})
     return result
