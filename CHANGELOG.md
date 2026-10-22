@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add the opt-in `entry_threshold` optimizer prefilter to penalize excessive entry
+  activation distances at declared exposure and volatility probes, independently
+  of close geometry. Preserve normalized EMA gates and partial initial entries.
+
 - Replace rolling HSL, auto-unstuck and realized-loss-gate memory with the v9 forward decaying
   risk model. `live.lookback_ema_span_minutes` controls slow loss decay; HSL's
   independent fast EMA smooths the drawdown ratio with contemporaneous budgets.

@@ -2,7 +2,8 @@
 use crate::closes::{calc_close_retracement_multiplier, calc_close_threshold_pct};
 use crate::entries::{
     calc_entry_distance_multiplier, calc_entry_retracement_multiplier, calc_next_entry_long,
-    calc_next_entry_short, wallet_exposure_limit_with_allowance,
+    calc_next_entry_short, gate_reentry_price_ask, gate_reentry_price_bid,
+    wallet_exposure_limit_with_allowance,
 };
 use crate::strategies::TrailingMartingaleParams;
 use crate::types::{
@@ -39,6 +40,7 @@ struct Probe {
 struct Observation {
     exposure_ratio: f64,
     entry_close_span: f64,
+    entry_threshold: f64,
     entry_retracement: f64,
     close_retracement: f64,
     entry_cooldown_minutes: f64,
@@ -303,6 +305,14 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             &TrailingPriceBundle::default(),
         )
     };
+    // Reentry-only gates do not affect the flat initial order above. Ask the
+    // runtime gate directly so every EMA mode measures its actual entry branch.
+    let reentry_gate_price = if p.side == "long" {
+        gate_reentry_price_bid(1.0, &exchange, &normalized_state, &p.strategy.entry)
+    } else {
+        gate_reentry_price_ask(1.0, &exchange, &normalized_state, &p.strategy.entry)
+    };
+    let reentry_distance = (reentry_gate_price - 1.0).abs();
     let mut observations = Vec::new();
     for &ratio in &p.exposure_ratios {
         let (mut distance, mut retracement) = distances(p, ratio * allowed, allowed);
@@ -315,7 +325,7 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             distance = initial_distance;
             retracement = 0.0;
         } else if p.strategy.entry.ema_gate_mode.gates_reentry() {
-            distance = distance.max(initial_distance);
+            distance = distance.max(reentry_distance);
         }
         let state = StateParams {
             balance: 1.0,
@@ -350,7 +360,7 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             Some(ratio * allowed / p.wallet_exposure_limit),
             Some(p.adverse_directionality),
         )?;
-        if [span, retracement, close_retracement, cooldown]
+        if [distance, span, retracement, close_retracement, cooldown]
             .iter()
             .any(|x| !x.is_finite())
         {
@@ -359,6 +369,7 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
         observations.push(Observation {
             exposure_ratio: ratio,
             entry_close_span: span,
+            entry_threshold: distance,
             entry_retracement: retracement,
             close_retracement,
             entry_cooldown_minutes: cooldown,
@@ -425,7 +436,104 @@ mod tests {
         p.strategy.close.threshold_we_weight = -0.005;
         let result = measure(&p).unwrap();
         assert!((result.observations[0].entry_close_span - 0.156).abs() < 1e-12);
+        assert!((result.observations[0].entry_threshold - 0.15).abs() < 1e-12);
         assert!((result.observations[0].entry_retracement - 0.00108).abs() < 1e-12);
+    }
+
+    #[test]
+    fn entry_threshold_uses_exposure_and_declared_volatility_on_both_sides() {
+        for side in ["long", "short"] {
+            let mut p = probe();
+            p.side = side.into();
+            p.calculate_grid = false;
+            p.strategy.entry.threshold_base_pct = 0.04;
+            p.strategy.entry.threshold_we_weight = 5.0;
+            p.strategy.entry.threshold_volatility_1m_weight = 10.0;
+            p.strategy.entry.threshold_volatility_1h_weight = 2.0;
+            p.volatility_ema_1m = 0.001;
+            p.volatility_ema_1h = 0.01;
+            p.exposure_ratios = vec![0.5, 0.8, 0.95];
+            let result = measure(&p).unwrap();
+            for (row, expected) in result.observations.iter().zip([0.1412, 0.2012, 0.2312]) {
+                assert!((row.entry_threshold - expected).abs() < 1e-12);
+            }
+            // Close geometry must not change the independent entry measurement.
+            p.strategy.close.threshold_base_pct = 0.5;
+            p.strategy.close.retracement_base_pct = 0.0;
+            let changed = measure(&p).unwrap();
+            assert_eq!(
+                changed.observations[1].entry_threshold,
+                result.observations[1].entry_threshold
+            );
+            assert!(
+                changed.observations[1].entry_close_span > result.observations[1].entry_close_span
+            );
+        }
+    }
+
+    #[test]
+    fn entry_threshold_matches_runtime_order_for_every_ema_mode() {
+        use crate::strategies::EmaGateMode;
+        for side in ["long", "short"] {
+            for mode in [
+                EmaGateMode::Disabled,
+                EmaGateMode::Initial,
+                EmaGateMode::Reentry,
+                EmaGateMode::All,
+            ] {
+                let mut p = probe();
+                p.side = side.into();
+                p.calculate_grid = false;
+                p.strategy.entry.ema_gate_mode = mode;
+                p.strategy.entry.initial_qty_pct = 0.01;
+                p.strategy.entry.initial_ema_dist = 0.6;
+                p.strategy.entry.threshold_base_pct = 0.03;
+                p.strategy.entry.threshold_we_weight = 0.0;
+                p.strategy.entry.retracement_base_pct = 0.0;
+                let exchange = ExchangeParams {
+                    qty_step: 1e-12,
+                    price_step: 1e-12,
+                    min_qty: 1e-12,
+                    min_cost: 0.0,
+                    c_mult: 1.0,
+                    ..Default::default()
+                };
+                let state = StateParams {
+                    balance: 1.0,
+                    order_book: OrderBook { bid: 1.0, ask: 1.0 },
+                    ema_bands: EMABands {
+                        lower: 1.0,
+                        upper: 1.0,
+                    },
+                    ..Default::default()
+                };
+                let runtime = RuntimeOrderContext {
+                    effective_wallet_exposure_limit: 1.0,
+                };
+                let position = Position {
+                    size: if side == "long" { 0.8 } else { -0.8 },
+                    price: 1.0,
+                };
+                let entry_fn = if side == "long" {
+                    calc_next_entry_long
+                } else {
+                    calc_next_entry_short
+                };
+                let order = entry_fn(
+                    &exchange,
+                    &state,
+                    &bot(&p),
+                    &runtime,
+                    &p.strategy.entry,
+                    &position,
+                    &TrailingPriceBundle::default(),
+                );
+                assert!(order.qty.abs() > 0.0);
+                let threshold = measure(&p).unwrap().observations[0].entry_threshold;
+                assert!((threshold - (order.price - 1.0).abs()).abs() < 1e-12);
+                assert!((threshold - if mode.gates_reentry() { 0.6 } else { 0.03 }).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]
@@ -455,10 +563,13 @@ mod tests {
         p.exposure_ratios = vec![0.25];
         let row = &measure(&p).unwrap().observations[0];
         assert_eq!(row.entry_close_span, 0.0);
+        assert_eq!(row.entry_threshold, 0.0);
         assert_eq!(row.entry_retracement, 0.0);
         p.strategy.entry.initial_qty_pct = 0.01;
         p.strategy.entry.initial_ema_dist = 0.6;
         p.strategy.entry.ema_gate_mode = crate::strategies::EmaGateMode::All;
-        assert!((measure(&p).unwrap().observations[0].entry_close_span - 0.6).abs() < 1e-9);
+        let result = measure(&p).unwrap();
+        assert!((result.observations[0].entry_close_span - 0.6).abs() < 1e-9);
+        assert!((result.observations[0].entry_threshold - 0.6).abs() < 1e-9);
     }
 }
