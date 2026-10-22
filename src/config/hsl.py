@@ -159,8 +159,8 @@ def generated_template(template, mode="coin"):
         config["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = deepcopy(
             prototype["optimize"]["bounds"]["long"]["hsl"]
         )
-        for side in ("long", "short"):
-            config["optimize"]["bounds"].get(side, {}).pop("hsl", None)
+        for scope in ("global", "long", "short"):
+            config["optimize"]["bounds"].get(scope, {}).pop("hsl", None)
     return config
 
 
