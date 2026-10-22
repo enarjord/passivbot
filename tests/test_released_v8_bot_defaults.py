@@ -179,3 +179,79 @@ def test_sparse_coin_and_scenario_fixed_replacements_do_not_gain_root_defaults()
     sparse = {"config_version": "v8.6.0", "bot": {"short": {"unstuck": {"close_pct": 0.007}}}}
     output = migrate_v8_to_v9(sparse, _coin_patch=True).config
     assert output["bot"] == {"short": {"unstuck": {"close_fraction": 0.007}}}
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("value,expected", [(2.5, 2), (3.5, 4)])
+@pytest.mark.parametrize("syntax", ["flat", "grouped", "canonical"])
+def test_released_root_counts_keep_historical_rounding(side, value, expected, syntax):
+    source = released()
+    target = source["bot"][side]
+    target["risk"].pop("n_positions")
+    if syntax == "flat":
+        target["n_positions"] = value
+    else:
+        target["risk"]["n_positions" if syntax == "grouped" else "max_positions"] = value
+    source["optimize"]["bounds"][side]["risk"]["n_positions"] = [1.5, 5.5]
+    original = deepcopy(source)
+    result = migrate_v8_to_v9(source, memory_span_minutes=123.5)
+    assert result.config["bot"][side]["risk"]["max_positions"] == expected
+    assert type(result.config["bot"][side]["risk"]["max_positions"]) is int
+    assert result.config["optimize"]["bounds"][side]["risk"]["max_positions"] == [1.5, 5.5]
+    assert any(row["old"] == value and row["new"] == expected and "round" in row["reason"]
+               for row in result.changes)
+    assert source == original
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("value,expected", [(2.5, 2), (3.5, 4)])
+@pytest.mark.parametrize("owner", ["fixed", "scenario", "suite"])
+@pytest.mark.parametrize("parent", [False, True])
+def test_released_count_patch_rounding_retains_replacement_scope(side, value, expected, owner, parent):
+    source = released()
+    patch = ({f"bot.{side}.risk": {"n_positions": value}} if parent else
+             {f"bot.{side}.n_positions": value})
+    if owner == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = patch
+    else:
+        scenarios = [{"label": "count", "overrides": patch}]
+        if owner == "suite":
+            source["backtest"].pop("scenarios", None)
+            source["backtest"]["suite"] = {"enabled": True, "scenarios": scenarios}
+        else:
+            source["backtest"]["scenarios"] = scenarios
+    original = deepcopy(source)
+    result = migrate_v8_to_v9(source, memory_span_minutes=123.5)
+    actual = (result.config["optimize"]["fixed_runtime_overrides"] if owner == "fixed" else
+              result.config["backtest"]["scenarios"][0]["overrides"])
+    assert actual == ({f"bot.{side}.risk": {"max_positions": expected}} if parent else
+                      {f"bot.{side}.risk.max_positions": expected})
+    assert any(row["old"] == value and row["new"] == expected and "round" in row["reason"]
+               and ("fixed_runtime_overrides" if owner == "fixed" else "scenarios") in row["path"]
+               for row in result.changes)
+    assert source == original
+
+
+def test_current_v9_authored_counts_remain_strict():
+    from config import prepare_config
+    from config.schema import get_template_config
+
+    source = get_template_config()
+    source["bot"]["global"]["risk"]["max_positions"] = 3.5
+    original = deepcopy(source)
+    with pytest.raises(TypeError, match="serialization type"):
+        prepare_config(source, verbose=False)
+    assert source == original
+
+
+def test_tool_exports_rounded_released_counts_as_strict_reloadable_values():
+    from config import prepare_config
+    from tools.migrate_config_v9 import migrate
+
+    source = released()
+    source["bot"]["long"]["risk"]["n_positions"] = 3.5
+    original = deepcopy(source)
+    output = migrate(source, memory_span_minutes=123.5).config
+    assert output["bot"]["long"]["risk"]["max_positions"] == 4
+    assert prepare_config(output, verbose=False)["bot"]["long"]["risk"]["max_positions"] == 4
+    assert source == original
