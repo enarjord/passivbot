@@ -326,6 +326,8 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         config = optimizer_overrides(overrides_list or [], config, pside)
     from config.bot_inheritance import get_bot_policy, install_bot_policy, with_normalized_bot_values
     normalization_policy = get_bot_policy(config)
+    origins = ({origin.target: origin for origin in normalization_policy.resolve()[1]}
+               if normalization_policy is not None else {})
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         forager_cfg = pside_cfg.get("forager") if isinstance(pside_cfg, dict) else None
@@ -344,6 +346,8 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         # mirrored targets inherit that source's domain, including at all-low.
         if not any(weights.values()) and all(
             ("bot", source_side, "forager", "score_weights", name) in fixed_value_paths
+            or ((origin := origins.get(("bot", source_side, "forager", "score_weights", name))) is not None
+                and origin.source in fixed_value_paths)
             or (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
             for name in weights
             if (key := f"{source_side}_forager_score_weights_{name}") in flat_bounds

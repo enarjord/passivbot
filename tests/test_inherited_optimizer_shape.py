@@ -182,6 +182,23 @@ def test_global_complete_runtime_weight_pin_freezes_the_inherited_group():
     validate_forager_weight_search(config)
 
 
+def test_global_fixed_zero_weights_retain_raw_values_through_candidate_finalization():
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+    config = real_prepared()
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    prepare_bound_plan(config, authored_bounds={"global": {"forager": {
+        "score_weights": {name: [0.0, 1.0] for name in names},
+    }}})
+    config["optimize"]["fixed_runtime_overrides"] = {
+        f"bot.global.forager.score_weights.{name}": 0.0 for name in names
+    }
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
+    for side in ("long", "short"):
+        assert candidate["bot"][side]["forager"]["score_weights"] == dict.fromkeys(names, 0.0)
+
+
 def test_global_runtime_pin_cannot_freeze_an_independently_owned_side_weight_domain():
     from optimization.config_adapter import validate_forager_weight_search
     config = weight_search_config(side_domain=True)
