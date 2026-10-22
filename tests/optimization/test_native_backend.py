@@ -9,6 +9,8 @@ import pytest
 
 import optimize
 from optimization.backends.gpu_backend import run_backend
+from config import prepare_config
+from config_utils import clean_config
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.gpu.executor import GpuBacktestService, ReplayResult
 from optimization.native_checkpoint import load_checkpoint
@@ -37,7 +39,7 @@ def inputs(manager, *, n_obj=2):
                 key: [config["bot"][side]["risk"][key]] * 2
                 for key in ("max_positions", "total_wallet_exposure_limit")
             },
-            "strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": [0.01, 0.05]}}},
+            "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": [0.01, 0.05]}}},
         }
         for side in ("long", "short")
     }
@@ -45,6 +47,9 @@ def inputs(manager, *, n_obj=2):
     config["optimize"]["scoring"] = [dict(metric=name, goal="max") for name in metrics[:n_obj]]
     config["optimize"]["limits"] = [dict(metric="drawdown_worst_strategy_eq", penalize_if="greater_than", value=0.2)]
     config["optimize"]["gpu"].update(batch_size=1, checkpoint_interval_seconds=0)
+    coins = deepcopy(config["backtest"]["coins"])
+    config = prepare_config(clean_config(config), verbose=False)
+    config["backtest"]["coins"] = coins
     specs = [manager.create_from(array)[0] for array in (candles, btc)]
     base = optimize.Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets},
                               config, timestamps={"binance": timestamps})
@@ -249,7 +254,7 @@ def test_native_interrupt_checkpoint_retains_full_results_and_resumes_pending_gp
         starts = [list(vector) for _ in range(6)] if seeds else []
         # Distinct seed requests exercise survival after more seeds than population.
         if seeds:
-            index = [key for key, _path in base.key_paths].index("long_entry_initial_qty_pct")
+            index = [key for key, _path in base.key_paths].index("bot.long.strategy.trailing_martingale.entry.initial_qty_fraction")
             for i, row in enumerate(starts):
                 row[index] = 0.01 + i * 0.004
         records = []
