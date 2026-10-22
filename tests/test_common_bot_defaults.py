@@ -33,7 +33,12 @@ def test_native_metadata_declares_one_common_profile_with_directional_ids(kind):
 def test_common_shared_profile_retains_former_long_values_and_separate_permission():
     common = get_common_bot_defaults()
     prototype = get_expanded_config_prototype()["bot"]
-    assert prototype["long"] == prototype["short"] == prototype["global"] == common
+    assert prototype["global"] == common
+    assert prototype["long"] == prototype["short"]
+    assert prototype["long"]["universe"]["approved_coins"] is None
+    inherited = deepcopy(prototype["long"])
+    inherited["universe"]["approved_coins"] = []
+    assert inherited == common
     assert common["enabled"] is False
     assert common["universe"]["approved_coins"] == []
     assert common["risk"]["total_wallet_exposure_limit"] == 1.5

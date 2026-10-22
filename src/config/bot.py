@@ -667,6 +667,17 @@ def normalize_bot_forager_config(
         forager_cfg["score_weights"] = normalized
 
 
+def normalize_position_count(value, *, path):
+    """Canonical count adapter shared by hydration and gene lowering."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric") from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{path} must be finite and >= 0")
+    return int(round(number))
+
+
 def normalize_position_counts(
     result: dict, *, tracker: Optional[object] = None
 ) -> None:
@@ -681,13 +692,7 @@ def normalize_position_counts(
         current = risk_cfg.get("max_positions")
         if current is None:
             continue
-        try:
-            current_value = float(current)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.risk.max_positions must be numeric") from exc
-        if not math.isfinite(current_value) or current_value < 0.0:
-            raise ValueError(f"bot.{pside}.risk.max_positions must be finite and >= 0")
-        rounded = int(round(current_value))
+        rounded = normalize_position_count(current, path=f"bot.{pside}.risk.max_positions")
         if tracker is not None and current != rounded:
             tracker.update(["bot", pside, "risk", "max_positions"], current, rounded)
         risk_cfg["max_positions"] = rounded

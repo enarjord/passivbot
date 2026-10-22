@@ -122,7 +122,7 @@ def _object_schema(tree, path, definitions):
     if (len(path) == 4 and path[:1] == ("bot",) and path[1] in {"global", "long", "short"}
             and path[2] == "universe" and path[3] in {"approved_coins", "ignored_coins"}):
         source_schema = _coin_source(sides=False)
-        if path[1] == "global":
+        if path[1] == "global" and path[-1] == "approved_coins":
             source_schema["anyOf"] = source_schema["anyOf"][:-1]
         return {**result, **source_schema}
     if path in {

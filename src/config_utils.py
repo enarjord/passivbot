@@ -2157,6 +2157,17 @@ def add_config_arguments(
         parser: argparse.ArgumentParser
         config: Config dict (typically from get_template_config())
     """
+    if isinstance(config, dict) and "config_version" in config and "bot" in config:
+        from config.schema import get_expanded_config_prototype
+        discovery = get_expanded_config_prototype()
+        def overlay(target, source):
+            for key, value in source.items():
+                if isinstance(value, dict) and isinstance(target.get(key), dict):
+                    overlay(target[key], value)
+                else:
+                    target[key] = deepcopy(value)
+        overlay(discovery, config)
+        config = discovery  # CLI discovery never creates authored side pins.
     reserved_acronyms, reserved_keys = add_reserved_arguments(
         parser, command=command, help_all=help_all, group_map=group_map
     )
@@ -2265,11 +2276,14 @@ def add_arguments_recursively(
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
             nullable_float_override = full_name in {
-                *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
+                *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("global", "long", "short")),
                 "backtest.ew_half_life_days",
                 "bot.portfolio.warmup.max_minutes",
             }
-            nullable_coin_override = full_name in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}
+            nullable_coin_override = full_name in {
+                *(f"bot.{side}.universe.approved_coins" for side in ("long", "short")),
+                *(f"bot.{side}.universe.ignored_coins" for side in ("global", "long", "short")),
+            }
             nullable_mode_override = full_name in {"live.modes.long", "live.modes.short"}
             type_ = type(value)
             if "bounds" in full_name:
@@ -2456,10 +2470,11 @@ def update_config_with_args(
     config = effective_config_payload(config)
     from config.hsl import validate_override_paths
     nullable_overrides = {
-        *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
+        *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("global", "long", "short")),
         "backtest.ew_half_life_days",
         "bot.portfolio.warmup.max_minutes", "live.modes.long", "live.modes.short",
         *(f"bot.{side}.universe.approved_coins" for side in ("long", "short")),
+        *(f"bot.{side}.universe.ignored_coins" for side in ("global", "long", "short")),
     }
     supplied = {key: value for key, value in vars(args).items()
                 if (value is not None or key in nullable_overrides)
@@ -2470,7 +2485,7 @@ def update_config_with_args(
     def null_source(value):
         candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
         return candidate is None or isinstance(candidate, str) and candidate.strip().lower() == "null"
-    for key in ("approved_coins", "ignored_coins", "bot.global.universe.approved_coins"):
+    for key in ("approved_coins", "bot.global.universe.approved_coins"):
         if key not in supplied:
             continue
         value = supplied[key]
@@ -2512,7 +2527,7 @@ def update_config_with_args(
             f"bot.{side}.universe.{field}": (side, field)
             for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
         }
-        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths or key == "bot.global.universe.approved_coins":
+        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths or key in {"bot.global.universe.approved_coins", "bot.global.universe.ignored_coins"}:
             from config.universe import restore_universe_sources
             restore_universe_sources(config)
             targets = ([f"bot.{pside}.universe.{key}" for pside in ("long", "short")]
@@ -2521,11 +2536,13 @@ def update_config_with_args(
                 raw = value
                 if key in {"approved_coins", "ignored_coins"} and isinstance(value, dict):
                     raw = value.get(path.split(".")[1], [])
-                if key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} and null_source(raw):
+                if null_source(raw) and (path.endswith(".ignored_coins")
+                                         or path in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}):
                     raw = None
                 from config.universe import bind_universe_source
                 raw = bind_universe_source(raw, field=path.split(".")[-1],
                     base_config_path=config.get("live", {}).get("base_config_path", ""))
+                expanded[path] = deepcopy(raw)
                 change = recursive_config_update(config, path, deepcopy(raw), verbose=verbose)
                 if change:
                     changed_keys.append(path)

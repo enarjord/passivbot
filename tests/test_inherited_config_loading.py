@@ -137,3 +137,38 @@ def test_owned_projection_keeps_full_policy_and_source_presence_guard():
     changed = deepcopy(prepared)
     changed["bot"] = Unowned(changed["bot"], get_bot_policy(changed))
     assert _compile_projection_guard(changed, set()) is None
+
+
+def test_cli_discovers_expanded_fields_but_preserves_sparse_equal_declarations():
+    import argparse
+    from config_utils import add_config_arguments, update_config_with_args
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(parser, get_template_config(), help_all=True)
+    assert "bot.long.risk.total_wallet_exposure_limit" in keys
+    assert "bot.short.strategy.ema_anchor.ema_span_0_minutes" in keys
+    assert "bot.global.entry_cooldown.max_duration_minutes" in keys
+    prepared = prepare_config(source(), verbose=False)
+    args = parser.parse_args(["--bot.long.risk.total_wallet_exposure_limit", "2.25",
+        "--bot.global.entry_cooldown.max_duration_minutes", "null",
+        "--bot.global.universe.ignored_coins", "null",
+        "--bot.short.universe.approved_coins", "null"])
+    update_config_with_args(prepared, args, allowed_keys=keys)
+    raw = bot_policy_source_view(prepared)["bot"]
+    assert raw["long"]["risk"]["total_wallet_exposure_limit"] == 2.25
+    assert raw["global"]["entry_cooldown"]["max_duration_minutes"] is None
+    assert raw["global"]["universe"]["ignored_coins"] is None
+    assert raw["short"]["universe"]["approved_coins"] is None
+    apply_bot_config_patch(prepared, {"bot.global.risk.total_wallet_exposure_limit": 3.5})
+    assert prepare_config(prepared, verbose=False)["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.25
+
+
+def test_editor_schema_accepts_common_ignored_clear_but_rejects_common_approval_null():
+    from jsonschema import Draft202012Validator, ValidationError
+    from config.json_schema import generate_schema
+    validator = Draft202012Validator(generate_schema())
+    raw = source()
+    raw["bot"]["global"]["universe"]["ignored_coins"] = None
+    validator.validate(raw)
+    raw["bot"]["global"]["universe"]["approved_coins"] = None
+    with pytest.raises(ValidationError):
+        validator.validate(raw)

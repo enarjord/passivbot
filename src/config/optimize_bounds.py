@@ -203,6 +203,9 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
     """
     from .param_paths import OPTIMIZABLE_BOT_KEY_PATHS, iter_optimizer_key_paths
 
+    from .inherited_bounds import get_bound_plan
+    if get_bound_plan(config) is not None:
+        return  # The typed plan already materialized every effective domain.
     kind = config["bot"]["portfolio"]["strategy_kind"]
     bounds = config["optimize"]["bounds"]
     authored = flatten_optimize_bounds(
@@ -327,6 +330,9 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
 
 
 def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio_hsl: bool = False) -> None:
+    from .inherited_bounds import PreparedOptimizationBounds
+    if type(bounds) is PreparedOptimizationBounds:
+        return  # Its immutable plan supplies canonical ordering and domains.
     flat = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
     normalized_kind = normalize_strategy_kind(strategy_kind)
     for key, value in list(flat.items()):

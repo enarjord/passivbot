@@ -128,12 +128,8 @@ def normalize_config(
     policy = with_normalized_bot_values(policy, result["bot"])
     install_bot_policy(result, policy, effective_bot=result["bot"])
     sync_canonical_strategy_config(result, tracker=tracker)
-    ensure_optimize_bounds_for_bot(
-        result,
-        verbose=verbose,
-        tracker=tracker,
-        source_bounds=raw_optimize_snapshot.get("bounds", {}),
-    )
+    from .inherited_bounds import prepare_bound_plan
+    prepare_bound_plan(result, authored_bounds=raw_optimize_snapshot.get("bounds", {}))
     # All missing numeric dimensions were fixed from effective bot values above;
     # later default hydration must not reopen the profile's recommended ranges.
     template["optimize"]["bounds"] = deepcopy(result["optimize"]["bounds"])
@@ -153,7 +149,7 @@ def normalize_config(
     normalize_scoring_config(result, verbose=verbose, tracker=tracker)
     validate_config(
         result,
-        raw_optimize=raw_optimize_snapshot,
+        raw_optimize={**raw_optimize_snapshot, "bounds": deepcopy(result["optimize"]["bounds"])},
         verbose=verbose,
         tracker=tracker,
     )
@@ -191,4 +187,5 @@ def normalize_config(
     policy = with_prepared_bot_sources(policy, result["bot"])
     policy = with_normalized_bot_values(policy, result["bot"])
     install_bot_policy(result, policy, effective_bot=result["bot"])
+    prepare_bound_plan(result, authored_bounds=raw_optimize_snapshot.get("bounds", {}))
     return result
