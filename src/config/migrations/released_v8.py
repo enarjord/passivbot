@@ -1099,6 +1099,50 @@ def materialize_released_v8_bot_defaults(config, *, changes):
         fill(bot.setdefault(side, {}), defaults[side], ("bot", side))
 
 
+def normalize_released_v8_position_counts(config, *, changes):
+    """Retain released count rounding after aliases, before strict v9 loading.
+
+    Only root policy and supported fixed/scenario replacements own counts.
+    Search domains retain their original endpoints and steps.
+    """
+    from config.bot import normalize_position_count
+
+    def count_policy(path):
+        if (len(path) < 4 or path[-4] != "bot" or path[-3] not in {"long", "short"}
+                or path[-2:] != ("risk", "max_positions")):
+            return False
+        prefix = path[:-4]
+        return (not prefix or prefix == ("optimize", "fixed_runtime_overrides")
+                or (len(prefix) == 4 and prefix[:2] == ("backtest", "scenarios")
+                    and type(prefix[2]) is int and prefix[3] == "overrides"))
+
+    def label(path):
+        result = ""
+        for part in path:
+            result += f"[{part}]" if type(part) is int else ("." if result else "") + part
+        return result
+
+    def visit(node, path=()):
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                visit(item, (*path, index))
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                selected = (*path, *key.split("."))
+                if value is not None and count_policy(selected):
+                    rounded = normalize_position_count(value, path=label(selected))
+                    if type(value) is not int or value != rounded:
+                        node[key] = rounded
+                        changes.append(dict(
+                            path=label(selected), old=deepcopy(value), new=rounded,
+                            reason="released-v8 position count rounded to the nearest integer (ties to even)",
+                        ))
+                else:
+                    visit(value, selected)
+
+    visit(config)
+
+
 def materialize_released_v8_optimizer_bounds(config, *, changes):
     """Preserve released implicit search ranges after explicit structural conversion.
 
