@@ -211,6 +211,21 @@ def materialize_coupled_scenario_spans(config):
 
     for scenario in config.get("backtest", {}).get("scenarios", []) or []:
         effective = deepcopy(config)
+        from config.bot_inheritance import (
+            get_bot_policy, install_bot_policy, resolve_bot_policy,
+            with_normalized_bot_values, with_prepared_bot_sources,
+        )
+
+        policy = get_bot_policy(effective)
+        if policy is not None:
+            # Scenario overrides apply after candidate transforms. Freeze only
+            # this disposable candidate snapshot so an authored scenario patch
+            # cannot discard the already-computed mirrored numeric values.
+            # The reusable candidate retains its original source authority.
+            snapshot = resolve_bot_policy(policy.candidate_view(), policy.catalog)
+            snapshot = with_prepared_bot_sources(snapshot, effective["bot"])
+            snapshot = with_normalized_bot_values(snapshot, effective["bot"])
+            install_bot_policy(effective, snapshot, effective_bot=effective["bot"])
         overrides = {
             ".".join(resolve_dotted_config_path(effective, key)): value
             for key, value in _normalize_scenario_overrides(
