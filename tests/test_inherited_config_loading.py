@@ -22,6 +22,14 @@ def source(kind="trailing_martingale"):
         "short": {"enabled": False}}, "live": {}}
 
 
+@pytest.mark.parametrize("side,value", [("long", -1.0), ("short", 1.0)])
+def test_invalid_authored_bot_value_reports_its_path_before_synthesized_fixed_bounds(side, value):
+    raw = source()
+    raw["bot"].setdefault(side, {})["unstuck"] = {"ema_distance_fraction": value}
+    with pytest.raises(ValueError, match=rf"bot\.{side}\.unstuck\.ema_distance_fraction"):
+        prepare_config(raw, verbose=False)
+
+
 def test_lean_template_has_common_profile_and_no_side_permission_pins():
     raw = get_template_config()
     assert raw["bot"]["long"] == raw["bot"]["short"] == {}

@@ -1794,12 +1794,15 @@ async def _format_approved_ignored_coins(
         exchanges = [exchanges]
     from config.universe import raw_side_universe_sources, resolve_universe_sources, materialize_side_universe_sources
     raw_sources = {field: raw_side_universe_sources(config, field) for field in ("approved_coins", "ignored_coins")}
+    from config.bot_inheritance import reconciled_bot_policy, install_bot_policy, with_prepared_bot_sources
+    source_policy = reconciled_bot_policy(config)
     before_approved = deepcopy(get_side_universe_sources(config, 'approved_coins'))
     before_ignored = deepcopy(get_side_universe_sources(config, 'ignored_coins'))
     before_sources = deepcopy(config.get("_coins_sources", {}))
     coin_sources = config.setdefault("_coins_sources", {})
     coin_sources["approved_coins"] = deepcopy(raw_sources["approved_coins"])
     ac, _ = resolve_universe_sources(config, "approved_coins")
+    ic, _ = resolve_universe_sources(config, "ignored_coins")
     needs_market_expansion = any(
         _coins_source_side_is_all(ac[pside]) for pside in ("long", "short")
     )
@@ -1830,6 +1833,10 @@ async def _format_approved_ignored_coins(
             )
         approved_coins_sorted = sorted([x for x in approved_coins if x])
 
+    # Identifier reconciliation edits an execution view. These temporary plain
+    # lists must not be interpreted as authored side-source replacements.
+    if source_policy is not None:
+        config["bot"] = deepcopy(dict(config["bot"]))
     set_side_universe_sources(config, 'approved_coins', {})
     for pside in ("long", "short"):
         if _coins_source_side_is_all(ac[pside]):
@@ -1838,8 +1845,7 @@ async def _format_approved_ignored_coins(
             config['bot'][pside]['universe']['approved_coins'] = _preserve_market_identifiers(ac[pside])
 
     coin_sources["ignored_coins"] = deepcopy(raw_sources["ignored_coins"])
-    # Resolve against the original source, not the materialized approved view.
-    ic, _ = resolve_universe_sources(config, "ignored_coins")
+    # Both fields were resolved against the original source before mutation.
     set_side_universe_sources(config, 'ignored_coins', {
         pside: _preserve_market_identifiers(ic[pside]) for pside in ic
     })
@@ -1871,6 +1877,8 @@ async def _format_approved_ignored_coins(
 
     for field in ("approved_coins", "ignored_coins"):
         materialize_side_universe_sources(config, field, require_side_universe_sources(config, field), sources=raw_sources[field])
+    if source_policy is not None:
+        install_bot_policy(config, with_prepared_bot_sources(source_policy, config["bot"]))
     approved_diff = _diff_snapshot(before_approved, require_side_universe_sources(config, 'approved_coins'))
     ignored_diff = _diff_snapshot(before_ignored, require_side_universe_sources(config, 'ignored_coins'))
     sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))

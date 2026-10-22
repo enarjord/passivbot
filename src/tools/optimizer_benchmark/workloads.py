@@ -123,14 +123,14 @@ def apply_features(config, case, coins, markets, bars):
 def sampled_population(config, case, count, seed, bounds_config=None, boundary_candidates=False):
     import numpy as np
     from config.hsl import generated_template, validate_hsl_paths
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
     from optimization.config_adapter import _flatten_bounds_for_config, get_optimization_key_paths
     from optimization.bounds import Bound, enforce_bounds
 
     search = deepcopy(config)
     source_bounds = bounds_config
     if source_bounds is None:
-        template = generated_template(get_template_config(), config["bot"]["portfolio"]["hsl"]["scope"])
+        template = generated_template(get_expanded_config_prototype(), config["bot"]["portfolio"]["hsl"]["scope"])
         source_bounds = template["optimize"]["bounds"]
         # This generated benchmark profile explicitly searches every positive
         # score coordinate. An authored bounds_config remains authoritative.
@@ -229,7 +229,13 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
                        "--hsl-red-threshold", "0.005", "--hsl-drawdown-ratio-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
             config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
             source_coins = config["backtest"]["coins"]
+            # A frozen benchmark candidate is a concrete execution snapshot,
+            # rather than an editable inherited authoring profile.
+            effective_bot = deepcopy(dict(config["bot"]))
+            effective_bounds = deepcopy(dict(config["optimize"]["bounds"]))
             config = clean_config(config)
+            config["bot"] = effective_bot
+            config["optimize"]["bounds"] = effective_bounds
             config["backtest"]["coins"] = source_coins
             if "coarse_candles" in case.features:
                 timestamps = timestamps[0] + np.arange(bars, dtype=np.int64) * 300_000

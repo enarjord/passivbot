@@ -805,6 +805,10 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
 
 
 def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
+    from config.inherited_bounds import optimize_bounds_source_view
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy, reconciled_bot_policy
+    old_source = optimize_bounds_source_view(entry)
+    new_source = optimize_bounds_source_view(config)
     old_bt = deepcopy(entry.get("backtest") or {})
     new_bt = deepcopy(config.get("backtest") or {})
     for section, path in ((old_bt, "resume.backtest"), (new_bt, "config.backtest")):
@@ -816,8 +820,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     new_bt.setdefault("limit_order_fill_buffer_fraction", 0.0)
     old_bt.setdefault("ew_half_life_days", None)
     new_bt.setdefault("ew_half_life_days", None)
-    old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
-    new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
+    old_opt = _canonicalize_resume_optimize(old_source.get("optimize") or {})
+    new_opt = _canonicalize_resume_optimize(new_source.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
     new_bot = config.get("bot", config) or {}
 
@@ -901,9 +905,19 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         mismatches, "optimize", old_opt_compare, new_opt_compare
     )
 
+    # Sparse inherited flags are permissions, not legacy truthy omissions.
+    def activation_view(value, bot):
+        if value.get("config_version") != "v9.0.0":
+            return bot
+        policy = reconciled_bot_policy(value)
+        if policy is None:
+            policy = resolve_bot_policy(bot, get_side_field_catalog())
+        return policy.effective_view()
+    old_activation = activation_view(entry, old_bot)
+    new_activation = activation_view(config, new_bot)
     for side in ["long", "short"]:
-        old_en = old_bot.get(side, {}).get("enabled", True)
-        new_en = new_bot.get(side, {}).get("enabled", True)
+        old_en = old_activation.get(side, {}).get("enabled", True)
+        new_en = new_activation.get(side, {}).get("enabled", True)
         if old_en != new_en:
             mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
 

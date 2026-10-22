@@ -53,7 +53,8 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     from config.authored import validate_authored_config
     from config.hsl import generated_template
     from config.migrations.v9 import require_v9_runtime_config
-    from config.schema import get_template_config
+    from config.schema import get_template_config, get_expanded_config_prototype
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy
     from config_utils import strip_config_metadata
 
     require_v9_runtime_config(source)
@@ -61,12 +62,13 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     validate_authored_config(source, template)
     result = strip_config_metadata(source)
     mode = result.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
-    profile = generated_template(template, mode)
+    profile = generated_template(get_expanded_config_prototype(), mode)
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
     # Unilateralness is optional in the starting profile. A positive fixed
     # coordinate cannot coexist with varying normalized sibling weights.
+    effective_bot = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).effective_view()
     for side in ("long", "short"):
-        weights = result.get("bot", {}).get(side, {}).get("forager", {}).get("score_weights", {})
+        weights = effective_bot[side]["forager"]["score_weights"]
         if weights.get("unilateralness", 0.0) > 0:
             result["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0.0, 1.0, 0.01]
     _anchor_file_references(result, base_config_path=base_config_path)
@@ -80,9 +82,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=(
-            "Sparse authored v9 bounds freeze omitted independent genes. get_template_config() "
-            "and the no-config optimizer command provide a complete starting profile "
-            "with explicit recommended ranges."
+            "Sparse authored v9 bounds freeze omitted independent genes. The lean starter "
+            "and no-config optimizer command contain no search ranges. This explicit preset "
+            "supplies visible recommended side and portfolio domains."
         ),
     )
     parser.add_argument("input", type=Path, help="Authored v9 configuration")

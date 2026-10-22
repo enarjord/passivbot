@@ -313,17 +313,28 @@ async def prepare_suite_contexts(
         # Formatting is an authored-policy boundary. Give it the fixed execution
         # view here so this prepared context never rereads mutable source files.
         source_policy = universe_source_view(scenario_config_raw)
+        from config.bot_inheritance import (
+            reconciled_bot_policy, install_bot_policy, with_normalized_bot_values,
+        )
+        from config.inherited_bounds import optimize_bounds_source_view, prepare_bound_plan
+        bot_policy = reconciled_bot_policy(scenario_config_raw)
+        authored_bounds = optimize_bounds_source_view(scenario_config_raw)["optimize"]["bounds"]
         membership = runtime_universe_snapshot(scenario_config_raw, available_coins=available_coins)
         scenario_config = format_config(
             fixed_runtime_universe_view(scenario_config_raw, snapshot=membership), verbose=False
         )
         scenario_config = parse_overrides(scenario_config, verbose=False)
-        scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
-            source_policy["bot"]["global"]["universe"]["approved_coins"]
-        )
-        for field in ("approved_coins", "ignored_coins"):
-            set_side_universe_sources(scenario_config, field, raw_side_universe_sources(source_policy, field))
+        if bot_policy is not None:
+            install_bot_policy(scenario_config, with_normalized_bot_values(bot_policy, scenario_config["bot"]))
+        else:
+            scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
+                source_policy["bot"]["global"]["universe"]["approved_coins"]
+            )
+            for field in ("approved_coins", "ignored_coins"):
+                set_side_universe_sources(scenario_config, field, raw_side_universe_sources(source_policy, field))
         scenario_config = materialize_universe_snapshot(scenario_config, membership)
+        if bot_policy is not None:
+            prepare_bound_plan(scenario_config, authored_bounds=authored_bounds)
         # Freeze the resolved patch in both candidate evaluation and resume evidence.
         # Reapplying raw file references would discard preparation's resolved values.
         scenario_overrides = deepcopy(scenario.overrides) if scenario.overrides else {}

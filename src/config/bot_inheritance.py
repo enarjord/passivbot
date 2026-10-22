@@ -241,6 +241,13 @@ class BotPolicy:
                         target[key] = deepcopy(value)
             overlay(portfolio, result.get("portfolio", {}))
             result["portfolio"] = portfolio
+            # Complete defaults describe the selected engine. Explicit inactive
+            # declarations remain source pins rather than being erased for size.
+            selected = portfolio.get("strategy_kind")
+            declared = authored.get("strategy", {})
+            for kind in tuple(common.get("strategy", {})):
+                if kind != selected and kind not in declared:
+                    common["strategy"].pop(kind)
         return result
 
     def has_side_pin(self, side, suffix):
