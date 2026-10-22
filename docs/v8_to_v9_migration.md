@@ -51,9 +51,18 @@ before backtesting a proposed replacement.
 | Legacy `_w` metrics | Removed; select replacement formulas explicitly |
 | DEAP search | Removed; choose an explicit pymoo NSGA-II/NSGA-III operator policy |
 
-V9 uses separate slow EMA spans for each HSL policy, global unstuck realized memory and
-global loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
-The global span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate span is
+V9 uses `bot.global` for inherited directional defaults and `bot.portfolio` for
+account-wide policy. The converter retains frozen released-v8 side parameters and search
+ranges as explicit side policy, including equal-valued pins; it does not replace old asymmetric
+profiles with the new common starter. It explicitly writes `enabled: true` for both sides and
+reports the choice, preserving search reachability when a side starts with zero capacity.
+Zero capacity still prevents entries; it no longer implicitly sets held-position management
+to Manual. New v9 configs instead default to disabled sides. No intermediate dev-v9 migration
+is added.
+
+V9 uses separate slow EMA spans for each HSL policy, account-wide unstuck realized memory and
+account-wide loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
+The shared span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate span is
 `bot.portfolio.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
 
