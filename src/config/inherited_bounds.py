@@ -155,14 +155,16 @@ def optimize_bounds_source_view(config):
     return result
 
 
-def apply_inherited_bounds_patch(config, validated_overrides):
+def apply_inherited_bounds_patch(config, validated_overrides, *, source_bounds=None):
     """Apply declared range replacements to authored authority, never its projection.
 
     The validated patch owner calls this before mutating optimizer containers.
     A range assigned at an effective side path explicitly creates that side's
     independent coordinate, even when it equals the common range.
     """
-    current = config.get("optimize", {}).get("bounds")
+    current = config.get("optimize", {}).get("bounds") if source_bounds is None else source_bounds
+    if source_bounds is not None and type(source_bounds) is not PreparedOptimizationBounds:
+        raise TypeError("declared range replacements require exact prepared bounds authority")
     if type(current) is not PreparedOptimizationBounds:
         return False
     authored = current.source_view()
