@@ -284,6 +284,9 @@ def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
     from config.migrations.v9 import migrate_v8_to_v9
     source = get_template_config()
     source["config_version"] = "v8.6.0"
+    source["bot"]["global"].pop("enabled")
+    for side in ("long", "short"):
+        source["bot"][side].pop("enabled")
     source["backtest"].pop("reducer")
     source["backtest"]["aggregate"] = {"adg_pnl": "max"}
     before = deepcopy(source)

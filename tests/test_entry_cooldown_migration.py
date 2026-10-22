@@ -22,6 +22,9 @@ from tools.migrate_config_v9 import migrate as migrate_config_v9
 def legacy_config():
     config = clean_config(get_template_config())
     config["config_version"] = "v8.4.0"
+    config["bot"]["global"].pop("enabled")
+    for side in ("long", "short"):
+        config["bot"][side].pop("enabled")
     for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
                 "realized_loss_gate_lookback_minutes"):
         config["live"].pop(key, None)

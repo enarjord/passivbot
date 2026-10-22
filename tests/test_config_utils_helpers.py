@@ -122,6 +122,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
 
     assert loaded['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
+        "enabled",
         "entry_cooldown",
         "forager",
         "hsl",
@@ -131,6 +132,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "universe",
     }
     assert set(loaded["bot"]["short"]) == {
+        "enabled",
         "entry_cooldown",
         "forager",
         "hsl",
@@ -173,6 +175,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
         assert raw["config_version"] == get_template_config()["config_version"]
         loaded = load_config(str(path), verbose=False)
         assert set(loaded["bot"]["long"]) == {
+            "enabled",
             "entry_cooldown",
             "forager",
             "hsl",
@@ -182,6 +185,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "universe",
         }
         assert set(loaded["bot"]["short"]) == {
+            "enabled",
             "entry_cooldown",
             "forager",
             "hsl",

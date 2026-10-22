@@ -3999,7 +3999,8 @@ mod core {
                     &s.long,
                 )?;
 
-                let allow_initial = enabled_long && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
+                let allow_initial = enabled_long
+                    && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4091,18 +4092,18 @@ mod core {
                     &s.short,
                 )?;
 
-                let allow_initial =
-                    enabled_short && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
-                        && actives_short[s.symbol_idx]
-                        && !workspace.one_way_block_initial_short[s.symbol_idx]
-                        && effective_min_cost_is_low_enough(
-                            input.balance,
-                            input.global.filter_by_min_effective_cost.short,
-                            s.effective_min_cost,
-                            &s.short.bot_params,
-                            &workspace.runtime_budget_short[s.symbol_idx],
-                            strategy_initial_qty_pct(&strategy_params_for_min_cost),
-                        );
+                let allow_initial = enabled_short
+                    && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
+                    && actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost.short,
+                        s.effective_min_cost,
+                        &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
+                    );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
                 let mut closes: Vec<IdealOrder> = Vec::new();
@@ -4749,21 +4750,21 @@ mod core {
                     .as_ref()
                     .map(|state| state.mode)
                     .unwrap_or_else(|| effective_mode(s.short.mode, s.short.position.size != 0.0));
-                let long_allow_initial =
-                    enabled_long && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
-                        && workspace.actives_long[s.symbol_idx]
-                        && !workspace.one_way_block_initial_long[s.symbol_idx]
-                        && effective_min_cost_is_low_enough(
-                            input.balance,
-                            input.global.filter_by_min_effective_cost.long,
-                            s.effective_min_cost,
-                            &s.long.bot_params,
-                            &workspace.runtime_budget_long[s.symbol_idx],
-                            workspace.derived_long[s.symbol_idx]
-                                .strategy_params
-                                .map(|params| strategy_initial_qty_pct(&params))
-                                .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
-                        );
+                let long_allow_initial = enabled_long
+                    && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
+                    && workspace.actives_long[s.symbol_idx]
+                    && !workspace.one_way_block_initial_long[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost.long,
+                        s.effective_min_cost,
+                        &s.long.bot_params,
+                        &workspace.runtime_budget_long[s.symbol_idx],
+                        workspace.derived_long[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
+                    );
                 if symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && workspace.actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
@@ -4785,21 +4786,21 @@ mod core {
                             .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 }
-                let short_allow_initial =
-                    enabled_short && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
-                        && workspace.actives_short[s.symbol_idx]
-                        && !workspace.one_way_block_initial_short[s.symbol_idx]
-                        && effective_min_cost_is_low_enough(
-                            input.balance,
-                            input.global.filter_by_min_effective_cost.short,
-                            s.effective_min_cost,
-                            &s.short.bot_params,
-                            &workspace.runtime_budget_short[s.symbol_idx],
-                            workspace.derived_short[s.symbol_idx]
-                                .strategy_params
-                                .map(|params| strategy_initial_qty_pct(&params))
-                                .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
-                        );
+                let short_allow_initial = enabled_short
+                    && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
+                    && workspace.actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost.short,
+                        s.effective_min_cost,
+                        &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        workspace.derived_short[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
+                    );
                 if symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                     && workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]

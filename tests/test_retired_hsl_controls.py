@@ -1,5 +1,6 @@
 """Retired recovery controls require explicit migration, even while disabled."""
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -33,8 +34,11 @@ def test_retired_recovery_controls_rejected_without_mutating_source(tmp_path, fi
     assert path.read_text() == original and raw == document
 
     # The offline migration owns removal; ordinary loading cannot grant a waiver.
-    legacy = config.copy()
+    legacy = deepcopy(config)
     legacy["config_version"] = "v8.6.0"
+    legacy["bot"]["global"].pop("enabled")
+    for side in ("long", "short"):
+        legacy["bot"][side].pop("enabled")
     result = migrate(legacy, memory_span_minutes=43200.0).config
     assert field not in result["live"]
     assert field not in prepare_config(result, target="canonical", runtime=None, verbose=False)["live"]

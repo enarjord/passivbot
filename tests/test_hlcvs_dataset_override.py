@@ -32,11 +32,13 @@ def _base_config(cache_dir, *, mode="dataset"):
         },
         "bot": {
             "long": {
+                "enabled": True,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
             },
             "short": {
+                "enabled": True,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": []},

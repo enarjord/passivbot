@@ -2156,8 +2156,6 @@ class _MulticoinReplayRunner:
             first_observed=self._hourly_first_observed, coin_ranges=self._hourly_coin_ranges,
             requested_start=self.requested_start_idx, warmup_bars=self.run_config.warmup_bars,
             available=self.n, end_steps=end_steps,
-            side_activation=tuple(self.side_activation[side] for side in
-                                  (("long", "short") if self.replay_sides == 2 else (self.side,))),
         )
         # Host feature proofs consume public policy columns; the shader matrix
         # additionally carries private decimal operands after each side block.
