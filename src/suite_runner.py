@@ -1537,7 +1537,9 @@ def apply_scenario(
             if current != values:
                 tracker.update(["bot", side, "universe", field], deepcopy(current), list(values))
             if (field == "approved_coins" and scenario.coins is not None) or (field == "ignored_coins" and scenario.ignored_coins is not None):
-                universe[field] = list(values)
+                from config.bot_inheritance import apply_bot_config_patch
+                if not apply_bot_config_patch(cfg, {f"bot.{side}.universe.{field}": list(values)}):
+                    universe[field] = list(values)
 
     resolved_sources = resolve_coin_sources(
         base_coin_sources or {},
