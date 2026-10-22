@@ -325,6 +325,7 @@ def make_input(
         "balance": balance,
         "balance_raw": balance,
         "global": {
+            "side_activation": {"long": True, "short": True},
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "auto_unstuck_allowed": True,
             # Each independently initialized realized memory starts empty.

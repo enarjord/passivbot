@@ -12,6 +12,28 @@ position entry price, plus any over-budget remainder, rounded and capped by the 
 Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
 is an absolute normalized-score gap, without an incumbent-relative denominator.
 
+## Explicit Side Activation
+
+`bot.global.enabled` defaults false; side omission inherits it and explicit side booleans
+are pins. Activation is fixed policy, separate from capacity, selection and operational modes.
+The native `side_activation` packet requires exactly long/short booleans. Disabled sides cannot
+generate or fill initial entries or DCA, including forced-normal selection and one-way arbitration.
+Held closes, reducers, trailing state, fills and HSL continue under their existing inputs, sizing
+and risk gates. Do not infer Manual from zero capacity or fabricate a positive sizing budget.
+Explicit Manual and ordinary TpOnly retain their standing-order ownership at reconciliation.
+
+Prepared activation declarations use an immutable typed source attribute on the exact prepared
+bot mapping. JSON metadata cannot grant that authority. Actual fixed/scenario/CLI patch owners
+record equal-value declarations and parent replacement; changed direct effective values survive
+reprepare. Authored projection retains omission; full effective JSON is a resolved policy snapshot.
+Optimizer boolean reachability follows fixed/scenario declarations while numeric ranges remain
+unable to grant activation. Released-v8 conversion explicitly enables both sides and retains the
+frozen released numeric defaults and ranges.
+
+GPU activation uses appended directional slot 15 and fused long/short slots 18/19; existing
+minimum-cost, factual-HSL and age slots remain unchanged. Replay/evaluation identities include
+activation and reject incompatible cached policy.
+
 ## Side-Specific Minimum-Cost Admission
 
 `bot.long.universe.filter_by_min_effective_cost` and its short counterpart are independent booleans,

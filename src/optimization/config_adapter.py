@@ -281,6 +281,12 @@ def validate_forager_weight_search(
 def _validate_forager_weight_context(
     config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
 ):
+    from copy import deepcopy
+    from config.activation import apply_activation_patch, side_enabled
+
+    activation_context = deepcopy(config)
+    apply_activation_patch(activation_context, dict(runtime_pins))
+    apply_activation_patch(activation_context, dict(scenario_pins))
     def pinned_value(path, configured, pins):
         pinned, removed = False, False
         for selector, value in pins:
@@ -315,7 +321,7 @@ def _validate_forager_weight_context(
                 f"{context}bot.{side}.forager.score_weights missing required weights: "
                 f"{', '.join(sorted(missing))}"
             )
-        active = True
+        active = side_enabled(activation_context, side)
         risk_source = optimizer_numeric_group_source_side(config, side, "risk")
         risk = config.get("bot", {}).get(risk_source, {}).get("risk", {})
         for field, key in (("max_positions", "n_positions"),
@@ -445,8 +451,9 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
     if bot_config is None:
         bot_config = get_template_config()["bot"]
     pside_enabled = {}
+    from config.activation import optimizer_side_may_activate
     for pside in ("long", "short"):
-        pside_enabled[pside] = all(
+        pside_enabled[pside] = optimizer_side_may_activate(config, pside) and all(
             (Bound.from_config(key, optimize_bounds[key]).high if key in optimize_bounds
              else float(bot_config[pside]["risk"][field])) > 0.0
             for key, field in ((f"{pside}_n_positions", "max_positions"),

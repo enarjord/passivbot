@@ -1144,6 +1144,39 @@ mod tests {
     use pyo3::types::{PyDict, PyList};
 
     #[test]
+    fn native_side_activation_requires_exact_boolean_pair() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            assert!(side_activation_from_dict(PyDict::new(py)).is_err());
+            for value in [
+                serde_json::json!({}),
+                serde_json::json!({"long": true}),
+                serde_json::json!({"long": true, "short": false, "extra": true}),
+                serde_json::json!({"long": 1, "short": false}),
+                serde_json::json!({"long": "false", "short": false}),
+                serde_json::json!({"long": null, "short": false}),
+            ] {
+                let dict = PyDict::new(py);
+                dict.set_item("side_activation", json_value_to_py(py, &value).unwrap())
+                    .unwrap();
+                assert!(side_activation_from_dict(dict).is_err());
+            }
+            let dict = PyDict::new(py);
+            let pair = PyDict::new(py);
+            pair.set_item("long", true).unwrap();
+            pair.set_item("short", false).unwrap();
+            dict.set_item("side_activation", pair).unwrap();
+            assert_eq!(
+                side_activation_from_dict(dict).unwrap(),
+                crate::types::SideActivation {
+                    long: true,
+                    short: false,
+                }
+            );
+        });
+    }
+
+    #[test]
     fn strategy_bindings_reject_unknown_and_non_string_keys_before_projection() {
         prepare_freethreaded_python();
         Python::with_gil(|py| {
@@ -1546,6 +1579,7 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
         && crate::unilateralness::backtest_enabled_sides(
             &bot_params_vec,
             backtest_params.dynamic_wel_by_tradability,
+            backtest_params.side_activation,
         )
         .iter()
         .flatten()
@@ -2231,9 +2265,40 @@ fn minimum_age_pair_from_dict(dict: &PyDict) -> PyResult<[f64; 2]> {
     ])
 }
 
+fn side_activation_from_dict(dict: &PyDict) -> PyResult<crate::types::SideActivation> {
+    let value = dict
+        .get_item("side_activation")?
+        .ok_or_else(|| PyValueError::new_err("missing side_activation"))?;
+    let pair = value.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("side_activation must contain long and short booleans")
+    })?;
+    if pair.len() != 2 {
+        return Err(PyValueError::new_err(
+            "side_activation must contain exactly long and short",
+        ));
+    }
+    let flag = |side: &str| -> PyResult<bool> {
+        let value = pair
+            .get_item(side)?
+            .ok_or_else(|| PyValueError::new_err(format!("missing side_activation.{side}")))?;
+        if !value.is_instance_of::<PyBool>() {
+            return Err(PyValueError::new_err(format!(
+                "side_activation.{side} must be a boolean"
+            )));
+        }
+        value.extract::<bool>()
+    };
+    Ok(crate::types::SideActivation {
+        long: flag("long")?,
+        short: flag("short")?,
+    })
+}
+
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     if dict.contains("calculate_legacy_w")? {
-        return Err(PyValueError::new_err("calculate_legacy_w is retired; only ordinary and explicit _ew metrics remain"));
+        return Err(PyValueError::new_err(
+            "calculate_legacy_w is retired; only ordinary and explicit _ew metrics remain",
+        ));
     }
 
     if dict.contains("lookback_ema_span_minutes")? {
@@ -2315,6 +2380,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        side_activation: side_activation_from_dict(dict)?,
         minimum_coin_age_days: minimum_age_pair_from_dict(dict)?,
         inception_timestamps_ms: match dict.get_item("inception_timestamps_ms")? {
             Some(item) => item
@@ -2529,7 +2595,11 @@ fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyRe
     Ok(())
 }
 
-fn validate_strategy_py_dict_keys(dict: &PyDict, context: &str, recognized: &Value) -> PyResult<()> {
+fn validate_strategy_py_dict_keys(
+    dict: &PyDict,
+    context: &str,
+    recognized: &Value,
+) -> PyResult<()> {
     // Compare the original input with the fields this binding actually
     // transports. Do not let projection erase a typo before strict Rust serde.
     let object = recognized

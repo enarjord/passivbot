@@ -25,6 +25,7 @@ def _canonical_config_with_bounds(bounds, *, strategy_kind="trailing_martingale"
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config["optimize"]["bounds"] = bounds
     for side in ("long", "short"):
+        config["bot"][side]["enabled"] = True
         config["bot"][side]["risk"].update(max_positions=1.0, total_wallet_exposure_limit=1.0)
     return config
 

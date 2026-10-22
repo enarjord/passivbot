@@ -33,6 +33,7 @@ def base_config():
     return {
         "bot": {
             "long": {
+                "enabled": False,
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "strategy": {
@@ -43,6 +44,7 @@ def base_config():
                 },
             },
             "short": {
+                "enabled": False,
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "strategy": {
@@ -478,8 +480,8 @@ class TestWarmupEdgeCases:
         """Test with empty bot params."""
         config = {
             "bot": {
-                "long": {},
-                "short": {},
+                "long": {"enabled": False},
+                "short": {"enabled": False},
                 "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 3.0, "max_minutes": None}},
             },
             "live": {},

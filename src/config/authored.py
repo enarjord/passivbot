@@ -99,6 +99,9 @@ def validate_authored_config(config, template, *, policy_context=None):
         from .control_sentinels import validate_control_value
 
         validate_control_value(parts, value)
+        if parts in {("bot", owner, "enabled") for owner in ("global", "long", "short")}:
+            if type(value) is not bool:
+                raise TypeError(f"{'.'.join(parts)} must be a boolean")
         from .age_policy import AGE_PATHS, validate_age_value
         if parts in AGE_PATHS:
             validate_age_value(value, path=".".join(parts))

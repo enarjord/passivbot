@@ -279,6 +279,9 @@ def migrate_v8_to_v9(
     is_v8 = int(match[1]) == 8
     if not is_v8:
         raise ValueError("migrate-config-v9 supports versioned v8 and final canonical v9 only")
+    for path, _, _ in _walk(result):
+        if re.search(r"(?:^|\.)bot\.(?:global|long|short)\.enabled$", path):
+            raise ValueError(f"{path} is not a released-v8 field; activation is chosen and reported by migration")
     from .final_v9 import reject_v8_alias_conflicts
 
     inferred_changes = []
@@ -518,6 +521,14 @@ def migrate_v8_to_v9(
                                 acknowledge_search_backend_change=acknowledge_search_backend_change,
                                 sparse=_coin_patch, best_effort=best_effort, base_config_path=base_config_path)
     if not _coin_patch:
+        # Released v8 used numeric capacity/search bounds as entry activation.
+        # Preserve those values and reachability rather than infer a boolean
+        # from a currently dormant side. New v9 documents default to disabled.
+        for side in ("long", "short"):
+            result.setdefault("bot", {}).setdefault(side, {})["enabled"] = True
+            record(f"bot.{side}.enabled", None, True,
+                   "released-v8 entry permission retained for numeric capacity and optimizer reachability; "
+                   "zero capacity still prevents entries without suppressing existing held-position management")
         from .released_v8 import materialize_released_v8_optimizer_bounds
 
         materialize_released_v8_optimizer_bounds(result, changes=changes)

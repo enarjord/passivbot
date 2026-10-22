@@ -67,6 +67,7 @@
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
         },
         "long": {
+            "enabled": true,
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
                 "max_duration_minutes": null,
@@ -132,6 +133,7 @@
             }
         },
         "short": {
+            "enabled": true,
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
                 "max_duration_minutes": null,

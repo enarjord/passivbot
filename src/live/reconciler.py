@@ -1401,11 +1401,9 @@ def _validate_rust_close_exchange_constraints(
 
 
 def _expected_rust_effective_mode(
-    input_mode: str | None, has_position: bool, globally_enabled: bool
+    input_mode: str | None, has_position: bool
 ) -> str:
     """Return Rust's deterministic generation mode for one submitted side."""
-    if not globally_enabled:
-        return "manual"
     if input_mode == "graceful_stop" and has_position:
         return "normal"
     return "normal" if input_mode is None else input_mode
@@ -1517,6 +1515,11 @@ def _submitted_rust_input_context(
     global_bot_params = global_input.get("global_bot_params")
     if not isinstance(global_bot_params, dict):
         raise FatalBotException("Rust orchestrator global input has invalid bot params")
+    from config.activation import validate_side_activation
+    try:
+        activation = validate_side_activation(global_input["side_activation"])
+    except (KeyError, TypeError) as exc:
+        raise FatalBotException("Rust orchestrator global input has invalid side_activation") from exc
     global_side_enablement: dict[str, bool] = {}
     global_side_n_positions: dict[str, int] = {}
     global_twel_enforcer_enablement: dict[str, bool] = {}
@@ -1538,7 +1541,7 @@ def _submitted_rust_input_context(
         ):
             raise FatalBotException(f"global input has invalid {pside} n_positions")
         global_side_enablement[pside] = (
-            total_wallet_exposure_limit > 0.0 and n_positions > 0
+            activation[pside] and total_wallet_exposure_limit > 0.0 and n_positions > 0
         )
         global_side_n_positions[pside] = n_positions
         twel_enabled = side_params.get("risk_twel_enforcer_enabled", True)
@@ -1970,7 +1973,7 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
             )
         pair = (symbol_idx, pside)
-        if not submitted_global_side_enablement[pside]:
+        if order_type.startswith("entry_") and not submitted_global_side_enablement[pside]:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} is inconsistent with globally disabled {pside}"
             )
@@ -2330,7 +2333,6 @@ def validate_rust_orchestrator_output(
             expected_effective_mode = _expected_rust_effective_mode(
                 submitted_input_modes[(symbol_idx, pside)],
                 submitted_position_sizes[(symbol_idx, pside)] != 0.0,
-                submitted_global_side_enablement[pside],
             )
             if effective_mode != expected_effective_mode:
                 raise FatalBotException(
@@ -2343,6 +2345,8 @@ def validate_rust_orchestrator_output(
                         f"Rust orchestrator symbol_state {state_idx} has invalid {pside} {field}"
                     )
             submitted_symbol_states[(symbol_idx, pside)] = side_state
+            if side_state["allow_initial"] and not submitted_global_side_enablement[pside]:
+                raise FatalBotException("Rust orchestrator disabled side reports initial-entry permission")
             if side_state["active"] and (
                 not submitted_symbol_side_eligibility[(symbol_idx, pside)]
                 or (
@@ -2552,11 +2556,6 @@ def validate_rust_orchestrator_output(
                 "bypasses the realized-loss gate"
             )
         pair = (symbol_idx, pside)
-        if not submitted_global_side_enablement[pside]:
-            raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} is inconsistent "
-                f"with globally disabled {pside}"
-            )
         if submitted_position_sizes[pair] == 0.0:
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} requires a submitted position"
@@ -2844,8 +2843,7 @@ def validate_rust_orchestrator_output(
     for pair, position_size in submitted_position_sizes.items():
         symbol_idx, pside = pair
         if (
-            submitted_global_side_enablement[pside]
-            and submitted_input_modes[pair] == "panic"
+            submitted_input_modes[pair] == "panic"
             and position_size > 1e-12
             and pair not in panic_close_pairs
         ):

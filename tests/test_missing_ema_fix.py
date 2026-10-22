@@ -165,6 +165,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
         "balance_raw": 1000.0,
         "global": {
             # Explicit known-empty continuous realized memory for these order fixtures.
+            "side_activation": {"long": True, "short": True},
             "unstuck_realized_pnl_drawdown": 0.0,
             "loss_gate_realized_pnl_drawdown": 0.0,
             "filter_by_min_effective_cost": {"long": False, "short": False},
@@ -284,6 +285,7 @@ class _BundleReproBot:
         self.config = {
             "live": {"candles": {"max_forager_candle_staleness_minutes": 10}}
         }
+        self.config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         self.exchange = "kucoin"
         now_ms = int(time.time() * 1000)
         if prev_close_ema is None:
@@ -2466,6 +2468,7 @@ async def test_close_ema_fallback_scopes_symbol_when_previous_ema_is_stale(caplo
         prev_age_ms=11 * 60_000,
     )
     bot.config = {"live": {"candles": {"max_forager_candle_staleness_minutes": 10}}}
+    bot.config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
 
     with caplog.at_level(logging.WARNING):
         result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
@@ -2790,6 +2793,8 @@ async def test_trailing_martingale_threshold_volatility_requires_h1_log_range():
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
     def trailing_martingale_params(_pside, _symbol=None):
         params = _rust_strategy_params()
@@ -2829,6 +2834,8 @@ async def test_trailing_martingale_threshold_h1_missing_is_scoped_in_rust():
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
     def trailing_martingale_params(_pside, _symbol=None):
         params = _rust_strategy_params()
@@ -2865,6 +2872,8 @@ async def test_trailing_martingale_present_none_threshold_weight_fails_loudly():
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
     def trailing_martingale_params(_pside, _symbol=None):
         params = _rust_strategy_params()
@@ -2948,6 +2957,8 @@ async def test_ema_anchor_h1_offset_weight_path_is_tuple_not_character_path():
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
         "bot": {"portfolio": {"strategy_kind": "ema_anchor"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
     def ema_anchor_params(_pside, _symbol=None):
         return {
@@ -3032,6 +3043,7 @@ class _PacingProbeBot:
     def __init__(self, exchange: str, sleep_fn):
         self.exchange = exchange
         self.config = {"live": {}}
+        self.config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         self.positions = {}
         self.cm = _PacingProbeCM(sleep_fn)
 

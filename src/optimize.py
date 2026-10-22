@@ -3784,18 +3784,12 @@ async def main():
         apply_optimizer_universe_sources(staged)
         # Only source policy crosses staging. Hydrated numeric values, bounds
         # and limits must not acquire authored authority in normal preparation.
-        omitted_sides = [side for side in ("long", "short")
-                         if "bot" in source_config and side not in source_config["bot"]]
         source_config = deepcopy(source_config)
         source_config.setdefault("bot", {}).setdefault("global", {}).setdefault("universe", {})["approved_coins"] = deepcopy(
             staged["bot"]["global"]["universe"]["approved_coins"]
         )
         for field in ("approved_coins", "ignored_coins"):
             set_side_universe_sources(source_config, field, raw_side_universe_sources(staged, field))
-        for side in omitted_sides:
-            # Adding source leaves must not bypass the loader's omitted-side
-            # disablement. Explicit search bounds may still activate that side.
-            source_config["bot"][side].setdefault("risk", {})["total_wallet_exposure_limit"] = 0.0
         for selector in fixed_sources:
             if universe_sources_affected({selector: fixed_sources[selector]}):
                 source_config["optimize"]["fixed_runtime_overrides"][selector] = deepcopy(

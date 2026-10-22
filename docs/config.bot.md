@@ -8,6 +8,13 @@ explicit and is never inferred from directional policies.
 Optimizer bounds use the same path after `optimize.bounds` as the corresponding parameter
 after `bot`, for example `long.forager.score_weights.volume`.
 
+Side activation is explicit: `bot.global.enabled` defaults false, omitted side flags inherit,
+and explicit `bot.long.enabled`/`bot.short.enabled` booleans pin permission. Disabled sides cannot
+open or DCA, even in forced-normal mode; capacity, approvals and readiness still gate enabled
+sides. Held closes and protection keep their existing sizing, risk and operational gates.
+Zero capacity does not set manual mode or fabricate a replacement budget. Numeric optimizer
+bounds do not grant boolean activation; fixed/scenario declarations retain their precedence.
+
 This note explains how the parameters under `config.bot.{long,short}` are consumed by
 Passivbot’s Rust core.  For brevity we omit rounding to exchange precision, guard rails,
 and boolean checks; the pseudo-code below mirrors the algebra in

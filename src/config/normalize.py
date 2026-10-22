@@ -38,6 +38,10 @@ def normalize_config(
     verbose: bool = True,
     record_step: bool = True,
 ) -> dict:
+    from .activation import activation_source_view, get_activation_source, resolve_side_activation
+
+    activation_source = get_activation_source(config)
+    config = activation_source_view(config)
     raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
     existing_log = config.get("_transform_log")
     if isinstance(existing_log, list):
@@ -103,6 +107,7 @@ def normalize_config(
         if value is not None:
             live_coin_sources_input[key] = deepcopy(value)
     seed_missing_default_sections(template, result, tracker=tracker)
+    resolve_side_activation(result, activation_source, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
     reject_legacy_flat_strategy_fields(result)
@@ -113,6 +118,7 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    resolve_side_activation(result, activation_source)
     sync_canonical_strategy_config(result, tracker=tracker)
     ensure_optimize_bounds_for_bot(
         result,
@@ -173,4 +179,5 @@ def normalize_config(
             }
         )
         record_transform(result, "normalize_config", details)
+    resolve_side_activation(result, activation_source)
     return result

@@ -4001,6 +4001,7 @@ inline void generate_tm_multicoin_side_orders(
     int k,
     int coin_count,
     bool short_side,
+    bool entries_enabled,
     int tradable_count,
     int effective_n_positions,
     int current_hsl_mode,
@@ -4459,7 +4460,7 @@ inline void generate_tm_multicoin_side_orders(
             coin_wel, twel, coin_allowance_pct);
         bool tradable = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(price_now) && allowed_coin_wel > 0.0f;
+            && finite_positive(price_now) && (psize[c] > 0.0f || allowed_coin_wel > 0.0f);
         if (!tradable) continue;
         float qty_step = coin_settings[coin_offset + 0];
         float price_step = coin_settings[coin_offset + 1];
@@ -4683,7 +4684,7 @@ inline void generate_tm_multicoin_side_orders(
         bool initial_entry_allowed = !flat
             || (passes_multicoin_age(coin_settings, coin_offset, k, short_side)
                 && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul);
-        if (!selected[c] || !initial_entry_allowed
+        if (!entries_enabled || !selected[c] || !initial_entry_allowed
             || cooldown || balance <= 0.0f
             || coin_initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
             quantity = 0.0f;
@@ -5553,6 +5554,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fmax(run_settings[12], 0.0f);
     const bool filter_by_min_effective_cost_long = run_settings[13] > 0.5f;
     const bool filter_by_min_effective_cost_short = run_settings[17] > 0.5f;
+    const bool long_activation = run_settings[18] > 0.5f;
+    const bool short_activation = run_settings[19] > 0.5f;
     const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
@@ -5882,14 +5885,16 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             wallet_exposure_denominator_n_positions(
                 short_config.n_positions, short_side.max_tradable_seen
             );
-        const bool long_can_generate = alive
-            && long_config.twel > 0.0f
-            && long_effective_n_positions > 0
-            && long_side.max_tradable_seen > 0 && past_activation_guard;
-        const bool short_can_generate = alive
-            && short_config.twel > 0.0f
-            && short_effective_n_positions > 0
-            && short_side.max_tradable_seen > 0 && past_activation_guard;
+        const bool long_entry_capacity = long_config.twel > 0.0f
+            && long_effective_n_positions > 0 && long_side.max_tradable_seen > 0;
+        const bool long_entries_enabled = long_activation && long_entry_capacity;
+        const bool long_can_generate = alive && past_activation_guard
+            && (long_entry_capacity || tm_multicoin_side_has_position(long_side, C));
+        const bool short_entry_capacity = short_config.twel > 0.0f
+            && short_effective_n_positions > 0 && short_side.max_tradable_seen > 0;
+        const bool short_entries_enabled = short_activation && short_entry_capacity;
+        const bool short_can_generate = alive && past_activation_guard
+            && (short_entry_capacity || tm_multicoin_side_has_position(short_side, C));
         equity_started = equity_started
             || long_can_generate || short_can_generate;
 #ifdef PASSIVBOT_ORGANILLO
@@ -5989,7 +5994,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_hsl_mode, short_hsl_mode,
                 long_effective_n_positions,
                 short_effective_n_positions,
-                long_can_generate, short_can_generate,
+                long_can_generate && long_entries_enabled, short_can_generate && short_entries_enabled,
                 filter_by_min_effective_cost_long, filter_by_min_effective_cost_short, account.balance,
                 long_one_way_selection_blocked_mask,
                 short_one_way_selection_blocked_mask,
@@ -6038,6 +6043,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         const int short_unstuck_coin = !long_unstuck_wins
             ? short_unstuck_candidate : -1;
         if (long_can_generate) {
+            if (long_entries_enabled) {
             update_tm_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings ORGANILLO_PASS,
                 long_coin_overrides, k, C, false,
@@ -6046,12 +6052,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_one_way_selection_blocked_mask,
                 filter_by_min_effective_cost_long, account.balance
             );
+            }
             generate_tm_multicoin_side_orders(
                 long_side, long_config, account,
                 bars, touch_ticks, touch_nearest_ticks,
                 touch_min_qty_bits, touch_min_qty_relation,
                 coin_settings ORGANILLO_PASS, long_coin_overrides,
-                k, C, false, long_tradable_count,
+                k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
                 market_orders_allowed,
@@ -6061,6 +6068,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             );
         }
         if (short_can_generate) {
+            if (short_entries_enabled) {
             update_tm_multicoin_side_selection(
                 short_side, short_config, bars, coin_settings ORGANILLO_PASS,
                 short_coin_overrides, k, C, true,
@@ -6069,12 +6077,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_one_way_selection_blocked_mask,
                 filter_by_min_effective_cost_short, account.balance
             );
+            }
             generate_tm_multicoin_side_orders(
                 short_side, short_config, account,
                 bars, touch_ticks, touch_nearest_ticks,
                 touch_min_qty_bits, touch_min_qty_relation,
                 coin_settings ORGANILLO_PASS, short_coin_overrides,
-                k, C, true, short_tradable_count,
+                k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
                 market_orders_allowed,
@@ -6864,6 +6873,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float market_order_near_touch_threshold =
         fmax(run_settings[10], 0.0f);
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
+    const bool side_activation = run_settings[15] > 0.5f;
     const float log_bin_scale = float(GAP_BINS - 1) / log(4000001.0f);
 
     thread float* psize = side.psize;
@@ -7127,8 +7137,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             wallet_exposure_denominator_n_positions(
                 n_positions, max_tradable_seen
             );
-        const bool can_generate = alive && effective_n_positions > 0
-            && max_tradable_seen > 0 && past_activation_guard;
+        const bool entry_capacity = effective_n_positions > 0
+            && max_tradable_seen > 0 && twel > 0.0f;
+        const bool entries_enabled = side_activation && entry_capacity;
+        const bool can_generate = alive && past_activation_guard
+            && (entry_capacity || tm_multicoin_side_has_position(side, C));
         equity_started = equity_started || can_generate;
 #ifdef PASSIVBOT_ORGANILLO
         // Account for flat ineligible days once the ordinary side is ready.
@@ -7234,6 +7247,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             return;
         }
         if (can_generate) {
+            if (entries_enabled) {
             update_tm_multicoin_side_selection(
                 side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side,
@@ -7242,13 +7256,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 score_hysteresis, 0ul,
                 filter_by_min_effective_cost, account.balance
             );
+            }
 
             generate_tm_multicoin_side_orders(
                 side, config, account,
                 bars, touch_ticks, touch_nearest_ticks,
                 touch_min_qty_bits, touch_min_qty_relation,
                 coin_settings ORGANILLO_PASS, coin_overrides,
-                k, C, short_side, tradable_count,
+                k, C, short_side, entries_enabled, tradable_count,
                 effective_n_positions, current_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
                 market_orders_allowed,

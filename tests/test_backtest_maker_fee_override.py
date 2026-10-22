@@ -17,6 +17,8 @@ from backtest import (
 
 def _base_config():
     cfg = get_template_config()
+    for side in ("long", "short"):
+        cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
     cfg["backtest"]["maker_fee_override"] = None
     cfg["backtest"]["taker_fee_override"] = None

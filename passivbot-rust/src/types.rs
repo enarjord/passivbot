@@ -32,6 +32,32 @@ impl MinimumCostFilter {
     }
 }
 
+/// Independent permission to increase a position side. Capacity and operational
+/// modes remain separate; this never disables held-position close/risk handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SideActivation {
+    pub long: bool,
+    pub short: bool,
+}
+
+impl SideActivation {
+    pub const fn uniform(enabled: bool) -> Self {
+        Self {
+            long: enabled,
+            short: enabled,
+        }
+    }
+
+    pub fn for_side(self, side: usize) -> bool {
+        match side {
+            crate::constants::LONG => self.long,
+            crate::constants::SHORT => self.short,
+            _ => panic!("invalid position side"),
+        }
+    }
+}
+
 /// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
 ///
 /// The numeric fields mirror the values currently distributed through `mss` dictionaries in
@@ -318,6 +344,7 @@ impl Default for EquityHardStopLossConfig {
 
 #[derive(Clone, Debug)]
 pub struct BacktestParams {
+    pub side_activation: SideActivation,
     pub minimum_coin_age_days: [f64; 2],
     pub inception_timestamps_ms: Vec<Option<u64>>,
     pub starting_balance: f64,

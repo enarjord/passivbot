@@ -227,6 +227,7 @@ from warmup_utils import (
     live_warmup_cap_minutes,
 )
 from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
+from config.activation import side_activation
 from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
@@ -10385,8 +10386,9 @@ class Passivbot:
         return round(twel / n_positions, 8)
 
     def is_pside_enabled(self, pside):
-        """Return True if trading is enabled for the given side in the current config."""
-        return (
+        """Return whether explicit activation and capacity permit side entries."""
+        from config.activation import side_enabled
+        return side_enabled(self.config, pside) and (
             self.bot_value(pside, "total_wallet_exposure_limit") > 0.0
             and self.bot_value(pside, "n_positions") > 0.0
         )
@@ -15120,6 +15122,9 @@ class Passivbot:
         return "manual"
 
     def _pside_blocks_new_entries(self, pside: str) -> bool:
+        from config.activation import side_enabled
+        if not side_enabled(self.config, pside):
+            return True
         forced_mode = self.get_forced_PB_mode(pside)
         return forced_mode in {
             "panic",
@@ -15971,6 +15976,9 @@ class Passivbot:
             pb_modes = getattr(self, "PB_modes", {})
 
             for pside in ("long", "short"):
+                from config.activation import side_enabled
+                if not side_enabled(self.config, pside):
+                    continue
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
                 if explicit_mode is not None:
                     if (
@@ -17935,6 +17943,7 @@ class Passivbot:
             # Rust defaults it to 0.0 for live loss projections; the backtest
             # value is a simulation knob, not a live slippage cap.
             "global": {
+                "side_activation": side_activation(self.config),
                 "filter_by_min_effective_cost": {
                     side: minimum_cost_filter(self.config, side) for side in ("long", "short")
                 },
@@ -18674,7 +18683,7 @@ class Passivbot:
             | {
                 s
                 for s in self.coin_overrides
-                if self.get_forced_PB_mode(pside, s) == "normal"
+                if self.is_pside_enabled(pside) and self.get_forced_PB_mode(pside, s) == "normal"
             }
         )
 
@@ -20205,26 +20214,16 @@ class Passivbot:
                     removed_summary.setdefault(k, {}).update(add_res.get("removed", {}))
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
+                # Activation and numeric capacity govern increases, not source
+                # approval. Retain membership so a held approved position does
+                # not acquire the disapproved-position operational mode.
                 if not self.is_pside_enabled(pside):
                     if pside not in self._disabled_psides_logged:
-                        if self.approved_coins[pside]:
-                            logging.info(
-                                f"{pside} side disabled (zero exposure or positions); clearing approved list."
-                            )
-                        else:
-                            logging.info(
-                                f"{pside} side disabled (zero exposure or positions); approved list already empty."
-                            )
+                        logging.info("%s side entries disabled; retaining authored coin approval.", pside)
                         self._disabled_psides_logged.add(pside)
-                    self.approved_coins[pside] = set()
-                    self.approved_coins_minus_ignored_coins[pside] = set()
-                    continue
-                else:
-                    if pside in self._disabled_psides_logged:
-                        logging.info(
-                            f"{pside} side re-enabled; restoring approved coin handling."
-                        )
-                        self._disabled_psides_logged.discard(pside)
+                elif pside in self._disabled_psides_logged:
+                    logging.info("%s side entries re-enabled.", pside)
+                    self._disabled_psides_logged.discard(pside)
                 self.approved_coins_minus_ignored_coins[pside] = (
                     self._filter_approved_symbols(
                         pside, self.approved_coins[pside] - self.ignored_coins[pside]

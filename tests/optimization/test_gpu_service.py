@@ -79,6 +79,7 @@ def _complete_hsl_payload(payload):
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
     params.setdefault("dynamic_wel_by_tradability", True)
     params.setdefault("minimum_coin_age_days", [0.0, 0.0])
+    params.setdefault("side_activation", {"long": True, "short": True})
     params.setdefault("unstuck_memory_ema_span_minutes", 1440.0)
     params.setdefault("loss_gate_memory_ema_span_minutes", 1440.0)
     old = params.get("equity_hard_stop_loss", {})
@@ -156,7 +157,7 @@ def test_single_coin_candle_interval_rejects_invalid_values(raw_interval):
 
 
 def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
-    backtest_params = {"minimum_coin_age_days": [0.0, 0.0],
+    backtest_params = {"side_activation": {"long": True, "short": True}, "minimum_coin_age_days": [0.0, 0.0],
         "coins": ["BTC"],
         "starting_balance": 10_000.0,
         "candle_interval_minutes": 1,
@@ -1043,6 +1044,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     config['bot']["portfolio"]['hedge_mode'] = False
     config["backtest"]["dynamic_wel_by_tradability"] = dynamic_wel_by_tradability
     for side in ("long", "short"):
+        config["bot"][side]["enabled"] = True
         config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
         # Construction must retain the fused shared-account path when both
         # directional surfaces participate in global auto-unstuck selection.
@@ -1118,7 +1120,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             }
             for _ in range(2)
         ],
-        backtest_params={"minimum_coin_age_days": [0.0, 0.0],
+        backtest_params={"side_activation": {"long": True, "short": True}, "minimum_coin_age_days": [0.0, 0.0],
             "candle_interval_minutes": interval_minutes,
             "dynamic_wel_by_tradability": dynamic_wel_by_tradability,
             "forager_score_hysteresis_pct": 0.0,
@@ -2366,10 +2368,12 @@ def test_gpu_side_enablement_uses_config_risk_not_per_coin_sentinel():
     config = {
         "bot": {
             "long": {
+                "enabled": True,
                 "risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 1},
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
+                "enabled": True,
                 "risk": {"total_wallet_exposure_limit": 0.0, "max_positions": 0},
                 "universe": {"approved_coins": ["BTC"]},
             },

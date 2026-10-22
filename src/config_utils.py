@@ -2529,6 +2529,10 @@ def update_config_with_args(
         if change:
             changed_keys.append(key)
             diffs.append(change)
+    # CLI presence is authored authority even when the new boolean equals the
+    # currently inherited value. Record declarations before another prepare.
+    from config.activation import apply_activation_patch
+    apply_activation_patch(config, expanded)
     if changed_keys:
         details = {"keys": changed_keys}
         if diffs:

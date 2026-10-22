@@ -29,6 +29,7 @@ def validate_hourly_bootstrap_inputs(
     This is a dataset capability boundary: all configured hourly inputs of an
     active policy must exist before its first planning boundary. It does not
     simulate selection, positions or eventual fills to predict consumption.
+    Entry activation cannot waive hourly inputs needed by held-position closes.
     """
     matrix = np.asarray(params, dtype=np.float64)
     width = len(keys)

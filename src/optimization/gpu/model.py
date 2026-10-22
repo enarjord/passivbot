@@ -446,6 +446,9 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
 def gpu_side_enabled(config: dict, side: str) -> bool:
     """Match Rust/backtest global side eligibility, including approved coins."""
 
+    from config.activation import side_enabled
+    if not side_enabled(config, side):
+        return False
     risk = config.get("bot", {}).get(side, {}).get("risk", {})
     total_exposure = float(risk.get("total_wallet_exposure_limit", 0.0) or 0.0)
     n_positions_raw = float(risk.get("max_positions", 0) or 0)

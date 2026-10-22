@@ -799,6 +799,19 @@
             "global": {
               "type": "object",
               "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Side omission inherits bot.global.enabled; explicit false is a pin. Held closes and protection retain their existing sizing, risk and mode gates.",
+                  "x-passivbot-scope": "global",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
                 "forager": {
                   "type": "object",
                   "properties": {
@@ -901,6 +914,19 @@
             "long": {
               "type": "object",
               "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Side omission inherits bot.global.enabled; explicit false is a pin. Held closes and protection retain their existing sizing, risk and mode gates.",
+                  "x-passivbot-scope": "long",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
                 "entry_cooldown": {
                   "type": "object",
                   "properties": {
@@ -2736,6 +2762,19 @@
             "short": {
               "type": "object",
               "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Side omission inherits bot.global.enabled; explicit false is a pin. Held closes and protection retain their existing sizing, risk and mode gates.",
+                  "x-passivbot-scope": "short",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
                 "entry_cooldown": {
                   "type": "object",
                   "properties": {
@@ -14439,6 +14478,9 @@
         "bot.global": {
           "$ref": "#/$defs/config/properties/bot/properties/global"
         },
+        "bot.global.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/enabled"
+        },
         "bot.global.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager"
         },
@@ -14453,6 +14495,9 @@
         },
         "bot.long": {
           "$ref": "#/$defs/config/properties/bot/properties/long"
+        },
+        "bot.long.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/enabled"
         },
         "bot.long.entry_cooldown": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/entry_cooldown"
@@ -14792,6 +14837,9 @@
         },
         "bot.short": {
           "$ref": "#/$defs/config/properties/bot/properties/short"
+        },
+        "bot.short.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/enabled"
         },
         "bot.short.entry_cooldown": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/entry_cooldown"
@@ -16549,6 +16597,9 @@
         "global": {
           "$ref": "#/$defs/scenarioPatch:bot.global"
         },
+        "global.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/enabled"
+        },
         "global.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager"
         },
@@ -16563,6 +16614,9 @@
         },
         "long": {
           "$ref": "#/$defs/scenarioPatch:bot.long"
+        },
+        "long.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/enabled"
         },
         "long.entry_cooldown": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/entry_cooldown"
@@ -16903,6 +16957,9 @@
         "short": {
           "$ref": "#/$defs/scenarioPatch:bot.short"
         },
+        "short.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/enabled"
+        },
         "short.entry_cooldown": {
           "$ref": "#/$defs/config/properties/bot/properties/short/properties/entry_cooldown"
         },
@@ -17177,6 +17234,9 @@
     "scenarioPatch:bot.global": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/global/properties/enabled"
+        },
         "forager": {
           "$ref": "#/$defs/scenarioPatch:bot.global.forager"
         },
@@ -17216,6 +17276,9 @@
     "scenarioPatch:bot.long": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/long/properties/enabled"
+        },
         "entry_cooldown": {
           "$ref": "#/$defs/scenarioPatch:bot.long.entry_cooldown"
         },
@@ -18201,6 +18264,9 @@
     "scenarioPatch:bot.short": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/short/properties/enabled"
+        },
         "entry_cooldown": {
           "$ref": "#/$defs/scenarioPatch:bot.short.entry_cooldown"
         },

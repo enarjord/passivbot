@@ -155,6 +155,34 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 
 ## Bot Settings
 
+### Side Activation
+
+`bot.global.enabled` defaults to `false`. An omitted `bot.long.enabled` or
+`bot.short.enabled` inherits that value; an explicit boolean pins the side.
+Absent and empty side objects have the same parameters and activation policy.
+Enable the intended sides explicitly before live trading, backtesting or optimization.
+
+`enabled=false` forbids initial entries and DCA, including forced-normal and
+always-include selection. Positive exposure capacity, position capacity, approvals,
+readiness and risk gates are still required when enabled. Zero capacity does not
+rewrite the activation flag. The flag is fixed policy, not an optimizer gene, and
+cannot be overridden per coin. Fixed runtime and scenario declarations retain
+their normal precedence; numeric search bounds cannot enable a disabled side.
+
+Disabling a side does not imply panic or manual mode. Held closes and protection
+continue under their existing operational, sizing and risk gates; a zero sizing
+allocation can still produce no ordinary close. Bot-managed normal/graceful-stop
+entry orders are reconciled away. Explicit manual and ordinary take-profit-only
+modes retain their standing-order ownership; the activation flag does not authorize
+cancelling operator-owned orders. Genuine removal from the approved universe still
+uses `live.modes.disapproved_position`.
+
+Compact exports retain explicit boolean pins and omission. Resolved/full inspection
+exports contain the effective booleans, so reloading those snapshots pins them.
+Released-v8 migration reports both sides as enabled while preserving frozen old
+parameters, capacities, modes and search ranges. Zero capacity still prevents entries,
+but no longer implicitly suppresses held-position management through manual mode.
+
 ### Equity Hard Stop Loss
 
 HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/position_side modes,
@@ -187,7 +215,7 @@ behavior.
   - Auto-unstuck uses its own `unstuck.ema_span_0_minutes` and `unstuck.ema_span_1_minutes`; ordinary trailing-martingale closes do not use the entry price band.
   - Final v9 loading requires these entry paths. The explicit released-v8 converter moves old
     strategy-root spans into `entry` and rejects conflicting authored values.
-- **max_positions**: Maximum number of positions to open. Set to `0` to disable long/short.
+- **max_positions**: Maximum number of positions to open. `0` prevents entries without changing `enabled` or held-position operational modes.
 - **total_wallet_exposure_limit**: Maximum exposure allowed.
   - Example: `total_wallet_exposure_limit = 0.75` means 75% of (unleveraged) wallet balance is used.
   - Example: `total_wallet_exposure_limit = 1.6` means 160% of (unleveraged) wallet balance is used.

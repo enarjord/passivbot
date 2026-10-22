@@ -598,6 +598,7 @@ mod tests {
             coins: BTreeMap::new(),
         };
         BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -704,6 +705,50 @@ mod tests {
         bt.update_hsl(1).unwrap();
         assert_eq!(bt.hsl_action(LONG, 0), Action::Panic);
         assert!(bt.hsl_scopes[0].state.current(120_000).drawdown > 99.0);
+    }
+
+    #[test]
+    fn side_activation_preserves_hsl_protection_for_existing_positions() {
+        for side in [LONG, SHORT] {
+            let mut values = candles(1, 100.0);
+            values[[1, 0, CLOSE]] = if side == LONG { 1.0 } else { 199.0 };
+            let btc = Array1::from_elem(6, 20_000.0);
+            let p = params("coin", 1);
+            let mut bt = Backtest::new(
+                values.view(),
+                btc.view(),
+                bots(1),
+                vec![ExchangeParams::default()],
+                &p,
+            );
+            if side == LONG {
+                bt.process_entry_fill_long(
+                    1,
+                    0,
+                    &order(1.0, OrderType::EntryInitialNormalLong),
+                    execution(100.0),
+                )
+                .unwrap();
+            } else {
+                bt.process_entry_fill_short(
+                    1,
+                    0,
+                    &order(-1.0, OrderType::EntryInitialNormalShort),
+                    execution(100.0),
+                )
+                .unwrap();
+            }
+            bt.backtest_params.side_activation = crate::types::SideActivation::uniform(false);
+            bt.update_hsl(1).unwrap();
+            assert_eq!(bt.hsl_action(side, 0), Action::Panic);
+            let orders = bt.hsl_protective_orders(1).unwrap();
+            assert!(orders.iter().any(|o| o.pside.to_pside_int() == side
+                && matches!(
+                    o.order_type,
+                    OrderType::ClosePanicLong | OrderType::ClosePanicShort
+                )));
+            assert!(!orders.iter().any(|o| o.order_type.is_entry()));
+        }
     }
 
     #[test]
