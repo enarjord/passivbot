@@ -10352,6 +10352,10 @@ class Passivbot:
 
     def set_wallet_exposure_limits(self):
         """Recalculate wallet exposure limits for both sides and per-symbol overrides."""
+        from config.bot_inheritance import reconciled_bot_policy, install_bot_policy
+
+        policy = reconciled_bot_policy(self.config)
+        aliases = self.config["bot"]._runtime_aliases if policy is not None else frozenset()
         for pside in ["long", "short"]:
             self.config["bot"][pside]["wallet_exposure_limit"] = (
                 self.get_wallet_exposure_limit(pside)
@@ -10362,6 +10366,12 @@ class Passivbot:
                     self.coin_overrides[symbol]["bot"][pside][
                         "wallet_exposure_limit"
                     ] = self.get_wallet_exposure_limit(pside, symbol)
+        if policy is not None:
+            # These calculated allocation values serve live consumers, never
+            # public policy. Rebaseline only at their actual trusted writer.
+            aliases |= frozenset((side, "wallet_exposure_limit") for side in ("long", "short"))
+            install_bot_policy(self.config, policy, effective_bot=self.config["bot"],
+                               runtime_aliases=aliases)
 
     def get_wallet_exposure_limit(self, pside, symbol=None):
         """Return side WEL from fixed config denominator, honoring per-symbol overrides."""
