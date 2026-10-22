@@ -139,3 +139,16 @@ def test_unrelated_or_invalid_bounds_patch_keeps_existing_authority():
         apply_inherited_bounds_patch(config, {"optimize.bounds.global.risk.unknown": [1.0, 3.0]})
     assert get_bound_plan(config).identity() == original
     assert not apply_inherited_bounds_patch({"optimize": {"bounds": {}}}, {"optimize.bounds": {}})
+
+
+def test_bounds_owner_can_capture_trusted_authority_before_an_atomic_container_replacement():
+    from config.inherited_bounds import apply_inherited_bounds_patch
+    config = prepared(bounds={"global": {"risk": {"capacity": [1.0, 3.0]}}})
+    previous = config["optimize"]["bounds"]
+    replacement = {"iters": 12, "bounds": {"short": {"risk": {"capacity": [2.0, 4.0]}}}}
+    config["optimize"] = deepcopy(replacement)
+    assert apply_inherited_bounds_patch(config, {"optimize": replacement}, source_bounds=previous)
+    assert config["optimize"]["iters"] == 12
+    assert optimize_bounds_source_view(config)["optimize"]["bounds"] == replacement["bounds"]
+    with pytest.raises(TypeError, match="exact prepared"):
+        apply_inherited_bounds_patch(config, {"optimize.bounds": {}}, source_bounds=dict(previous))
