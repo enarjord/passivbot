@@ -361,7 +361,13 @@ class NativeCandidatePlanner:
 
     def prepare(self, candidate_id, vector, *, scenarios=None):
         from optimize import _canonicalize_optimizer_individual
+        from config.universe import runtime_universe_snapshot
 
+        # Registration already acquired these facts. Validate the current
+        # source bindings before a gene write could restore an older policy;
+        # this owner never acquires a replacement source during replay.
+        columns = sorted({coin for coins in self.base.config["backtest"]["coins"].values() for coin in coins})
+        runtime_universe_snapshot(self.base.config, available_coins=columns)
         values = [float(value) for value in vector]
         if len(values) != len(self.base.bounds) or any(not math.isfinite(value) for value in values):
             raise ValueError("candidate must have a complete finite optimizer vector")

@@ -124,3 +124,24 @@ def test_omitted_fixed_float_signature_is_stable_after_actual_vector_normalizati
         plan.apply_values(changed, {})
     with pytest.raises(TypeError, match="max_positions"):
         apply_bot_policy_patch(policy, {"bot.global.risk.max_positions": 0.5})
+
+
+@pytest.mark.parametrize("anchored", [False, True])
+def test_vector_reconciliation_cannot_erase_an_unprepared_source_edit(tmp_path, anchored):
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+    from optimize import install_anchored_fine_tune_plan
+    original, replacement = tmp_path / "first.json", tmp_path / "second.json"
+    original.write_text('["AAA"]')
+    replacement.write_text('["AAA"]')
+    raw = source()
+    raw["bot"]["global"]["universe"] = {"approved_coins": str(original)}
+    config = prepare_config(raw, verbose=False)
+    if anchored:
+        install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit"],
+                                      "unused", starting_configs_override=[bot_policy_source_view(config)])
+    shape = build_optimization_shape(config)
+    config["bot"]["global"]["universe"]["approved_coins"] = str(replacement)
+    with pytest.raises(ValueError, match="does not match source authority"):
+        build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
+    assert config["bot"]["global"]["universe"]["approved_coins"] == str(replacement)

@@ -438,7 +438,7 @@ def _build_anchored_optimizer_vector_config(
     config.pop(ANCHOR_PLAN_KEY, None)
     # Carry the selected plan's fixed leaf authority through finalization.
     fixed_paths = set()
-    from config.bot_inheritance import get_bot_policy, install_bot_policy
+    from config.bot_inheritance import reconciled_bot_policy, install_bot_policy
     from config.inherited_bounds import get_bound_plan
     binding_plan = get_bound_plan(config)
     bindings = ({binding.authoring_path: binding for binding in binding_plan.bindings}
@@ -461,7 +461,7 @@ def _build_anchored_optimizer_vector_config(
         else:
             _set_path(config, path, value)
     if binding_plan is not None:
-        install_bot_policy(config, binding_plan.apply_values(get_bot_policy(config), values))
+        install_bot_policy(config, binding_plan.apply_values(reconciled_bot_policy(config), values))
     config["_optimizer_anchor"] = {
         "id": anchor_id,
         "source": anchor.get("source"),
@@ -492,14 +492,14 @@ def build_optimizer_vector_config(
     assert len(vector) == len(
         key_paths
     ), f"individual length {len(vector)} does not match optimization key count {len(key_paths)}"
-    from config.bot_inheritance import get_bot_policy, install_bot_policy
+    from config.bot_inheritance import reconciled_bot_policy, install_bot_policy
     from config.inherited_bounds import get_bound_plan
     plan = get_bound_plan(config)
     if plan is not None:
         declared = {binding.key: binding.authoring_path for binding in plan.bindings}
         if any(declared.get(key) != tuple(path) for key, path in key_paths):
             raise ValueError("optimizer key paths do not match the inherited binding plan")
-        updated = plan.apply_values(get_bot_policy(config), {key: value for value, (key, _) in zip(vector, key_paths)})
+        updated = plan.apply_values(reconciled_bot_policy(config), {key: value for value, (key, _) in zip(vector, key_paths)})
         install_bot_policy(config, updated)
     else:
         for value, (_, path) in zip(vector, key_paths):
