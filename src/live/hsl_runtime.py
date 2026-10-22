@@ -9,10 +9,14 @@ from dataclasses import dataclass, replace
 from collections import Counter
 import json
 import math
+import struct
 
 import passivbot_rust as pbr
 
-from config.hsl import FIELDS, engine, require_live_balance_support
+from config.hsl import FIELDS, engine, require_live_balance_support, require_live_runtime_support
+from config.risk_memory import risk_bootstrap_horizon_minutes
+from live.hsl_budget import BudgetObservations
+from live.hsl_continuity import FactualReplays
 from live.hsl_inputs import FillTape, capture_fills
 from passivbot_exceptions import FatalBotException
 
@@ -31,9 +35,11 @@ class PositionObservation:
     payload: str
     observed_ms: int
     generation: int
+    revision: int = 0
 
 
 def observe_positions(bot):
+    source = bot._ensure_freshness_ledger().surfaces["positions"]
     return PositionObservation(
         json.dumps(
             sorted(
@@ -43,8 +49,9 @@ def observe_positions(bot):
                 if position["size"] != 0
             )
         ),
-        bot._ensure_freshness_ledger().surfaces["positions"].updated_ms,
+        source.updated_ms,
         int(getattr(bot, "_account_invalidation_generation", 0)),
+        source.revision,
     )
 
 
@@ -82,7 +89,7 @@ def enabled(bot):
     may still contribute a cooldown when they next become eligible.
     """
     mode = bot.config["live"]["hsl_signal_mode"]
-    if mode == "unified":
+    if mode == "portfolio":
         return bot.config["bot"]["hsl"]["enabled"]
     if mode not in {"coin", "pside"}:
         raise ValueError("invalid HSL signal mode")
@@ -101,13 +108,7 @@ def observe_fills(bot, interval):
     if not enabled(bot):
         return None
     now = int(bot.get_exchange_time())
-    start = max(
-        0,
-        now
-        - math.floor(
-            float(bot.config["live"]["pnls_max_lookback_days"]) * 86_400_000 + 0.5
-        ),
-    )
+    start = history_start_ms(bot, now)
     manager = bot._pnls_manager
     return FillObservation(
         manager,
@@ -115,6 +116,14 @@ def observe_fills(bot, interval):
         capture_fills(manager.get_events(start_ms=start), bot.c_mults),
         interval,
     )
+
+
+def history_start_ms(bot, now):
+    # Acquisition remains bounded and may slide. The retained factual replay
+    # anchor and Rust forward fold have an independent, fixed initialization.
+    minutes, _ = risk_bootstrap_horizon_minutes(bot.config["live"])
+    minutes = max(minutes, require_live_runtime_support(bot.config))
+    return max(0, int(now) - math.floor(minutes * 60_000 + 0.5))
 
 
 def observed_fill_interval(bot, tape, start, now):
@@ -169,6 +178,7 @@ class Request:
     reasons: tuple[str, ...]
     price_grids: tuple[object, ...]
     mark_observed_ms: tuple[int, ...]
+    replay: object = None
 
     @property
     def payload(self):
@@ -221,7 +231,7 @@ def _source_reasons(source):
 
 def _policies(bot, pairs):
     mode = bot.config["live"]["hsl_signal_mode"]
-    if mode == "unified":
+    if mode == "portfolio":
         policy = dict(bot.config["bot"]["hsl"])
         if policy["enabled"]:
             yield Scope(mode), policy, 1
@@ -270,6 +280,9 @@ def capture(
     position_observation=None,
     use_observed_fills=False,
     target=None,
+    observation_clock_offset_ms=0,
+    account_clock_projector=None,
+    fact_clock_projector=None,
 ):
     """Copy a current account cohort and canonical history into immutable requests.
 
@@ -283,6 +296,11 @@ def capture(
     permission; an aggregate scope still retains every contributing pair.
     ``positions`` must be the complete successfully committed account snapshot;
     an omitted symbol in that complete response is an observed flat position.
+    Observation clocks share UTC by default. A synthetic harness may explicitly
+    supply ``observation_clock_offset_ms``; two sampled wall-clock values never
+    establish a clock-domain difference.
+    An optional harness ``account_clock_projector(surface, revision, utc_ms)``
+    maps independently recorded account receipts, preserving cached read identity.
 
     Missing current quotes are scoped before Rust. No part of a malformed Rust
     result can become a partial decision batch. Callers must not await between
@@ -300,19 +318,30 @@ def capture(
     ):
         raise ValueError("HSL symbols require explicit long/short membership")
     if (
-        any(type(x) is not int for x in (now_ms, utc_now_ms, max_current_age_ms))
+        any(type(x) is not int for x in (now_ms, utc_now_ms, max_current_age_ms, observation_clock_offset_ms))
         or max_current_age_ms < 0
+        or (account_clock_projector is not None and not callable(account_clock_projector))
+        or (fact_clock_projector is not None and not callable(fact_clock_projector))
     ):
         raise ValueError("invalid HSL capture clock")
     if not enabled(bot):
         return (), ()
     require_live_balance_support(bot.config, getattr(bot, "balance_override", None))
-    lookback_days = float(bot.config["live"]["pnls_max_lookback_days"])
-    if not 1 <= lookback_days <= 90:
-        raise ValueError("HSL requires 1..90 day lookback")
-    lookback_ms = math.floor(lookback_days * 86_400_000 + 0.5)
-    start = max(0, now_ms - lookback_ms)
-    offset = now_ms - utc_now_ms
+    start = history_start_ms(bot, now_ms)
+    _, truncated = risk_bootstrap_horizon_minutes(bot.config["live"])
+    # Real account observations and exchange events both use UTC. Processing
+    # between two clock reads is not a timebase offset. Synthetic harnesses
+    # must provide their distinct observation projection explicitly.
+    offset = observation_clock_offset_ms
+
+    def fact_time(kind, receipt, observed_utc):
+        if fact_clock_projector is None:
+            return observed_utc + offset
+        projected = fact_clock_projector(kind, receipt, observed_utc)
+        if type(projected) is not int or not 0 < projected <= now_ms:
+            raise ValueError("invalid projected HSL fact clock")
+        return projected
+
     ledger = bot._ensure_freshness_ledger()
     balance_state, position_state = (
         ledger.surfaces[key] for key in ("balance", "positions")
@@ -325,12 +354,15 @@ def capture(
             or position_observation.generation != current.generation
             or type(position_observation.observed_ms) is not int
             or not 0 < position_observation.observed_ms <= current.observed_ms
+            or type(position_observation.revision) is not int
+            or not 0 <= position_observation.revision <= current.revision
         ):
             raise ValueError(
                 "position observation does not match current account facts"
             )
         position_state = replace(
-            position_state, updated_ms=position_observation.observed_ms
+            position_state, updated_ms=position_observation.observed_ms,
+            revision=position_observation.revision,
         )
     balance = bot.get_raw_balance()
     events = (
@@ -369,6 +401,8 @@ def capture(
         for order in orders
     )
     global_reasons = set(tape.reasons)
+    if truncated:
+        global_reasons.add("bootstrap_target_truncated")
     if fills_started_ms is None or fills_completed_ms is None:
         global_reasons.add("fill_capture_unknown")
     if any(f.timestamp > now_ms for p in tape.pairs for f in p.fills):
@@ -408,7 +442,7 @@ def capture(
     problem = None
     if (
         balance_invalidated
-        or not _finite(balance, positive=True)
+        or not _finite(balance)
         or not fresh(balance_state.updated_ms)
     ):
         problem = "current_balance_unavailable"
@@ -416,6 +450,20 @@ def capture(
         problem = "current_positions_unavailable"
     if problem:
         return (), tuple(Unavailable(scope, problem) for scope, _, _ in policies)
+    account_times = {}
+    for state in (balance_state, position_state):
+        projected = (
+            state.updated_ms + offset if account_clock_projector is None
+            else account_clock_projector(state.name, state.revision, state.updated_ms)
+        )
+        if type(projected) is not int or not 0 < projected <= now_ms:
+            raise ValueError("invalid projected HSL account clock")
+        if now_ms - projected > max_current_age_ms:
+            return (), tuple(
+                Unavailable(scope, f"current_{state.name}_unavailable")
+                for scope, _, _ in policies
+            )
+        account_times[state.name] = projected
     for timestamp in (fills_started_ms, fills_completed_ms):
         if timestamp is not None and (
             type(timestamp) is not int or timestamp <= 0 or timestamp > utc_now_ms
@@ -427,6 +475,17 @@ def capture(
         and fills_started_ms > fills_completed_ms
     ):
         raise ValueError("reversed observed fill capture interval")
+    fill_receipt = getattr(bot, "_hsl_fill_observation", None)
+    fill_start = (
+        None if fills_started_ms is None
+        else fact_time("fill_start", fill_receipt, fills_started_ms)
+    )
+    fill_end = (
+        None if fills_completed_ms is None
+        else fact_time("fill_end", fill_receipt, fills_completed_ms)
+    )
+    if fill_start is not None and fill_end is not None and fill_start > fill_end:
+        raise ValueError("reversed projected fill capture interval")
 
     scoped_keys = {}
     for scope, _, _ in policies:
@@ -439,7 +498,7 @@ def capture(
         scoped_keys[scope] = keys
 
     pairs, pair_problems, pair_reasons, flat_coins = {}, {}, {}, {}
-    projected, empty_flat_pairs = {}, set()
+    projected, empty_flat_pairs, mark_observations = {}, set(), {}
     for scope, _, _ in policies:
         for symbol, side in scoped_keys[scope]:
             key = (symbol, side)
@@ -477,12 +536,8 @@ def capture(
                     flat_coins[scope] = dict(
                         symbol=symbol,
                         pside=side,
-                        position_at=position_state.updated_ms + offset,
-                        fills_at=(
-                            None
-                            if fills_completed_ms is None
-                            else fills_completed_ms + offset
-                        ),
+                        position_at=account_times["positions"],
+                        fills_at=fill_end,
                         history_start=start,
                     )
                 reasons = global_reasons | _source_reasons(source)
@@ -490,7 +545,11 @@ def capture(
                     reasons.update(history.reasons)
                 if fills_started_ms is None or fills_completed_ms is None:
                     reasons.add("fill_capture_unknown")
-                elif fills_completed_ms != position_state.updated_ms:
+                elif (
+                    (fill_end != account_times["positions"])
+                    if fact_clock_projector is not None
+                    else (fills_completed_ms != position_state.updated_ms)
+                ):
                     reasons.add("snapshot_skew")
                 pair_reasons[key] = reasons
                 continue
@@ -500,11 +559,22 @@ def capture(
                 continue
             if symbol not in projected:
                 source = candle_sources.get(symbol)
-                projected[symbol] = (
-                    source.native_source.project(start, now_ms, offset)
-                    if source is not None
-                    else pbr.hsl_native_price_grid(start, now_ms, [])
-                )
+                if source is not None and fact_clock_projector is not None:
+                    # Offline harnesses bind each immutable acquisition receipt.
+                    # Prices/source periods remain exact; only availability is
+                    # projected, while the original UTC tapes remain unchanged.
+                    native_source = pbr.HslCandleSource([
+                        (c.start, c.minutes, c.open, c.high, c.low, c.close,
+                         fact_time("candle", tape, c.available_at))
+                        for tape in source.tapes for c in tape.candles
+                    ])
+                    projected[symbol] = native_source.project(start, now_ms, 0)
+                else:
+                    projected[symbol] = (
+                        source.native_source.project(start, now_ms, offset)
+                        if source is not None
+                        else pbr.hsl_native_price_grid(start, now_ms, [])
+                    )
             _grid, last_price, price_reasons = projected[symbol]
             quote = quotes.get(symbol)
             flat_fill_prices = (
@@ -523,7 +593,12 @@ def capture(
                 and 0 < quote.fetched_ms <= utc_now_ms
             )
             if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
-                mark, mark_at = quote.last, quote.fetched_ms + offset
+                mark, mark_at = quote.last, fact_time("quote", quote, quote.fetched_ms)
+                if (fact_clock_projector is not None and size != 0
+                        and now_ms - mark_at > max_current_age_ms):
+                    pair_problems[key] = "current_mark_unavailable"
+                    continue
+                mark_observations[key] = quote.fetched_ms
                 flat_price_reason = None
             elif size == 0 and last_price is not None:
                 # Flat UPNL is zero. A retained source close can value this
@@ -559,14 +634,10 @@ def capture(
                     pside=side,
                     quantity_step=bot.qty_steps.get(symbol),
                 ),
-                position_at=position_state.updated_ms + offset,
+                position_at=account_times["positions"],
                 mark_at=mark_at,
-                fills_started_at=(
-                    None if fills_started_ms is None else fills_started_ms + offset
-                ),
-                fills_at=(
-                    None if fills_completed_ms is None else fills_completed_ms + offset
-                ),
+                fills_started_at=fill_start,
+                fills_at=fill_end,
                 prices_at=now_ms,
                 prices={},
                 fills=fills.payload() if fills is not None else [],
@@ -584,7 +655,7 @@ def capture(
             now=now_ms,
             start=start,
             balance=balance,
-            balance_at=balance_state.updated_ms + offset,
+            balance_at=account_times["balance"],
             config_at=now_ms,
             max_current_age_ms=max_current_age_ms,
             mode=scope.mode,
@@ -597,10 +668,10 @@ def capture(
         payload = dict(
             snapshot=snapshot,
             slots=slots,
+            lookback_span_minutes=bot.config["live"]["lookback_ema_span_minutes"],
             span=policy["ema_span_minutes"],
             threshold=policy["red_threshold"],
             cooldown_ms=math.floor(policy["cooldown_minutes_after_red"] * 60_000 + 0.5),
-            restart=policy["restart_after_red_policy"],
         )
         payload["scale_budget_with_excess_allowance"] = policy[
             "scale_budget_with_excess_allowance"
@@ -620,6 +691,24 @@ def capture(
                     "we_excess_allowance_pct", side_config["risk"]["we_excess_allowance_pct"]
                 ),
             )
+        else:
+            payload["exposure_budget"] = None
+        budgets = getattr(bot, "_hsl_budget_observations", None)
+        if budgets is None:
+            budgets = BudgetObservations()
+            bot._hsl_budget_observations = budgets
+        payload["budget_observations"] = budgets.capture(
+            scope, start=start, now=now_ms, balance=balance, slots=slots,
+            scale=policy["scale_budget_with_excess_allowance"],
+            exposure=payload["exposure_budget"],
+            balance_at=snapshot["balance_at"],
+        )
+        payload["invalidated_price_symbols"] = sorted({
+            key[0] for key in keys if key in pairs
+            and {"candle_conflict", "unusable_historical_candle"}.intersection(
+                projected[key[0]][2]
+            )
+        })
         reasons = set(global_reasons)
         # An attributed row may have no usable timestamp and therefore cannot
         # establish a price-bearing contributor. Its quality still belongs to
@@ -630,18 +719,26 @@ def capture(
                     reasons.update(pair.reasons)
         for key in keys:
             reasons.update(pair_reasons.get(key, ()))
+        metadata = json.dumps(payload, allow_nan=False)
+        grids = tuple(projected[key[0]][0] for key in keys if key in pairs)
+        replays = getattr(bot, "_hsl_factual_replays", None)
+        if replays is None:
+            replays = FactualReplays()
+            bot._hsl_factual_replays = replays
+        replay = replays.scope(scope, metadata, grids)
         requests.append(
             Request(
                 scope,
-                json.dumps(payload, allow_nan=False),
+                metadata,
                 policy["panic_close_order_type"],
                 tuple(sorted(reasons)),
-                tuple(projected[key[0]][0] for key in keys if key in pairs),
+                grids,
                 tuple(
-                    pair["mark_at"] - offset
+                    mark_observations[(pair["symbol"], pair["position"]["pside"])]
                     for pair in snapshot["pairs"]
                     if pair["position"]["size"] != 0
                 ),
+                replay,
             )
         )
     return tuple(requests), tuple(unavailable)
@@ -660,15 +757,54 @@ def _evaluate(requests):
     for request in requests:
         submitted = json.loads(request.metadata)
         output = json.loads(
-            pbr.hsl_evaluate_grids(request.metadata, request.price_grids)
+            pbr.hsl_v9_evaluate_grids(request.metadata, request.price_grids)
+            if request.replay is None
+            else request.replay.evaluate_grids(request.metadata, request.price_grids)
         )
         decision = output["decision"]
+        unavailable = output["unavailable_reason"]
+        if unavailable is not None:
+            if (
+                unavailable not in {
+                    "causal_position_mark_unavailable",
+                    "causal_position_snapshot_precedes_fill",
+                }
+                or decision is not None
+                or output["risk"] is not None
+                or output["events"] != []
+                or type(output["observations"]) is not int
+                or output["observations"] != 0
+                or type(output["episodes"]) is not int
+                or output["episodes"] != 0
+                or not isinstance(output["reasons"], list)
+                or any(not isinstance(reason, str) or not reason for reason in output["reasons"])
+            ):
+                raise InvalidHslOutput("incoherent HSL unavailable envelope")
+            decisions.append(Unavailable(request.scope, unavailable))
+            continue
         inactive = request.scope.mode == "coin" and submitted["slots"] == 0
         if (decision is None) != inactive:
             raise InvalidHslOutput("unexpected HSL scope activity")
         if decision is not None:
             snapshot = submitted["snapshot"]
             exposed = any(pair["position"]["size"] != 0 for pair in snapshot["pairs"])
+            risk = output["risk"]
+            threshold = struct.unpack("f", struct.pack("f", submitted["threshold"]))[0]
+            deadline = risk["cooldown_until"]
+            if (
+                type(risk["timestamp_ms"]) is not int or risk["timestamp_ms"] != snapshot["now"]
+                or type(risk["exposed"]) is not bool or risk["exposed"] != exposed
+                or type(risk["red"]) is not bool
+                or type(risk["nonpositive_equity"]) is not bool
+                or any(not _finite(risk[key]) or risk[key] < 0 for key in ("raw", "ema", "drawdown"))
+                or risk["raw"] != decision["raw"] or risk["ema"] != decision["ema"]
+                or risk["action"] != decision["action"]
+                or risk["red"] != (risk["nonpositive_equity"] or min(risk["raw"], risk["ema"]) > threshold)
+                or (deadline is not None and (type(deadline) is not int or deadline < 0))
+                or (exposed and decision["action"] != ("panic" if risk["red"] else "normal"))
+                or (not exposed and decision["action"] != ("halted" if deadline is not None and snapshot["now"] < deadline else "normal"))
+            ):
+                raise InvalidHslOutput("incoherent v9 risk decision envelope")
             red, flat = decision["red_at"], decision["flat_at"]
             if (
                 type(decision["timestamp"]) is not int
@@ -682,7 +818,10 @@ def _evaluate(requests):
                     t is not None
                     and (
                         type(t) is not int
-                        or not snapshot["start"] <= t <= snapshot["now"]
+                        or not (
+                            snapshot["start"] if request.replay is None
+                            else request.replay.anchor.origin_ms
+                        ) <= t <= snapshot["now"]
                     )
                     for t in (red, flat)
                 )
@@ -697,6 +836,7 @@ def _evaluate(requests):
                 or (decision["action"] == "panic" and (not exposed or flat is not None))
                 or (decision["action"] == "halted" and exposed)
                 or (flat is not None and (red is None or flat < red))
+                or (decision["action"] == "halted" and deadline != flat + submitted["cooldown_ms"])
             ):
                 raise InvalidHslOutput("invalid HSL decision envelope")
         reasons = tuple(sorted(set(request.reasons) | set(output["reasons"])))

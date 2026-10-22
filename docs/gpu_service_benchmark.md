@@ -16,8 +16,8 @@ The preparation-only mode creates requests without importing Torch, CuPy or the
 replay kernel. Execution requires a full CUDA installation and a source-verified
 Rust extension. Skipped verification, absent stamps and mismatched source
 fingerprints are rejected before fixture or device preparation. All data and candidate configurations come from the public
-seed-seven parity fixture. Both sides run; `--hsl unified` enables factual HSL
-with a 0.99 threshold and one-day lookback. This tool does not claim every risk
+seed-seven parity fixture. Both sides run; `--hsl portfolio` enables the forward
+risk model with a 0.99 threshold and a 1440.0-minute slow EMA span. This tool does not claim every risk
 transition occurs in that fixture.
 
 The base scenario uses all selected coins and rows. Early and late scenarios

@@ -149,20 +149,25 @@ def test_prep_backtest_args_uses_market_orders_allowed_from_live():
     assert backtest_params["market_orders_allowed"] is True
 
 
-def test_prep_backtest_args_uses_pnls_max_lookback_days_from_live():
+def test_prep_backtest_args_shares_risk_memory_without_rolling_gate_transport():
     config = _base_config()
-    config["live"]["pnls_max_lookback_days"] = 30.0
+    config["live"]["lookback_ema_span_minutes"] = 1234.5
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["pnls_max_lookback_days"] == 30.0
+    assert backtest_params["lookback_ema_span_minutes"] == 1234.5
+    assert "realized_loss_gate_lookback_minutes" not in backtest_params
+    assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_encodes_all_pnls_lookback_for_backtest():
+def test_prep_backtest_args_preserves_active_gate_fraction_and_shared_span():
     config = _base_config()
-    config["live"]["pnls_max_lookback_days"] = "all"
+    config["live"]["max_realized_loss_pct"] = 0.1
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["pnls_max_lookback_days"] == -1.0
+    assert backtest_params["max_realized_loss_pct"] == 0.1
+    assert "realized_loss_gate_lookback_minutes" not in backtest_params
+    assert backtest_params["lookback_ema_span_minutes"] == 43200.0
+    assert "pnls_max_lookback_days" not in backtest_params
 
 
 def test_prep_backtest_args_passes_liquidation_threshold():
@@ -418,7 +423,9 @@ def test_log_backtest_execution_settings_emits_summary(caplog):
 
     assert "[backtest] effective execution settings:" in caplog.text
     assert "market_orders_allowed" in caplog.text
-    assert "pnls_max_lookback_days" in caplog.text
+    assert "lookback_ema_span_minutes" in caplog.text
+    assert "realized_loss_gate_lookback_minutes" not in caplog.text
+    assert "pnls_max_lookback_days" not in caplog.text
 
 
 def test_build_backtest_payload_compiles_runtime_config_once(monkeypatch):

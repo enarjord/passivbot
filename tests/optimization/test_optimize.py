@@ -1805,6 +1805,7 @@ class TestIndividualToConfig:
         self, strategy_kind, bound_key, expected_path, new_value
     ):
         template = {
+            "config_version": optimize.get_template_config()["config_version"],
             "live": {"strategy_kind": strategy_kind},
             "bot": {
                 "long": {
@@ -3374,6 +3375,7 @@ class TestApplyFineTuneBounds:
 
     def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path, caplog):
         config = {
+            "config_version": optimize.get_template_config()["config_version"],
             "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
                 "bounds": {
@@ -3389,7 +3391,7 @@ class TestApplyFineTuneBounds:
             },
             "bot": {
                 "long": {
-                    "hsl": {"enabled": True, "restart_after_red_policy": "always"},
+                    "hsl": {"enabled": True, "cooldown_minutes_after_red": 3.0},
                     "n_positions": 1.0,
                     "param1": 0.1,
                     "param2": 0.2,
@@ -3405,6 +3407,7 @@ class TestApplyFineTuneBounds:
             (anchors_dir / f"anchor_{idx}.json").write_text(
                 json.dumps(
                     {
+                        "config_version": config["config_version"],
                         "live": {"strategy_kind": "trailing_martingale"},
                         "bot": {
                             "long": {
@@ -3446,6 +3449,7 @@ class TestApplyFineTuneBounds:
 
     def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
         config = {
+            "config_version": optimize.get_template_config()["config_version"],
             "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
                 "bounds": {
@@ -3723,7 +3727,9 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert "live" not in result[0]
+            assert result[0]["live"] == {
+                "lookback_ema_span_minutes": template["live"]["lookback_ema_span_minutes"]
+            }
         finally:
             os.unlink(path)
 

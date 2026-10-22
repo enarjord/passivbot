@@ -17,7 +17,7 @@ def options(*values):
 
 @pytest.mark.parametrize("flags", [
     ("--hsl-red-threshold", "nan"), ("--hsl-ema-span-minutes", "0"),
-    ("--hsl-cooldown-minutes", "-1"), ("--hsl-lookback-days", "91"),
+    ("--hsl-cooldown-minutes", "-1"), ("--lookback-ema-span-minutes", "0"),
     ("--price-shock", "4", "64", ".7"), ("--price-shock", "0", "10080", ".7"),
     ("--price-shock", "0", "64", "inf"),
 ])
@@ -33,17 +33,18 @@ def test_cohort_rejects_unsupported_cooldown_before_benchmark(monkeypatch, value
         pytest.fail("invalid timestamp policy must not initialize a benchmark/device")
     monkeypatch.setattr(benchmark, "run_benchmark", forbidden)
     with pytest.raises(SystemExit) as error:
-        benchmark.main(["--hsl", "unified", "--hsl-cooldown-minutes", str(value)])
+        benchmark.main(["--hsl", "portfolio", "--hsl-cooldown-minutes", str(value)])
     assert error.value.code == 2
 
 
 def test_cohort_accepts_cooldown_just_inside_rust_timestamp_range():
     value = math.nextafter((2**63 - 1) / 60_000, 0)
-    assert options("--hsl", "unified", "--hsl-cooldown-minutes", str(value)).hsl_cooldown_minutes == value
+    assert options("--hsl", "portfolio", "--hsl-cooldown-minutes", str(value)).hsl_cooldown_minutes == value
 
 
 @pytest.mark.parametrize("flags", [
     ("--hsl-ema-span-minutes", "1e300"), ("--hsl-red-threshold", "1e-300"),
+    ("--hsl-ema-span-minutes", "1e10"), ("--lookback-ema-span-minutes", "1e10"),
     ("--price-shock", "0", "64", "1e40"),
     ("--price-shock", "0", "64", "1e-100"),
     ("--price-shock", "0", "64", "1e20", "--price-shock", "0", "64", "1e20"),
@@ -55,20 +56,20 @@ def test_gpu_encoding_rejected_before_benchmark(monkeypatch, flags):
         pytest.fail("invalid float32 recipe must not initialize CUDA or run backtests")
     monkeypatch.setattr(benchmark, "run_benchmark", forbidden)
     with pytest.raises(SystemExit) as error:
-        benchmark.main(["--bars", "128", "--coins", "1", "--hsl", "unified", *flags])
+        benchmark.main(["--bars", "128", "--coins", "1", "--hsl", "portfolio", *flags])
     assert error.value.code == 2
 
 
-def test_gpu_policy_encoding_accepts_float32_boundaries():
-    args = options("--hsl-ema-span-minutes", str(float.fromhex("0x1.fffffep127")),
+def test_gpu_policy_encoding_accepts_decaying_span_and_subnormal_threshold():
+    args = options("--hsl-ema-span-minutes", "65536.5",
                    "--hsl-red-threshold", str(2**-149))
-    assert args.hsl_ema_span_minutes == float.fromhex("0x1.fffffep127")
+    assert args.hsl_ema_span_minutes == 65536.5
     assert args.hsl_red_threshold == 2**-149
 
 
 def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     import numpy as np
-    flags = ["--hsl", "unified", "--bars", "128", "--coins", "2", "--sides", "both",
+    flags = ["--hsl", "portfolio", "--bars", "128", "--coins", "2", "--sides", "both",
              "--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
              "--hsl-cooldown-minutes", "10000", "--price-shock", "0", "64", ".7"]
     args = options("--candidates", "2", *flags)
@@ -84,7 +85,7 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     assert len(configs) == len(parameters) == 2
     assert all(c["bot"]["hsl"]["red_threshold"] == .002 for c in configs)
     assert args.price_shocks == [[0, 64, .7]]
-    assert args.hsl_lookback_days == 1
+    assert args.lookback_ema_span_minutes == 1440.0
 
 
 @pytest.mark.parametrize("flags", [("--widths", "0"), ("--widths", "broken"),
@@ -238,7 +239,7 @@ def test_failed_execution_is_structured_and_report_file_matches_stdout(monkeypat
     monkeypatch.setattr(benchmark, "run_benchmark", fail)
     report_path = tmp_path / "report.json"
     assert benchmark.main(["--report", str(report_path), "--compact",
-        "--hsl", "unified", "--hsl-red-threshold", ".002",
+        "--hsl", "portfolio", "--hsl-red-threshold", ".002",
         "--price-shock", "0", "64", ".7"]) == 2
     text = capsys.readouterr().out
     assert report_path.read_text() == text
@@ -362,7 +363,7 @@ def test_cohort_reference_uses_the_native_factual_simulation_contract(monkeypatc
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("hsl", ["disabled", "unified"])
+@pytest.mark.parametrize("hsl", ["disabled", "portfolio"])
 def test_real_cuda_cohort_reports_serial_cpu_and_equivalent_service_metrics(strategy, hsl, tmp_path):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():

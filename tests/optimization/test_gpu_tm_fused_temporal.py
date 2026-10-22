@@ -34,7 +34,7 @@ def _replay(hsl, hedge_mode, monkeypatch):
                "--price-shock", "1", "1800", "1.3"]
     if hsl != "disabled":
         options += ["--hsl-red-threshold", ".002", "--hsl-ema-span-minutes", "2.5",
-                    "--hsl-cooldown-minutes", "10000", "--hsl-lookback-days", "1"]
+                    "--hsl-cooldown-minutes", "10000", "--lookback-ema-span-minutes", "1440"]
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
     config["live"]["hedge_mode"] = hedge_mode
     metrics = {
@@ -70,7 +70,7 @@ def _assert_exact(torch, expected, actual):
             assert value == actual[key], key
 
 
-@pytest.mark.parametrize("hsl", ["disabled", "coin", "unified"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin", "portfolio"])
 @pytest.mark.parametrize("hedge_mode", [False, True])
 def test_cuda_fused_temporal_preserves_all_outputs_and_unequal_ends(
     cuda_runtime, monkeypatch, hsl, hedge_mode

@@ -8,6 +8,7 @@ import pytest
 
 import procedures
 from config_utils import load_config
+from config.schema import CONFIG_SCHEMA_VERSION
 import utils
 from utils import format_approved_ignored_coins, normalize_coins_source
 
@@ -805,6 +806,7 @@ async def test_format_approved_ignored_coins_supports_explicit_per_side_all(monk
 
 def test_load_config_migrates_legacy_global_empty_means_all_approved(tmp_path: Path, caplog):
     raw = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},

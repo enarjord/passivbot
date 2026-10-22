@@ -54,6 +54,52 @@ def _strategy_side(config, pside, kind=None):
     return config["bot"][pside]["strategy"][kind]
 
 
+def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
+    path = Path(__file__).resolve().parents[1] / "configs/examples/ema_anchor_smoke_test.json"
+    authored = json.loads(path.read_text())
+    original = deepcopy(authored)
+    config = load_prepared_config(str(path), verbose=False, log_info=False)
+    compiled = compile_runtime_config(config, runtime="backtest")
+
+    assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
+    assert config["live"]["strategy_kind"] == "ema_anchor"
+    assert config["live"]["user"] == "example"
+    # This explicit demonstration span is not a converted rolling-window policy.
+    assert config["live"]["lookback_ema_span_minutes"] == 43200.0
+    assert config["live"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
+    assert config["live"]["max_realized_loss_pct"] == 1.0
+    assert config["live"]["hsl_signal_mode"] == "coin"
+    assert config["live"]["approved_coins"] == {
+        "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
+    }
+    for key, expected in {
+        "start_date": "2023-01-01", "end_date": "2023-01-15",
+        "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
+        "starting_balance": 100000.0, "maker_fee_override": 0.0004,
+        "btc_collateral_cap": 0.0, "suite_enabled": False,
+    }.items():
+        assert config["backtest"][key] == expected
+    expected_strategy = {
+        "base_qty_pct": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
+        "offset": 0.003, "offset_volatility_ema_span_1m": 60.0,
+        "offset_volatility_1m_weight": 0.0, "offset_volatility_ema_span_1h": 24.0,
+        "offset_volatility_1h_weight": 0.0, "offset_psize_weight": 0.2,
+    }
+    for side in ("long", "short"):
+        assert config["bot"][side]["hsl"]["enabled"] is False
+        assert config["bot"][side]["risk"]["n_positions"] == 2.0
+        assert config["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.0
+        for key, expected in expected_strategy.items():
+            assert _strategy_side(config, side)[key] == expected
+            assert _strategy_side(compiled, side)[key] == expected
+        assert config["bot"][side]["unstuck"]["ema_span_0"] == 48.0
+        assert config["bot"][side]["unstuck"]["ema_span_1"] == 288.0
+    for retired in ("pnls_max_lookback_days", "realized_loss_gate_lookback_minutes",
+                    "no_restart_drawdown_threshold", "orange_tier_mode", "tier_ratios"):
+        assert retired not in path.read_text()
+    assert json.loads(path.read_text()) == original
+
+
 def test_startup_phase_budgets_validate_and_roundtrip():
     source = get_template_config()
     assert source["live"]["startup_phase_budgets"] == {}
@@ -898,6 +944,7 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():
 def test_migrate_v7_trailing_grid_coin_override_reports_unknown_live_keys():
     source = _minimal_v7_trailing_grid_config()
     source["coin_overrides"]["BTC"] = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "live": {
             "leverage": 5,
             "unknown_live_toggle": True,
@@ -1927,6 +1974,7 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
 
 def test_prepare_config_preserves_backtest_visible_metrics():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "visible_metrics": [
                 "gain",
@@ -1951,6 +1999,7 @@ def test_prepare_config_preserves_backtest_visible_metrics():
 
 def test_prepare_config_rejects_unknown_backtest_visible_metrics():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {"visible_metrics": ["not_a_metric"]},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -1964,6 +2013,7 @@ def test_prepare_config_rejects_unknown_backtest_visible_metrics():
 
 def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {"visible_metrics": "adg"},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -1977,7 +2027,7 @@ def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
+def test_prepare_config_rejects_unversioned_configs_without_explicit_migration():
     source = {
         "backtest": {},
         "bot": {"long": {}, "short": {}},
@@ -1986,15 +2036,14 @@ def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
+    with pytest.raises(ValueError, match="explicit migration"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize(
     "previous_version", ["v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0"]
 )
-def test_prepare_config_migrates_supported_previous_config_to_current_schema(
+def test_prepare_config_requires_explicit_previous_schema_migration(
     previous_version,
 ):
     source = {
@@ -2006,14 +2055,17 @@ def test_prepare_config_migrates_supported_previous_config_to_current_schema(
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    with pytest.raises(ValueError, match="explicit migration"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
 
-
-def test_prepare_config_rejects_unreleased_same_major_schema():
+@pytest.mark.parametrize("version,message", [
+    ("v9.1.999", "newer than supported schema"),
+    ("v9.0.999", "requires explicit migration"),
+])
+def test_prepare_config_rejects_unreleased_same_major_schema(version, message):
     source = {
-        "config_version": "v8.0.999",
+        "config_version": version,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2021,7 +2073,7 @@ def test_prepare_config_rejects_unreleased_same_major_schema():
         "optimize": {"bounds": {}},
     }
 
-    with pytest.raises(ValueError, match="not a supported previous schema"):
+    with pytest.raises(ValueError, match=message):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
@@ -2053,46 +2105,48 @@ def test_prepare_config_rejects_malformed_config_version():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
-def test_prepare_config_keeps_live_pnls_max_lookback_days_without_backtest_override():
+def test_prepare_config_keeps_live_lookback_ema_span_minutes_without_backtest_override():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
-        "live": {"pnls_max_lookback_days": 30.0},
+        "live": {"lookback_ema_span_minutes": 30.0},
         "optimize": {"bounds": {}},
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["pnls_max_lookback_days"] == pytest.approx(30.0)
-    assert "pnls_max_lookback_days" not in prepared["backtest"]
+    assert prepared["live"]["lookback_ema_span_minutes"] == pytest.approx(30.0)
+    assert "lookback_ema_span_minutes" not in prepared["backtest"]
 
 
-def test_prepare_config_normalizes_all_pnls_max_lookback_days():
+def test_prepare_config_rejects_retired_all_history_gate_window():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
-        "live": {"pnls_max_lookback_days": "ALL"},
+        "live": {"realized_loss_gate_lookback_minutes": -1.0},
         "optimize": {"bounds": {}},
     }
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    with pytest.raises(ValueError, match="realized_loss_gate_lookback_minutes.*removed"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["live"]["pnls_max_lookback_days"] == "all"
 
-
-def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
+def test_prepare_config_rejects_invalid_lookback_ema_span_minutes_string():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
-        "live": {"pnls_max_lookback_days": "everything"},
+        "live": {"lookback_ema_span_minutes": "everything"},
         "optimize": {"bounds": {}},
     }
 
     with pytest.raises(
-        ValueError, match="live\\.pnls_max_lookback_days must be >= 0 or 'all'"
+        ValueError, match="live\\.lookback_ema_span_minutes must be a finite number"
     ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
@@ -2106,6 +2160,7 @@ def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
 )
 def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected):
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {
             "long": {},
@@ -2123,6 +2178,7 @@ def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected)
 
 def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_override():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2238,14 +2294,13 @@ def test_prepare_config_preserves_fractional_hsl_ema_span():
     assert prepared["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1.25)
 
 
-def test_prepare_config_removes_retired_hsl_terminal_threshold():
+def test_prepare_config_rejects_retired_hsl_terminal_threshold():
     source = get_template_config()
     source["bot"]["long"]["hsl"]["red_threshold"] = 0.20
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
-    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
-
-    assert "no_restart_drawdown_threshold" not in prepared["bot"]["long"]["hsl"]
+    with pytest.raises(ValueError, match="removed in v9"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize(
@@ -2326,11 +2381,13 @@ def test_prepare_config_preserves_live_custom_endpoints_path():
     [
         ("market_orders_allowed", False),
         ("market_order_near_touch_threshold", 0.0),
-        ("pnls_max_lookback_days", 0.0),
+        ("lookback_ema_span_minutes", 0.0),
+        ("realized_loss_gate_lookback_minutes", 0.0),
     ],
 )
 def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {field: value},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2344,6 +2401,7 @@ def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
 
 def test_prepare_config_migrates_legacy_backtest_market_slippage_key():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {"panic_market_slippage_pct": 0.0015},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
@@ -2359,6 +2417,7 @@ def test_prepare_config_migrates_legacy_backtest_market_slippage_key():
 
 def test_prepare_config_removes_empty_means_all_approved_from_canonical_shape():
     source = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},

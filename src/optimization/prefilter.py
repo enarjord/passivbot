@@ -169,6 +169,17 @@ def _probe_inputs(config, params, checks):
             }
 
 
+def _bound_excess(value, bound, *, lower):
+    if bound is None:
+        return 0.0
+    excess = bound - value if lower else value - bound
+    # The Rust measurement combines decimal settings using binary arithmetic.
+    # Ignore only a few representable steps at an inclusive bound, not a broad
+    # relative/absolute policy tolerance; larger violations retain their penalty.
+    roundoff = 4.0 * max(math.ulp(value), math.ulp(bound))
+    return excess if excess > roundoff else 0.0
+
+
 def inspect_config_prefilter(config, prefilter_params):
     """Return constraint and explanatory contributions without mutating inputs."""
     params = resolve_prefilter(prefilter_params)
@@ -197,8 +208,8 @@ def inspect_config_prefilter(config, prefilter_params):
                 violation = (
                     max(
                         0.0,
-                        0.0 if check["min"] is None else check["min"] - value,
-                        0.0 if check["max"] is None else value - check["max"],
+                        _bound_excess(value, check["min"], lower=True),
+                        _bound_excess(value, check["max"], lower=False),
                     )
                     / check["scale"]
                 )

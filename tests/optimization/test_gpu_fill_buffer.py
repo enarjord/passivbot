@@ -115,11 +115,11 @@ def test_buffered_gpu_matches_rust_marginal_entries(side, strategy_kind, coin_co
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip('GPU unavailable')
     from backtest import run_backtest
-    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    from optimization.gpu.service import MpsMulticoinProxy
     from rust_utils import verify_loaded_runtime_extension
     verify_loaded_runtime_extension()
     cfg, candles, mss, btc, ts = _fixture(side, strategy_kind, 0.0015, coin_count, market_orders)
-    proxy_cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    proxy_cls = MpsMulticoinProxy
     for buffer in [0.0, 0.0015]:
         cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
         proxy = proxy_cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
@@ -133,8 +133,8 @@ def test_buffered_gpu_matches_rust_marginal_entries(side, strategy_kind, coin_co
             assert len(fills) > 0
         # Preparation must not alter candle inputs used by indicators or touches.
         if coin_count == 1:
-            np.testing.assert_array_equal(proxy.data['high_f'].cpu().numpy(), candles[:, 0, 0].astype(np.float32))
-            np.testing.assert_array_equal(proxy.data['low_f'].cpu().numpy(), candles[:, 0, 1].astype(np.float32))
+            np.testing.assert_array_equal(proxy.data['bars'][:, 0, 0].cpu().numpy(), candles[:, 0, 0].astype(np.float32))
+            np.testing.assert_array_equal(proxy.data['bars'][:, 0, 1].cpu().numpy(), candles[:, 0, 1].astype(np.float32))
 
 
 @pytest.mark.parametrize('side', ['long', 'short'])
@@ -144,7 +144,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip('GPU unavailable')
     from backtest import run_backtest
-    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    from optimization.gpu.service import MpsMulticoinProxy
     cfg, candles, mss, btc, ts = _fixture(side, 'trailing_martingale', 0.0015, coin_count)
     candles[:, :, :3] = 100.0
     if side == 'long':
@@ -155,7 +155,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
         candles[10, :, 0] = 100.2
         candles[11:21, :, 1] = 98.95
         candles[21, :, 1] = 98.7
-    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    cls = MpsMulticoinProxy
     for buffer in [0.0, 0.0015]:
         cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
@@ -243,11 +243,11 @@ def test_gpu_large_buffer_with_representable_prices_matches_rust(side, coin_coun
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip("GPU unavailable")
     from backtest import run_backtest
-    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    from optimization.gpu.service import MpsMulticoinProxy
     cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.999, coin_count)
     candles[:, :, :3] *= 1000.0
     cfg["backtest"]["starting_balance"] = 1000000.0
-    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    cls = MpsMulticoinProxy
     for buffer in [0.0, 0.999, np.nextafter(1.0, 0.0)]:
         cfg["backtest"]["limit_order_fill_buffer_pct"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,

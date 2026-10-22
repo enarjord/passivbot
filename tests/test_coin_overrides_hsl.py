@@ -1,4 +1,7 @@
 from copy import deepcopy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -14,14 +17,22 @@ def _parse(overrides, *, mode="coin", loaded=None, configure_source=None):
     source["live"]["hsl_signal_mode"] = mode
     if configure_source is not None:
         configure_source(source)
-    source["coin_overrides"] = deepcopy(overrides)
-    prepared = prepare_config(source, verbose=False, log_config_transforms=False)
-    return parse_overrides(
-        prepared,
-        verbose=False,
-        override_loader=lambda config, coin: deepcopy(loaded or {}),
-        symbol_normalizer=lambda coin: coin,
-    )
+    # Schema validation must see the same real authored file that the resolver
+    # sees; a nonexistent test path would now correctly fail before its hook.
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "override.json"
+        path.write_text(json.dumps(loaded or {}))
+        source["coin_overrides"] = deepcopy(overrides)
+        for patch in source["coin_overrides"].values():
+            if "override_config_path" in patch:
+                patch["override_config_path"] = str(path)
+        prepared = prepare_config(source, verbose=False, log_config_transforms=False)
+        return parse_overrides(
+            prepared,
+            verbose=False,
+            override_loader=lambda config, coin: deepcopy(loaded or {}),
+            symbol_normalizer=lambda coin: coin,
+        )
 
 
 HSL_LEAF_CASES = [
@@ -30,7 +41,6 @@ HSL_LEAF_CASES = [
     (("enabled",), False),
     (("panic_close_order_type",), "market"),
     (("red_threshold",), 0.2),
-    (("restart_after_red_policy",), "always"),
 ]
 
 
@@ -66,11 +76,10 @@ def test_hsl_policy_registry_covers_every_canonical_leaf():
         "hsl.enabled",
         "hsl.panic_close_order_type",
         "hsl.red_threshold",
-        "hsl.restart_after_red_policy",
     }
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 @pytest.mark.parametrize("spelling", ["grouped", "flat"])
 def test_inline_hsl_patch_is_rejected_outside_coin_mode(mode, spelling):
     side = (
@@ -108,7 +117,7 @@ def test_full_file_hsl_patch_is_warned_and_ignored_outside_coin_mode(caplog):
 
 @pytest.mark.parametrize(
     ("global_mode", "file_mode", "accepted"),
-    [("coin", "unified", True), ("pside", "coin", False)],
+    [("coin", "portfolio", True), ("pside", "coin", False)],
 )
 def test_global_signal_mode_wins_over_override_file_mode(
     global_mode, file_mode, accepted, caplog
@@ -167,7 +176,7 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
                 "short": {
                     "hsl": {
                         "panic_close_order_type": "limit",
-                        "restart_after_red_policy": "always",
+                        "cooldown_minutes_after_red": 17.5,
                     }
                 },
             }
@@ -178,7 +187,7 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
     assert bot["long"]["hsl"]["red_threshold"] == 0.25
     assert bot["long"]["hsl"]["ema_span_minutes"] == 4.5
     assert bot["short"]["hsl"]["panic_close_order_type"] == "market"
-    assert bot["short"]["hsl"]["restart_after_red_policy"] == "always"
+    assert bot["short"]["hsl"]["cooldown_minutes_after_red"] == 17.5
 
 
 def test_threshold_override_does_not_add_unrequested_policy_fields():

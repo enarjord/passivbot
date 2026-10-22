@@ -175,6 +175,13 @@ statistics remain zero for a slice without fills. Short runs average the availab
 - `expected_shortfall_1pct`: Average loss of the worst 1% daily min-equity returns.
 
 ## HSL metrics
+
+V9 HSL risk curves use decaying currency drawdown and ratio smoothing. These diagnostics
+are model-dependent; they are not independent account-equity measurements or a common
+quality ruler for v8/v9 comparisons. Compute ordinary account return/drawdown/recovery
+from full account equity and fills with identical definitions. Disabling optional HSL
+samples must not omit required account/objective metrics. See [V9 risk model](v9_risk_model.md).
+
 - `hard_stop_triggers`: Absolute count of RED trigger events during the run.
 - `hard_stop_restarts`: Absolute count of cooldown restarts after RED halts.
 - `hard_stop_total_loss_pct`: Total panic-close loss as a fraction of starting balance.

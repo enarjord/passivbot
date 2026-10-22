@@ -1,7 +1,7 @@
 //! Observational HSL reporting. No field here is read by trading code.
 use super::*;
-use crate::hsl_controller::{Action, LifecycleEvent};
-use crate::hsl_evaluator::Output;
+use crate::hsl_intent::{Action, LifecycleEvent};
+use crate::hsl_support::Output;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -501,7 +501,7 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
             .mode
             .as_str()
         {
-            "unified" => (None, None),
+            "portfolio" => (None, None),
             "pside" => (Some(side), None),
             "coin" => (Some(side), Some(coin)),
             _ => unreachable!("validated HSL mode"),
@@ -512,7 +512,7 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hsl_controller::Decision;
+    use crate::hsl_intent::Decision;
 
     fn output(now: i64, action: Action, events: Vec<LifecycleEvent>) -> Output {
         Output {
@@ -530,7 +530,6 @@ mod tests {
             reasons: Default::default(),
             observations: 1,
             episodes: 1,
-            cursor: None,
         }
     }
 

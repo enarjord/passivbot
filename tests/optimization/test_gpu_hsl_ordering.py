@@ -9,16 +9,16 @@ import pytest
     ("ema_anchor", "coin", 1, "both", False),
     ("ema_anchor", "coin", 2, "both", False),
     ("ema_anchor", "pside", 2, "both", True),
-    ("ema_anchor", "unified", 2, "both", True),
+    ("ema_anchor", "portfolio", 2, "both", True),
     ("trailing_martingale", "coin", 2, "long", True),
     ("trailing_martingale", "pside", 2, "long", True),
-    ("trailing_martingale", "unified", 2, "long", True),
+    ("trailing_martingale", "portfolio", 2, "long", True),
     ("trailing_martingale", "coin", 2, "short", True),
     ("trailing_martingale", "pside", 2, "short", True),
-    ("trailing_martingale", "unified", 2, "short", True),
+    ("trailing_martingale", "portfolio", 2, "short", True),
     ("trailing_martingale", "coin", 2, "both", True),
     ("trailing_martingale", "pside", 2, "both", True),
-    ("trailing_martingale", "unified", 2, "both", True),
+    ("trailing_martingale", "portfolio", 2, "both", True),
 ])
 def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides, shocks):
     torch = pytest.importorskip("torch")
@@ -40,7 +40,7 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
         inputs[0]["bot"][side]["hsl"].update(
             red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
-    if mode == "unified":
+    if mode == "portfolio":
         inputs[0]["bot"]["hsl"].update(
             red_threshold=0.002, ema_span_minutes=2.5, cooldown_minutes_after_red=5,
         )
@@ -68,56 +68,6 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
     assert report["passed"], report["metrics"]
 
 
-@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", [1, 2], ids=["pside", "coin"])
-def test_forced_terminal_reporting_uses_final_equity_without_reobserving(strategy, mode):
-    torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA required")
-    import passivbot_rust
-    from optimization.gpu.runtime import compile_shader, gpu_device
-
-    source = ("#define PASSIVBOT_HSL_CAPACITY 64\n"
-              "#define PASSIVBOT_HSL_TREE_SIZE 1\n"
-              "#define PASSIVBOT_HSL_LOOKBACK 1440\n"
-              "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
-              "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
-              + getattr(passivbot_rust, f"mps_{strategy}_multicoin_source_py")()
-              + r"""
-kernel void terminal_reporting_probe(constant float* params, device HslNode* trees,
-    device int* rows, device float* out, uint b [[thread_position_in_grid]]) {
-    HslState aggregate = load_hsl(params, 0, 0);
-    HslState coins[1];
-    coins[0] = load_hsl(params, 0, 0);
-    thread HslState& owner = aggregate.signal_mode == HSL_SIGNAL_COIN ? coins[0] : aggregate;
-    bind_hsl(owner, trees, rows, 0, 64, 1, 1440, true, true);
-    HslDrawdownEmaTailStats tail = init_hsl_drawdown_ema_tail_stats();
-    HslStrategyEquityStats eq = init_hsl_strategy_equity_stats();
-    observe_hsl(owner, 1000, 0, 0, false, 0, false);
-    record_multicoin_hsl_report(aggregate, coins, 1, 1, true, tail);
-    update_hsl_strategy_equity_stats(eq, 1000, 0);
-    observe_hsl(owner, 1000, 0, 50, true, 1, false);
-    observe_hsl(owner, 1000, 0, 5000, true, 2, false);
-    // A same-bar forced close follows next-order construction. The terminal
-    // fill's factual time is one minute earlier than that provisional mark.
-    finish_hsl_episode_at_flat(owner, 700, 1000, -300, 1, 60000);
-    out[0] = record_multicoin_hsl_report(
-        aggregate, coins, 1, 1, true, tail);
-    update_hsl_strategy_equity_stats(eq, 700, 0);
-    out[1] = hsl_strategy_equity_drawdown_max(eq);
-    out[2] = owner.hsl.last_observed;
-    out[3] = owner.hsl.flat_minute;
-    out[4] = owner.hsl_valid;
-    out[5] = owner.sampled_drawdown_raw;
-}
-""")
-    device = gpu_device()
-    params = torch.tensor([1, 0.1, 1, 5, 0, mode, 1], dtype=torch.float32, device=device)
-    trees = torch.empty((36, 32), dtype=torch.uint8, device=device)
-    rows = torch.empty(256, dtype=torch.int32, device=device)
-    out = torch.zeros(6, dtype=torch.float32, device=device)
-    compile_shader(source).terminal_reporting_probe(params, trees, rows, out, threads=1)
-    assert out.cpu().tolist() == pytest.approx([3, 0.3, 1, 1, 1, 350 / 1050])
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
@@ -175,7 +125,7 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
         bot["risk"].update(n_positions=1 if enabled else 0,
                            total_wallet_exposure_limit=(5.0 if side == "long" else 0.001) if enabled else 0)
         bot["hsl"].update(enabled=enabled, red_threshold=0.002, ema_span_minutes=1,
-                          cooldown_minutes_after_red=5, restart_after_red_policy="always",
+                          cooldown_minutes_after_red=5,
                           panic_close_order_type="market" if terminal_fill else "limit")
         bot["strategy"]["ema_anchor"]["base_qty_pct"] = 0.8
         bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.8

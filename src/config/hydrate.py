@@ -29,7 +29,7 @@ BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
     "fee_pct_sanity_abs_max",
     "market_orders_allowed",
     "market_order_near_touch_threshold",
-    "pnls_max_lookback_days",
+    "lookback_ema_span_minutes",
 )
 
 TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
@@ -324,5 +324,5 @@ def normalize_optimizer_settings(
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
         strategy_kind=result.get("live", {}).get("strategy_kind"),
-        portfolio_hsl=result["live"].get("hsl_signal_mode") == "unified",
+        portfolio_hsl=result["live"].get("hsl_signal_mode") == "portfolio",
     )

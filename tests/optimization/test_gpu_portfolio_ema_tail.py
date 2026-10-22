@@ -4,7 +4,7 @@ import pytest
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", [0, 1, 2], ids=["unified", "pside", "coin"])
+@pytest.mark.parametrize("mode", [0, 1, 2], ids=["portfolio", "pside", "coin"])
 def test_portfolio_tail_reduces_per_bar_scope_maximum(strategy, mode):
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():

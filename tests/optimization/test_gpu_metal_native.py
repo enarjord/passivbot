@@ -86,7 +86,7 @@ def test_metal_native_ew_only_omits_legacy_history(monkeypatch, strategy):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_metal_factual_hsl_matches_full_dispatch_through_policy_transitions(monkeypatch, strategy, mode):
     import backtest
     from test_gpu_hsl_multicoin import make_proxy, raw

@@ -14,7 +14,7 @@ def _side_equity_inputs(strategy, sides, hsl):
                 red_threshold=.002, ema_span_minutes=2.5,
                 cooldown_minutes_after_red=5,
             )
-        if hsl == 'unified':
+        if hsl == 'portfolio':
             inputs[0]['bot']['hsl'].update(
                 red_threshold=.002, ema_span_minutes=2.5,
                 cooldown_minutes_after_red=5,
@@ -26,7 +26,7 @@ def _side_equity_inputs(strategy, sides, hsl):
 
 @pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
 @pytest.mark.parametrize('sides', ['long', 'short', 'both'])
-@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'unified'])
+@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'portfolio'])
 def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
     torch = pytest.importorskip('torch')
     if not torch.cuda.is_available():
@@ -40,7 +40,7 @@ def test_native_side_equity_metrics_independent_of_hsl(strategy, sides, hsl):
         for name in ('peak_recovery_days', 'drawdown_worst', 'drawdown_worst_mean_1pct')
     ]
     policies = {name: MetricTolerance(1e-6, 1e-4) for name in metrics}
-    if strategy == 'trailing_martingale' and sides == 'both' and hsl in ('disabled', 'unified'):
+    if strategy == 'trailing_martingale' and sides == 'both' and hsl in ('disabled', 'portfolio'):
         # These two public shock fixtures retain existing trading differences.
         # At step 1501 a .060-.042 partial-entry subtraction floors to .017
         # in Rust and .018 under GPU float32 rounding. The long drawdown gaps

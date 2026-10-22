@@ -155,6 +155,8 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     }
     if not isinstance(bounds, dict):
         return flat
+    for key, value in bounds.get("live", {}).items():
+        flat[f"live_{key}"] = deepcopy(value)
     for key, value in bounds.get("hsl", {}).items():
         flat[f"hsl_{key}"] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
@@ -185,7 +187,7 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     # Flat leaves take precedence when legacy and grouped bounds are mixed.
     flat.update({
         key: deepcopy(value) for key, value in bounds.items()
-        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
+        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_", "live_"))
     })
     return flat
 
@@ -268,7 +270,7 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     }
     target = template["optimize"]["bounds"]
     for key, value in flat.items():
-        if key.split("_", 1)[-1] in optional:
+        if key == "live_lookback_ema_span_minutes" or key.split("_", 1)[-1] in optional:
             set_flat_optimize_bound(target, kind, key, value)
     # Input also accepts nested score_weights before canonical bound sorting.
     for side in BOT_POSITION_SIDES:
@@ -287,6 +289,9 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
 
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
     normalized_kind = normalize_strategy_kind(strategy_kind)
+    if flat_key == "live_lookback_ema_span_minutes":
+        bounds.setdefault("live", {})["lookback_ema_span_minutes"] = deepcopy(value)
+        return
     if flat_key.startswith("hsl_"):
         bounds.setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
         return

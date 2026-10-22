@@ -139,6 +139,9 @@ async def test_fake_runner_settles_without_waiting_on_frozen_market_clock():
         config = {"live": {}}
         cca = FakeCCXTClient(_scenario(), quote="USDT")
 
+        def _record_authoritative_surface(self, *args):
+            raise AssertionError("clock-only fixture must not acquire account snapshots")
+
         async def update_pnls(self, **kwargs):
             calls.append(syncmod.state(self).clock())
             return True

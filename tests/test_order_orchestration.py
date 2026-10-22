@@ -28,7 +28,14 @@ class OrchestrationBot(Passivbot):
     def __init__(self, market_prices: dict[str, float]):
         from config.schema import get_template_config
 
-        self.config = get_template_config()
+        from config import prepare_config
+
+        source = get_template_config()
+        for side in ("long", "short"):
+            source["bot"][side]["unstuck"]["enabled"] = False
+        # This wrapper stubs unstuck selection and tests ordinary reconciliation.
+        self.config = prepare_config(source, target="live", runtime="live", verbose=False)
+        self.coin_overrides = {}
         self.balance = 1_000.0
         from live.hsl_live import Wave
 
@@ -39,7 +46,7 @@ class OrchestrationBot(Passivbot):
         self.positions: dict[str, dict[str, dict[str, float]]] = {}
         self.PB_modes = {"long": {}, "short": {}}
         self._market_prices = market_prices
-        self._live_values = {"market_orders_allowed": False}
+        self._live_values = {"market_orders_allowed": False, "max_realized_loss_pct": 1.0}
         self.qty_steps = {}
         self.price_steps = {}
         self.min_qtys = {}

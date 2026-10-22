@@ -114,7 +114,7 @@ def test_raw_risk_ablation_preserves_other_outputs_and_budgets_days(strategy, si
 
 @pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
 @pytest.mark.parametrize('sides', ['long', 'short', 'both'])
-@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'unified'])
+@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'portfolio'])
 def test_native_portfolio_raw_risk_on_active_shock_replay(strategy, sides, hsl):
     torch = pytest.importorskip('torch')
     if not torch.cuda.is_available():

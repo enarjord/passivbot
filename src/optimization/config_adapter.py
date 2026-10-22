@@ -77,6 +77,12 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             raise KeyError(
                 f"optimize bound {bound_key} does not map to a known bot parameter"
             )
+        if resolved == ("live", "lookback_ema_span_minutes"):
+            from config.risk_memory import normalize_lookback_ema_span_minutes
+
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            for endpoint in (bound.low, bound.high):
+                normalize_lookback_ema_span_minutes(endpoint)
         if "hsl" in resolved:
             from config.hsl import _number
 
@@ -90,6 +96,12 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
+                    if name == "ema_span_minutes":
+                        from config.risk_memory import normalize_lookback_ema_span_minutes
+
+                        normalize_lookback_ema_span_minutes(
+                            endpoint, field=f"optimize.bounds.{bound_key}"
+                        )
         adaptive_domain = {
             ("forager", "unilateralness_ema_span_1m"): (1.0, 100_000.0),
             ("forager", "score_weights", "unilateralness"): (0.0, math.inf),

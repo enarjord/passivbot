@@ -19,7 +19,7 @@ MPS_TM_MULTICOIN_CHUNK_CANDIDATES = 512
 CUDA_TM_MULTICOIN_CHUNK_CANDIDATES = 1024
 CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS = 128
 MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS = 2_097_152
-HSL_SIGNAL_MODES = {"unified", "pside", "coin"}
+HSL_SIGNAL_MODES = {"portfolio", "pside", "coin"}
 
 
 def validate_hsl_signal_topology(
@@ -34,7 +34,7 @@ def validate_hsl_signal_topology(
     if signal_mode not in HSL_SIGNAL_MODES:
         raise ValueError(
             "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
-            f"unified; got {signal_mode!r}"
+            f"portfolio; got {signal_mode!r}"
         )
     if coin_count > 1:
         if (
@@ -45,7 +45,7 @@ def validate_hsl_signal_topology(
             raise ValueError(
                 "GPU dual-side multi-coin HSL currently supports only pside "
                 "signal mode; coin requires a shared-balance denominator and "
-                "unified requires one cross-side episode controller"
+                "portfolio requires one cross-side episode controller"
             )
         return
 
@@ -156,18 +156,18 @@ HSL_PARAM_KEYS = (
     "hsl_enabled",
     "hsl_red_threshold",
     "hsl_ema_span_minutes",
-    "hsl_cooldown_minutes_after_red",
-    "hsl_restart_policy",
+    "hsl_cooldown_ms_lo",
+    "hsl_lookback_ema_span_minutes",
     "hsl_signal_mode",
-    "hsl_slot_count",
+    "hsl_cooldown_ms_hi",
 )
 
 HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_enabled", ("enabled",)),
     ("hsl_red_threshold", ("red_threshold",)),
     ("hsl_ema_span_minutes", ("ema_span_minutes",)),
-    ("hsl_cooldown_minutes_after_red", ("cooldown_minutes_after_red",)),
-    ("hsl_restart_policy", ("restart_after_red_policy",)),
+    ("hsl_cooldown_ms_lo", ("cooldown_minutes_after_red",)),
+    ("hsl_cooldown_ms_hi", ("cooldown_minutes_after_red",)),
     ("hsl_panic_market", ("panic_close_order_type",)),
 )
 

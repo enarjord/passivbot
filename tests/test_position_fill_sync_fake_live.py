@@ -50,11 +50,11 @@ async def test_pending_history_cannot_starve_real_protective_execution(
     cfg["bot"][side]["hsl"].update(
         enabled=True,
         red_threshold=0.9,
-        ema_span_minutes=356.0,
+        # Isolate the fill-sync deadline from intentional fast-EMA warmup.
+        ema_span_minutes=1.0,
         panic_close_order_type="market",
-        restart_after_red_policy="always",
     )
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
+    cfg["live"]["lookback_ema_span_minutes"] = 288.0
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})

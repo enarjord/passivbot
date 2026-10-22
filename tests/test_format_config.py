@@ -100,6 +100,7 @@ def test_format_config_live_only_adds_sections():
 
 def test_format_config_missing_short_side_stays_disabled():
     current = {
+        "config_version": _template()["config_version"],
         "bot": {
             "long": {
                 "total_wallet_exposure_limit": 0.7,
@@ -120,6 +121,7 @@ def test_format_config_missing_short_side_stays_disabled():
 
 def test_format_config_missing_long_side_stays_disabled():
     current = {
+        "config_version": _template()["config_version"],
         "bot": {
             "short": {
                 "total_wallet_exposure_limit": 0.7,
@@ -213,11 +215,11 @@ def test_format_config_prunes_unknown_keys_recursively():
 
 
 @pytest.mark.parametrize("removed_value", ["manual", "bad_policy"])
-def test_format_config_drops_removed_cooldown_position_policy(removed_value):
+def test_format_config_rejects_removed_cooldown_position_policy(removed_value):
     current = copy.deepcopy(_template())
     current["live"]["hsl_position_during_cooldown_policy"] = removed_value
-    out = format_config(current, verbose=False, live_only=True)
-    assert "hsl_position_during_cooldown_policy" not in out["live"]
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        format_config(current, verbose=False, live_only=True)
 
 
 def test_format_config_adds_monitor_defaults():

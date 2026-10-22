@@ -12,6 +12,7 @@ from .strategy_spec import (
 )
 
 OPTIMIZABLE_BOT_KEY_PATHS = {
+    "live_lookback_ema_span_minutes": ("live", "lookback_ema_span_minutes"),
     "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
     "long_filter_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
     "long_forager_volatility_ema_span_1m": (
@@ -160,7 +161,7 @@ def iter_optimizer_key_paths(
 
 def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
-        if config.get("live", {}).get("hsl_signal_mode") == "unified":
+        if config.get("live", {}).get("hsl_signal_mode") == "portfolio":
             field = canonical_key.removeprefix("hsl_")
             if field in {
                 "red_threshold",

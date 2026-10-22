@@ -2,10 +2,10 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
-    calc_pprice_diff_int, calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty,
-    quantize_price, quantize_qty, round_dn, round_up, tolerant_round_dn_preserve_step,
-    tolerant_round_up_preserve_step, RoundingMode,
+    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
+    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
+    round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
+    RoundingMode,
 };
 use std::collections::HashMap;
 
@@ -346,27 +346,34 @@ pub fn calc_unstucking_action(
     })
 }
 
-pub fn calc_unstucking_action_with_position_allowances(
+pub fn calc_unstucking_action_with_realized_drawdown(
     balance: f64,
-    pnl_cumsum_max: f64,
-    pnl_cumsum_last: f64,
+    realized_drawdown: f64,
     positions: &[UnstuckPositionInput],
-) -> Option<(usize, usize, Order)> {
-    calc_unstucking_action_with_allowance(balance, positions, |input| {
-        if input.unstuck_loss_allowance_pct <= 0.0
-            || input.total_wallet_exposure_limit <= 0.0
-            || !input.unstuck_loss_allowance_pct.is_finite()
-            || !input.total_wallet_exposure_limit.is_finite()
-        {
+) -> Result<Option<(usize, usize, Order)>, String> {
+    let mut error = None;
+    let result = calc_unstucking_action_with_allowance(balance, positions, |input| {
+        if input.unstuck_loss_allowance_pct <= 0.0 || input.total_wallet_exposure_limit <= 0.0 {
             return 0.0;
         }
-        calc_auto_unstuck_allowance(
+        match crate::hsl_decay::allowance_for(
             balance,
-            input.unstuck_loss_allowance_pct * input.total_wallet_exposure_limit,
-            pnl_cumsum_max,
-            pnl_cumsum_last,
-        )
-    })
+            input.unstuck_loss_allowance_pct,
+            input.total_wallet_exposure_limit,
+            realized_drawdown,
+        ) {
+            Ok(value) => value,
+            Err(reason) => {
+                error = Some(reason);
+                0.0
+            }
+        }
+    });
+    if let Some(reason) = error {
+        Err(reason)
+    } else {
+        Ok(result)
+    }
 }
 
 fn calc_unstucking_action_with_allowance<F>(

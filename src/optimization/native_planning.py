@@ -52,7 +52,7 @@ def _static_contract(config):
     for key in ("scenarios", "suite_enabled", "suite_reducers", "cache_dir", "base_dir"):
         result["backtest"].pop(key, None)
     kind = config["live"]["strategy_kind"]
-    dynamic_bound_keys = []
+    dynamic_bound_keys = ["live_lookback_ema_span_minutes"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
             _remove_path(result, ("bot", side, "strategy", kind, *key.split(".")))

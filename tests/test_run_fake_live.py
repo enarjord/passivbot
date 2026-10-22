@@ -31,6 +31,12 @@ from tools.run_fake_live import (
     _summarize_remote_calls,
 )
 
+
+def _isolated_fake_user(prefix, tmp_path):
+    # Python-version runs share repository caches but have distinct temp roots.
+    suffix = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{suffix}"
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -102,7 +108,11 @@ class _StubBot:
     def __init__(self) -> None:
         self.loop_calls = 0
         self.config = {"live": {"hsl_signal_mode": "coin"}}
-        self._hsl_live = SimpleNamespace(cycle=self.cycle)
+        self._hsl_live = SimpleNamespace(
+            cycle=self.cycle, _ordinary=None,
+            _quote_tasks={}, _discard_quote_tasks=set(),
+            required_fill_facts=lambda: None,
+        )
 
     async def cycle(self):
         self.loop_calls += 1
@@ -173,7 +183,7 @@ async def test_fake_live_persists_events_when_console_pipeline_is_disabled(
         pytest.skip("requires real passivbot_rust extension")
 
     monkeypatch.setenv("PASSIVBOT_LIVE_EVENT_CONSOLE", "0")
-    user = f"fake_capture_only_{tmp_path.name}"
+    user = _isolated_fake_user("fake_capture_only", tmp_path)
     _cleanup_fake_user_state(user)
     scenario = hjson.loads(
         (
@@ -380,6 +390,27 @@ def test_extract_hsl_trace_returns_serializable_state():
     assert trace["hsl"]["observation_status"] == "not_evaluated"
     assert trace["hsl"]["scopes"] == []
     json.dumps(trace)
+
+
+@pytest.mark.fake_live
+@pytest.mark.parametrize("gate_fraction", [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("now_ms,expected", [
+    (60_000, (None, "all")),
+    (2_000_000, (1_100_000, "window")),
+])
+def test_fake_history_coverage_uses_shared_bootstrap_origin(gate_fraction, now_ms, expected):
+    from config.schema import get_template_config
+
+    config = get_template_config()
+    config["live"].update(lookback_ema_span_minutes=3.0,
+                          risk_bootstrap_max_lookback_minutes=15.0,
+                          max_realized_loss_pct=gate_fraction)
+    for pside in ("long", "short"):
+        config["bot"][pside]["hsl"]["enabled"] = False
+        config["bot"][pside]["unstuck"]["enabled"] = False
+    bot = SimpleNamespace(config=config)
+    client = SimpleNamespace(now_ms=now_ms)
+    assert run_fake_live_module._fake_fill_cache_coverage(bot, client, []) == expected
 
 
 @pytest.mark.fake_live
@@ -628,7 +659,13 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
 def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     cm = type("CandlestickManager", (), {})()
-    bot = type("Bot", (), {"cca": client, "cm": cm})()
+
+    def record_surface(self, *args):
+        raise AssertionError("clock-only fixture must not acquire account snapshots")
+
+    bot = type(
+        "Bot", (), {"cca": client, "cm": cm, "_record_authoritative_surface": record_surface}
+    )()
     _install_runtime_overrides(bot, {})
     bot.cca = None
 
@@ -819,7 +856,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
-    user = f"fake_coin_overrides_{tmp_path.name}"
+    user = _isolated_fake_user("fake_coin_overrides", tmp_path)
     _cleanup_fake_user_state(user)
     base_config = hjson.loads(
         (REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json").read_text(
@@ -835,7 +872,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             {
                 "bot": {
                     "long": {
-                        "risk": {"entry_cooldown_minutes": 3.0},
+                        "entry_cooldown": {"base_duration_minutes": 3.0},
                         "unstuck": {
                             "ema_gating_enabled": False,
                             "loss_allowance_pct": 0.1,
@@ -851,7 +888,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             "override_config_path": override_path.name,
             "bot": {
                 "long": {
-                    "risk": {"entry_cooldown_minutes": 0.05},
+                    "entry_cooldown": {"base_duration_minutes": 0.05},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_pct": global_threshold}
@@ -910,7 +947,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
-async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
+async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_once(
     tmp_path, monkeypatch
 ):
     import passivbot_rust as pbr
@@ -918,8 +955,8 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
-    user = "fake_hsl_pnls_lookback_all_test"
-    user = f"{user}_{tmp_path.name}"
+    user = "fake_gate_only_memory_backfill_test"
+    user = _isolated_fake_user(user, tmp_path)
     scenario_path = REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
     cache_dir = REPO_ROOT / "caches" / "fill_events" / "fake" / user
     _cleanup_fake_user_state(user)
@@ -928,9 +965,13 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
         str(REPO_ROOT / "configs" / "examples" / "fake_live_hsl.json"), verbose=False
     )
     cfg["bot"]["long"]["hsl"]["enabled"] = False
-    cfg["live"]["pnls_max_lookback_days"] = "all"
+    # The gate alone owns strict shared-memory bootstrap coverage, even with
+    # both HSL and auto-unstuck disabled.
+    for pside in ("long", "short"):
+        cfg["bot"][pside]["unstuck"]["enabled"] = False
+    cfg["live"]["max_realized_loss_pct"] = 0.5
     cfg["live"]["hsl_signal_mode"] = "pside"
-    config_path = tmp_path / "fake_live_hsl_btc_all_lookback.json"
+    config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario_copy_path = tmp_path / "hsl_long_red_restart_no_assertions.hjson"
     scenario_cfg = hjson.loads(scenario_path.read_text(encoding="utf-8"))
@@ -994,7 +1035,9 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(
 
         cache = FillEventCache(cache_dir)
         cached_ids = [str(event.id) for event in cache.load()]
-        assert cache.get_history_scope() == "all"
+        assert cache.get_history_scope() == "window"
+        assert cache.get_covered_start_ms() > 0
+        assert "approximate zero initializer" in log_text
         assert "10" in cached_ids
         assert {"10", "11", "12"}.issubset(set(cached_ids))
     finally:

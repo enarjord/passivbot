@@ -12,18 +12,17 @@ effects, use the standalone [GPU cohort benchmark](gpu_cohort_benchmark.md).
 
 Native GPU replay uses F32 arithmetic and the declared metric approximations. A
 passing comparison covers only the selected inputs, metrics and policies; it does
-not certify all configurations. Retained legacy replay is an explicit diagnostic
-option. Normal GPU optimization consumes native metrics directly and does not
-call this comparator. The development [contract](plans/gpu_optimizer_contract.md)
-tracks scoped evidence and numerical limitations, including
-[bounded EMA unified HSL reuse](plans/gpu_optimizer_acceptance.md#bounded-ema-unified-hsl-arithmetic-reuse).
+not certify all configurations. V9 uses the shared-account native service on Metal
+and CUDA, including one-coin inputs. Normal GPU optimization consumes native metrics
+directly and does not call this comparator. The [v9 risk model](v9_risk_model.md)
+defines the current authored arithmetic and causal event contract.
 
 ## Reproducible fixtures
 
 ```sh
 passivbot tool gpu-parity --fixture trailing_martingale --coins 2 --sides long
 passivbot tool gpu-parity --fixture trailing_martingale --coins 2 --sides short --diagnostics
-passivbot tool gpu-parity --fixture ema_anchor --coins 2 --sides both --hsl unified
+passivbot tool gpu-parity --fixture ema_anchor --coins 2 --sides both --hsl portfolio
 passivbot tool gpu-parity --fixture trailing_martingale --sides both --market-orders
 passivbot tool gpu-parity --fixture trailing_martingale --coins 1 --gpu-engine native
 ```
@@ -35,10 +34,11 @@ configuration paths; enabling a controller does not prove that a particular fixt
 triggers its transitions. Add targeted stress fixtures for behavioral coverage.
 
 Fixture-only `--hsl-red-threshold`, `--hsl-ema-span-minutes`,
-`--hsl-cooldown-minutes` and `--hsl-lookback-days` set the explicit policy before
-canonical preparation. Defaults remain 0.05, 30 minutes, 30 minutes and one day.
-These settings do not enable HSL; select its mode with `--hsl`. Fractional spans and
-lookbacks remain floats. Lookback also controls the fixture's ordinary PnL history.
+`--hsl-cooldown-minutes` and `--lookback-ema-span-minutes` set the explicit policy
+before canonical preparation. Defaults are 0.05, 30 minutes, 30 minutes and 1440
+minutes. These settings do not enable HSL; select its mode with `--hsl`. Fractional
+spans remain floats. The slow span controls continuous HSL and unstuck memory;
+the ordinary rolling loss-admission gate is configured independently.
 Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close from
 that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
 shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
@@ -46,31 +46,30 @@ are rejected. HSL policies and final shocked candles must remain valid in the GP
 float32 encoding; overflow and positive-value underflow are rejected before either
 simulator runs. The report's `fixture_recipe` records the resolved public synthetic
 settings, including post-input execution failures. Cooldowns must also fit Rust's
-signed 64-bit millisecond range. Prepared config comparisons reject all these switches,
+signed 64-bit millisecond range; GPU transport supports exact integer milliseconds
+through `2^48 - 1`. Spans must retain a decaying coefficient after f32 encoding.
+Prepared config comparisons reject all these switches,
 including defaults.
 
-For a retained-history expiry diagnostic:
+For a decaying-memory stress diagnostic:
 
 ```sh
 passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 3000 \
-  --seed 43 --hsl unified --gpu-engine native --hsl-red-threshold 0.002 \
+  --seed 43 --hsl portfolio --gpu-engine native --hsl-red-threshold 0.002 \
   --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
   --metrics adg_strategy_eq drawdown_worst_strategy_eq hard_stop_time_in_red_pct \
-  hard_stop_duration_minutes_max --report expiry.json
+  hard_stop_duration_minutes_max --report stress.json
 ```
 
 This is an adversarial diagnostic, not a blanket release gate. Missing policies remain
-unassessed; evaluate current reconstruction and numerical differences case by case,
+unassessed; evaluate current event and numerical differences case by case,
 without inferring acceptance from execution completing.
 
-The default `--gpu-engine native` uses the actual `CudaBacktestService` selected by GPU
-optimization, including factual HSL and shared-account replay for a single coin. It requires
-NVIDIA CUDA and never falls back to the legacy path. Explicit `--gpu-engine legacy` retains
-the earlier single-coin/multicoin diagnostic selection, including Apple Metal installations.
-Reports label both the chosen engine and replay family; a one-coin legacy comparison does
-not establish parity of the native shared-account implementation. Neither mode changes
-metric tolerances or calls this comparator during optimization.
+The default `--gpu-engine native` uses `NativeBacktestService`, the same shared-account
+route used by GPU optimization on supported Metal or CUDA devices. Explicit
+`--gpu-engine legacy` is rejected for v9. The report identifies the selected engine
+and replay family; the comparator does not alter metric tolerances.
 
 The fixture's requested dates and ordered market metadata match its candle arrays.
 The tool strips optimizer gene bounds when preparing standalone comparisons; it
@@ -172,9 +171,14 @@ For native service comparisons, `gpu_cold` includes worker preparation and simul
 `gpu_prepare` is null because that timing is not exposed by the service boundary. CPU
 preparation of shared arrays precedes that timer. Native diagnostics retain the bounded CPU
 fill summary and actual GPU liquidation status; they do not expose worker buffers or
-invent unavailable final positions. Legacy diagnostics retain their raw scalar summaries.
+invent unavailable final positions.
 
-## Measured development parity
+## Historical v8 development parity
+
+These observations predate the v9 decaying-risk model and do not qualify its
+behavior. Current v9 regression cases are maintained in
+`tests/optimization/test_gpu_v9_native.py`, `test_gpu_hsl_decay.py` and
+`test_gpu_hsl_adapter.py`; passing them establishes their declared bounded cases.
 
 The initial 21-case seed-7 matrix covers both strategies, three side modes, one/two
 coins and selected feature toggles at 5,760 bars. These are historical observations
@@ -213,6 +217,5 @@ the recorded matrix uses matching midnight endpoints. Its earlier completion dis
 was a fixture-preparation finding and is not included as a simulator defect.
 
 These are simulator measurements, not execution-service regressions. The matrix
-does not establish general HSL/unstuck transition coverage, long-run rolling-history
-parity, or suite/ranking acceptance. Follow the [inventory](plans/gpu_optimizer_inventory.md)
+does not establish v9 HSL/unstuck transition coverage or suite/ranking acceptance. Follow the [inventory](plans/gpu_optimizer_inventory.md)
 and development checklist for those remaining gates.

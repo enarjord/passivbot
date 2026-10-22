@@ -12,7 +12,7 @@ pytestmark = pytest.mark.skipif(
 _GUARD = "if (!selected[c] && psize[c] <= 0.0f) continue;"
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_inactive_flat_orders_preserve_scoped_hsl_and_chunk_continuation(
     monkeypatch, mode, sides,
@@ -22,7 +22,7 @@ def test_inactive_flat_orders_preserve_scoped_hsl_and_chunk_continuation(
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_inactive_flat_orders_preserve_disabled_hsl_and_general_replay(monkeypatch, sides):
-    _compare_replay(monkeypatch, "unified", sides, enabled=False, factual_hsl=False)
+    _compare_replay(monkeypatch, "portfolio", sides, enabled=False, factual_hsl=False)
 
 
 def _compare_replay(monkeypatch, mode, sides, *, enabled, factual_hsl):

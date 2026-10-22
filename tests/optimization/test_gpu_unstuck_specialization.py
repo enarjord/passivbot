@@ -145,7 +145,7 @@ def test_disabled_unstuck_preserves_active_factual_hsl_panics(
     import torch
     from test_gpu_hsl_multicoin import make_proxy, raw
 
-    proxy = make_proxy('unified', strategy, sides, minutes=3000, factual_hsl=True)
+    proxy = make_proxy('portfolio', strategy, sides, minutes=3000, factual_hsl=True)
     candidate = {f'{side}_unstuck_enabled': 0.0 for side in sides}
     candidate['hsl_red_threshold'] = 1e-6
     runner, specialized = raw(proxy, [candidate])

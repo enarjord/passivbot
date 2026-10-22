@@ -1,4 +1,4 @@
-"""Flat-fill accounting can retire RED before the following bar interval."""
+"""Execution-mark recovery is observed before final-fill cooldown qualification."""
 
 from copy import deepcopy
 
@@ -25,9 +25,9 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
                               maker_fee_override=0., taker_fee_override=0.)
     for direction in ("long", "short"):
         policy = config["bot"][direction]["hsl"]
-        policy.update(enabled=direction == side and mode != "unified",
+        policy.update(enabled=direction == side and mode != "portfolio",
                       red_threshold=.01, ema_span_minutes=1.,
-                      cooldown_minutes_after_red=5., restart_after_red_policy="always",
+                      cooldown_minutes_after_red=5.,
                       panic_close_order_type="market")
         strategy = config["bot"][direction]["strategy"]["trailing_martingale"]
         strategy["entry"].update(initial_qty_pct=.5, threshold_base_pct=.5,
@@ -37,7 +37,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
             base_qty_pct=.5, ema_span_0=2., ema_span_1=3., offset=.01,
             offset_psize_weight=0., entry_double_down_factor=0.,
         )
-    if mode == "unified":
+    if mode == "portfolio":
         config["bot"]["hsl"] = deepcopy(config["bot"][side]["hsl"])
         config["bot"]["hsl"]["enabled"] = True
     count = 16
@@ -47,8 +47,8 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
         candles[3, :, 0] = 101.
         candles[3, :, 1] = 99.
     # The close sees RED; the next market execution recovers to its basis.
-    # Those observations share an accounting timestamp, so terminal GREEN
-    # must not acquire an entire subsequent RED minute.
+    # The execution-price mark recovers before the economic fill observation;
+    # this GREEN pre-fill sample does not qualify a new cooldown.
     adverse = 80. if side == "long" else 120.
     candles[5, :, :3] = adverse
     candles[5, :, 0] = max(100., adverse)
@@ -61,8 +61,8 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
 
 @pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-def test_recovered_panic_fill_has_no_unobserved_red_minute(side, mode, strategy_kind):
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
+def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode, strategy_kind):
     from backtest import build_backtest_payload, execute_backtest
     from config.metrics import resolve_metric_value
     from optimization.gpu.parameters import prepare_candidate_parameters

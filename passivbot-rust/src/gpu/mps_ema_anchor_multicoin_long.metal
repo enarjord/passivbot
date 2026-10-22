@@ -338,8 +338,14 @@ inline void record_ema_multicoin_close_fill(
     bool collect_coin_fill_counts,
     thread float& hsl_equity_before_fills,
     thread HslState* opposite_hsl = nullptr,
-    bool opposite_has_position = false
+    bool opposite_has_position = false,
+    bool at_bar_close = false
 ) {
+    const int event_minute = k + (at_bar_close ? 1 : 0);
+#if !PASSIVBOT_HSL_DISABLED
+    hsl_before_fill(side.coin_hsl[coin], account.balance, fill_price, event_minute);
+#endif
+
 #if PASSIVBOT_HSL_DISABLED
     // Forced delists retain their HSL panic-loss diagnostics even when the
     // controller is disabled. Ordinary closes need no HSL state at all.
@@ -379,13 +385,15 @@ inline void record_ema_multicoin_close_fill(
         fills.day_fill_count, fills.fill_count,
         fills.fill_count_entry, fills.fill_count_long,
         fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
-        fills.pnl_recovery_max_min, float(k), false, !short_side
+        fills.pnl_recovery_max_min, float(event_minute), false, !short_side
     );
     if (collect_coin_fill_counts) {
         coin_fill_counts[candidate_index * coin_count + coin] += 1.0f;
     }
 #if !PASSIVBOT_HSL_DISABLED
     side.coin_realized_pnl[coin] += net_pnl;
+    hsl_after_fill(side.coin_hsl[coin], account.balance, net_pnl, actual_size_after,
+        position_price, fill_price, event_minute);
     if (coin_hsl_mode) {
         advance_coin_hsl_equity_after_close_fill(
             hsl_equity_before_fills,
@@ -484,6 +492,7 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
         ? clamp(2.0f / (config.forager_volatility_span + 1.0f), 0.0f, 1.0f)
         : 0.0f;
     config.hsl_template = load_hsl(params, po, 31);
+    config.hsl_template.slot_count = float(config.n_positions);
 #if PASSIVBOT_HSL_DISABLED
     config.hsl_template.enabled = false;
     config.hsl_template.signal_mode = HSL_SIGNAL_PSIDE;
@@ -1233,7 +1242,7 @@ inline void update_ema_multicoin_side_selection(
 inline int select_ema_multicoin_unstuck_coin(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
-    thread const JointPortfolioAccount& account,
+    thread JointPortfolioAccount& account,
     constant float* bars,
     constant int* touch_ticks,
     constant float* coin_settings ORGANILLO_ARGS,
@@ -1249,7 +1258,7 @@ inline int select_ema_multicoin_unstuck_coin(
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance + effective_realized_pnl_drawdown(account);
+    const float balance_peak = account.balance + account.realized_decay_drawdown;
     if (!(balance_peak > 0.0f)) return -1;
 
     int selected_coin = -1;
@@ -1301,12 +1310,14 @@ inline int select_ema_multicoin_unstuck_coin(
             && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
             continue;
         }
-        const float allowance = float32_floor_nonnegative(fmax(
-            account.balance - balance_peak * (
-                1.0f - coin_loss_allowance_pct * config.twel
-            ),
-            0.0f
-        ));
+        float allowance;
+        if (!hsl_decay_auto_allowance(
+            account.balance, account.realized_decay_drawdown,
+            coin_loss_allowance_pct, config.twel, allowance)) {
+            account.realized_decay_valid = false;
+            return -1;
+        }
+        allowance = float32_floor_nonnegative(allowance);
         const float wallet_exposure = side.psize[c] * side.pprice[c]
             * c_mult / account.balance;
         if (!(allowance > 0.0f
@@ -1566,7 +1577,7 @@ inline void generate_ema_multicoin_side_orders(
         close_is_unstuck_reducer[c] = false;
     }
 #if PASSIVBOT_UNSTUCK_ENABLED
-    float balance_peak = balance + effective_realized_pnl_drawdown(account);
+    float balance_peak = balance + account.realized_decay_drawdown;
     int unstuck_coin = -1;
     float best_unstuck_diff = INFINITY;
     float selected_unstuck_qty = 0.0f;
@@ -1626,12 +1637,14 @@ inline void generate_ema_multicoin_side_orders(
             && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
             continue;
         }
-        float allowance = float32_floor_nonnegative(fmax(
-            balance - balance_peak * (
-                1.0f - coin_loss_allowance_pct * twel
-            ),
-            0.0f
-        ));
+        float allowance;
+        if (!hsl_decay_auto_allowance(
+            balance, account.realized_decay_drawdown, coin_loss_allowance_pct, twel,
+            allowance)) {
+            account.realized_decay_valid = false;
+            return;
+        }
+        allowance = float32_floor_nonnegative(allowance);
         float wallet_exposure = psize[c] * pprice[c] * c_mult / balance;
         if (!(allowance > 0.0f
             && wallet_exposure / allowed_coin_wel > coin_threshold)) {
@@ -2217,29 +2230,6 @@ inline void apply_ema_multicoin_reducer_candidate(
     side.close_is_unstuck_reducer[coin] = candidate.is_unstuck;
 }
 
-inline float ema_multicoin_remaining_loss_budget(
-    thread const JointPortfolioAccount& account,
-    float max_realized_loss_pct,
-    thread bool& gate_enabled
-) {
-    float current_realized_loss = effective_realized_pnl_drawdown(account);
-    gate_enabled = max_realized_loss_pct < 1.0f
-        && isfinite(account.balance) && account.balance > 0.0f
-        && isfinite(current_realized_loss);
-    if (!gate_enabled) return INFINITY;
-    float balance_peak = account.balance + current_realized_loss;
-    if (!(isfinite(balance_peak) && balance_peak > 0.0f)) {
-        gate_enabled = false;
-        return INFINITY;
-    }
-    float allowed_loss_budget = float32_floor_nonnegative(
-        balance_peak * fmax(max_realized_loss_pct, 0.0f)
-    );
-    return float32_floor_nonnegative(
-        fmax(allowed_loss_budget - current_realized_loss, 0.0f)
-    );
-}
-
 inline void gate_ema_multicoin_side_ordinary_closes(
     thread EmaMulticoinSideState& side,
     constant float* bars,
@@ -2290,7 +2280,7 @@ inline void gate_ema_multicoin_side_ordinary_closes(
 
 inline void finalize_ema_multicoin_reducers_one_side(
     thread EmaMulticoinSideState& side,
-    thread const JointPortfolioAccount& account,
+    thread JointPortfolioAccount& account,
     constant float* bars,
     constant float* coin_settings ORGANILLO_ARGS,
     int k,
@@ -2299,7 +2289,8 @@ inline void finalize_ema_multicoin_reducers_one_side(
     bool market_orders_allowed,
     float market_order_near_touch_threshold,
     float market_order_slippage_pct,
-    float max_realized_loss_pct
+    float max_realized_loss_pct,
+    bool loss_gate_enabled
 ) {
     EmaMulticoinReducerCandidate preferred[MAX_COINS];
     EmaMulticoinReducerCandidate fallback[MAX_COINS];
@@ -2316,10 +2307,9 @@ inline void finalize_ema_multicoin_reducers_one_side(
         candidate_index[c] = 0;
         resolved[c] = !preferred[c].valid;
     }
-    bool loss_gate_enabled;
-    float remaining_loss_budget = ema_multicoin_remaining_loss_budget(
-        account, max_realized_loss_pct, loss_gate_enabled
-    );
+    float remaining_loss_budget = INFINITY;
+    if (loss_gate_enabled && !joint_realized_loss_allowance(
+            account, max_realized_loss_pct, remaining_loss_budget)) return;
     for (int attempt = 0; attempt < MAX_COINS * 2; ++attempt) {
         int best = -1;
         EmaMulticoinReducerCandidate best_candidate =
@@ -2376,7 +2366,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
 inline void finalize_ema_multicoin_reducers_fused(
     thread EmaMulticoinSideState& long_side,
     thread EmaMulticoinSideState& short_side,
-    thread const JointPortfolioAccount& account,
+    thread JointPortfolioAccount& account,
     constant float* bars,
     constant float* coin_settings ORGANILLO_ARGS,
     int k,
@@ -2386,7 +2376,8 @@ inline void finalize_ema_multicoin_reducers_fused(
     bool market_orders_allowed,
     float market_order_near_touch_threshold,
     float market_order_slippage_pct,
-    float max_realized_loss_pct
+    float max_realized_loss_pct,
+    bool loss_gate_enabled
 ) {
     EmaMulticoinReducerCandidate long_preferred[MAX_COINS];
     EmaMulticoinReducerCandidate long_fallback[MAX_COINS];
@@ -2418,10 +2409,9 @@ inline void finalize_ema_multicoin_reducers_fused(
         long_resolved[c] = !long_enabled || !long_preferred[c].valid;
         short_resolved[c] = !short_enabled || !short_preferred[c].valid;
     }
-    bool loss_gate_enabled;
-    float remaining_loss_budget = ema_multicoin_remaining_loss_budget(
-        account, max_realized_loss_pct, loss_gate_enabled
-    );
+    float remaining_loss_budget = INFINITY;
+    if (loss_gate_enabled && !joint_realized_loss_allowance(
+            account, max_realized_loss_pct, remaining_loss_budget)) return;
     for (int attempt = 0; attempt < MAX_COINS * 4; ++attempt) {
         int best_coin = -1;
         bool best_short = false;
@@ -2703,6 +2693,12 @@ inline bool process_ema_multicoin_side_fills(
 #ifdef PASSIVBOT_ORGANILLO
         if (!ORGANILLO_ALLOWED(k, c, coin_count) && psize[c] <= 0.0f) entry_qty[c] = 0.0f;
 #endif
+#if !PASSIVBOT_HSL_DISABLED
+        if (!hsl_entry_allowed(side.coin_hsl[c])) {
+            entry_qty[c] = 0.0f;
+            entry_market[c] = false;
+        }
+#endif
         bool was_flat = psize[c] <= 0.0f;
         bool filled_entry = entry_qty[c] > 0.0f
             && (entry_market[c] || (short_side
@@ -2718,6 +2714,9 @@ inline bool process_ema_multicoin_side_fills(
             float adjusted = round_step(entry_qty[c], qty_step);
             float fee = adjusted * fill_price * c_mult
                 * (entry_market[c] ? taker_fee : maker_fee);
+#if !PASSIVBOT_HSL_DISABLED
+            hsl_before_fill(side.coin_hsl[c], account.balance, fill_price, k);
+#endif
             record_realized_net(
                 -fee, account,
                 fills.day_fill_count, fills.fill_count,
@@ -2746,6 +2745,10 @@ inline bool process_ema_multicoin_side_fills(
             if (was_flat) position_open_k[c] = float(k);
             psize[c] = new_size;
             pprice[c] = new_price;
+#if !PASSIVBOT_HSL_DISABLED
+            hsl_after_fill(side.coin_hsl[c], account.balance, -fee,
+                new_size, new_price, fill_price, k);
+#endif
 #if PASSIVBOT_HSL_FACTS_ENABLED > 0
             HslPairFact fact;
             fact.delta = short_side ? -adjusted : adjusted;
@@ -2849,7 +2852,7 @@ inline bool force_close_ema_multicoin_delisted_position(
         close_qty, close_price, close_qty * close_price * c_mult * taker_fee,
         0.0f, position_price, close, c_mult, short_side,
         true, collect_coin_fill_counts, hsl_equity_before_close,
-        opposite_hsl, opposite_has_position
+        opposite_hsl, opposite_has_position, true
     );
     if (!coin_hsl_mode) {
         advance_coin_hsl_equity_after_close_fill(
@@ -3074,10 +3077,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     device EmaMulticoinReplayState* replay_states,
     constant int* replay_range,
@@ -3133,6 +3132,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const float max_realized_loss_pct = run_settings[5];
+    const bool loss_gate_enabled = run_settings[14] > 0.5f;
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const bool market_orders_allowed = run_settings[9] > 0.5f;
@@ -3296,22 +3296,17 @@ inline void passivbot_ema_anchor_multicoin_impl(
         , int(run_settings[12])
 #endif
     );
-#if PASSIVBOT_HSL_FACTS_ENABLED > 0
     HslReplayContext factual_context = hsl_replay_context(
         bars, coin_settings, C, COIN_COLS, run_settings[13] > 0.5f);
     attach_hsl_replay_side(factual_context, side.hsl, side.coin_hsl, 0, short_side);
 #endif
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
-#endif
+    account.realized_decay_enabled = PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled;
+    account.realized_decay_beta = side.hsl.decay_policy.slow_beta;
+    account.realized_decay_interval_minutes = multicoin_interval_minutes(interval_ms);
     for (int k = begin_k; k < chunk_stop_k; ++k) {
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         fills.step_volume = 0.0f;
         fills.step_has_fill = 0.0f;
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        account.unstuck_pnl_k = k;
 #endif
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
@@ -3430,8 +3425,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
         const float hsl_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
             side, bars, coin_settings ORGANILLO_PASS, k, C, short_side, 0.0f
         );
-        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
-            || (any_fill && balance + hsl_unrealized <= liquidation_floor);
+        // Only a depleted fill terminates at start(k). A positive-balance
+        // liquidation caused by this completed close still samples end(k).
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted;
         if (any_fill && !hsl_report_at_fill_boundary) {
             HslFillTimeReport fill_report = observed_multicoin_hsl_fill_time(
                 side.hsl, side.coin_hsl, C, effective_n_positions, k);
@@ -3454,6 +3450,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     hsl_report_at_fill_boundary))) {
             if (coin_hsl_mode) {
                 for (int c = 0; c < C; ++c) {
+                    if (!hsl_coin_scope_active(coin_hsl[c], effective_n_positions,
+                            psize[c] != 0.0f)) continue;
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
                     float close = bars[bar_offset + 2];
@@ -3508,12 +3506,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
             ? 0 : hsl_mode(hsl, has_hsl_position);
 #endif
 
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        if (!refresh_unstuck_pnl_window(account)) {
-            scalars[int(b) * SCALAR_COLS + 9] = -3.0f;
+        advance_joint_realized_memory(account, k + 1);
+        if (!account.realized_decay_valid) {
+            scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
             return;
         }
-#endif
         if (can_generate) {
             update_ema_multicoin_side_selection(
                 side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
@@ -3530,11 +3527,19 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 current_hsl_mode, market_orders_allowed,
                 market_order_near_touch_threshold, -2, 0ul
             );
+            if (!account.realized_decay_valid) {
+                scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
+                return;
+            }
             finalize_ema_multicoin_reducers_one_side(
                 side, account, bars, coin_settings ORGANILLO_PASS, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_threshold,
-                market_order_slippage_pct, max_realized_loss_pct
+                market_order_slippage_pct, max_realized_loss_pct, loss_gate_enabled
             );
+            if (!account.realized_decay_valid) {
+                scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
+                return;
+            }
         }
 
         float forced_delist_equity =
@@ -4242,10 +4247,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     device EmaMulticoinFusedReplayState* replay_states,
     constant int* replay_range,
@@ -4334,6 +4335,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const float max_realized_loss_pct = run_settings[5];
+    const bool loss_gate_enabled = run_settings[16] > 0.5f;
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
@@ -4492,22 +4494,17 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         , int(run_settings[14])
 #endif
     );
-#if PASSIVBOT_HSL_FACTS_ENABLED > 0
     HslReplayContext factual_context = hsl_replay_context(
         bars, coin_settings, C, COIN_COLS, run_settings[15] > 0.5f);
     attach_hsl_replay_side(factual_context, long_side.hsl, long_side.coin_hsl, 0, false);
     attach_hsl_replay_side(factual_context, short_side.hsl, short_side.coin_hsl, 1, true);
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    bind_unstuck_pnl_window(account, unstuck_pnl_values, unstuck_pnl_indices, int(b));
-#endif
+    account.realized_decay_enabled = PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled;
+    account.realized_decay_beta = long_side.hsl.decay_policy.slow_beta;
+    account.realized_decay_interval_minutes = multicoin_interval_minutes(interval_ms);
     for (int k = begin_k; k < chunk_stop_k; ++k) {
 #ifdef PASSIVBOT_WEIGHTED_VOLUME_ENABLED
         fills.step_volume = 0.0f;
         fills.step_has_fill = 0.0f;
-#endif
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        account.unstuck_pnl_k = k;
 #endif
         if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings ORGANILLO_PASS, k, C)
             || held_positions_have_missing_prices(short_side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
@@ -4688,8 +4685,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             accumulate_ema_multicoin_side_unrealized_pnl(
                 short_side, bars, coin_settings ORGANILLO_PASS, k, C, true, 0.0f)
         );
-        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted
-            || (any_fill && hsl_equity <= liquidation_floor);
+        const bool hsl_report_at_fill_boundary = post_fill_balance_depleted;
         if (any_fill && !hsl_report_at_fill_boundary) {
             HslFillTimeReport long_fill_report = observed_multicoin_hsl_fill_time(
                 long_side.hsl, long_side.coin_hsl, C, long_effective_n_positions, k);
@@ -4764,12 +4760,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_one_way_order_blocked_mask
             );
         }
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        if (!refresh_unstuck_pnl_window(account)) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -3.0f;
+        advance_joint_realized_memory(account, k + 1);
+        if (!account.realized_decay_valid) {
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-#endif
         float long_unstuck_diff = INFINITY;
         float short_unstuck_diff = INFINITY;
         const int long_unstuck_candidate = long_can_generate
@@ -4788,6 +4783,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_unstuck_diff
             )
             : -1;
+        if (!account.realized_decay_valid) {
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
+            return;
+        }
         // Exact Rust ranks by price difference, then symbol index. Its stable
         // long-first input order makes long win an equal-symbol tie.
         const bool long_unstuck_wins = long_unstuck_candidate >= 0
@@ -4837,14 +4836,22 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
+        if (!account.realized_decay_valid) {
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
+            return;
+        }
         if (long_can_generate || short_can_generate) {
             finalize_ema_multicoin_reducers_fused(
                 long_side, short_side, account,
                 bars, coin_settings ORGANILLO_PASS, k, C,
                 long_can_generate, short_can_generate,
                 market_orders_allowed, market_order_near_touch_threshold,
-                market_order_slippage_pct, max_realized_loss_pct
+                market_order_slippage_pct, max_realized_loss_pct, loss_gate_enabled
             );
+            if (!account.realized_decay_valid) {
+                scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
+                return;
+            }
         }
 
         float forced_delist_equity = account.balance;
@@ -5471,10 +5478,6 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     device char* replay_state_bytes,
     constant int* replay_range,
@@ -5510,9 +5513,6 @@ kernel void passivbot_ema_anchor_multicoin_fused(
         hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        unstuck_pnl_values, unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
         replay_states, replay_range,
 #endif
@@ -5555,10 +5555,6 @@ kernel void passivbot_ema_anchor_multicoin(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     device char* replay_state_bytes,
     constant int* replay_range,
@@ -5599,9 +5595,6 @@ kernel void passivbot_ema_anchor_multicoin(
         hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        unstuck_pnl_values, unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
         replay_states, replay_range,
 #endif
@@ -5644,10 +5637,6 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #endif
     device HslNode* hsl_trees,
     device int* hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-    device float2* unstuck_pnl_values,
-    device int2* unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
     device char* replay_state_bytes,
     constant int* replay_range,
@@ -5683,9 +5672,6 @@ kernel void passivbot_ema_anchor_multicoin_long(
         hsl_ema_tail_samples,
 #endif
         hsl_trees, hsl_rows,
-#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
-        unstuck_pnl_values, unstuck_pnl_indices,
-#endif
 #if PASSIVBOT_EMA_MULTICOIN_CHUNKED
         replay_states, replay_range,
 #endif

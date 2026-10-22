@@ -234,14 +234,16 @@ def gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budge
 
 
 def _gpu_runs(entry, arrays, width, repeats, warmup, tune_seconds, dispatch_budget, phase_profile=False):
+    config = entry["configs"][0]
+    native = (Path("src/optimization/gpu/native.py")).exists()
+    if str(config.get("config_version", "")).startswith("v9.") and not native:
+        raise RuntimeError("v9 GPU benchmark replay requires NativeBacktestService; legacy direct replay is unsupported")
     import torch
     from optimization.gpu.runtime import gpu_device, synchronize
     from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
     device = gpu_device(torch)
-    config = entry["configs"][0]
     candles, btc, timestamps = arrays
     metrics, markets, exchange = entry["metrics"], entry["markets"], entry["exchange"]
-    native = (Path("src/optimization/gpu/native.py")).exists()
     dispatches, samples, tuning, tuning_windows, profiles = [], [], [], [], []
     from optimization.gpu.autotune import BatchController
     original_observe = BatchController.observe

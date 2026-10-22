@@ -110,7 +110,7 @@ def build_parser():
                         help="Require this many completed default tuner windows per scenario; auto may run longer")
     parser.add_argument("--max-rounds", type=int, default=256,
                         help="Bound automatic extension for --tuning-windows")
-    parser.add_argument("--hsl", choices=["disabled", "unified"], default="disabled")
+    parser.add_argument("--hsl", choices=["disabled", "portfolio"], default="disabled")
     parser.add_argument("--accumulation-delay", type=float, default=None,
                         help="Fixed accumulation seconds; omitted uses production adaptive accumulation, zero isolates width")
     parser.add_argument("--prepare-only", action="store_true")
@@ -211,7 +211,7 @@ def main(argv=None):
     inputs = fixture_inputs(parity_parser().parse_args([
         "--fixture", args.strategy, "--sides", "both", "--coins", str(args.coins),
         "--bars", str(args.bars), "--seed", "7", "--hsl", args.hsl,
-        "--hsl-red-threshold", ".99", "--hsl-lookback-days", "1",
+        "--hsl-red-threshold", ".99", "--lookback-ema-span-minutes", "1440",
     ]))
     metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
                "backtest_completion_ratio", "hard_stop_time_in_red_pct",

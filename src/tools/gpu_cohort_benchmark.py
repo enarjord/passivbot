@@ -39,7 +39,7 @@ def build_parser():
     parser.add_argument("--candidates", type=int, default=16)
     parser.add_argument("--warm-runs", type=int, default=3)
     parser.add_argument("--widths", nargs="+", default=["1", "4", "16", "auto"])
-    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "unified"), default="disabled")
+    parser.add_argument("--hsl", choices=("disabled", "coin", "pside", "portfolio"), default="disabled")
     gpu_parity.add_fixture_stress_options(parser)
     parser.add_argument("--unstuck", action="store_true")
     parser.add_argument("--adg-floor", type=float)

@@ -36,7 +36,6 @@ BOT_GROUP_FIELD_MAP = {
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
         "red_threshold": "hsl_red_threshold",
-        "restart_after_red_policy": "hsl_restart_after_red_policy",
     },
     "unstuck": {
         "close_pct": "unstuck_close_pct",

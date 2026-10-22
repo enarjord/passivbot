@@ -121,9 +121,9 @@ def test_dashboard_event_summary_reads_current_scope_schema():
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_smoke_unified_policy_ignores_inactive_sides(enabled):
+def test_smoke_portfolio_policy_ignores_inactive_sides(enabled):
     config = {
-        "live": {"hsl_signal_mode": "unified"},
+        "live": {"hsl_signal_mode": "portfolio"},
         "bot": {
             "hsl": {"enabled": enabled},
             "long": {"hsl": {"enabled": not enabled}},

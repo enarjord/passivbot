@@ -3,10 +3,12 @@
 import copy
 
 from config_utils import format_config, get_template_config
+from config.schema import CONFIG_SCHEMA_VERSION
 
 
 def _base_config():
     return {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "base_dir": "backtests",
             "compress_cache": True,

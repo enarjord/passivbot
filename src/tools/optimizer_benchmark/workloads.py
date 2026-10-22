@@ -9,7 +9,7 @@ import random
 
 from .catalogue import declared_gpu_support, select_cases
 
-VERSION = 1
+VERSION = 2
 CORE_METRICS = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day", "backtest_completion_ratio"]
 
 
@@ -50,6 +50,10 @@ def get_path(config, path):
 
 def apply_features(config, case, coins, markets, bars):
     flags = set(case.features)
+    if flags & {"hsl_never", "hsl_threshold", "hsl_unified"}:
+        raise ValueError("retired v8 HSL benchmark feature; freeze a current v9 workload")
+    if "hsl_slow_memory" in flags:
+        config["live"]["lookback_ema_span_minutes"] = 10.5
     if "hsl_scaled" in flags:
         flags.add("excess")
     active = ("long", "short") if case.sides == "both" else (case.sides,)
@@ -93,10 +97,8 @@ def apply_features(config, case, coins, markets, bars):
         if "forager_hysteresis" in flags:
             config["live"]["forager_score_hysteresis_pct"] = 0.1
         policy = bot["hsl"]
-        if "hsl_never" in flags:
-            policy["restart_after_red_policy"] = "never"
-        if "hsl_threshold" in flags:
-            policy["restart_after_red_policy"] = "threshold"
+        if "hsl_zero_cooldown" in flags:
+            policy["cooldown_minutes_after_red"] = 0.0
         policy["scale_budget_with_excess_allowance"] = "hsl_scaled" in flags
         policy["panic_close_order_type"] = "market" if "hsl_market" in flags else "limit"
         strategy = bot["strategy"][case.strategy]
@@ -210,7 +212,7 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
     entries = []
     for case in select_cases(profile, patterns):
         for seed in seeds:
-            hsl = next((mode for mode in ("coin", "pside", "unified") if f"hsl_{mode}" in case.features),
+            hsl = next((mode for mode in ("coin", "pside", "portfolio") if f"hsl_{mode}" in case.features),
                        "coin" if any(f.startswith("hsl") for f in case.features) else "disabled")
             options = ["--fixture", case.strategy if case.strategy != "trailing_grid_v7" else "trailing_martingale",
                        "--sides", case.sides, "--coins", str(1 if case.topology == "single" else coins),

@@ -32,7 +32,7 @@ def fill_payload(fill):
     return row
 
 
-def payload(snapshot, mode="unified", *, quantity_step=None, **kwargs):
+def payload(snapshot, mode="portfolio", *, quantity_step=None, **kwargs):
     pairs = []
     for p in snapshot.pairs:
         position = asdict(p.position)
@@ -84,6 +84,13 @@ def payload(snapshot, mode="unified", *, quantity_step=None, **kwargs):
         symbol=kwargs.get("symbol"),
         pairs=pairs,
     )
+
+
+def runtime_request(snapshot, *, slots=1, span=1.0, threshold=0.05):
+    return dict(snapshot=snapshot,slots=slots,span=span,threshold=threshold,
+                lookback_span_minutes=43200.0,cooldown_ms=120000,
+                scale_budget_with_excess_allowance=False,exposure_budget=None,
+                budget_observations=[])
 
 
 def rust(value):
@@ -196,7 +203,7 @@ def test_reference_boundary_cases_against_rust(name, monkeypatch):
     [
         ("coin", dict(pside="long", symbol="A")),
         ("pside", dict(pside="long")),
-        ("unified", {}),
+        ("portfolio", {}),
     ],
 )
 def test_scope_mapping(mode, kwargs, monkeypatch):
@@ -237,7 +244,6 @@ def test_fake_exchange_boundary_reconstruction(pside, monkeypatch):
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("balance", 0),
         ("balance_at", -1_000_000),
         ("config_at", 999_999),
         ("max_current_age_ms", -1),
@@ -291,7 +297,7 @@ def test_generated_damage_retains_numeric_history_independently_of_boundaries(se
         cases.frame(
             cases.pair(fills=tape, prices={0: 100, cases.M: 100, 2 * cases.M: 80})
         ),
-        "unified",
+        "portfolio",
     )
 
 
@@ -321,7 +327,7 @@ def test_quantity_roundoff_cannot_hide_a_real_flat(side, opening, first, last):
     assert len(result["boundaries"]) == 1
     assert "lifecycle_eligible" not in result["boundaries"][0]
     assert "uncertain_episode_flat" not in result["reasons"]
-    compare(cases.frame(p), "unified", quantity_step=0.1)
+    compare(cases.frame(p), "portfolio", quantity_step=0.1)
 
 
 def test_quantity_tolerance_does_not_hide_a_material_missing_close():
@@ -360,7 +366,7 @@ def test_larger_later_position_does_not_hide_earlier_small_flat(side):
     result = rust(payload(cases.frame(p), quantity_step=0.1))
     assert [b["timestamp"] for b in result["boundaries"]] == [2]
     assert "lifecycle_eligible" not in result["boundaries"][0]
-    compare(cases.frame(p), "unified", quantity_step=0.1)
+    compare(cases.frame(p), "portfolio", quantity_step=0.1)
 
 
 @pytest.mark.parametrize("values", permutations([-1e16, -1, 1e16]))
@@ -403,35 +409,11 @@ def test_inactive_candle_free_scope_still_validates_current_snapshot(field, valu
         snapshot["pairs"][0][field] = value
     else:
         snapshot[field] = value
-    request = dict(snapshot=snapshot, slots=0, span=1, threshold=0.05)
+    request = runtime_request(snapshot,slots=0)
     with pytest.raises(ValueError):
-        pbr.hsl_candle_free(json.dumps(request))
+        pbr.hsl_v9_evaluate(json.dumps(request))
 
 
-@pytest.mark.parametrize("values", permutations([-1e16, -1, 1e16]))
-@pytest.mark.parametrize("component", ["upnl", "realized"])
-def test_small_scope_loss_still_panics_after_large_finite_cancellation(
-    values, component
-):
-    import passivbot_rust as pbr
-
-    pairs = []
-    for i, value in enumerate(values):
-        if component == "upnl":
-            p = cases.pair(str(i), size=abs(value), basis=2, mark=1 if value < 0 else 3)
-        else:
-            p = cases.pair(
-                str(i), fills=[Fill("close", cases.M, -1, 100, value)], mark=100
-            )
-        pairs.append(p)
-    snapshot = payload(cases.frame(*pairs, balance=1000))
-    request = dict(snapshot=snapshot, slots=1, span=10000, threshold=0.0005)
-    result = json.loads(pbr.hsl_candle_free(json.dumps(request)))
-    assert result[component] == -1
-    assert result["signal"]["raw"] == pytest.approx(
-        [1 / (1000 if component == "upnl" else 1001)]
-    )
-    assert result["signal"]["panic"] == [True]
 
 
 def test_quantity_roundoff_scale_resets_after_later_episode_opening():
@@ -477,13 +459,6 @@ def test_nested_scope_cancellation_keeps_the_net_loss(values):
     request = payload(cases.frame(*pairs, balance=1e11))
     boundary = rust(request)["boundaries"][0]
     assert boundary["pnl"] == -1e10
-    result = json.loads(
-        pbr.hsl_candle_free(
-            json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=0.05))
-        )
-    )
-    assert result["realized"] == -1e10
-    assert result["signal"]["panic"] == [True]
 
 
 @pytest.mark.parametrize("field", ["realized", "fee"])
@@ -507,13 +482,6 @@ def test_pair_cashflows_keep_small_losses_before_scope_aggregation(field, values
     prepared = rust(request)
     assert prepared["pairs"][0]["history"]["events"][-1]["realized_cumsum"] == -1
     assert prepared["boundaries"][0]["pnl"] == -1
-    result = json.loads(
-        pbr.hsl_candle_free(
-            json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=0.0005))
-        )
-    )
-    assert result["realized"] == -1
-    assert result["signal"]["panic"] == [True]
 
 
 def test_scope_retains_fee_below_one_pairs_rounded_cumulative_precision():
@@ -525,13 +493,6 @@ def test_scope_retains_fee_below_one_pairs_rounded_cumulative_precision():
     ]
     request = payload(cases.frame(*pairs, balance=1000))
     assert rust(request)["boundaries"][0]["pnl"] == -1
-    result = json.loads(
-        pbr.hsl_candle_free(
-            json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=0.0005))
-        )
-    )
-    assert result["realized"] == -1
-    assert result["signal"]["panic"] == [True]
 
 
 def test_currency_sum_matches_exact_fraction_oracle_for_generated_scopes():
@@ -552,34 +513,6 @@ def test_currency_sum_matches_exact_fraction_oracle_for_generated_scopes():
         assert rust(payload(cases.frame(*pairs)))["boundaries"][0]["pnl"] == expected
 
 
-@pytest.mark.parametrize("offset_upnl", [False, True])
-def test_small_loss_survives_large_realized_peak_or_offsetting_current_upnl(
-    offset_upnl,
-):
-    import passivbot_rust as pbr
-
-    if offset_upnl:
-        p = cases.pair(
-            size=1e16, basis=2, mark=3, fills=[Fill("loss", 1, 1e16, 2, -1e16, -1)]
-        )
-    else:
-        p = cases.pair(
-            fills=[
-                Fill("open", 1, 2, 100, 0),
-                Fill("profit", 2, -1, 100, 1e16),
-                Fill("fee", 3, -1, 100, 0, -1),
-            ]
-        )
-    request = payload(cases.frame(p, balance=1000))
-    result = json.loads(
-        pbr.hsl_candle_free(
-            json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=0.0005))
-        )
-    )
-    # With positive current UPNL, current equity (and the peak) includes it.
-    expected = 1 / (1e16 + 1001) if offset_upnl else 1 / 1001
-    assert result["signal"]["raw"] == pytest.approx([expected], rel=1e-14, abs=0)
-    assert result["signal"]["panic"] == [not offset_upnl]
 
 
 @pytest.mark.parametrize(
@@ -590,27 +523,12 @@ def test_inactive_scope_rejects_invalid_signal_configuration(field, value):
 
     p = cases.pair("TEST", size=1, basis=100, now=300_000)
     snapshot = payload(cases.frame(p, now=300_000), "coin", symbol="TEST", pside="long")
-    request = dict(snapshot=snapshot, slots=0, span=1, threshold=0.05)
+    request = runtime_request(snapshot,slots=0)
     request[field] = value
-    with pytest.raises(ValueError, match="invalid HSL signal inputs"):
-        pbr.hsl_candle_free(json.dumps(request))
+    with pytest.raises(ValueError):
+        pbr.hsl_v9_evaluate(json.dumps(request))
 
 
-@pytest.mark.parametrize(
-    "budget,loss", [(1e16, 1.0), (1e300, 1e280), (1e-200, 1e-220), (1e308, 1e308)]
-)
-def test_candle_free_loss_survives_absolute_peak_rounding(budget, loss):
-    from fractions import Fraction
-    import passivbot_rust as pbr
-
-    expected = float(Fraction(loss) / (Fraction(budget) + Fraction(loss)))
-    p = cases.pair(fills=[Fill("close", 1, -1, 100, -loss)], mark=100)
-    snapshot = payload(cases.frame(p, balance=budget))
-    request = dict(snapshot=snapshot, slots=1, span=1e9, threshold=expected * 0.5)
-    result = json.loads(pbr.hsl_candle_free(json.dumps(request)))
-    assert result["signal"]["raw"][0] == pytest.approx(expected, rel=1e-14, abs=0)
-    assert result["signal"]["ema"] == result["signal"]["raw"]
-    assert result["signal"]["panic"] == [True]
 
 
 @pytest.mark.parametrize("pside", ["long", "short"])
@@ -631,7 +549,7 @@ def test_confirmed_flat_can_replay_cooldown_with_old_factual_mark(pside):
     assert "stale_flat_mark" in result["reasons"]
     assert len(result["boundaries"]) == 1
     assert "lifecycle_eligible" not in result["boundaries"][0]
-    compare(frame, "unified", quantity_step=0.1)
+    compare(frame, "portfolio", quantity_step=0.1)
     request = payload(frame)
     request["pairs"][0]["position"].update(size=direction, basis=100.0)
     with pytest.raises(ValueError, match="position/mark"):
@@ -657,10 +575,9 @@ def test_explicit_flat_coin_proof_is_neutral_but_absence_is_not_flat():
     assert rust(request)["pairs"] == []
     import passivbot_rust as pbr
 
-    trace = json.loads(pbr.hsl_trace(json.dumps(request)))
-    assert trace["episodes"][0]["points"] == [
-        dict(timestamp=request["now"], pnl=0, upnl=0, exposed=False, flatten=False)
-    ]
+    current = json.loads(pbr.hsl_v9_evaluate(json.dumps(runtime_request(request))))
+    assert current["decision"]["action"] == "normal"
+    assert current["risk"]["exposed"] is False
     for observed, reason in [
         (None, "fill_capture_unknown"),
         (request["now"] - 1, "snapshot_skew"),
@@ -766,3 +683,14 @@ def test_exact_simulator_position_anchor_resolves_same_timestamp_fill(
     assert ("position_fill_timestamp_tie" in result["reasons"]) != eligible
     assert result["boundaries"]
     assert "current_flat_timestamp_estimate" not in result["reasons"]
+
+
+@pytest.mark.parametrize("balance",[0.0,-1.0])
+def test_finite_nonpositive_balance_is_valid_factual_loss_input(balance):
+    import passivbot_rust as pbr
+    snapshot=payload(cases.frame(cases.pair(size=1,basis=100,mark=90),balance=100.0))
+    snapshot["balance"]=balance
+    assert rust(snapshot)["pairs"]
+    result=json.loads(pbr.hsl_v9_evaluate(json.dumps(runtime_request(snapshot))))
+    assert result["risk"]["nonpositive_equity"] is True
+    assert result["decision"]["action"] == "panic"

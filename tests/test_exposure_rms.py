@@ -158,9 +158,10 @@ def test_native_scalar_transport_preserves_legacy_tail_and_optional_columns(fuse
     assert not EXPOSURE_RMS_METRICS & native_without_rms.keys()
     assert native_without_rms["hsl_drawdown_ema_max_portfolio"].item() == scalars[0, 17].item()
     for key in legacy:
-        if key == "last_eq_ts":
+        if key in {"first_eq_ts", "last_eq_ts"}:
             assert torch.equal(native[key], legacy[key] * 60_000), key
-            assert torch.equal(native["last_eq_step"], scalars[:, 8].to(torch.int64))
+            prefix, column = ("first_eq", 7) if key == "first_eq_ts" else ("last_eq", 8)
+            assert torch.equal(native[f"{prefix}_step"], scalars[:, column].to(torch.int64))
         else:
             assert torch.equal(native[key], legacy[key]), key
     assert [native[name].item() for name in NAMES] == list(range(columns, columns + 7))
@@ -269,7 +270,12 @@ def test_unsupported_rms_service_requests_fail_before_payload_preparation(monkey
     monkeypatch.setattr(service, "gpu_device", lambda *_: device)
     proxy = service.MpsSingleCoinProxy if proxy_kind == "single" else service.MpsMulticoinProxy
     extra = {"factual_hsl": native} if proxy_kind == "multi" else {}
-    with pytest.raises(ValueError, match="require native NVIDIA/CUDA replay"):
+    import backtest
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsupported RMS capability must reject before payload preparation")
+    monkeypatch.setattr(backtest, "build_backtest_payload", forbidden)
+    message = "NativeBacktestService" if proxy_kind == "single" else "require native NVIDIA/CUDA replay"
+    with pytest.raises(ValueError, match=message):
         proxy(config=get_template_config(), hlcvs=np.ones((2, 2, 4)), mss={},
               btc=np.ones(2), timestamps=np.arange(2) * 60_000, exchange="binance",
               batch_size=1, needed_metrics=[name], **extra)

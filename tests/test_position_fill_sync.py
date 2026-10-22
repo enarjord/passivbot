@@ -76,7 +76,7 @@ def test_change_during_fetch_does_not_accept_stale_receipt_or_reset_hard_deadlin
     [
         ("coin", [True, False, False]),
         ("pside", [True, False, True]),
-        ("unified", [True, True, True]),
+        ("portfolio", [True, True, True]),
     ],
 )
 def test_scope_dependency_for_both_create_and_cancel(mode, blocked):
@@ -214,7 +214,7 @@ def test_successful_cap_authorized_fetch_rearms_a_new_burst():
     assert sync.fetch_ready()
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_disabled_aggregate_policy_keeps_only_own_coin_side_dependency(mode):
     sync, now = gate()
     bot = SimpleNamespace(

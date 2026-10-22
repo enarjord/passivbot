@@ -77,7 +77,7 @@ TAILS = tuple(f"hsl_drawdown_ema_mean_worst_1pct_{s}" for s in ("long", "short",
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
-@pytest.mark.parametrize("signal_mode", [0, 1, 2], ids=["unified", "pside", "coin"])
+@pytest.mark.parametrize("signal_mode", [0, 1, 2], ids=["portfolio", "pside", "coin"])
 def test_native_capture_uses_reporting_clock_and_preserves_other_metrics(strategy, sides, signal_mode):
     from test_gpu_weighted_equity_capture import _runner_context
     baseline, params = _runner_context(strategy, sides, shock=True, factual_hsl=True, count=512)

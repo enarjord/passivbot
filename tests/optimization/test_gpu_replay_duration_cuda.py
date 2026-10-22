@@ -30,7 +30,7 @@ def test_adaptive_boundaries_preserve_every_output_and_cache_reset(
     from test_gpu_hsl_multicoin import make_proxy, raw
     from test_gpu_side_specialization import equal_outputs
 
-    proxy = make_proxy("unified", strategy, sides, minutes=256, factual_hsl=True)
+    proxy = make_proxy("portfolio", strategy, sides, minutes=256, factual_hsl=True)
     runner = proxy.fused_runner or proxy.runners[sides[0]]
     assert runner.max_dispatch_candidate_bars is not None
     assert proxy.temporal_chunking
@@ -57,7 +57,7 @@ def test_adaptive_boundaries_preserve_every_output_and_cache_reset(
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_zero_work_candidate_finalizes_once_in_adaptive_native_replay(cuda_runtime, strategy):
     from test_gpu_hsl_multicoin import make_proxy, raw
-    proxy = make_proxy("unified", strategy, ("long", "short"), minutes=128, factual_hsl=True)
+    proxy = make_proxy("portfolio", strategy, ("long", "short"), minutes=128, factual_hsl=True)
     runner, output = raw(proxy, [{}], profile=True, end_steps=np.array([1], dtype=np.int32))
     assert runner.last_profile["dispatch_count"] == 1
     assert runner.last_profile["kernel_candidate_steps"] == 0
@@ -74,7 +74,7 @@ def test_adaptive_disabled_hsl_preserves_unequal_candidate_endpoints(
     from test_gpu_hsl_multicoin import make_proxy, raw
     from test_gpu_side_specialization import equal_outputs
 
-    proxy = make_proxy("unified", strategy, ("long", "short"), minutes=256,
+    proxy = make_proxy("portfolio", strategy, ("long", "short"), minutes=256,
                        factual_hsl=True, enabled=False)
     runner = proxy.fused_runner
     candidates = [{}, {}, {}]

@@ -3352,9 +3352,12 @@ def install_anchored_fine_tune_plan(
                 {
                     "source": source,
                     "seed_bot": deepcopy(anchor_cfg["bot"]),
+                    "seed_live": _starting_live_numeric_seed(anchor_cfg.get("live")),
                     "fixed_values": fixed_values,
                 }
             )
+        except StartingConfigSchemaError:
+            raise
         except Exception as exc:
             logging.warning(
                 "failed to use starting config as fine-tune anchor: %s", exc
@@ -3381,6 +3384,10 @@ def install_anchored_fine_tune_plan(
     )
 
 
+class StartingConfigSchemaError(ValueError):
+    """A seed's old risk policy requires explicit migration before extraction."""
+
+
 def extract_configs(path):
     return list(iter_extract_configs(path))
 
@@ -3392,6 +3399,8 @@ def iter_extract_configs(path):
         try:
             raw = load_hjson_config(path, log_errors=False)
             yield _extract_starting_config(raw, source=path)
+        except StartingConfigSchemaError:
+            raise
         except Exception as e:
             logging.warning(
                 f"failed to extract bot config from starting config {path}: {e}"
@@ -3403,6 +3412,8 @@ def iter_extract_configs(path):
                 try:
                     cfg = json.loads(line)
                     yield _extract_starting_config(cfg, source=path)
+                except StartingConfigSchemaError:
+                    raise
                 except Exception as e:
                     logging.warning(
                         f"failed to extract bot config from starting config {path}: {e}"
@@ -3413,17 +3424,27 @@ def _format_starting_seed_bot(bot, live=None):
     """Normalize numeric seed parameters without inheriting HSL activation policy.
 
     Fresh searches evaluate every seed under the main config's current policy;
-    seed enablement/restart choices and old fitness are never runtime authority.
+    seed enablement and old fitness are never runtime authority.
     """
     from config.shared_bot import canonicalize_shared_bot_side
+    from config.migrations.v9 import reject_retired_v9_fields
 
     bot = deepcopy(bot)
     live = deepcopy(live) if isinstance(live, dict) else {}
-    live.pop("hsl_engine", None)
+    try:
+        reject_retired_v9_fields({"bot": bot, "live": live})
+    except ValueError as exc:
+        raise StartingConfigSchemaError(str(exc)) from exc
     for side in ("long", "short"):
         if isinstance(bot.get(side), dict):
             canonicalize_shared_bot_side(bot[side])
-    defaults = get_template_config()["bot"]["long"]["hsl"]
+    template = get_template_config()
+    # Current finite numeric suggestions are clamped against the main search
+    # bounds later. Bot-layout normalization must not validate them as a live
+    # runtime policy first, or replace an invalid suggestion with a default.
+    for field in _starting_live_numeric_seed(live):
+        live[field] = deepcopy(template["live"][field])
+    defaults = template["bot"]["long"]["hsl"]
     numeric_fields = ("red_threshold", "ema_span_minutes", "cooldown_minutes_after_red")
     numeric_seeds = {}
     for scope in ("long", "short", "portfolio"):
@@ -3436,12 +3457,33 @@ def _format_starting_seed_bot(bot, live=None):
         # Seed HSL policy is not used. Validate the bot layout with inert current
         # defaults, then leave numeric suggestions for the optimizer's bounds clamp.
         block.clear()
-        block.update(deepcopy(defaults), enabled=False, restart_after_red_policy=None)
+        block.update(deepcopy(defaults), enabled=False)
     formatted = format_bot_config(bot, live_cfg=live, verbose=False, warn_deprecations=False)
     for scope, values in numeric_seeds.items():
         block = formatted["hsl"] if scope == "portfolio" else formatted[scope]["hsl"]
         block.update(values)
     return formatted
+
+
+def _starting_live_numeric_seed(live):
+    """Keep declared live optimizer genes without importing runtime policy."""
+    from config.param_paths import OPTIMIZABLE_BOT_KEY_PATHS
+
+    if not isinstance(live, dict):
+        return {}
+    result = {}
+    for path in set(OPTIMIZABLE_BOT_KEY_PATHS.values()):
+        if len(path) != 2 or path[0] != "live" or path[1] not in live:
+            continue
+        value = live[path[1]]
+        try:
+            number = float(value)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError(f"invalid live optimizer seed value: live.{path[1]}") from exc
+        if isinstance(value, bool) or not math.isfinite(number):
+            raise ValueError(f"non-finite or non-numeric live optimizer seed value: live.{path[1]}")
+        result[path[1]] = number
+    return result
 
 
 def _extract_starting_config(raw_config, *, source: str = "<memory>"):
@@ -3453,28 +3495,30 @@ def _extract_starting_config(raw_config, *, source: str = "<memory>"):
     bot_cfg = current.get("bot")
     if not isinstance(bot_cfg, dict):
         raise KeyError("missing bot config")
-    extracted = {"bot": _format_starting_seed_bot(bot_cfg, current.get("live"))}
+    from config.migrations.v9 import require_v9_runtime_config
+
+    try:
+        require_v9_runtime_config(current)
+    except ValueError as exc:
+        raise StartingConfigSchemaError(f"starting config {source}: {exc}") from exc
+    extracted = {"config_version": current["config_version"],
+                 "bot": _format_starting_seed_bot(bot_cfg, current.get("live"))}
     live_cfg = current.get("live")
     if isinstance(live_cfg, dict):
+        numeric_live = _starting_live_numeric_seed(live_cfg)
+        if numeric_live:
+            extracted["live"] = numeric_live
         strategy_kind = live_cfg.get("strategy_kind")
         if strategy_kind and normalize_strategy_kind(
             strategy_kind
         ) != normalize_strategy_kind(None):
-            extracted["live"] = {"strategy_kind": strategy_kind}
-        if live_cfg.get("hsl_signal_mode") == "unified":
-            extracted.setdefault("live", {})["hsl_signal_mode"] = "unified"
+            extracted.setdefault("live", {})["strategy_kind"] = strategy_kind
+        if live_cfg.get("hsl_signal_mode") in {"pside", "portfolio"}:
+            extracted.setdefault("live", {})["hsl_signal_mode"] = live_cfg["hsl_signal_mode"]
     optimize_cfg = current.get("optimize")
     if isinstance(optimize_cfg, dict) and isinstance(optimize_cfg.get("bounds"), dict):
         extracted["optimize"] = {"bounds": deepcopy(optimize_cfg["bounds"])}
     record_source = source or "<memory>"
-    from config.migrations.legacy_v7 import _parse_version_tuple
-    version = _parse_version_tuple(current.get("config_version"))
-    if version is None or version < (8, 6, 0) or "hsl_engine" in (live_cfg or {}):
-        logging.warning(
-            "Loading legacy optimizer seed %s best effort under the current schema; "
-            "main config owns HSL activation/restart policy and all fitness is reevaluated",
-            record_source,
-        )
     extracted["_starting_config_source"] = record_source
     return extracted
 
@@ -3489,6 +3533,22 @@ def _build_starting_seed_config(cfg):
             "bot": _format_starting_seed_bot(cfg)
         }
     elif "bot" in cfg and isinstance(cfg.get("bot"), dict):
+        if "config_version" in cfg:
+            from config.migrations.v9 import require_v9_runtime_config
+
+            try:
+                require_v9_runtime_config(cfg)
+            except ValueError as exc:
+                raise StartingConfigSchemaError(str(exc)) from exc
+        else:
+            # In-memory numeric suggestions have no runtime schema authority;
+            # removed v8 policy must still pass through explicit migration.
+            from config.migrations.v9 import reject_retired_v9_fields
+
+            try:
+                reject_retired_v9_fields(cfg)
+            except ValueError as exc:
+                raise StartingConfigSchemaError(str(exc)) from exc
         extracted = cfg
     else:
         extracted = _extract_starting_config(cfg)
@@ -3689,13 +3749,12 @@ def iter_anchored_fine_tune_seed_configs(config: dict):
     if anchor_plan is None:
         return
     for anchor in anchor_plan.get("anchors") or []:
+        live_seed = deepcopy(anchor.get("seed_live") or {})
+        if anchor_plan.get("strategy_kind"):
+            live_seed["strategy_kind"] = anchor_plan["strategy_kind"]
         yield {
             "bot": deepcopy(anchor.get("seed_bot") or {}),
-            "live": (
-                {"strategy_kind": anchor_plan.get("strategy_kind")}
-                if anchor_plan.get("strategy_kind")
-                else {}
-            ),
+            "live": live_seed,
             "_starting_config_source": anchor.get("source", "<memory>"),
         }
 
@@ -3768,6 +3827,8 @@ def configs_to_individuals_streaming(
                 clamp_collector=clamp_collector,
             )
             inds.add(tuple(individual))
+        except StartingConfigSchemaError:
+            raise
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
     _flush_seed_bounds_adjustments(clamp_collector)
@@ -3929,7 +3990,7 @@ async def main():
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "pside", "portfolio"))
     config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     if "couple_unstuck_ema_spans" in (

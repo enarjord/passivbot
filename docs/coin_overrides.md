@@ -47,12 +47,11 @@ The complete conditional HSL override group is:
 - `hsl.red_threshold`
 - `hsl.ema_span_minutes`
 - `hsl.cooldown_minutes_after_red`
-- `hsl.restart_after_red_policy`
 - `hsl.panic_close_order_type`
 
 These fields are per `coin+side` only when the main config selects
 `live.hsl_signal_mode = "coin"`. The signal mode itself remains global and is not overridable.
-An inline HSL patch in `pside` or `unified` mode is rejected. HSL values in a complete override
+An inline HSL patch in `pside` or `portfolio` mode is rejected. HSL values in a complete override
 file are warned about and ignored in those modes, while other eligible fields in that file still
 apply. A `live.hsl_signal_mode` value inside an override file or inline patch cannot authorize the
 HSL patch; the main config's effective global mode always decides.
@@ -114,7 +113,6 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
             "red_threshold": 0.08,
             "ema_span_minutes": 10.0,
             "cooldown_minutes_after_red": 60.0,
-            "restart_after_red_policy": "always",
             "panic_close_order_type": "market"
           },
           "wallet_exposure_limit": 0.18
@@ -321,4 +319,4 @@ excluded from discovery, but other JSON/HJSON files in that directory are treate
 - Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
   coerced into trading parameters.
 - Conditional HSL: setting HSL fields in a coin patch while the main config uses `pside` or
-  `unified` mode is invalid; changing `live.hsl_signal_mode` inside the patch does not change that.
+  `portfolio` mode is invalid; changing `live.hsl_signal_mode` inside the patch does not change that.

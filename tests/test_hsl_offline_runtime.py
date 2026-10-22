@@ -44,7 +44,7 @@ def runtime_inputs(mode):
     return cfg, markets, candles, timestamps
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_public_payload_runs_red_panic_and_cooldown(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     original = deepcopy(cfg)
@@ -65,13 +65,13 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     assert cfg == original
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     fixed_side_bounds(cfg)
     target = (
         cfg["optimize"]["bounds"]
-        if mode == "unified"
+        if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
     target["hsl"] = {"red_threshold": [0.01, 0.9]}
@@ -110,7 +110,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         # Exercise effective scenario overrides through the complete suite evaluator.
         path = (
             "bot.hsl.red_threshold"
-            if mode == "unified"
+            if mode == "portfolio"
             else "bot.long.hsl.red_threshold"
         )
         contexts = [
@@ -181,7 +181,7 @@ def offline_cli_config(tmp_path, monkeypatch, mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("detailed", [False, True])
 async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
     tmp_path, monkeypatch, mode, detailed
@@ -214,7 +214,7 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, b
     from optimize import main
     import msgpack
 
-    cfg = offline_cli_config(tmp_path, monkeypatch, "unified")
+    cfg = offline_cli_config(tmp_path, monkeypatch, "portfolio")
     fixed_side_bounds(cfg)
     cfg["optimize"].update(
         backend=backend,

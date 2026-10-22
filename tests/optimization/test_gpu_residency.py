@@ -436,7 +436,7 @@ def test_late_chunk_tick_failure_removes_all_partial_market_files(runtime, monke
 @pytest.mark.parametrize("runner_key", ["long", "fused"])
 @pytest.mark.parametrize("eviction", ["dataset", "owner"])
 @pytest.mark.parametrize("automatic", [False, True])
-def test_factual_capacity_survives_production_residency_eviction(runtime, runner_key, eviction, automatic):
+def test_forward_scratch_owner_releases_state_across_residency_eviction(runtime, runner_key, eviction, automatic):
     import weakref
     from optimization.gpu.service import MpsMulticoinProxy
 
@@ -447,9 +447,9 @@ def test_factual_capacity_survives_production_residency_eviction(runtime, runner
         hsl_scratch_budget_bytes = 70000
         bars = SimpleNamespace(device=SimpleNamespace(type="cuda"))
         def __init__(self, *args, **kwargs):
-            self.hsl_fact_capacity = self.hsl_fact_capacity_learned = 256
+            self.hsl_fact_capacity = 0
         def _history_bytes_per_candidate(self):
-            return self.hsl_fact_capacity * 16
+            return 256
         def _history_batch_bytes(self, count):
             return count * self._history_bytes_per_candidate()
     manager = CudaSuiteResidency()
@@ -485,67 +485,24 @@ def test_factual_capacity_survives_production_residency_eviction(runtime, runner
         manager.activate(first)
         # Memory pressure never resizes a still-active owner.
         assert runner(first).hsl_scratch_budget_bytes == initial_budget
-        learned.hsl_fact_capacity = learned.hsl_fact_capacity_learned = 4096
         first._remember_factual_capacities()
-        # An HSL-off dispatch must retain the learned estimate rather than zero.
-        learned.hsl_fact_capacity = 0
-        first._remember_factual_capacities()
+        assert learned.hsl_fact_capacity == 0
+        assert not hasattr(learned, "hsl_fact_capacity_learned")
         old = weakref.ref(learned)
         del learned
-        assert estimates == {runner_key: 4096}
+        assert estimates == {}
         manager.activate(other)
         assert old() is None
         assert not first.runners and first.fused_runner is None
         manager.activate(first)
-        assert runner(first).hsl_fact_capacity == 4096
-        assert runner(first).hsl_fact_capacity_learned == 4096
+        assert runner(first).hsl_fact_capacity == 0
+        assert not hasattr(runner(first), "hsl_fact_capacity_learned")
         if automatic:
             assert runner(first).hsl_scratch_budget_bytes == int(free[0] * .35)
             assert runner(first).hsl_scratch_budget_bytes < initial_budget
         else:
             assert runner(first).hsl_scratch_budget_bytes == initial_budget
         assert not other.runners and other.fused_runner is None
-        assert estimates == {runner_key: 4096}
+        assert estimates == {}
     finally:
         manager.close()
-
-
-@pytest.mark.parametrize("hint", [False, 0, -1, 4096.0, 8192])
-def test_capacity_restore_rejects_malformed_or_over_budget_estimates(hint):
-    from optimization.gpu.service import MpsMulticoinProxy
-    class Runner:
-        native_factual_hsl = True
-        hsl_fact_capacity_learned = 256
-        hsl_scratch_budget_bytes = 70000
-        def __init__(self, *args, **kwargs):
-            pass
-        def _history_bytes_per_candidate(self):
-            return self.hsl_fact_capacity * 16
-        def _history_batch_bytes(self, count):
-            return count * self._history_bytes_per_candidate()
-    owner = object.__new__(MpsMulticoinProxy)
-    owner.run = owner.data = None
-    owner._factual_capacity_hints = {"long": hint}
-    owner._automatic_scratch_budget = False
-    with pytest.raises(ValueError, match="Invalid learned|exceeds scratch budget"):
-        owner._construct_runner("long", Runner, {})
-
-
-def test_capacity_restore_includes_shared_metric_workspace():
-    from optimization.gpu.service import MpsMulticoinProxy
-    class Runner:
-        native_factual_hsl = True
-        hsl_fact_capacity_learned = 256
-        hsl_scratch_budget_bytes = 70000
-        def __init__(self, *args, **kwargs):
-            pass
-        def _history_bytes_per_candidate(self):
-            return self.hsl_fact_capacity * 16
-        def _history_batch_bytes(self, count):
-            return count * self._history_bytes_per_candidate() + 8192
-    owner = object.__new__(MpsMulticoinProxy)
-    owner.run = owner.data = None
-    owner._factual_capacity_hints = {"long": 4096}
-    owner._automatic_scratch_budget = False
-    with pytest.raises(ValueError, match="exceeds scratch budget"):
-        owner._construct_runner("long", Runner, {})

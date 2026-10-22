@@ -8,7 +8,7 @@ from config.strategy_spec import get_supported_strategy_kinds, strategy_optimize
 
 
 @pytest.mark.parametrize("kind", get_supported_strategy_kinds())
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("nested", [False, True])
 def test_group_resolution_matches_single_keys_with_one_metadata_projection(
     monkeypatch, kind, mode, nested
@@ -44,7 +44,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
     config["live"]["strategy_kind"] = "trailing_martingale"
     keys = ["long_ema_span_0", "long_n_positions", "hsl_red_threshold"]
     first = dict(param_paths.iter_optimizer_key_paths(config, keys))
-    config["live"].update(strategy_kind="ema_anchor", hsl_signal_mode="unified")
+    config["live"].update(strategy_kind="ema_anchor", hsl_signal_mode="portfolio")
     config["bot"]["long"] = {"n_positions": 2.0}
     second = dict(param_paths.iter_optimizer_key_paths(config, keys))
     assert first["long_ema_span_0"] == (
@@ -63,7 +63,7 @@ def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
         raise RuntimeError("metadata unavailable")
 
     monkeypatch.setattr(param_paths, "_strategy_path_map_for_config", unavailable)
-    config = {"live": {"hsl_signal_mode": "unified"}}
+    config = {"live": {"hsl_signal_mode": "portfolio"}}
     assert list(param_paths.iter_optimizer_key_paths(config, [])) == []
     assert list(param_paths.iter_optimizer_key_paths(config, ["hsl_red_threshold"])) == [
         ("hsl_red_threshold", ("bot", "hsl", "red_threshold"))

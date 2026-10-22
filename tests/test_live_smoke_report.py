@@ -9333,7 +9333,7 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
     config_path.write_text(
         json.dumps(
             {
-                "live": {"hsl_signal_mode": "unified"},
+                "live": {"hsl_signal_mode": "portfolio"},
                 "bot": {
                     "hsl": {"enabled": True},
                     "long": {"hsl": {"enabled": True}},
@@ -9400,7 +9400,7 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
     assert issue["code"] == "hsl_balance_override_account_level_replay_unsafe"
     assert issue["severity"] == "error"
     assert issue["account"] == "ebybitsub03"
-    assert issue["hsl_signal_mode"] == "unified"
+    assert issue["hsl_signal_mode"] == "portfolio"
     assert issue["enabled_scopes"] == ["portfolio"]
     assert issue["balance_override_active"] is True
     assert issue["balance_override_source"] == "argument"

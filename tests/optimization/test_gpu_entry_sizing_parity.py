@@ -95,11 +95,11 @@ def _fixture(side, coin_count, entry_kind):
 
 def _evaluate(side, inputs):
     from backtest import run_backtest
-    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import MpsMulticoinProxy
 
     config, candles, mss, btc, timestamps = inputs
     coin_count = candles.shape[1]
-    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    cls = MpsMulticoinProxy
     proxy = cls(
         config=config,
         hlcvs=candles,
@@ -111,7 +111,7 @@ def _evaluate(side, inputs):
         needed_metrics={"adg_strategy_eq"},
     )
     outputs = []
-    runner = proxy.runner if coin_count == 1 else proxy.runners[side]
+    runner = proxy.runners[side]
     original = runner.run
 
     def capture(*args, **kwargs):

@@ -49,16 +49,16 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
         return capture(client.now_ms, start, client.balance_total, client.now_ms, [p])
 
     assert client.advance_time()  # open
-    assert not scope_boundaries(snapshot(), "unified").boundaries
+    assert not scope_boundaries(snapshot(), "portfolio").boundaries
     assert client.advance_time()  # partial
-    assert not scope_boundaries(snapshot(), "unified").boundaries
+    assert not scope_boundaries(snapshot(), "portfolio").boundaries
     assert client.advance_time()  # actual flat
     events = client.get_fill_events(start, client.now_ms)
-    estimated = scope_boundaries(snapshot(events[:-1]), "unified")
+    estimated = scope_boundaries(snapshot(events[:-1]), "portfolio")
     assert [b.timestamp for b in estimated.boundaries] == [events[-2]["timestamp"]]
     assert "current_flat_timestamp_estimate" in estimated.reasons
     clean = snapshot()
-    trace = scope_boundaries(clean, "unified")
+    trace = scope_boundaries(clean, "portfolio")
     boundary, = trace.boundaries
     assert boundary.timestamp == client.now_ms
     assert float(boundary.observation.pnl) == pytest.approx(client.realized_pnl - client.realized_fees)
@@ -67,7 +67,7 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
     assert "current_flat_timestamp_estimate" not in trace.reasons
     assert client.advance_time()
     clean = snapshot()
-    trace = scope_boundaries(clean, "unified")
+    trace = scope_boundaries(clean, "portfolio")
     boundary, = trace.boundaries
     risk = signal([Observation(start, dec(0), dec(0)), boundary.observation],
                   client.balance_total, 1, ".02")
@@ -76,8 +76,8 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
     assert permission(client.now_ms, 86_400_000, 120_000, "always", evidence,
                       exposed=False, red_now=False) == "halted"
     # Repeated observation does not refresh cooldown.
-    repeated = scope_boundaries(snapshot(), "unified")
+    repeated = scope_boundaries(snapshot(), "portfolio")
     assert repeated.boundaries == trace.boundaries
     fresh = replace(clean, pairs=tuple(replace(p, fills=tuple(replace(f) for f in p.fills))
                                       for p in clean.pairs))
-    assert scope_boundaries(fresh, "unified") == trace
+    assert scope_boundaries(fresh, "portfolio") == trace

@@ -109,7 +109,7 @@ def test_coin_scaling_switch_is_global_per_side():
         prepare_config(source, verbose=False)
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["pside", "portfolio"])
 def test_scaling_rejects_aggregate_scopes(mode):
     from config.hsl import generated_template
 

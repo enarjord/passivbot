@@ -12,6 +12,9 @@ def compile_runtime_config(
 ) -> dict:
     normalized_runtime = str(runtime).strip().lower()
     result = deepcopy(config)
+    from .migrations.v9 import require_v9_runtime_config
+
+    require_v9_runtime_config(result)
     for pside in BOT_POSITION_SIDES:
         canonicalize_shared_bot_side(
             result.get("bot", {}).get(pside),
@@ -34,6 +37,10 @@ def compile_runtime_config(
     from .schema import get_template_config
 
     normalize_hsl(result, get_template_config(), verbose=False)
+    if normalized_runtime == "live":
+        from .hsl import require_live_runtime_support
+
+        require_live_runtime_support(result)
     sync_canonical_strategy_config(result)
     prune_inactive_strategy_subtrees(result)
     prune_inactive_optimize_strategy_bounds(result)

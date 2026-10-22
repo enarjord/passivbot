@@ -54,29 +54,6 @@ def test_current_mixed_batch_failure_precedes_early_capacity_retry(monkeypatch, 
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("fatal", [-2., -3., -4., -5., -7., None])
-def test_terminal_capacity_preserves_later_fatal_errors(monkeypatch, fatal):
-    runner, calls, dispatch = _dispatch(
-        monkeypatch, lambda count: [-6., fatal if fatal is not None and count >= 3 else -1.])
-    runner.hsl_fact_capacity = 1
-    runner._prepare_native_factual_hsl = lambda params: None
-    runner._hsl_native_cache_capacity = lambda: 0
-    runner._disable_native_cache_over_budget = lambda: False
-    runner._history_batch_bytes = lambda count: count * 16 if runner.hsl_fact_capacity == 1 else 2048
-    attempts = []
-    def attempt(*args, **kwargs):
-        attempts.append(runner.hsl_fact_capacity)
-        runner._replay_state_bytes = 16
-        mps_kernel._require_available_held_valuation(dispatch())
-        pytest.fail("rejected diagnostic outputs must not publish")
-    runner._run_factual_attempt = attempt
-    with pytest.raises((RuntimeError, ValueError)) as error:
-        runner.run([{}, {}])
-    assert isinstance(error.value, mps_kernel.HslFactHistoryOverflow) == (fatal is None)
-    assert attempts == [1, 1]
-    assert len(calls) == (51 if fatal is None else 3)
-    assert runner.hsl_fact_capacity == 1
-    assert not runner._defer_hsl_overflow
 
 
 @pytest.mark.parametrize("device,block", [("cuda", 1), ("mps", 2)])
@@ -101,7 +78,7 @@ def test_outer_admission_reserves_shared_workspace_once():
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
 def test_cuda_independent_blocks_preserve_every_output(monkeypatch, strategy, mode, sides):
     if not torch.cuda.is_available():
@@ -119,12 +96,9 @@ def test_cuda_independent_blocks_preserve_every_output(monkeypatch, strategy, mo
     _, expected = raw(proxy, candidates, end_steps=ends)
     expected = {key: value.clone() if isinstance(value, torch.Tensor) else value
                 for key, value in expected.items()}
-    # Reject an actual producer overflow between chunks, grow worker storage,
-    # and reconstruct from the beginning before publishing accepted results.
-    runner.hsl_fact_capacity = runner.hsl_fact_capacity_learned = 1
-    _, recovered = raw(proxy, candidates, end_steps=ends)
-    assert runner.last_hsl_fact_retries > 0
-    equal_outputs(expected, recovered)
+    _, repeated = raw(proxy, candidates, end_steps=ends)
+    assert runner.hsl_fact_capacity == 0 and runner.last_hsl_fact_retries == 0
+    equal_outputs(expected, repeated)
     original = CudaShaderLibrary.__getattr__
     def prior_geometry(self, name):
         launch = original(self, name)

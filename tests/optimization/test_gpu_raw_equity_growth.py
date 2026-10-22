@@ -147,7 +147,7 @@ def test_daily_decoder_uses_explicit_feature_ownership(fused, btc_risk):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", ["long", "short", "both"])
-@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "unified"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin", "pside", "portfolio"])
 def test_native_raw_growth_on_active_shock_replay(strategy, sides, hsl):
     from test_gpu_side_equity_sampling import _side_equity_inputs
     from tools.gpu_parity import run_comparison

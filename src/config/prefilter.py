@@ -4,10 +4,11 @@ from copy import deepcopy
 import math
 
 
-PREFILTER_VERSION = 1
+PREFILTER_VERSION = 2
 PREFILTER_METRICS = frozenset(
     {
         "entry_close_span",
+        "entry_threshold",
         "entry_retracement",
         "close_retracement",
         "entry_cooldown_minutes",

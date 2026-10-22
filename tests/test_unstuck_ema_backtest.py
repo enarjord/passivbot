@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from config import get_template_config, prepare_config
 from config.overrides import parse_overrides
+from config.migrations.v9 import migrate_v8_to_v9
 from backtest import run_backtest
 from hsl_reporting import hsl_report as collect_hsl_report
 
@@ -152,7 +153,12 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
 
     assert not getattr(pbr, "__is_stub__", False)
     raw = _legacy_replay_config()
-    migrated = parse_overrides(prepare_config(raw, verbose=False), verbose=False)
+    migrated = parse_overrides(
+        prepare_config(
+            migrate_v8_to_v9(raw, memory_span_minutes=43200.0).config, verbose=False
+        ),
+        verbose=False,
+    )
     explicit = deepcopy(raw)
     for side in ("long", "short"):
         strategy = explicit["bot"][side]["strategy"]["trailing_martingale"]
@@ -162,7 +168,12 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
         "ema_span_0": 21.5,
         "ema_span_1": 110.25,
     }
-    explicit = parse_overrides(prepare_config(explicit, verbose=False), verbose=False)
+    explicit = parse_overrides(
+        prepare_config(
+            migrate_v8_to_v9(explicit, memory_span_minutes=43200.0).config, verbose=False
+        ),
+        verbose=False,
+    )
     old_fills, old_equity, _ = _replay(migrated)
     expected_fills, expected_equity, _ = _replay(explicit)
     np.testing.assert_array_equal(old_fills, expected_fills)
@@ -185,7 +196,10 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
 
     assert not getattr(pbr, "__is_stub__", False)
     # Author a current-schema fixture; do not activate HSL in legacy input.
-    migrated = prepare_config(_legacy_replay_config(), verbose=False)
+    migrated = prepare_config(
+        migrate_v8_to_v9(_legacy_replay_config(), memory_span_minutes=43200.0).config,
+        verbose=False,
+    )
     raw = get_template_config()
     for section in ("bot", "coin_overrides", "backtest", "live"):
         raw[section] = deepcopy(migrated[section])
@@ -200,7 +214,7 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
         active_side: ["BTC", "ETH"], inactive_side: []
     }
     raw["bot"][active_side]["hsl"].update(
-        enabled=hsl_enabled, restart_after_red_policy="always",
+        enabled=hsl_enabled,
         ema_span_minutes=1.0, red_threshold=0.001,
         cooldown_minutes_after_red=7.0,
     )

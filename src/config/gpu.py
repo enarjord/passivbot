@@ -54,7 +54,7 @@ def parse_screening_scenarios(value: str) -> list[str]:
 
 def gpu_hsl_policy(config: dict, side: str) -> dict:
 
-    if config["live"]["hsl_signal_mode"] == "unified":
+    if config["live"]["hsl_signal_mode"] == "portfolio":
         return config["bot"]["hsl"]
     return config.get("bot", {}).get(side, {}).get("hsl", {})
 
