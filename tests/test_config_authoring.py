@@ -69,9 +69,9 @@ def test_authoring_views_preserve_whole_section_omission(sections):
     assert effective(resolved_config(source)) == expected
     report = explain_config(source, "bot.long.risk.total_wallet_exposure_limit")
     assert report["value"] == expected["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
-    assert (report["sources"][0].get("rule") == "omitted_side_disabled") == (
-        "bot" in source and "long" not in source["bot"]
-    )
+    assert report["sources"][0]["kind"] == "default_or_derived"
+    assert "rule" not in report["sources"][0]
+    assert expected["bot"]["long"]["enabled"] is False
     assert source == original
 
 
@@ -487,11 +487,13 @@ def test_explain_dynamic_coin_patch_reuses_root_type_without_inventing_a_pin_def
     assert report["search"]["status"] == "coin_override"
 
 
-def test_explain_omitted_side_disable_and_normalized_weights_are_visible():
+def test_explain_default_activation_and_normalized_weights_are_visible():
     source = {"config_version": "v9.0.0", "bot": {}, "live": {}}
-    report = explain_config(source, "bot.long.risk.total_wallet_exposure_limit")
-    assert report["value"] == 0.0
-    assert report["sources"][0]["rule"] == "omitted_side_disabled"
+    report = explain_config(source, "bot.long.enabled")
+    assert report["value"] is False
+    assert report["sources"][-1] == {
+        "kind": "inherited", "path": "bot.global.enabled", "value": False,
+    }
     source = policy()
     source["bot"]["long"]["forager"]["score_weights"] = {
         "ema_readiness": 1.0, "volume": 2.0, "volatility": 0.0, "unilateralness": 0.0,
