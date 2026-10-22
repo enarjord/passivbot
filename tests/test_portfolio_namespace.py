@@ -32,6 +32,11 @@ PORTFOLIO_PATHS = (
     "hsl.scale_budget_with_excess_allowance",
 )
 
+DIRECTIONAL_HSL_PATHS = tuple(path for path in PORTFOLIO_PATHS
+                              if path.startswith("hsl.") and path != "hsl.scope")
+PORTFOLIO_ONLY_PATHS = tuple(path for path in PORTFOLIO_PATHS
+                             if path not in DIRECTIONAL_HSL_PATHS)
+
 
 def read(node, path):
     for part in path.split("."):
@@ -50,14 +55,15 @@ def test_registry_declares_exact_portfolio_scope_and_remaining_global_defaults()
     fields = get_field_registry()
     assert {".".join(field.path[2:]) for field in fields
             if field.path[:2] == ("bot", "portfolio")} == set(PORTFOLIO_PATHS)
-    assert {".".join(field.path[2:]) for field in fields
-            if field.path[:2] == ("bot", "global")} == {
-                "enabled", "universe.approved_coins", "forager.score_hysteresis_margin"}
+    common = {field.path[2:] for field in fields if field.path[:2] == ("bot", "global")}
+    for side in ("long", "short"):
+        assert common == {field.path[2:] for field in fields
+                          if field.path[:2] == ("bot", side)}
     assert all(field.scope == "portfolio" for field in fields
                if field.path[:2] == ("bot", "portfolio"))
 
 
-@pytest.mark.parametrize("local", PORTFOLIO_PATHS)
+@pytest.mark.parametrize("local", PORTFOLIO_ONLY_PATHS)
 @pytest.mark.parametrize("owner", ["root", "scenario", "fixed"])
 def test_retired_global_portfolio_paths_are_rejected_without_mutation(local, owner):
     source = generated_template(get_template_config(), "portfolio")
@@ -95,16 +101,42 @@ def test_portfolio_bounds_mirror_bot_paths_and_keep_native_optimizer_ids(scope):
         prepare_config(retired, verbose=False, live_only=True)
 
 
-def test_directional_hsl_never_authorizes_portfolio_policy():
+@pytest.mark.parametrize("owner", ["global", "long", "short"])
+def test_directional_hsl_never_authorizes_portfolio_policy(owner):
     source = get_template_config()
     source["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
-    source["bot"]["long"]["hsl"]["enabled"] = True
+    directional = deepcopy(source["bot"]["global"]["hsl"])
+    directional["enabled"] = True
+    write(source, f"bot.{owner}.hsl", directional)
+    original = deepcopy(source)
     with pytest.raises(ValueError, match="(?:explicit|missing|required)"):
         prepare_config(source, verbose=False, live_only=True)
+    assert source == original
+
+
+def test_portfolio_hsl_rejects_coin_only_budget_scaling():
     source = generated_template(get_template_config(), "portfolio")
     source["bot"]["portfolio"]["hsl"]["scale_budget_with_excess_allowance"] = True
     with pytest.raises(ValueError, match="requires coin HSL mode"):
         prepare_config(source, verbose=False, live_only=True)
+
+
+@pytest.mark.parametrize("local", DIRECTIONAL_HSL_PATHS)
+@pytest.mark.parametrize("owner", ["root", "scenario", "fixed"])
+def test_directional_hsl_defaults_remain_valid_with_explicit_portfolio_policy(local, owner):
+    source = generated_template(get_template_config(), "portfolio")
+    path = "bot.global." + local
+    value = read(source, "bot.portfolio." + local)
+    if owner == "root":
+        write(source, path, deepcopy(value))
+    elif owner == "fixed":
+        source["optimize"]["fixed_runtime_overrides"] = {path: value}
+    else:
+        source["backtest"]["scenarios"] = [{"label": "directional", "overrides": {path: value}}]
+    original = deepcopy(source)
+    assert not list(Draft202012Validator(generate_schema()).iter_errors(source))
+    assert prepare_config(source, verbose=False, live_only=True)
+    assert source == original
 
 
 @pytest.mark.parametrize("mode", [compact_config, resolved_config, cleanup_config])
@@ -114,15 +146,16 @@ def test_exports_retain_explicit_portfolio_policy_values_and_side_independence(m
     source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 123.5
     source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 234.75
     source["bot"]["global"]["forager"]["score_hysteresis_margin"] = 0.125
-    source["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = 35.5
+    write(source, "bot.long.hsl.cooldown_after_red_minutes", 35.5)
     original = deepcopy(source)
+    expected = prepare_config(source, verbose=False, live_only=True)
     output = mode(source)
     if isinstance(output, tuple):
         output = output[0]
     reloaded = prepare_config(json.loads(json.dumps(output)), verbose=False, live_only=True)
     for path in ("bot.portfolio.hsl", "bot.portfolio.loss_gate", "bot.portfolio.unstuck",
                  "bot.global.forager", "bot.long.hsl"):
-        assert read(reloaded, path) == read(source, path)
+        assert read(reloaded, path) == read(expected, path)
     assert source == original
 
 
