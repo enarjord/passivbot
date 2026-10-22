@@ -15,7 +15,9 @@ since the latest release tag; these features may already be available when insta
   A global optimizer range owns one coordinate feeding its inheriting sides; explicit side
   ranges are independent, and omitted ranges stay fixed. Resume and execution identities retain
   this binding authority. Forager hysteresis now honors each resolved side policy in live,
-  native backtests and supported GPU replay. Direct released-v8 migration materializes its
+  native backtests and supported GPU replay, with directional margins validated during config
+  loading. Preflight and config diffs resolve inherited side policy while retaining explicit
+  declaration changes. Direct released-v8 migration materializes its
   historical directional profiles and search ranges rather than adopting the common profile.
 
 - Add explicit side activation: `bot.global.enabled` defaults false, omitted directional flags
