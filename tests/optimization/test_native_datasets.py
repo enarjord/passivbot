@@ -9,6 +9,9 @@ from optimization.native_datasets import NativeDatasetRegistry
 from optimize import Evaluator, SuiteEvaluator
 from shared_arrays import SharedArrayManager, attach_shared_array
 from tools.gpu_parity import build_parser, fixture_inputs
+from config import prepare_config
+from config.project import project_config
+from config.universe import universe_source_view
 
 
 def fixture(manager):
@@ -19,6 +22,9 @@ def fixture(manager):
     config["optimize"]["limits"] = []
     for side in ("long", "short"):
         config["bot"][side]["risk"]["max_positions"] = 2
+    columns = config["backtest"].pop("coins")
+    config = prepare_config(config, verbose=False)
+    config["backtest"]["coins"] = columns
     specs = [manager.create_from(array)[0] for array in (candles, btc)]
     base = Evaluator({"binance": specs[0]}, {"binance": specs[1]}, {"binance": markets},
                      config, timestamps={"binance": timestamps})
@@ -30,6 +36,9 @@ def contexts(base, timestamps, *, lazy):
     config["backtest"]["coins"]["binance"] = ["COIN00", "COIN02"]
     for side in ("long", "short"):
         config['bot'][side]['universe']['approved_coins'] = ["COIN00", "COIN02"]
+    columns = config["backtest"].pop("coins")
+    config = prepare_config(config, verbose=False)
+    config["backtest"]["coins"] = columns
     return [SimpleNamespace(
         label=label, exchanges=["binance"], config=deepcopy(config), msss=base.msss,
         timestamps={"binance": timestamps[32:96] if lazy else timestamps}, overrides={},
@@ -77,8 +86,10 @@ def test_standalone_registry_borrows_histories_and_owns_only_reusable_timestamps
             worker_config = json.loads(worker_dataset.config_json)
             assert "optimize" not in worker_config
             original_config = json.loads(dataset.config_json)
+            assert universe_source_view(dataset.policy_config())["bot"] == original_config["bot"]
+            expected = project_config(dataset.execution_config(), "backtest", record_step=False)
             for section in ("bot", "live", "backtest", "coin_overrides"):
-                assert worker_config.get(section) == original_config.get(section)
+                assert worker_config.get(section) == expected.get(section)
         assert len(allocated) == 1
         with pytest.raises(FileNotFoundError):
             attach_shared_array(allocated[0])
