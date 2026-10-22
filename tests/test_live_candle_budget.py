@@ -857,6 +857,7 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
                 }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -984,6 +985,7 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
                 }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
@@ -1093,6 +1095,7 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
                 }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {}
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
@@ -1229,6 +1232,7 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
             },
             "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
@@ -1443,6 +1447,7 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
             },
             "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {
             symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}
             for symbol in symbols
@@ -1637,6 +1642,7 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
 
     class FakeBot:
         config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -1823,6 +1829,7 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
                 }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -1939,6 +1946,7 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
 
     class FakeBot:
         config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 30}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -2056,6 +2064,7 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
 
     class FakeBot:
         config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 30}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -2164,6 +2173,7 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
 
     class FakeBot:
         config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
