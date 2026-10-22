@@ -8,7 +8,7 @@ import pytest
 from config.load import prepare_config
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype, get_template_config
 from config.strategy import merge_runtime_bot_side
 from passivbot import Passivbot
 
@@ -39,7 +39,7 @@ def _parse(overrides, *, loaded=None, symbol_normalizer=lambda coin: coin):
 
 
 def test_explicit_inline_values_equal_to_global_are_retained():
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     threshold = template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_fraction"
     ]
@@ -246,7 +246,7 @@ def test_strategy_kind_mismatch_fails_in_inline_patch():
 
 
 def test_inactive_strategy_subtrees_in_full_override_file_are_ignored():
-    loaded = get_template_config()
+    loaded = get_expanded_config_prototype()
     loaded["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_fraction"
     ] = 0.123
@@ -381,7 +381,7 @@ def test_canonical_grouped_patch_has_live_and_backtest_consumer_parity():
 
 @pytest.mark.parametrize("pside", ["long", "short"])
 def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside):
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     side = template["bot"][pside]
     parsed = _parse(
         {

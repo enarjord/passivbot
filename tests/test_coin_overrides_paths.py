@@ -6,6 +6,7 @@ import os
 import pytest
 
 import config_utils
+from config.schema import get_expanded_config_prototype
 from config.load import prepare_config
 from config.overrides import load_override_config
 
@@ -16,7 +17,7 @@ def _write_config(path, cfg):
 
 
 def test_override_path_resolves_relative_to_base_config(tmp_path):
-    base_cfg = config_utils.get_template_config()
+    base_cfg = get_expanded_config_prototype()
     base_cfg["live"]["account"]["user"] = "tester"
     base_path = tmp_path / "base.json"
     base_cfg["live"]["base_config_path"] = str(base_path)
@@ -38,7 +39,7 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
         }
     }
 
-    override_cfg = config_utils.get_template_config()
+    override_cfg = get_expanded_config_prototype()
     override_cfg["live"]["account"]["user"] = "tester"
     override_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_fraction"
@@ -154,7 +155,7 @@ def test_referenced_retired_policy_error_identifies_coin_and_file(tmp_path):
 
 
 def _config_with_file(tmp_path, document, *, scope="coin"):
-    config = config_utils.get_template_config()
+    config = get_expanded_config_prototype()
     config["live"]["account"]["user"] = "tester"
     config["bot"]["portfolio"]["hsl"]["scope"] = scope
     if scope == "portfolio":
@@ -261,7 +262,7 @@ def test_sparse_file_keeps_only_authored_pins_and_explicit_wallet_extension(tmp_
 
 @pytest.mark.parametrize("scope", ["position_side", "portfolio"])
 def test_full_file_hsl_cannot_authorize_its_own_scope(tmp_path, caplog, scope):
-    document = config_utils.get_template_config()
+    document = get_expanded_config_prototype()
     document["bot"]["portfolio"]["hsl"]["scope"] = "coin"
     document["bot"]["long"]["hsl"]["enabled"] = True
     document["bot"]["long"]["unstuck"]["enabled"] = False
@@ -275,7 +276,7 @@ def test_full_file_hsl_cannot_authorize_its_own_scope(tmp_path, caplog, scope):
 
 @pytest.mark.parametrize("invalid", ["unknown_root", "unknown_inactive_leaf", "invalid_nonoverridable"])
 def test_full_file_rejects_invalid_source_before_filtering(tmp_path, invalid):
-    document = config_utils.get_template_config()
+    document = get_expanded_config_prototype()
     if invalid == "unknown_root":
         document["unknown_setting"] = True
         match = "unknown_setting.*unknown configuration field"

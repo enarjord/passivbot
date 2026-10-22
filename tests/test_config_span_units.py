@@ -8,7 +8,7 @@ import pytest
 from config.field_registry import get_field_registry
 from config.load import prepare_config
 from config.param_paths import resolve_optimizer_key_path
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from config.shared_bot import get_grouped_bot_value
 from config.strategy import build_runtime_strategy_side
 from config.strategy_paths import native_strategy_path_to_public
@@ -23,7 +23,7 @@ def set_value(mapping, path, value):
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(kind, side):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["portfolio"]["strategy_kind"] = kind
     native_spec = pbr.get_strategy_spec(kind)
     native_before = deepcopy(native_spec)
@@ -62,7 +62,7 @@ def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(
     ("hsl_cooldown_minutes_after_red", "hsl", "cooldown_after_red_minutes"),
 ])
 def test_shared_minute_fields_keep_native_optimizer_and_runtime_bindings(side, native, group, public):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"][side][group][public] = 123.75
     prepared = prepare_config(source, verbose=False)
     assert get_grouped_bot_value(prepared["bot"][side], native) == 123.75
@@ -73,7 +73,7 @@ def test_shared_minute_fields_keep_native_optimizer_and_runtime_bindings(side, n
 def test_unreleased_strategy_span_spellings_are_not_runtime_aliases(kind):
     from tools.migrate_config_v9 import migrate
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["portfolio"]["strategy_kind"] = kind
     native = next(parameter for parameter in pbr.get_strategy_spec(kind)["parameters"]
                   if parameter["side"] == "long" and parameter["name"] == "ema_span_0")

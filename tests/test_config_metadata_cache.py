@@ -12,7 +12,7 @@ def test_template_and_path_caches_do_not_leak_caller_mutations():
     expected = deepcopy(config)
     paths = strategy_spec.strategy_optimize_key_path_map("trailing_martingale")
     expected_paths = dict(paths)
-    config["bot"]["long"]["strategy"].clear()
+    config["bot"]["global"]["strategy"].clear()
     config["optimize"]["bounds"].clear()
     config["backtest"]["scenarios"].clear()
     paths.clear()
@@ -36,19 +36,21 @@ def test_replaced_rust_metadata_rebuilds_defaults_and_paths(monkeypatch):
     def changed(kind):
         spec = deepcopy(original(kind))
         if kind == "trailing_martingale":
-            row = next(row for row in spec["parameters"] if row["optimize_key"] == key)
-            row["default"] = 0.123
-            row["optimize_key"] = "long_replacement_initial_qty"
+            for row in spec["parameters"]:
+                if row["config_path"][2:] == selected["config_path"][2:]:
+                    row["default"] = 0.123
+                if row["optimize_key"] == key:
+                    row["optimize_key"] = "long_replacement_initial_qty"
         return spec
     try:
         with monkeypatch.context() as patch:
             patch.setattr(strategy_spec.pbr, "get_strategy_spec", changed)
             strategy_spec.get_strategy_spec.cache_clear()
-            assert schema.get_template_config()["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 0.123
+            assert schema.get_template_config()["bot"]["global"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 0.123
             paths = strategy_spec.strategy_optimize_key_path_map("trailing_martingale")
             assert key not in paths
             assert paths["long_replacement_initial_qty"] == old_paths[key]
     finally:
         strategy_spec.get_strategy_spec.cache_clear()
     assert strategy_spec.strategy_optimize_key_path_map("trailing_martingale") == old_paths
-    assert schema.get_template_config()["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == selected["default"]
+    assert schema.get_template_config()["bot"]["global"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == selected["default"]
