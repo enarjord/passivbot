@@ -4355,7 +4355,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
-    const float score_hysteresis = fmax(run_settings[4], 0.0f);
+    const float long_score_hysteresis = fmax(run_settings[4], 0.0f);
+    const float short_score_hysteresis = fmax(run_settings[20], 0.0f);
     const float max_realized_loss_pct = run_settings[5];
     const bool loss_gate_enabled = run_settings[16] > 0.5f;
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
@@ -4836,7 +4837,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_side, long_config, bars, coin_settings ORGANILLO_PASS,
                 long_coin_overrides, k, C, false,
                 any_fill,
-                long_effective_n_positions, score_hysteresis,
+                long_effective_n_positions, long_score_hysteresis,
                 long_one_way_selection_blocked_mask,
                 filter_by_min_effective_cost_long, account.balance
             );
@@ -4856,7 +4857,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side, short_config, bars, coin_settings ORGANILLO_PASS,
                 short_coin_overrides, k, C, true,
                 any_fill,
-                short_effective_n_positions, score_hysteresis,
+                short_effective_n_positions, short_score_hysteresis,
                 short_one_way_selection_blocked_mask,
                 filter_by_min_effective_cost_short, account.balance
             );

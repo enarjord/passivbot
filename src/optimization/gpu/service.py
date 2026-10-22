@@ -39,6 +39,7 @@ from optimization.gpu.metric_registry import (
 )
 from optimization.gpu.model import (
     MARKET_EXECUTION_TICKS_ABI,
+    FORAGER_HYSTERESIS_ABI,
     validate_market_order_slippage_pct,
     adaptive_params,
     ADAPTIVE_OVERRIDE_KEYS,
@@ -651,7 +652,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "market_order_slippage_pct",
         "market_orders_allowed",
         "market_order_near_touch_threshold",
-        "forager_score_hysteresis_pct",
+        "forager_score_hysteresis",
     )
     market_keys = (
         "qty_step",
@@ -663,7 +664,8 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee",
     )
     contract = {
-        "version": 9,
+        "version": 10,
+        "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
         "side_activation_abi": 1,
         "minimum_cost_filter_abi": 2,
@@ -1619,16 +1621,11 @@ class SharedAccountReplay:
         self.dynamic_wel_by_tradability = bool(
             backtest_params.get("dynamic_wel_by_tradability", True)
         )
-        self.forager_score_hysteresis_pct = float(
-            backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0
+        from config.forager_hysteresis import validate_forager_score_hysteresis
+
+        self.forager_score_hysteresis = validate_forager_score_hysteresis(
+            backtest_params["forager_score_hysteresis"]
         )
-        if not np.isfinite(self.forager_score_hysteresis_pct) or (
-            self.forager_score_hysteresis_pct < 0.0
-        ):
-            raise ValueError(
-                "MPS multicoin proxy requires a finite non-negative "
-                "bot.global.forager.score_hysteresis_margin"
-            )
         _require_supported_multicoin_valid_tails(
             values,
             backtest_params["first_valid_indices"],
@@ -1757,8 +1754,8 @@ class SharedAccountReplay:
                 self.coin_override_contract["hsl_signal_mode"] = (
                     str(signal_mode).strip().lower()
                 )
-        self.coin_override_contract["forager_score_hysteresis_pct"] = (
-            self.forager_score_hysteresis_pct
+        self.coin_override_contract["forager_score_hysteresis"] = (
+            self.forager_score_hysteresis
         )
 
         markets = [
@@ -1874,7 +1871,7 @@ class SharedAccountReplay:
 
         common_runner_kwargs = {
             "side_activation": validate_side_activation(backtest_params["side_activation"]),
-            "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
+            "forager_score_hysteresis": self.forager_score_hysteresis,
             "max_realized_loss_pct": float(
                 backtest_params.get("max_realized_loss_pct", 1.0)
             ),

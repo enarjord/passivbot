@@ -2294,6 +2294,43 @@ fn side_activation_from_dict(dict: &PyDict) -> PyResult<crate::types::SideActiva
     })
 }
 
+fn forager_score_hysteresis_from_dict(
+    dict: &PyDict,
+) -> PyResult<crate::types::ForagerScoreHysteresis> {
+    let value = dict
+        .get_item("forager_score_hysteresis")?
+        .ok_or_else(|| PyValueError::new_err("missing forager_score_hysteresis"))?;
+    let pair = value.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("forager_score_hysteresis must contain long and short numbers")
+    })?;
+    if pair.len() != 2 {
+        return Err(PyValueError::new_err(
+            "forager_score_hysteresis must contain exactly long and short",
+        ));
+    }
+    let margin = |side: &str| -> PyResult<f64> {
+        let value = pair.get_item(side)?.ok_or_else(|| {
+            PyValueError::new_err(format!("missing forager_score_hysteresis.{side}"))
+        })?;
+        if value.is_instance_of::<PyBool>() {
+            return Err(PyValueError::new_err(format!(
+                "forager_score_hysteresis.{side} must be a number"
+            )));
+        }
+        let number = value.extract::<f64>()?;
+        if !number.is_finite() || number < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "forager_score_hysteresis.{side} must be finite and non-negative"
+            )));
+        }
+        Ok(number)
+    };
+    Ok(crate::types::ForagerScoreHysteresis {
+        long: margin("long")?,
+        short: margin("short")?,
+    })
+}
+
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     if dict.contains("calculate_legacy_w")? {
         return Err(PyValueError::new_err(
@@ -2464,11 +2501,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0005),
-        forager_score_hysteresis_pct: dict
-            .get_item("forager_score_hysteresis_pct")?
-            .map(|item| item.extract::<f64>())
-            .transpose()?
-            .unwrap_or(0.02),
+        forager_score_hysteresis: forager_score_hysteresis_from_dict(dict)?,
         candle_interval_minutes: dict
             .get_item("candle_interval_minutes")?
             .map(|item| item.extract::<u64>())

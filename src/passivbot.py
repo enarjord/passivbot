@@ -228,6 +228,7 @@ from warmup_utils import (
 )
 from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.activation import side_activation
+from config.forager_hysteresis import forager_score_hysteresis
 from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
@@ -7636,9 +7637,6 @@ class Passivbot:
                 else:
                     incumbent_short.add(idx)
 
-        score_hysteresis_pct = float(
-            require_config_value(self.config, 'bot.global.forager.score_hysteresis_margin') or 0.0
-        )
         return {
             "peek_hints": {
                 "expand_grid_long": sorted(expand_grid_long),
@@ -7647,7 +7645,6 @@ class Passivbot:
                 "expand_close_short": sorted(expand_close_short),
             },
             "forager_hysteresis": {
-                "score_hysteresis_pct": score_hysteresis_pct,
                 "incumbent_long": sorted(incumbent_long),
                 "incumbent_short": sorted(incumbent_short),
             },
@@ -17944,6 +17941,7 @@ class Passivbot:
             # value is a simulation knob, not a live slippage cap.
             "global": {
                 "side_activation": side_activation(self.config),
+                "forager_score_hysteresis": forager_score_hysteresis(self.config),
                 "filter_by_min_effective_cost": {
                     side: minimum_cost_filter(self.config, side) for side in ("long", "short")
                 },

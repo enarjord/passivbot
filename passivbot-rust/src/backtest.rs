@@ -1419,6 +1419,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             balance_raw,
             global: orchestrator::OrchestratorGlobal {
                 side_activation: self.backtest_params.side_activation,
+                forager_score_hysteresis: self.backtest_params.forager_score_hysteresis,
                 filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
                 market_orders_allowed: self.backtest_params.market_orders_allowed,
                 market_order_near_touch_threshold: self
@@ -3615,7 +3616,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             }
         }
         ForagerHysteresisState {
-            score_hysteresis_pct: self.backtest_params.forager_score_hysteresis_pct,
             incumbent_long,
             incumbent_short,
         }
@@ -4950,7 +4950,7 @@ mod tests {
             skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             unstuck_memory_ema_span_minutes: 43_200.0,
@@ -5491,7 +5491,7 @@ mod tests {
             skip_btc_analysis: false,
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             unstuck_memory_ema_span_minutes: 43_200.0,
@@ -5573,7 +5573,7 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             max_realized_loss_pct: 1.0,
             unstuck_memory_ema_span_minutes: 43_200.0,
             loss_gate_memory_ema_span_minutes: 43_200.0,
@@ -5642,7 +5642,7 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             max_realized_loss_pct: 1.0,
             unstuck_memory_ema_span_minutes: 43_200.0,
             loss_gate_memory_ema_span_minutes: 43_200.0,
@@ -5757,7 +5757,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.5,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -5844,7 +5844,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -5932,7 +5932,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6029,7 +6029,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6114,7 +6114,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6211,7 +6211,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0001,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6482,7 +6482,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
         };
@@ -6640,7 +6640,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6705,7 +6705,7 @@ mod tests {
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
                 limit_order_fill_buffer_pct: 0.0,
-                forager_score_hysteresis_pct: 0.0,
+                forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                 candle_interval_minutes: 1,
             };
 
@@ -6778,7 +6778,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6855,7 +6855,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -6938,7 +6938,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7016,7 +7016,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7102,7 +7102,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7204,7 +7204,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7317,7 +7317,7 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             max_realized_loss_pct: 1.0,
             unstuck_memory_ema_span_minutes: 43_200.0,
             loss_gate_memory_ema_span_minutes: 43_200.0,
@@ -7482,7 +7482,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0001,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7591,7 +7591,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7704,7 +7704,7 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             max_realized_loss_pct: 1.0,
             unstuck_memory_ema_span_minutes: 43_200.0,
             loss_gate_memory_ema_span_minutes: 43_200.0,
@@ -7793,7 +7793,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
@@ -7876,7 +7876,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             limit_order_fill_buffer_pct: 0.0,
-            forager_score_hysteresis_pct: 0.0,
+            forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             candle_interval_minutes: 1,
         };
 
