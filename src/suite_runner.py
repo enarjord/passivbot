@@ -1327,6 +1327,8 @@ def apply_scenario_overrides(config, overrides, tracker=None):
             from config.param_paths import resolve_dotted_config_path
             path = resolve_dotted_config_path(config, dotted_path)
             if policy_source is not None and path and path[0] == "bot":
+                if path[:2] == ("bot", "portfolio"):
+                    require_existing_config_path(config, dotted_path)
                 # Registered inactive strategy declarations remain valid source
                 # pins even though execution intentionally omits their runtime
                 # subtree. The typed source owner validates these selectors and

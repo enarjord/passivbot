@@ -679,6 +679,17 @@ def apply_bot_config_patch(config, overrides, *, channel="authored", policy_sour
         return False
     selected = {key: value for key, value in overrides.items()
                 if isinstance(key, str) and (key == "bot" or key.startswith("bot."))}
+    if channel == "authored" and any(
+        key in {"bot", "bot.portfolio"} or key.startswith("bot.portfolio.") for key in selected
+    ):
+        from .authored import validate_authored_config
+        from .schema import get_expanded_config_prototype
+        # Portfolio/root replacements use the canonical authored owner. The
+        # side catalog alone cannot authorize unknown account-wide children.
+        validate_authored_config(
+            {"optimize": {"fixed_runtime_overrides": selected}},
+            get_expanded_config_prototype(), policy_context=config,
+        )
     for selector, value in selected.items():
         path = tuple(selector.split("."))
         if channel == "authored" and (path == ("bot",) or path[:2] == ("bot", "portfolio")
