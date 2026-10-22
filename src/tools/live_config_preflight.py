@@ -55,8 +55,11 @@ DIFF_SETTING_PATHS = (
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
     ("hsl", "bot.portfolio.hsl.scope", ("bot", "portfolio", "hsl", "scope")),
+    ("hsl", "bot.portfolio.hsl.enabled", ("bot", "portfolio", "hsl", "enabled")),
+    ("hsl", "bot.global.hsl.enabled", ("bot", "global", "hsl", "enabled")),
     ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
     ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
+    ("forager", "bot.global.risk.max_positions", ("bot", "global", "risk", "max_positions")),
     (
         "forager",
         "bot.long.risk.max_positions",
@@ -80,6 +83,8 @@ DIFF_SETTING_PATHS = (
         "bot.global.forager.score_hysteresis_margin",
         ("bot", "global", "forager", "score_hysteresis_margin"),
     ),
+    *(("forager", f"bot.{side}.forager.score_hysteresis_margin",
+       ("bot", side, "forager", "score_hysteresis_margin")) for side in SIDES),
     (
         "cache",
         "bot.portfolio.warmup.max_minutes",
@@ -295,6 +300,37 @@ def _side_coin_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
     return {side: dict(summary) for side in SIDES}
 
 
+def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve policy only; source files and non-bot declarations stay untouched."""
+    from config.bot_inheritance import (
+        get_side_field_catalog, reconciled_bot_policy, resolve_bot_policy,
+    )
+    policy = reconciled_bot_policy(config)
+    if policy is None:
+        policy = resolve_bot_policy(config.get("bot", {}), get_side_field_catalog())
+    effective = {**config, "bot": policy.effective_view()}
+    from config.authored import validate_authored_config
+    from config.forager_hysteresis import forager_score_hysteresis
+    from config.hsl import _mode, normalize_block
+    from config.schema import get_template_config
+
+    # The portfolio is not part of the directional catalog. Keep its existing
+    # authored shape gate before the HSL owner reads the scope/container.
+    validate_authored_config({"bot": {"portfolio": {
+        "hsl": effective["bot"]["portfolio"].get("hsl"),
+    }}}, get_template_config())
+    forager_score_hysteresis(effective)
+    mode = _mode(effective)
+    effective["bot"]["portfolio"]["hsl"]["scope"] = mode
+    if mode == "portfolio":
+        normalize_block(effective["bot"]["portfolio"]["hsl"], {}, "bot.portfolio.hsl",
+                        portfolio=True, verbose=False)
+    else:
+        for side in SIDES:
+            normalize_block(effective["bot"][side]["hsl"], {}, f"bot.{side}.hsl", verbose=False)
+    return effective
+
+
 def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     from config.hsl import FIELDS
 
@@ -305,11 +341,10 @@ def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     return {"present": any(value is not None for value in values.values()), **values}
 
 
-def _hsl_policy_reports(config):
-    """Only policies active in the configured signal topology."""
-    live = config.get("live")
+def _hsl_policy_reports(config, *, resolved=False):
+    """Only effective policies active in the configured signal topology."""
+    config = config if resolved else _effective_bot_config(config)
     bot = config.get("bot")
-    live = live if isinstance(live, dict) else {}
     bot = bot if isinstance(bot, dict) else {}
     if _effective_hsl_signal_mode(config) == "portfolio":
         return {"portfolio": _hsl_side_report({"hsl": bot.get("portfolio", {}).get("hsl", {})})}
@@ -324,6 +359,7 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
             ("volume_ema_span_minutes", "forager_volume_ema_span_1m"),
         )
     }
+    forager_values["score_hysteresis_margin"] = side_config.get("forager", {}).get("score_hysteresis_margin")
     report = {
         "max_positions": side_config.get("risk", {}).get("max_positions"),
         "forager_present": any(value is not None for value in forager_values.values()),
@@ -936,36 +972,55 @@ def build_live_config_diff_report(
             "summary": {"change_count": 0, "category_counts": {}},
         }
 
+    effective = []
+    for label, config in (("baseline", baseline), ("target", target)):
+        try:
+            from config.authored import validate_authored_config
+            from config.schema import get_template_config
+            from config.migrations.v9 import require_v9_runtime_config
+
+            require_v9_runtime_config(config)
+            validate_authored_config(config, get_template_config())
+            effective.append(_effective_bot_config(config))
+        except (ValueError, TypeError, KeyError) as error:
+            issues.append(_issue("error", f"{label}_config_schema_invalid", str(error), path="config"))
+    if issues:
+        return {"ok": False, "baseline_config_path": baseline_display_path,
+                "target_config_path": target_display_path, "issues": issues,
+                "summary": {"change_count": 0, "category_counts": {}}}
+    baseline_effective, target_effective = effective
     changes: list[dict[str, Any]] = []
     for category, field, path in DIFF_SETTING_PATHS:
-        before = _path_value(baseline, path)
-        after = _path_value(target, path)
-        if before != after:
-            changes.append(
-                {
-                    "category": category,
-                    "field": field,
-                    "before": _display_value(before),
-                    "after": _display_value(after),
-                }
-            )
+        authored_before = _path_value(baseline, path)
+        authored_after = _path_value(target, path)
+        before = _path_value(baseline_effective, path) if path[0] == "bot" else authored_before
+        after = _path_value(target_effective, path) if path[0] == "bot" else authored_after
+        if before != after or authored_before != authored_after:
+            change = {"category": category, "field": field,
+                      "before": _display_value(before), "after": _display_value(after)}
+            if path[0] == "bot":
+                change.update(authored_before=_display_value(authored_before),
+                              authored_after=_display_value(authored_after),
+                              effective_changed=before != after,
+                              authored_changed=authored_before != authored_after)
+            changes.append(change)
     changes.extend(_universe_diff_changes(baseline, target, sample_size=sample_size))
     baseline_live = baseline["live"] if isinstance(baseline.get("live"), dict) else {}
     target_live = target["live"] if isinstance(target.get("live"), dict) else {}
-    baseline_hsl_sides = _hsl_policy_reports(baseline)
-    target_hsl_sides = _hsl_policy_reports(target)
+    baseline_hsl_sides = _hsl_policy_reports(baseline_effective, resolved=True)
+    target_hsl_sides = _hsl_policy_reports(target_effective, resolved=True)
     baseline_identity = _identity_report(baseline, baseline_live)
     target_identity = _identity_report(target, target_live)
     baseline_readiness = _cache_readiness_report(
         baseline_live,
-        config=baseline,
+        config=baseline_effective,
         identity=baseline_identity,
         hsl_sides=baseline_hsl_sides,
         balance_override=_balance_override_report(baseline_live),
     )
     target_readiness = _cache_readiness_report(
         target_live,
-        config=target,
+        config=target_effective,
         identity=target_identity,
         hsl_sides=target_hsl_sides,
         balance_override=_balance_override_report(target_live),
@@ -1001,6 +1056,7 @@ def build_live_config_diff_report(
         },
         "notes": [
             "offline_read_only_config_diff",
+            "bot_diffs_include_effective_values_and_authored_declarations",
             "does_not_load_credentials_or_contact_exchanges",
             "does_not_enforce_live_startup_policy",
         ],
@@ -1095,24 +1151,24 @@ def build_live_config_preflight_report(
         validate_authored_config(parsed, get_template_config())
     except (ValueError, TypeError, KeyError) as error:
         issues.append(_issue("error", "config_schema_invalid", str(error), path="config"))
-    side_configs = {
-        side: bot[side] if isinstance(bot.get(side), dict) else {} for side in SIDES
-    }
-    for side, side_config in side_configs.items():
-        if not side_config and bot:
-            issues.append(
-                _issue(
-                    "warning",
-                    "side_config_missing",
-                    f"bot.{side} is missing or is not an object",
-                    path=f"bot.{side}",
-                )
-            )
+    effective = None
+    try:
+        effective = _effective_bot_config(parsed)
+    except (ValueError, TypeError, KeyError) as error:
+        if not any(issue["code"] == "config_schema_invalid" for issue in issues):
+            issues.append(_issue("error", "config_schema_invalid", str(error), path="config"))
 
     sample_size = max(0, int(sample_size))
     approved = {side: _coin_list_summary(_coin_value_for_side(parsed, "approved_coins", side), sample_size=sample_size) for side in SIDES}
     ignored = {side: _coin_list_summary(_coin_value_for_side(parsed, "ignored_coins", side), sample_size=sample_size) for side in SIDES}
     _collect_shape_warnings(approved=approved, ignored=ignored, issues=issues)
+    if effective is None:
+        # An invalid policy has no safe effective disabled-policy projection.
+        counts = Counter(issue["severity"] for issue in issues)
+        return {"ok": False, "config_path": display_path, "config_version": parsed.get("config_version"),
+                "universe": {"approved_coins": approved, "ignored_coins": ignored}, "issues": issues,
+                "summary": {"error_count": counts["error"], "warning_count": counts["warning"]}}
+    side_configs = {side: _bot_side_config(effective, side) for side in SIDES}
 
     forager_by_side = {
         side: _forager_side_report(side_config)
@@ -1125,12 +1181,12 @@ def build_live_config_preflight_report(
     ]
     severity_counts = Counter(issue["severity"] for issue in issues)
     identity_report = _identity_report(parsed, live)
-    hsl_sides = _hsl_policy_reports(parsed)
+    hsl_sides = _hsl_policy_reports(effective, resolved=True)
     if _any_hsl_enabled(hsl_sides):
         from config.hsl import require_live_runtime_support
 
         try:
-            require_live_runtime_support(parsed)
+            require_live_runtime_support(effective)
         except KeyError:
             # A sparse/flat inspection is not a compiled runtime configuration;
             # missing capability facts remain explicit readiness attention.
@@ -1148,7 +1204,7 @@ def build_live_config_preflight_report(
         live, override_value=balance_override
     )
     balance_hysteresis_report = _balance_hysteresis_report(live, issues)
-    hsl_signal_mode = _effective_hsl_signal_mode(parsed)
+    hsl_signal_mode = _effective_hsl_signal_mode(effective)
     if balance_override_report.get("status") in {"invalid", "invalid_bool"}:
         issues.append(
             _issue(
@@ -1226,7 +1282,7 @@ def build_live_config_preflight_report(
             ),
             "readiness": _cache_readiness_report(
                 live,
-                config=parsed,
+                config=effective,
                 identity=identity_report,
                 hsl_sides=hsl_sides,
                 balance_override=balance_override_report,

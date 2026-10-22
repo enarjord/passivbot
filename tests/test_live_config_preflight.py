@@ -155,7 +155,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert "realized_loss_gate_lookback_minutes" not in report["cache"]["live_settings"]
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
-        "attention_count": 7,
+        "attention_count": 6,
         "disabled_surface_count": 0,
         "not_proven_count": 3,
     }
@@ -171,8 +171,8 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "max_active_candle_tail_gap_minutes_missing",
         "max_disk_candles_per_symbol_per_tf_missing",
         "max_memory_candles_per_symbol_missing",
-        "warmup_ratio_missing",
     }
+    assert report["cache"]["readiness"]["checks"]["bot.portfolio.warmup.span_multiplier"] == {"present": True, "value": 0.3}
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
 
@@ -465,7 +465,10 @@ def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     assert "restart_after_red_policy" not in report["hsl"]["sides"]["long"]
     assert report["forager"]["sides"]["long"]["max_positions"] == 3
     assert report["forager"]["sides"]["long"]["forager_present"] is True
-    assert report["forager"]["sides"]["long"]["settings"] == {"volume_ema_span_minutes": 120.0}
+    assert report["forager"]["sides"]["long"]["settings"] == {
+        "volume_ema_span_minutes": 120.0, "volatility_ema_span_minutes": 2274.0,
+        "score_hysteresis_margin": 0.02,
+    }
 
 
 def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):
@@ -473,7 +476,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     target = _sample_config()
     target["live"]["account"]["user"] = "okx_01"
     target["backtest"]["exchanges"] = ["okx"]
-    target["bot"]["portfolio"]["hsl"]["scope"] = "pside"
+    target["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
     target['bot']["long"]['universe']['approved_coins'] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
     target['bot']["short"]['universe']['ignored_coins'] = ["DOGE", "XRP"]
     target["live"]["candles"]["max_forager_candle_staleness_minutes"] = 20
@@ -505,7 +508,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     assert changes["backtest.exchanges"]["after"] == {"present": True, "value": ["okx"]}
     assert changes["bot.portfolio.hsl.scope"]["after"] == {
         "present": True,
-        "value": "pside",
+        "value": "position_side",
     }
     assert changes["bot.long.hsl.enabled"]["after"] == {
         "present": True,
@@ -708,7 +711,7 @@ def test_live_config_preflight_compare_cli_emits_diff(tmp_path, capsys):
         "present": True,
         "value": True,
     }
-    assert changes["cache.readiness.summary"]["after"]["value"]["attention_count"] == 8
+    assert changes["cache.readiness.summary"]["after"]["value"]["attention_count"] == 7
 
 
 def test_live_config_preflight_cli_balance_override_returns_nonzero(tmp_path, capsys):
