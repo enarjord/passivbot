@@ -11,7 +11,7 @@ import pytest
 from backtest import prep_backtest_args, build_backtest_payload
 from config import prepare_config
 from config.hsl import generated_template
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +22,7 @@ def real_extension():
 
 
 def inputs(mode="coin"):
-    cfg = generated_template(get_template_config(), mode)
+    cfg = generated_template(get_expanded_config_prototype(), mode)
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['AAA'], 'short': []})
     set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
     set_risk_memory_spans(cfg, 1440.0)
@@ -251,7 +251,8 @@ def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
     cfg["bot"]["long"]["unstuck"]["enabled"] = False
     cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=.03, drawdown_ratio_ema_span_minutes=1.0)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
-        initial_qty_pct=1.0, initial_ema_dist=0.0, ema_span_0=2.0, ema_span_1=3.0)
+        initial_qty_fraction=1.0, initial_ema_distance_fraction=0.0,
+        ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
     counts = []
     for span in (1.0, 1440.0):
         cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span

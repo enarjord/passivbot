@@ -20,7 +20,7 @@ def require_real_passivbot_rust_module():
 
 from config import prepare_config
 from config.hsl import generated_template
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from live.freshness import FreshnessLedger
 from live.hsl_candles import Sources, Failure
 from live.hsl_continuity import ScopeReplay
@@ -35,7 +35,7 @@ SYMBOL = "TEST/USDT:USDT"
 
 
 def bot(mode="coin", *, side="long", events=()):
-    config = generated_template(get_template_config(), mode)
+    config = generated_template(get_expanded_config_prototype(), mode)
     set_risk_memory_spans(config, 288.0)
     for pside in ("long", "short"):
         config["bot"][pside]["hsl"].update(
