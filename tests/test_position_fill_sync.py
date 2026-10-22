@@ -16,7 +16,7 @@ def settling_config(scope="coin", *, enabled=True):
         policy["enabled"] = enabled
     return {
         "config_version": "v9.0.0",
-        "bot": {'global': {'hsl': policy}, 'long': {'hsl': {'enabled': enabled}}, 'short': {'hsl': {'enabled': enabled}}},
+        "bot": {"portfolio": {'hsl': policy}, 'long': {'hsl': {'enabled': enabled}}, 'short': {'hsl': {'enabled': enabled}}},
     }
 
 
@@ -280,7 +280,7 @@ def test_legacy_policy_fields_cannot_override_canonical_scope(scope):
 def test_invalid_canonical_scope_fails_explicitly_when_gate_is_consumed(scope):
     sync, _ = gate()
     config = settling_config()
-    config["bot"]["global"]["hsl"]["scope"] = scope
+    config["bot"]["portfolio"]["hsl"]["scope"] = scope
     config["live"] = {"hsl_signal_mode": "coin"}
     with pytest.raises(ValueError, match="invalid HSL scope"):
         permits(SimpleNamespace(_position_fill_sync=sync, config=config),
@@ -288,7 +288,7 @@ def test_invalid_canonical_scope_fails_explicitly_when_gate_is_consumed(scope):
 
 
 @pytest.mark.parametrize("config", [{}, {"bot": {}}, {"bot": {"risk": {}}},
-                                    {"bot": {'global': {'hsl': {}}}}])
+                                    {"bot": {"portfolio": {'hsl': {}}}}])
 def test_missing_canonical_scope_has_no_legacy_or_coin_fallback(config):
     sync, _ = gate()
     with pytest.raises(KeyError):
@@ -300,7 +300,7 @@ def test_missing_canonical_scope_has_no_legacy_or_coin_fallback(config):
 def test_missing_enabled_fact_for_consumed_aggregate_policy_fails(scope):
     sync, _ = gate()
     config = settling_config(scope)
-    policy = config["bot"]["global"]["hsl"] if scope == "portfolio" else config["bot"]["long"]["hsl"]
+    policy = config["bot"]["portfolio"]["hsl"] if scope == "portfolio" else config["bot"]["long"]["hsl"]
     del policy["enabled"]
     with pytest.raises(KeyError, match="enabled"):
         permits(SimpleNamespace(_position_fill_sync=sync, config=config),

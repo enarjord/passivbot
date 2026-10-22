@@ -92,7 +92,7 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
                         "live": {},
                         "bot": {
                             "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
-                            "global": {"hedge_mode": True},
+                            "portfolio": {"hedge_mode": True},
                         },
                         "coin_overrides": {
                             "ETH": {"live": {"modes": {"long": "normal"}}}
@@ -105,7 +105,7 @@ def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atom
     )
 
     assert scenarios[0].overrides == {
-        "bot.global.hedge_mode": True,
+        "bot.portfolio.hedge_mode": True,
         "bot.short.risk.total_wallet_exposure_limit": 0.0,
         "coin_overrides": {"ETH": {"live": {"modes": {"long": "normal"}}}},
     }
@@ -1013,7 +1013,7 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
             "end_date": "1970-01-01T00:03:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "global": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr(
@@ -1059,7 +1059,7 @@ def test_prepare_dataset_subset_recomputes_warmup_from_scenario(monkeypatch):
             "end_date": "1970-01-01T00:05:00",
         },
         "live": {},
-        "bot": {"long": {}, "short": {}, "global": {"warmup": {'span_multiplier': 0.0}}},
+        "bot": {"long": {}, "short": {}, "portfolio": {"warmup": {'span_multiplier': 0.0}}},
         "optimize": {"bounds": {}},
     }
     monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
@@ -1110,7 +1110,7 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
         "bot": {
             "long": {},
             "short": {},
-            "global": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}},
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}},
         },
         "optimize": {"bounds": {}},
     }

@@ -18,10 +18,7 @@ from warmup_utils import (
 def _config(span, cap):
     return {
         "bot": {
-            "global": {
-                "strategy_kind": "trailing_martingale",
-                "warmup": {"span_multiplier": 1.0, "max_minutes": cap},
-            },
+            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 1.0, "max_minutes": cap}},
             "long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0_minutes": span, "ema_span_1_minutes": span},
                 "volatility_ema_span_minutes": 0.0,
@@ -104,9 +101,9 @@ def test_cli_preserves_authored_cap_and_rounds_only_for_acquisition(text, expect
     config = get_template_config()
     parser = ArgumentParser()
     add_arguments_recursively(parser, config)
-    update_config_with_args(config, parser.parse_args(["--bot.global.warmup.max_minutes", text]))
+    update_config_with_args(config, parser.parse_args(["--bot.portfolio.warmup.max_minutes", text]))
     prepared = prepare_config(config, verbose=False)
-    assert prepared["bot"]["global"]["warmup"]["max_minutes"] == (
+    assert prepared["bot"]["portfolio"]["warmup"]["max_minutes"] == (
         None if text == "null" else float(text)
     )
     assert live_warmup_cap_minutes(prepared) == expected
@@ -125,7 +122,7 @@ def test_fractional_cap_reaches_native_backtest_as_the_same_whole_window(cap, wh
 
     assert not getattr(passivbot_rust, "__is_stub__", False)
     config = _ema_anchor_config(True)
-    config["bot"]["global"]["warmup"]["max_minutes"] = cap
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = cap
     original = deepcopy(config)
     candles, markets, btc, timestamps = _synthetic_inputs()
     ensure_valid_index_metadata(
@@ -138,12 +135,12 @@ def test_fractional_cap_reaches_native_backtest_as_the_same_whole_window(cap, wh
     assert payload.backtest_params["warmup_minutes"] == [whole_minutes, whole_minutes]
     assert payload.backtest_params["global_warmup_bars"] == whole_minutes
     assert payload.backtest_params["trade_start_indices"] == [whole_minutes, whole_minutes]
-    config["bot"]["global"]["warmup"]["max_minutes"] = float(whole_minutes)
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = float(whole_minutes)
     reference = run_backtest(candles, markets, config, "binance", btc, timestamps)
     assert len(fills) > 0
     np.testing.assert_array_equal(fills, reference[0])
     np.testing.assert_array_equal(equity, reference[1])
-    config["bot"]["global"]["warmup"]["max_minutes"] = cap
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = cap
     assert config == original
 
 
@@ -151,7 +148,7 @@ def test_fractional_cap_preserves_independently_required_rms_history():
     from test_backtest_directional_eligibility import _ema_anchor_config
 
     config = _ema_anchor_config(True)
-    config["bot"]["global"]["warmup"]["max_minutes"] = 0.5
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = 0.5
     config["optimize"]["bounds"] = {}
     config["bot"]["long"]["forager"]["unilateralness_ema_span_minutes"] = 2.25
     config["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
@@ -179,7 +176,7 @@ async def test_direct_ranking_readers_keep_float_spans_until_acquisition(reader,
             calls.append((symbol, spans, kwargs))
             return {"qv": 100.0, "log_range": 0.25}
 
-    config = {"bot": {"global": {"warmup": {"span_multiplier": 0.0, "max_minutes": cap}}}}
+    config = {"bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": cap}}}}
     original = deepcopy(config)
     bot = SimpleNamespace(
         config=config,

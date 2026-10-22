@@ -19,8 +19,8 @@ def test_actual_gpu_age_admission_matches_native_counts(monkeypatch, kind, topol
     args = build_parser().parse_args(["--fixture", kind, "--hsl", "disabled", "--sides", sides,
                                      "--coins", "2", "--bars", "64", "--seed", "2026"])
     config, candles, markets, btc, timestamps = fixture_inputs(args)
-    config["bot"]["global"]["hedge_mode"] = topology != "oneway"
-    config["bot"]["global"]["warmup"]["max_minutes"] = 1.0
+    config["bot"]["portfolio"]["hedge_mode"] = topology != "oneway"
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = 1.0
     config["backtest"]["filter_by_min_effective_cost"] = False
     for side in ("long", "short"):
         bot = config["bot"][side]
@@ -95,8 +95,8 @@ def combined_policy_inputs(kind, eligible_side, allow_entry):
                                      "--coins", "2", "--bars", "64", "--seed", "2026"])
     config, candles, markets, btc, timestamps = fixture_inputs(args)
     config["backtest"]["filter_by_min_effective_cost"] = None
-    config["bot"]["global"]["hedge_mode"] = False
-    config["bot"]["global"]["warmup"]["max_minutes"] = 1.0
+    config["bot"]["portfolio"]["hedge_mode"] = False
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = 1.0
     config["bot"]["global"]["universe"]["approved_coins"] = ["COIN00"]
     for side in ("long", "short"):
         bot = config["bot"][side]

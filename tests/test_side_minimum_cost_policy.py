@@ -110,7 +110,7 @@ def test_effective_evaluation_identity_records_both_independent_flags():
 def test_optimizer_mirroring_preserves_directional_admission_policy(kind):
     from optimizer_overrides import optimizer_overrides
     source = get_template_config()
-    source["bot"]["global"]["strategy_kind"] = kind
+    source["bot"]["portfolio"]["strategy_kind"] = kind
     source["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = False
     source["bot"]["short"]["universe"]["filter_by_min_effective_cost"] = True
     effective = optimizer_overrides(["mirror_short_from_long"], source)

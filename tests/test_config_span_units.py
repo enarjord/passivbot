@@ -24,7 +24,7 @@ def set_value(mapping, path, value):
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(kind, side):
     source = get_template_config()
-    source["bot"]["global"]["strategy_kind"] = kind
+    source["bot"]["portfolio"]["strategy_kind"] = kind
     native_spec = pbr.get_strategy_spec(kind)
     native_before = deepcopy(native_spec)
     expected_native = {}
@@ -74,7 +74,7 @@ def test_unreleased_strategy_span_spellings_are_not_runtime_aliases(kind):
     from tools.migrate_config_v9 import migrate
 
     source = get_template_config()
-    source["bot"]["global"]["strategy_kind"] = kind
+    source["bot"]["portfolio"]["strategy_kind"] = kind
     native = next(parameter for parameter in pbr.get_strategy_spec(kind)["parameters"]
                   if parameter["side"] == "long" and parameter["name"] == "ema_span_0")
     set_value(source["bot"]["long"]["strategy"][kind], native["config_path"][2:], 123.75)

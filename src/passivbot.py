@@ -1385,7 +1385,7 @@ class Passivbot:
         # self.hedge_mode to False if the exchange doesn't support two-way mode.
         # Effective hedge_mode = config setting AND exchange capability.
         self._config_hedge_mode = bool(
-            get_optional_config_value(self.config, 'bot.global.hedge_mode', True)
+            get_optional_config_value(self.config, 'bot.portfolio.hedge_mode', True)
         )
         self.hedge_mode = True  # Exchange capability, may be overridden by subclass
         self.inverse = False
@@ -1856,7 +1856,7 @@ class Passivbot:
                 )
 
     def _live_max_realized_loss_pct(self) -> float:
-        return float(require_config_value(self.config, "bot.global.loss_gate.max_drawdown_ratio"))
+        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_ratio"))
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -2524,7 +2524,7 @@ class Passivbot:
                 "[order] live market order execution is enabled | "
                 "market_order_near_touch_fraction=%s; crossing/near-touch orders may be "
                 "submitted as market orders and live exchange slippage controls apply",
-                require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction'),
+                require_config_value(self.config, 'bot.portfolio.execution.market_order_near_touch_fraction'),
             )
 
     def _format_duration(self, ms: int) -> str:
@@ -3088,7 +3088,7 @@ class Passivbot:
         if not active_sides:
             return []
         strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(self.config, 'bot.global.strategy_kind')
+            get_optional_config_value(self.config, 'bot.portfolio.strategy_kind')
             if isinstance(getattr(self, "config", None), dict)
             else None
         )
@@ -4647,7 +4647,7 @@ class Passivbot:
                 },
             }
         strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(self.config, 'bot.global.strategy_kind')
+            get_optional_config_value(self.config, 'bot.portfolio.strategy_kind')
         )
         return Passivbot._required_h1_log_range_span_for_strategy(
             strategy_params,
@@ -4818,7 +4818,7 @@ class Passivbot:
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -5473,7 +5473,7 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -5631,7 +5631,7 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -7452,7 +7452,7 @@ class Passivbot:
             logging.info("[order] %s %d orders", direction, order_count)
 
     def _live_market_orders_allowed(self) -> bool:
-        value = require_config_value(self.config, 'bot.global.execution.market_orders_allowed')
+        value = require_config_value(self.config, 'bot.portfolio.execution.market_orders_allowed')
         if isinstance(value, str):
             return value.strip().lower() in {"true", "t", "1", "yes", "y", "on"}
         return bool(value)
@@ -8109,7 +8109,7 @@ class Passivbot:
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
         strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(self.config, 'bot.global.strategy_kind')
+            get_optional_config_value(self.config, 'bot.portfolio.strategy_kind')
             if isinstance(getattr(self, "config", None), dict)
             else None
         )
@@ -10158,7 +10158,7 @@ class Passivbot:
         )
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0
@@ -10401,7 +10401,7 @@ class Passivbot:
         bot_cfg = config.get("bot")
         if not isinstance(bot_cfg, dict) or not isinstance(bot_cfg.get(pside), dict):
             return float(self.bp(pside, "entry_initial_qty_pct", symbol))
-        strategy_kind = normalize_strategy_kind(config["bot"]["global"]["strategy_kind"])
+        strategy_kind = normalize_strategy_kind(config["bot"]["portfolio"]["strategy_kind"])
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
             return float(strategy_cfg["base_qty_pct"])
@@ -13056,13 +13056,13 @@ class Passivbot:
             "unstuck": {
                 "enabled": self._unstuck_uses_realized_pnl(),
                 "memory_ema_span_minutes": require_config_value(
-                    self.config, "bot.global.unstuck.memory_ema_span_minutes"
+                    self.config, "bot.portfolio.unstuck.memory_ema_span_minutes"
                 ),
             },
             "loss_gate": {
                 "enabled": self._live_max_realized_loss_pct() < 1.0,
                 "memory_ema_span_minutes": require_config_value(
-                    self.config, "bot.global.loss_gate.memory_ema_span_minutes"
+                    self.config, "bot.portfolio.loss_gate.memory_ema_span_minutes"
                 ),
             },
         }
@@ -13393,7 +13393,7 @@ class Passivbot:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                    "adjust bot.global.loss_gate.max_drawdown_ratio to change behavior",
+                    "adjust bot.portfolio.loss_gate.max_drawdown_ratio to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,
@@ -14904,7 +14904,7 @@ class Passivbot:
     def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         config = getattr(self, "config", {})
         strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(config, 'bot.global.strategy_kind')
+            get_optional_config_value(config, 'bot.portfolio.strategy_kind')
         )
         strategy_cfg = get_active_strategy_side(
             config.get("bot", {}).get(pside, {}),
@@ -15488,7 +15488,7 @@ class Passivbot:
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
         strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(self.config, 'bot.global.strategy_kind')
+            get_optional_config_value(self.config, 'bot.portfolio.strategy_kind')
         )
 
         def _legacy_bp_warmup_value(pside: str, key: str, symbol: str) -> float:
@@ -17925,7 +17925,7 @@ class Passivbot:
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         config = getattr(self, "config", {})
         strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(config, 'bot.global.strategy_kind')
+            get_optional_config_value(config, 'bot.portfolio.strategy_kind')
         )
         input_dict = {
             "timestamp_ms": now_ms,
@@ -17938,9 +17938,9 @@ class Passivbot:
                 "filter_by_min_effective_cost": {
                     side: minimum_cost_filter(self.config, side) for side in ("long", "short")
                 },
-                "market_orders_allowed": bool(require_config_value(self.config, 'bot.global.execution.market_orders_allowed')),
+                "market_orders_allowed": bool(require_config_value(self.config, 'bot.portfolio.execution.market_orders_allowed')),
                 "market_order_near_touch_threshold": float(
-                    require_config_value(self.config, 'bot.global.execution.market_order_near_touch_fraction')
+                    require_config_value(self.config, 'bot.portfolio.execution.market_order_near_touch_fraction')
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
@@ -19017,7 +19017,7 @@ class Passivbot:
 
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0) or 0.0
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0) or 0.0
             )
         except Exception:
             warmup_ratio = 0.0
@@ -19818,7 +19818,7 @@ class Passivbot:
         )
         try:
             warmup_ratio = float(
-                get_optional_config_value(self.config, 'bot.global.warmup.span_multiplier', 0.0)
+                get_optional_config_value(self.config, 'bot.portfolio.warmup.span_multiplier', 0.0)
             )
         except Exception:
             warmup_ratio = 0.0

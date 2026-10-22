@@ -90,9 +90,9 @@ def test_backtest_with_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']['global']['warmup']['span_multiplier'] = 0.0
-    config['bot']['global']['warmup']['max_minutes'] = None
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = None
+    config['bot']["portfolio"]['hedge_mode'] = False
 
     n_minutes = 60
     start_ts = 1609459200000  # 2021-01-01 00:00:00 UTC
@@ -189,9 +189,9 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']['global']['warmup']['span_multiplier'] = 0.0
-    config['bot']['global']['warmup']['max_minutes'] = None
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = None
+    config['bot']["portfolio"]['hedge_mode'] = False
     config["bot"]["long"]["hsl"]["enabled"] = True
     config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.0
     config["bot"]["short"]["hsl"]["enabled"] = True
@@ -250,9 +250,9 @@ def test_build_backtest_payload_normalizes_integral_float_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']['global']['warmup']['span_multiplier'] = 0.0
-    config['bot']['global']['warmup']['max_minutes'] = None
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = None
+    config['bot']["portfolio"]['hedge_mode'] = False
 
     n_minutes = 60
     start_ts = 1609459200000
@@ -303,9 +303,9 @@ def test_build_backtest_payload_rejects_fractional_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']['global']['warmup']['span_multiplier'] = 0.0
-    config['bot']['global']['warmup']['max_minutes'] = None
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = None
+    config['bot']["portfolio"]['hedge_mode'] = False
 
     n_minutes = 60
     start_ts = 1609459200000
@@ -359,9 +359,9 @@ def test_backtest_rejects_invalid_equity_floor_ratio():
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
     config["backtest"]["equity_floor_ratio"] = 1.0
-    config['bot']['global']['warmup']['span_multiplier'] = 0.0
-    config['bot']['global']['warmup']['max_minutes'] = None
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = None
+    config['bot']["portfolio"]['hedge_mode'] = False
 
     n_minutes = 60
     start_ts = 1609459200000

@@ -37,7 +37,7 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     def bp(side, key, symbol=None):
         return 'bounded' if key == 'risk_we_excess_allowance_mode' else .2
     bot = SimpleNamespace(
-        config={"live": {}, "bot": {"global": {"strategy_kind": "trailing_martingale"}}},
+        config={"live": {}, "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}}},
         positions={s: {'long': {'size': 1., 'price': 100.}, 'short': {'size': -.5, 'price': 100.}} for s in symbols},
         _strategy_params_to_rust_dict=params,
         _orchestrator_exchange_params=lambda s: {'qty_step': .01},

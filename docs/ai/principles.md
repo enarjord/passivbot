@@ -58,8 +58,9 @@ Canonical repository-wide invariants; task documents link here instead of restat
 
 Place parameters by actual consumers:
 
-- `config.bot`: strategy and trading policy shared by live, backtest, and optimize; global policy
-  belongs under `bot.global`, and directional policy under `bot.long` or `bot.short`
+- `config.bot`: strategy and trading policy shared by live, backtest, and optimize; account-wide
+  controls belong under `bot.portfolio`, shared directional defaults under `bot.global`, and
+  directional policy under `bot.long` or `bot.short`
 - `config.live`: operational live execution, exchange I/O, account, and process controls
 - `config.backtest`: simulation-only behavior
 - `config.optimize`: optimizer-only behavior

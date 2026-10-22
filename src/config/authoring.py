@@ -28,7 +28,7 @@ _PROTECTED = (
     ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),
     ("backtest", "scenarios"), *_UNIVERSE_PATHS,
     *(("bot", side, "forager", "always_include") for side in ("long", "short")),
-    ("bot", "global", "hsl"),
+    ("bot", "portfolio", "hsl"),
 )
 
 
@@ -132,11 +132,11 @@ def compact_config(source, *, base_config_path="", destination_path=""):
     if "bot" in authored:
         baseline["bot"] = {side: {} for side in ("long", "short") if side in authored["bot"]}
     if "bot" in authored:
-        baseline["bot"]["global"] = {"strategy_kind": full["bot"]["global"]["strategy_kind"]}
+        baseline["bot"]["portfolio"] = {"strategy_kind": full["bot"]["portfolio"]["strategy_kind"]}
     if "live" in authored:
         baseline["live"] = {}
-    if full["bot"]["global"]["hsl"]["scope"] == "portfolio":
-        baseline["bot"].setdefault("global", {})["hsl"] = deepcopy(full["bot"]["global"]["hsl"])
+    if full["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
+        baseline["bot"].setdefault("portfolio", {})["hsl"] = deepcopy(full["bot"]["portfolio"]["hsl"])
     defaults = cleanup_config(baseline, base_config_path=base_config_path, _allow_sparse=True)
     registry = get_field_registry()
     keep_empty = {("bot",), ("live",), ("bot", "long"), ("bot", "short")}
@@ -272,7 +272,7 @@ def _bound_target(config, path):
     selected = path[2:]
     if selected and str(selected[-1]).isdigit():
         selected = selected[:-1]
-    kind = config["bot"]["global"]["strategy_kind"]
+    kind = config["bot"]["portfolio"]["strategy_kind"]
     bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
     for key, target in iter_optimizer_key_paths(config, bounds):
         singleton = {}
@@ -302,7 +302,7 @@ def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, app
     from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
     from optimization.bounds import Bound
 
-    bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["global"]["strategy_kind"])
+    bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["portfolio"]["strategy_kind"])
     matches = [(key, bounds[key]) for key, target in iter_optimizer_key_paths(config, bounds) if target == path]
     if not matches:
         return {"status": "not_in_bounds"}
@@ -315,7 +315,7 @@ def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, app
     fixed_by = [selector for selector in selectors
                 if key in resolve_bound_selectors(config, [selector], bounds)]
     authored_bounds = flatten_optimize_bounds(
-        authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["global"]["strategy_kind"],
+        authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["portfolio"]["strategy_kind"],
     )
     status = ("fixed_selector" if fixed_by else
               "fixed_bound" if key in authored_bounds and bound.low == bound.high else

@@ -269,7 +269,7 @@ def migrate_v8_to_v9(
         validate_authored_config(result, get_template_config())
         if memory_span_minutes is not None and normalize_lookback_ema_span_minutes(
             memory_span_minutes
-        ) != result.get("bot", {}).get("global", {}).get("unstuck", {}).get("memory_ema_span_minutes"):
+        ) != result.get("bot", {}).get("portfolio", {}).get("unstuck", {}).get("memory_ema_span_minutes"):
             raise ValueError("already-v9 configuration has a different memory span; edit it explicitly")
         if memory_span_choices:
             raise ValueError("memory-span choices do not apply to an already-v9 configuration")

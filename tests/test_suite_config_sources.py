@@ -192,7 +192,7 @@ def test_external_suite_validates_unprojected_authored_fields(tmp_path, document
 
 def test_external_suite_canonical_coin_patch_uses_base_strategy_context(tmp_path):
     base = get_template_config()
-    base['bot']['global']['strategy_kind'] = "ema_anchor"
+    base['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     section = {"scenarios": [{"label": "anchor", "overrides": {"coin_overrides": {
         "BTC": {"bot": {"long": {"strategy": {"ema_anchor": {"offset_fraction": 0.013}}}}},
     }}}]}
@@ -205,7 +205,7 @@ def test_external_suite_canonical_coin_patch_uses_base_strategy_context(tmp_path
 
 def test_external_suite_canonical_coin_patch_uses_base_scope_context(tmp_path):
     base = get_template_config()
-    base["bot"]["global"]["hsl"]["scope"] = "position_side"
+    base["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
     section = {"scenarios": [{"label": "scope", "overrides": {"coin_overrides": {
         "BTC": {"bot": {"long": {"hsl": {"enabled": True}}}},
     }}}]}
@@ -236,7 +236,7 @@ def test_external_suite_rejects_retired_fields_outside_projected_section(tmp_pat
 
 def test_external_full_config_without_base_uses_its_own_policy_context(tmp_path):
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "ema_anchor"
+    source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     source["backtest"]["scenarios"] = [{"label": "anchor", "overrides": {"coin_overrides": {
         "BTC": {"bot": {"long": {"strategy": {"ema_anchor": {"offset_fraction": 0.013}}}}},
     }}}]

@@ -33,8 +33,8 @@ def _require_max_warmup_minutes(config: dict) -> float | None:
     from config.control_sentinels import warmup_cap
 
     return warmup_cap(
-        require_config_value(config, 'bot.global.warmup.max_minutes'),
-        path='bot.global.warmup.max_minutes',
+        require_config_value(config, 'bot.portfolio.warmup.max_minutes'),
+        path='bot.portfolio.warmup.max_minutes',
     )
 
 
@@ -58,7 +58,7 @@ def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
 
 def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
     bot_cfg = config.get("bot", {})
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     strategy_cfg = get_active_strategy_config(config, strategy_kind=strategy_kind)
     base_long = flatten_shared_bot_side(bot_cfg.get("long", {}) or {})
     base_short = flatten_shared_bot_side(bot_cfg.get("short", {}) or {})
@@ -142,7 +142,7 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
         return False
     bounds = flatten_optimize_bounds(
         config.get("optimize", {}).get("bounds", {}),
-        strategy_kind=get_optional_config_value(config, 'bot.global.strategy_kind'),
+        strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind'),
     )
     pinned = flatten_shared_bot_side(
         config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
@@ -447,7 +447,7 @@ def compute_backtest_warmup_minutes(
 
     bounds = flatten_optimize_bounds(
         config.get("optimize", {}).get("bounds", {}),
-        strategy_kind=get_optional_config_value(config, 'bot.global.strategy_kind'),
+        strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind'),
     )
     bound_keys_minutes = [
         "long_forager_volume_ema_span_1m",
@@ -475,8 +475,8 @@ def compute_backtest_warmup_minutes(
         max_minutes = max(max_minutes, extracted * 60.0)
 
     warmup_ratio = _to_float(
-        require_config_value(config, 'bot.global.warmup.span_multiplier'),
-        context='bot.global.warmup.span_multiplier',
+        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
+        context='bot.portfolio.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
 
@@ -507,8 +507,8 @@ def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
     warmup_ratio = _to_float(
-        require_config_value(config, 'bot.global.warmup.span_multiplier'),
-        context='bot.global.warmup.span_multiplier',
+        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
+        context='bot.portfolio.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}

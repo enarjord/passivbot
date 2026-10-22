@@ -47,8 +47,8 @@ def bot(mode="coin", *, side="long", events=()):
         )
         config["bot"][pside]["risk"]["max_positions"] = 1
     if mode == "portfolio":
-        config["bot"]["global"]["hsl"].update(config["bot"][side]["hsl"])
-        config["bot"]["global"]["hsl"]["panic_close_order_type"] = "market"
+        config["bot"]["portfolio"]["hsl"].update(config["bot"][side]["hsl"])
+        config["bot"]["portfolio"]["hsl"]["panic_close_order_type"] = "market"
         for pside in ("long", "short"):
             config["bot"][pside]["hsl"]["enabled"] = False
             config["bot"][pside]["risk"]["max_positions"] = 0
@@ -117,7 +117,7 @@ def run(value, marks=None, sources=None, **changes):
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     value = bot(mode, side=side)
-    policy = value.config["bot"]["global"]["hsl"] if mode == "portfolio" else value.config["bot"][side]["hsl"]
+    policy = value.config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else value.config["bot"][side]["hsl"]
     policy["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
     result, unavailable = run(value, quotes(side))
     assert not unavailable
@@ -171,8 +171,8 @@ def test_current_quote_failure_is_scoped_before_native_evaluation():
     assert [d.scope.symbol for d in result] == [SYMBOL]
     assert result[0].action == "panic"
     assert [u.scope.symbol for u in unavailable] == [other]
-    value.config["bot"]["global"]["hsl"]["scope"] = "portfolio"
-    value.config["bot"]["global"]["hsl"] = dict(
+    value.config["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
+    value.config["bot"]["portfolio"]["hsl"] = dict(
         deepcopy(value.config["bot"]["long"]["hsl"]), scope="portfolio"
     )
     result, unavailable = run(value)
@@ -375,7 +375,7 @@ def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["global"]["hsl"]
+        value.config["bot"]["portfolio"]["hsl"]
         if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
@@ -820,7 +820,7 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     from passivbot import Passivbot
 
     fixture = bot(mode)
-    policy = fixture.config["bot"]["global"]["hsl"] if mode == "portfolio" else fixture.config["bot"]["long"]["hsl"]
+    policy = fixture.config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else fixture.config["bot"]["long"]["hsl"]
     policy["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
     # Do not start a bot or exchange client: exercise the real runtime accessors
     # and symbol override resolver against canonical prepared configuration.
@@ -988,7 +988,7 @@ def test_actual_unchanged_position_read_can_precede_fill_tail_without_forged_tim
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["global"]["hsl"]
+        value.config["bot"]["portfolio"]["hsl"]
         if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
@@ -1047,7 +1047,7 @@ def test_flat_retained_fills_do_not_require_a_delisted_market_quote(mode):
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["global"]["hsl"]
+        value.config["bot"]["portfolio"]["hsl"]
         if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
@@ -1386,7 +1386,7 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
     value = bot(mode, side=side, events=events)
     value.positions[SYMBOL][side].update(size=sign * 1.0, price=100.0)
     policy = (
-        value.config["bot"]["global"]["hsl"]
+        value.config["bot"]["portfolio"]["hsl"]
         if mode == "portfolio"
         else value.config["bot"][side]["hsl"]
     )
@@ -1417,7 +1417,7 @@ def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, cap):
     for side in ("long", "short"):
         value.config["bot"][side]["hsl"]["enabled"] = False
     if mode == "portfolio":
-        value.config["bot"]["global"]["hsl"]["enabled"] = False
+        value.config["bot"]["portfolio"]["hsl"]["enabled"] = False
     value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = cap
     # These are not needed by HSL when it has no enabled scope. The ordinary
     # owner still validates its account receipt before any connector write.
@@ -1493,7 +1493,7 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
         ],
     )
     policy = (
-        value.config["bot"]["global"]["hsl"]
+        value.config["bot"]["portfolio"]["hsl"]
         if mode == "portfolio"
         else value.config["bot"]["long"]["hsl"]
     )
@@ -1552,7 +1552,7 @@ def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
     value = bot(mode)
     value.config["live"]["account"]["balance_override"] = 1000.0
     if mode == "portfolio":
-        value.config["bot"]["global"]["hsl"]["enabled"] = False
+        value.config["bot"]["portfolio"]["hsl"]["enabled"] = False
     else:
         for side in ("long", "short"):
             value.config["bot"][side]["hsl"]["enabled"] = False

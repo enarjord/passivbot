@@ -36,7 +36,7 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit=0.0
         )
-    block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
+    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     block.update(
         enabled=True,
         drawdown_ratio_threshold=0.06,
@@ -50,7 +50,7 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
             cfg["bot"][pside]["unstuck"]["enabled"] = False
             cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
             cfg['bot'][pside]['universe']['approved_coins'] = ["BTC"] if pside == side else []
-        cfg["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 1.0
+        cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 1.0
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})

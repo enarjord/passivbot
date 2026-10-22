@@ -167,10 +167,10 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     }
     if not isinstance(bounds, dict):
         return flat
-    for key, value in bounds.get("global", {}).get("unstuck", {}).items():
+    for key, value in bounds.get("portfolio", {}).get("unstuck", {}).items():
         flat[f"unstuck_{key}"] = deepcopy(value)
     for group in ("hsl", "loss_gate"):
-        for key, value in bounds.get("global", {}).get(group, {}).items():
+        for key, value in bounds.get("portfolio", {}).get(group, {}).items():
             flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group, {}).get(key, f"{group}_{key}")
             flat[flat_key] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
@@ -203,7 +203,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
     """
     from .param_paths import OPTIMIZABLE_BOT_KEY_PATHS, iter_optimizer_key_paths
 
-    kind = config["bot"]["global"]["strategy_kind"]
+    kind = config["bot"]["portfolio"]["strategy_kind"]
     bounds = config["optimize"]["bounds"]
     authored = flatten_optimize_bounds(
         bounds if source_bounds is None else source_bounds, strategy_kind=kind
@@ -212,7 +212,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
     for side in BOT_POSITION_SIDES:
         for fields in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.values():
             keys.update(f"{side}_{key}" for key in fields.values())
-    portfolio = config["bot"]["global"]["hsl"]["scope"] == "portfolio"
+    portfolio = config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"
     if portfolio:
         keys = {key for key in keys if not key.startswith(("long_hsl_", "short_hsl_"))}
         keys.update(SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].values())
@@ -245,7 +245,7 @@ def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracke
 
 def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     """Keep explicit search dimensions without adding them to default searches."""
-    kind = get_optional_config_value(source, 'bot.global.strategy_kind', "trailing_martingale")
+    kind = get_optional_config_value(source, 'bot.portfolio.strategy_kind', "trailing_martingale")
     flat = flatten_optimize_bounds(source.get("optimize", {}).get("bounds"), strategy_kind=kind)
     optional = {
         "entry_cooldown_weights_minutes_exposure_ratio",
@@ -288,14 +288,14 @@ def _shared_bound_local_path(group: str, local_key: str) -> tuple[str, ...]:
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     if flat_key == "unstuck_memory_ema_span_minutes":
-        bounds.setdefault("global", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = deepcopy(value)
+        bounds.setdefault("portfolio", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = deepcopy(value)
         return
     if flat_key == "loss_gate_memory_ema_span_minutes":
-        bounds.setdefault("global", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
+        bounds.setdefault("portfolio", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
         return
     if flat_key.startswith("hsl_"):
         local_key = SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY["hsl"].get(flat_key, flat_key.removeprefix("hsl_"))
-        bounds.setdefault("global", {}).setdefault("hsl", {})[local_key] = deepcopy(value)
+        bounds.setdefault("portfolio", {}).setdefault("hsl", {})[local_key] = deepcopy(value)
         return
     pside, key = flat_key.split("_", 1)
     if pside not in BOT_POSITION_SIDES:
@@ -344,7 +344,7 @@ def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio
 
 
 def prune_inactive_optimize_strategy_bounds(config: dict, *, tracker: Optional[object] = None) -> None:
-    active_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    active_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     bounds = config.get("optimize", {}).get("bounds")
     if not isinstance(bounds, dict):
         return

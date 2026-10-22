@@ -78,7 +78,7 @@ def test_actual_gpu_asymmetric_replay_matches_native_counts(monkeypatch, kind, p
                                       "--coins", "2", "--bars", "180", "--seed", "2026"])
     config, candles, markets, btc, timestamps = fixture_inputs(args)
     config["backtest"]["filter_by_min_effective_cost"] = None
-    config["bot"]["global"]["hedge_mode"] = topology != "oneway"
+    config["bot"]["portfolio"]["hedge_mode"] = topology != "oneway"
     for side in ("long", "short"):
         bot = config["bot"][side]
         bot["universe"]["filter_by_min_effective_cost"] = side != passing_side

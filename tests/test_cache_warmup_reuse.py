@@ -88,10 +88,7 @@ def _base_config(**overrides):
                 "entry_volatility_ema_span_1h": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
             },
-            "global": {
-                "universe": {},
-                "warmup": {"span_multiplier": 0.3, "max_minutes": None},
-            },
+            "portfolio": {"warmup": {"span_multiplier": 0.3, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
         "optimize": {"bounds": {}},
@@ -186,7 +183,7 @@ class TestCacheHashIndependence:
         """Changing warmup_ratio does not change the hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b['bot']['global']['warmup']['span_multiplier'] = 10.0
+        cfg_b['bot']["portfolio"]['warmup']['span_multiplier'] = 10.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")

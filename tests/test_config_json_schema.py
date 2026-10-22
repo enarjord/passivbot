@@ -76,7 +76,7 @@ def test_schema_generation_and_metadata_are_offline(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", forbidden)
     schema = generate_schema()
     Draft202012Validator(schema).validate(get_template_config())
-    assert describe_field("bot.global.hsl.enabled")["default"] == {"declared": False}
+    assert describe_field("bot.portfolio.hsl.enabled")["default"] == {"declared": False}
 
 
 def test_all_intentional_examples_match_editor_schema(validator):
@@ -89,7 +89,7 @@ def test_all_intentional_examples_match_editor_schema(validator):
 @pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_templates_and_canonical_roundtrips_match_schema(validator, strategy, scope):
     payload = generated_template(get_template_config(), scope)
-    payload["bot"]["global"]["strategy_kind"] = strategy
+    payload["bot"]["portfolio"]["strategy_kind"] = strategy
     validator.validate(payload)
     prepared = prepare_config(payload, verbose=False)
     prepared = {key: value for key, value in prepared.items() if not key.startswith("_")}
@@ -170,7 +170,7 @@ def test_nested_scenario_overrides_remain_supported(validator):
 @pytest.mark.parametrize("patch", [
     {"bot.long.not_a_field": 1}, {"long.unstuck.ema_span_0_minutes": 1},
     {"coin_overrides.BTC.bot.long.risk.max_positions": 1},
-    {"coin_overrides.BTC.bot.global.loss_gate.max_drawdown_ratio": 0.5},
+    {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_ratio": 0.5},
     {"coin_overrides.BTC.override_config_path": "policy.json"},
 ])
 def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, patch):
@@ -236,7 +236,7 @@ def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
     }}}})
     validator.validate(payload)
     for scope in ("position_side", "portfolio"):
-        payload["bot"] = {"global": {"hsl": {"scope": scope}}}
+        payload["bot"] = {"portfolio": {"hsl": {"scope": scope}}}
         with pytest.raises(ValidationError):
             validator.validate(payload)
     payload = source(coin_overrides={"BTC": {"bot": {"long": {"risk": {"max_positions": 2}}}}})
@@ -267,10 +267,10 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
 
 
 def test_metadata_report_is_separate_and_optional_authority_has_no_default(capsys):
-    report = describe_field("bot.global.hsl.enabled")
+    report = describe_field("bot.portfolio.hsl.enabled")
     assert report["default"] == {"declared": False}
     assert report["optimizer"]["eligible"] is False
-    assert main(["--field", "bot.global.hsl.enabled"]) == 0
+    assert main(["--field", "bot.portfolio.hsl.enabled"]) == 0
     assert json.loads(capsys.readouterr().out) == json.loads(json.dumps(report))
     with pytest.raises(KeyError):
         describe_field("bot.global.unknown")
@@ -290,10 +290,10 @@ def test_schema_cli_is_offline_and_registered():
 
 
 @pytest.mark.parametrize("path", [
-    "bot.global.strategy_kind", "bot.global.hedge_mode",
+    "bot.portfolio.strategy_kind", "bot.portfolio.hedge_mode",
     "bot.long.universe.minimum_coin_age_days", "bot.long.universe.filter_by_min_effective_cost",
-    "bot.global.execution.market_orders_allowed", "bot.global.execution.market_order_near_touch_fraction",
-    "bot.global.forager.score_hysteresis_margin", "bot.global.warmup.span_multiplier", "bot.global.warmup.max_minutes",
+    "bot.portfolio.execution.market_orders_allowed", "bot.portfolio.execution.market_order_near_touch_fraction",
+    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.span_multiplier", "bot.portfolio.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
     "bot.long.forager.always_include",
 ])
