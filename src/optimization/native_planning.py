@@ -177,6 +177,7 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
             if path != ("bot",) or type(value._bot_policy) is not BotPolicy:
                 return None
             policy = value._bot_policy
+            runtime_aliases = value._runtime_aliases
             authored_guard = _compile_projection_guard(policy.source_view(include_defaults=True),
                                                         numeric_paths, path, ancestors)
             if authored_guard is None:
@@ -184,6 +185,7 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
             def source_guard(current):
                 candidate = current._bot_policy
                 return (type(candidate) is BotPolicy and candidate.catalog == policy.catalog
+                        and current._runtime_aliases == runtime_aliases
                         and candidate._prepared == policy._prepared
                         and candidate._genes == policy._genes
                         and authored_guard(candidate.source_view(include_defaults=True)))

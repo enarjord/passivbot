@@ -1303,6 +1303,9 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     Mutates config, matching apply_scenario's existing configuration stage.
     """
     from config.universe import restore_universe_sources, universe_sources_affected
+    from config.bot_inheritance import get_bot_policy
+    policy_source = get_bot_policy(config)
+    bounds_source = config.get("optimize", {}).get("bounds")
     if universe_sources_affected(overrides):
         restore_universe_sources(config)
     if tracker is None:
@@ -1319,12 +1322,18 @@ def apply_scenario_overrides(config, overrides, tracker=None):
                 raise ValueError("Scenario override keys must be dotted strings")
             _apply_override(config, dotted_path, deepcopy(value), tracker)
         from config.activation import apply_activation_patch
-        apply_activation_patch(config, overrides)
+        apply_activation_patch(config, overrides, policy_source=policy_source, bounds_source=bounds_source)
 
     from config.hsl import normalize_hsl
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
-    normalize_hsl(config, get_template_config(), verbose=False)
+    if get_bot_policy(config) is not None:
+        from config.bot import format_bot_config
+        from config.bot_inheritance import install_bot_policy, with_normalized_bot_values
+        effective_bot = format_bot_config(config["bot"], live_cfg=config.get("live"), verbose=False)
+        policy = with_normalized_bot_values(get_bot_policy(config), effective_bot)
+        install_bot_policy(config, policy, effective_bot=effective_bot)
+    normalize_hsl(config, get_expanded_config_prototype(), verbose=False)
 
 
 def _materialize_scenario_universe(

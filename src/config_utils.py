@@ -2468,6 +2468,9 @@ def update_config_with_args(
 ):
     transform_root = config
     config = effective_config_payload(config)
+    from config.bot_inheritance import get_bot_policy
+    policy_source = get_bot_policy(config)
+    bounds_source = config.get("optimize", {}).get("bounds")
     from config.hsl import validate_override_paths
     nullable_overrides = {
         *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("global", "long", "short")),
@@ -2558,7 +2561,7 @@ def update_config_with_args(
     # CLI presence is authored authority even when the new boolean equals the
     # currently inherited value. Record declarations before another prepare.
     from config.activation import apply_activation_patch
-    apply_activation_patch(config, expanded)
+    apply_activation_patch(config, expanded, policy_source=policy_source, bounds_source=bounds_source)
     if changed_keys:
         details = {"keys": changed_keys}
         if diffs:

@@ -128,3 +128,20 @@ def test_continuous_count_gene_uses_existing_canonical_count_adapter(value, expe
     if not value.is_integer():
         with pytest.raises(TypeError, match="serialization type"):
             apply_bot_policy_patch(get_bot_policy(config), {"bot.global.risk.max_positions": value})
+
+
+def test_compiled_aliases_are_effective_only_and_cannot_become_authored_fields():
+    from config.runtime_compile import compile_runtime_config
+    prepared = load(source())
+    authored = bot_policy_source_view(prepared)["bot"]
+    compiled = compile_runtime_config(prepared, runtime="backtest")
+    assert compiled["bot"]["long"]["risk_entry_cooldown_minutes"] == 24.1
+    assert bot_policy_source_view(compiled)["bot"] == authored
+    assert bot_policy_source_view(compile_runtime_config(compiled, runtime="backtest"))["bot"] == authored
+    compiled["bot"]["long"]["risk_entry_cooldown_minutes"] = 0.0
+    with pytest.raises(ValueError, match="compiled native aliases"):
+        bot_policy_source_view(compiled)
+    raw = source()
+    raw["bot"]["long"] = {"risk_entry_cooldown_minutes": 1.0}
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        prepare_config(raw, verbose=False)

@@ -172,3 +172,32 @@ def test_editor_schema_accepts_common_ignored_clear_but_rejects_common_approval_
     raw["bot"]["global"]["universe"]["approved_coins"] = None
     with pytest.raises(ValidationError):
         validator.validate(raw)
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_runtime_installs_only_active_engine_but_preserves_explicit_inactive_source(kind):
+    raw = source(kind)
+    strategies = get_expanded_config_prototype()["bot"]["global"]["strategy"]
+    raw["bot"]["global"]["strategy"] = strategies
+    prepared = prepare_config(raw, verbose=False)
+    assert set(prepared["bot"]["long"]["strategy"]) == {kind}
+    assert set(prepared["bot"]["short"]["strategy"]) == {kind}
+    assert bot_policy_source_view(prepared)["bot"]["global"]["strategy"] == strategies
+    assert set(prepare_config(prepared, verbose=False)["bot"]["long"]["strategy"]) == {kind}
+
+
+def test_real_scenario_parent_patches_preserve_equal_source_and_bound_declarations():
+    from config.inherited_bounds import get_bound_plan
+    from suite_runner import apply_scenario_overrides
+    prepared = prepare_config(source(), verbose=False)
+    apply_scenario_overrides(prepared, {"bot.long": {
+        "enabled": True, "risk": {"total_wallet_exposure_limit": 2.25}}})
+    apply_scenario_overrides(prepared, {"bot.global.risk.total_wallet_exposure_limit": 3.5})
+    assert prepared["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.25
+    apply_scenario_overrides(prepared, {"optimize.bounds": {
+        "global": {"risk": {"total_wallet_exposure_limit": [1.0, 4.0]}},
+        "short": {"risk": {"total_wallet_exposure_limit": [1.0, 4.0]}}}})
+    plan = get_bound_plan(prepared)
+    selected = [entry for entry in plan.bindings if entry.authoring_path[-1] == "total_wallet_exposure_limit"]
+    assert {entry.authoring_path[1] for entry in selected} == {"long", "short"}
+    assert next(entry for entry in selected if entry.authoring_path[1] == "long").bound.low == 2.25
