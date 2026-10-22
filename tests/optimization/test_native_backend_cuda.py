@@ -182,6 +182,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             hlcvs=candles, mss=deepcopy(markets), btc_usd_prices=btc, timestamps=timestamps, cache_dir="",
             hlcvs_spec=source, btc_spec=prices,
         )}
+    monkeypatch.setattr(optimize, "load_markets", offline)
     monkeypatch.setattr(optimize, "format_approved_ignored_coins", offline)
     monkeypatch.setattr(optimize, "prepare_hlcvs_mss", prepared)
     monkeypatch.setattr(optimize_suite, "load_markets", offline)

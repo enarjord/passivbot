@@ -131,6 +131,7 @@ from utils import (
     utc_ms,
     make_get_filepath,
     format_approved_ignored_coins,
+    load_markets,
 )
 from logging_setup import configure_logging, resolve_log_level
 from materialized_cache import release_materialized_payload
@@ -4014,6 +4015,14 @@ async def main():
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     validate_optimizer_effective_configs(config)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    # Freeze routing facts only after required metadata is available, including
+    # cached-data runs. Resume must not depend on a previously warmed alias map.
+    identity_exchanges = dict.fromkeys([
+        *backtest_exchanges, *(config["backtest"].get("coin_sources") or {}).values(),
+    ])
+    for exchange in identity_exchanges:
+        if str(exchange).lower() != "fake":
+            await load_markets(exchange, offline=config["backtest"].get("offline", False))
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )

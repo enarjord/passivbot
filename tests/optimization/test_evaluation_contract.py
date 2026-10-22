@@ -496,6 +496,10 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
         vector = optimize.config_to_individual(run_config, evaluator.bounds)
         evaluator.evaluate(vector, [])
 
+    async def metadata(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(optimize, "load_markets", metadata)
     monkeypatch.setattr(optimize, "execute_backtest", execute_and_capture)
     monkeypatch.setattr(
         optimize, "format_approved_ignored_coins", evaluate_before_data_download

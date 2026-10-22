@@ -133,6 +133,7 @@ def test_cpu_optimizer_and_resume_use_real_workers_without_gpu_imports(tmp_path,
                 assert error.code == 0
         async def run():
             with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(optimize, "load_markets", offline)
                 patch.setattr(optimize, "format_approved_ignored_coins", offline)
                 patch.setattr(optimize, "prepare_hlcvs_mss", prepared)
                 patch.chdir(directory)

@@ -102,6 +102,9 @@ async def test_actual_main_prepares_fixed_policy_before_single_evaluator_replay(
     )
     acquired = []
 
+    async def metadata(*_args, **_kwargs):
+        return deepcopy(markets)
+
     async def acquire(current, *args, **kwargs):
         assert current["_raw"]["optimize"]["bounds"] == config["optimize"]["bounds"]
         assert current["_raw_effective"]["optimize"]["limits"] == []
@@ -188,6 +191,7 @@ async def test_actual_main_prepares_fixed_policy_before_single_evaluator_replay(
         observed.append(actual)
         return {"pool": None, "pool_terminated": False}
 
+    monkeypatch.setattr(optimize, "load_markets", metadata)
     monkeypatch.setattr(optimize, "format_approved_ignored_coins", acquire)
     monkeypatch.setattr(optimize, "prepare_hlcvs_mss", prepare)
     monkeypatch.setattr(optimize, "get_backend_runner", lambda _: backend)
