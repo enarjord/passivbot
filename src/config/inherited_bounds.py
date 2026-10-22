@@ -94,19 +94,25 @@ class BoundPlan:
         return hashlib.sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
     def apply_vector(self, policy: BotPolicy, vector: Sequence[float]):
-        if type(policy) is not BotPolicy:
-            raise TypeError("a typed BotPolicy is required")
         if len(vector) != len(self.bindings):
             raise ValueError("optimizer vector length differs from its inheritance plan")
+        return self.apply_values(policy, {binding.key: value for binding, value in zip(self.bindings, vector)})
+
+    def apply_values(self, policy: BotPolicy, values: Mapping[str, float]):
+        """Apply an explicit subspace, leaving coupled/dead coordinates untouched."""
+        if type(policy) is not BotPolicy:
+            raise TypeError("a typed BotPolicy is required")
         if _source_signature(policy, self.bindings) != self.source_signature:
             raise ValueError("optimizer binding plan does not match source authority")
-        values = {}
-        for binding, value in zip(self.bindings, vector):
+        bindings = {binding.key: binding for binding in self.bindings}
+        if set(values) - set(bindings):
+            raise ValueError("optimizer values contain an unknown binding coordinate")
+        for key, value in values.items():
+            binding = bindings[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise TypeError(f"{binding.key} optimizer value must be finite numeric")
             if not binding.bound.low <= value <= binding.bound.high:
                 raise ValueError(f"{binding.key} optimizer value is outside its declared bound")
-            values[binding.key] = value
         return apply_bot_policy_patch(policy, values, channel="gene")
 
 
@@ -147,6 +153,37 @@ def optimize_bounds_source_view(config):
     if plan is not None:
         result["optimize"]["bounds"] = config["optimize"]["bounds"].source_view()
     return result
+
+
+def apply_inherited_bounds_patch(config, validated_overrides):
+    """Apply declared range replacements to authored authority, never its projection.
+
+    The validated patch owner calls this before mutating optimizer containers.
+    A range assigned at an effective side path explicitly creates that side's
+    independent coordinate, even when it equals the common range.
+    """
+    current = config.get("optimize", {}).get("bounds")
+    if type(current) is not PreparedOptimizationBounds:
+        return False
+    authored = current.source_view()
+    changed = False
+    for selector, value in validated_overrides.items():
+        path = tuple(selector.split("."))
+        if path == ("optimize",):
+            authored = deepcopy(value.get("bounds", {}))
+        elif path[:2] == ("optimize", "bounds"):
+            if len(path) == 2:
+                authored = deepcopy(value)
+            else:
+                _set(authored, path[2:], deepcopy(value))
+        else:
+            continue
+        changed = True
+    if changed:
+        temporary = deepcopy(config)
+        prepare_bound_plan(temporary, authored_bounds=authored)
+        config["optimize"]["bounds"] = temporary["optimize"]["bounds"]
+    return changed
 
 
 def prepare_bound_plan(config, *, authored_bounds=None):

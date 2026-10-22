@@ -17,6 +17,7 @@ from config.param_paths import (
     require_existing_config_path,
 )
 from config.optimize_bounds import flatten_optimize_bounds
+from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
 from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
 from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
@@ -60,6 +61,12 @@ def _strategy_path_map(config: dict) -> dict[str, Tuple[str, ...]]:
 def resolve_optimization_bound_path(
     config: dict, bound_key: str
 ) -> Tuple[str, ...] | None:
+    plan = get_bound_plan(config)
+    if plan is not None:
+        for binding in plan.bindings:
+            if bound_key == binding.key or bound_key in binding.native_ids:
+                return binding.authoring_path
+        return None
     return resolve_optimizer_key_path(config, bound_key)
 
 
@@ -254,9 +261,24 @@ def validate_forager_weight_search(
     raw = (config.get("optimize", {}).get("bounds", {})
            if optimize_bounds is None else optimize_bounds)
     flat = _flatten_bounds_for_config(config, raw)
-    fixed = set(resolve_bound_selectors(
-        config, config.get("optimize", {}).get("fixed_params", []) or [], flat
-    ))
+    plan = get_bound_plan(config)
+    if plan is not None:
+        if optimize_bounds is not None and optimize_bounds is not config.get("optimize", {}).get("bounds"):
+            from copy import deepcopy
+            from config.inherited_bounds import prepare_bound_plan
+
+            config = deepcopy(config)
+            plan = prepare_bound_plan(config, authored_bounds=optimize_bounds)
+        selected = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [])
+        fixed = {key for binding in plan.bindings if binding.key in selected for key in binding.native_ids}
+        if tunable_keys is not None:
+            tunable_keys = {key for binding in plan.bindings
+                            if binding.key in tunable_keys or set(binding.native_ids) & set(tunable_keys)
+                            for key in binding.native_ids}
+    else:
+        fixed = set(resolve_bound_selectors(
+            config, config.get("optimize", {}).get("fixed_params", []) or [], flat
+        ))
     runtime_pins = list(normalize_scenario_overrides(
         config.get("optimize", {}).get("fixed_runtime_overrides", {})
     ).items())
@@ -273,9 +295,89 @@ def validate_forager_weight_search(
             scenario_pins = normalize_scenario_overrides(scenario.get("overrides"))
             contexts.append((context, list(scenario_pins.items())))
     for context, scenario_pins in contexts:
-        _validate_forager_weight_context(
+        validator = (_validate_inherited_forager_weight_context if plan is not None
+                     else _validate_forager_weight_context)
+        validator(
             config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
         )
+
+
+def _validate_inherited_forager_weight_context(
+    config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
+):
+    """Follow declared gene ownership through runtime and scenario replacements.
+
+    Materializing each binding at its current value establishes side-bound pins
+    without sampling. Origins then distinguish an explicit equal-value pin from
+    an untouched inherited gene, including atomic parent replacements.
+    """
+    from copy import deepcopy
+    from config.activation import side_enabled
+    from config.bot_inheritance import (
+        apply_bot_config_patch, apply_bot_policy_patch, get_bot_policy, install_bot_policy,
+    )
+
+    plan = get_bound_plan(config)
+    bindings = {binding.authoring_path: binding for binding in plan.bindings}
+    values = {}
+    for binding in plan.bindings:
+        value = config
+        for part in binding.authoring_path:
+            value = value[part]
+        values[binding.key] = value
+    runtime = deepcopy(config)
+    install_bot_policy(runtime, apply_bot_policy_patch(get_bot_policy(config), values, channel="gene"))
+    apply_bot_config_patch(runtime, dict(runtime_pins))
+    runtime_bot, runtime_origins = get_bot_policy(runtime).resolve()
+    runtime_origins = {origin.target: origin for origin in runtime_origins}
+    scenario = deepcopy(runtime)
+    apply_bot_config_patch(scenario, dict(scenario_pins))
+    scenario_bot, scenario_origins = get_bot_policy(scenario).resolve()
+    scenario_origins = {origin.target: origin for origin in scenario_origins}
+
+    def field_domain(side, group, suffix):
+        target = ("bot", side, group, *suffix)
+        # A scenario declaration follows mirroring. An untouched target still
+        # consumes the runtime source group selected by the existing transform.
+        if scenario_origins[target] != runtime_origins[target]:
+            origin, bot = scenario_origins[target], scenario_bot
+            selected_side = side
+        else:
+            selected_side = optimizer_numeric_group_source_side(config, side, group)
+            selected = ("bot", selected_side, group, *suffix)
+            origin, bot = runtime_origins[selected], runtime_bot
+        value = bot[selected_side][group]
+        for part in suffix:
+            value = value[part]
+        binding = bindings.get(origin.source) if origin.kind == "gene" else None
+        if (binding is None or set(binding.native_ids) & fixed
+                or tunable_keys is not None and not set(binding.native_ids) & set(tunable_keys)):
+            return Bound(float(value), float(value))
+        return binding.bound
+
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    for side in ("long", "short"):
+        if not side_enabled(scenario, side) or any(
+            field_domain(side, "risk", (field,)).high <= 0
+            for field in ("max_positions", "total_wallet_exposure_limit")
+        ):
+            continue
+        domains = {name: field_domain(side, "forager", ("score_weights", name)) for name in names}
+        for name, bound in domains.items():
+            if any(not math.isfinite(value) or value < 0 for value in (bound.low, bound.high)):
+                raise ValueError(f"{context}bot.{side}.forager.score_weights.{name} pin must be finite and nonnegative")
+        varied = [name for name, bound in domains.items() if bound.low != bound.high]
+        fixed_positive = [name for name, bound in domains.items() if bound.low == bound.high and bound.low > 0]
+        fallback_fixed = (sum(bound.low for bound in domains.values()) == 0
+                          and domains["ema_readiness"].low == domains["ema_readiness"].high)
+        if varied and (fixed_positive or fallback_fixed):
+            affected = sorted(fixed_positive) or ["ema_readiness (all-zero normalization fallback)"]
+            raise ValueError(
+                f"{context}bot.{side}.forager.score_weights: partial normalized-weight search would change "
+                f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
+                "weight or freeze the whole score_weights group; omitted zero weights must "
+                "also remain zero at the all-zero fallback."
+            )
 
 
 def _validate_forager_weight_context(
@@ -391,6 +493,10 @@ def _validate_forager_weight_context(
 
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
+    plan = get_bound_plan(config)
+    if plan is not None:
+        return [(binding.key, binding.authoring_path) for binding in plan.bindings
+                if _binding_supplies_runtime_values(config, binding)]
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
     bot_config = config.get("bot")
     if bot_config is None:
@@ -433,6 +539,21 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     return key_paths
 
 
+def _binding_supplies_runtime_values(config, binding):
+    if unstuck_ema_spans_coupled(config) and set(binding.native_ids) & COUPLED_UNSTUCK_EMA_BOUND_KEYS:
+        return False
+    mirror = "mirror_short_from_long" in (config.get("optimize", {}).get("enable_overrides") or [])
+    for target in binding.effective_targets:
+        if target[1] not in {"long", "short"}:
+            return True
+        source_side = optimizer_numeric_group_source_side(config, target[1], target[2])
+        if mirror and target[1] == "short" and target[2] == "strategy":
+            source_side = "long"
+        if source_side == target[1]:
+            return True
+    return False
+
+
 def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
     """
     Extracts list of Bound instances for bot parameters.
@@ -444,6 +565,9 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         - [low, high, 0] or [low, high, null]: treated as continuous
         - single value: fixed parameter (low=high, step=None)
     """
+    plan = get_bound_plan(config)
+    if plan is not None:
+        return _inherited_optimization_bounds(config, plan)
     bounds = []
     optimize_bounds = _flatten_required_optimize_bounds(config)
     key_paths = get_optimization_key_paths(config)
@@ -479,3 +603,35 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             continue
         bounds.append(bound_vals)
     return bounds
+
+
+def _inherited_optimization_bounds(config, plan):
+    """A common domain remains searchable if any effective target can use it."""
+    from config.activation import optimizer_side_may_activate
+
+    by_target = {target: binding for binding in plan.bindings for target in binding.effective_targets}
+    enabled = {}
+    for side in ("long", "short"):
+        enabled[side] = optimizer_side_may_activate(config, side)
+        for name in ("max_positions", "total_wallet_exposure_limit"):
+            target = ("bot", side, "risk", name)
+            binding = by_target.get(target)
+            value = (binding.bound.high if binding is not None else
+                     config["bot"][side]["risk"][name])
+            enabled[side] = enabled[side] and value > 0.0
+    by_key = {binding.key: binding for binding in plan.bindings}
+    fixed = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [])
+    result = []
+    for key, _ in get_optimization_key_paths(config):
+        binding = by_key[key]
+        bound = binding.bound
+        if key in fixed:
+            value = config
+            for part in binding.authoring_path:
+                value = value[part]
+            result.append(Bound(float(value), float(value), bound.step))
+        elif all(target[1] in enabled and not enabled[target[1]] for target in binding.effective_targets):
+            result.append(Bound(bound.low, bound.low, bound.step))
+        else:
+            result.append(bound)
+    return result

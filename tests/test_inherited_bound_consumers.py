@@ -105,3 +105,37 @@ def test_fixed_target_selector_freezes_shared_gene_at_current_value_outside_prio
     candidate = plan.apply_vector(get_bot_policy(config), [item.bound.low for item in plan.bindings])
     assert candidate.effective_view()["long"]["risk"]["capacity"] == 1.0
     assert candidate.effective_view()["short"]["risk"]["capacity"] == 1.0
+
+
+@pytest.mark.parametrize("selector,value,expected", [
+    ("optimize.bounds.global.risk.capacity", [2.0, 4.0], {"global": {"risk": {"capacity": [2.0, 4.0]}}}),
+    ("optimize.bounds.short.risk.capacity", [1.0, 3.0], {
+        "global": {"risk": {"capacity": [1.0, 3.0]}}, "short": {"risk": {"capacity": [1.0, 3.0]}}}),
+    ("optimize.bounds", {"short": {"risk": {"capacity": [2.0, 4.0]}}},
+        {"short": {"risk": {"capacity": [2.0, 4.0]}}}),
+    ("optimize", {"bounds": {}}, {}),
+    ("optimize", {"iters": 12}, {}),
+])
+def test_declared_bounds_patches_replace_raw_authority_without_guessing_from_expanded_sides(selector, value, expected):
+    from config.inherited_bounds import apply_inherited_bounds_patch
+    config = prepared(bounds={"global": {"risk": {"capacity": [1.0, 3.0]}}})
+    assert apply_inherited_bounds_patch(config, {selector: value})
+    assert optimize_bounds_source_view(config)["optimize"]["bounds"] == expected
+    plan = get_bound_plan(config)
+    if selector == "optimize.bounds.short.risk.capacity":
+        common = next(binding for binding in plan.bindings if binding.key == "bot.global.risk.capacity")
+        side = next(binding for binding in plan.bindings if binding.key == "bot.short.risk.capacity")
+        assert common.effective_targets == (("bot", "long", "risk", "capacity"),)
+        assert side.effective_targets == (("bot", "short", "risk", "capacity"),)
+
+
+def test_unrelated_or_invalid_bounds_patch_keeps_existing_authority():
+    from config.inherited_bounds import apply_inherited_bounds_patch
+    config = prepared(bounds={"global": {"risk": {"capacity": [1.0, 3.0]}}})
+    original = get_bound_plan(config).identity()
+    assert not apply_inherited_bounds_patch(config, {"live.account.user": "public fixture"})
+    assert get_bound_plan(config).identity() == original
+    with pytest.raises(ValueError, match="unknown"):
+        apply_inherited_bounds_patch(config, {"optimize.bounds.global.risk.unknown": [1.0, 3.0]})
+    assert get_bound_plan(config).identity() == original
+    assert not apply_inherited_bounds_patch({"optimize": {"bounds": {}}}, {"optimize.bounds": {}})
