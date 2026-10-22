@@ -95,11 +95,15 @@ def _apply_config_overrides(
 
 
 def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_universe):
-    from config.bot_inheritance import apply_bot_config_patch
+    from config.bot_inheritance import apply_bot_config_patch, reconciled_bot_policy
+    from config.inherited_bounds import PreparedOptimizationBounds
     from config.hsl import validate_override_paths
-    from config.universe import (ResolvedCoinList, materialize_side_universe_sources,
-        raw_side_universe_sources, shared_universe_source, source_inherits_shared)
+    from config.universe import ResolvedCoinList
 
+    policy_source = reconciled_bot_policy(config)
+    bounds_source = config.get("optimize", {}).get("bounds")
+    if type(bounds_source) is not PreparedOptimizationBounds:
+        bounds_source = None
     prepared = {(field, side): deepcopy(value)
                 for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
                 if preserve_prepared_universe and
@@ -110,7 +114,7 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
     for selector, value in canonical.items():
         if not selector.startswith("bot.") and selector != "bot":
             _set_path(config, selector.split("."), value)
-    apply_bot_config_patch(config, canonical)
+    apply_bot_config_patch(config, canonical, policy_source=policy_source, bounds_source=bounds_source)
     _restore_matching_optimizer_memberships(config, prepared, require_match=True)
 
 

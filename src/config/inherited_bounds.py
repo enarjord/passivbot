@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 
 from optimization.bounds import Bound
 from .bot_inheritance import (ABSENT, SIDES, BotPolicy, Path, _get, _set, _freeze, _thaw,
-                              apply_bot_policy_patch, reconciled_bot_policy)
+                              apply_bot_policy_patch, install_bot_policy, reconciled_bot_policy)
 from .field_spec import FieldType
 
 
@@ -184,6 +184,7 @@ def apply_inherited_bounds_patch(config, validated_overrides, *, source_bounds=N
     if changed:
         temporary = deepcopy(config)
         prepare_bound_plan(temporary, authored_bounds=authored)
+        config["bot"] = temporary["bot"]
         config["optimize"]["bounds"] = temporary["optimize"]["bounds"]
     return changed
 
@@ -222,6 +223,8 @@ def prepare_bound_plan(config, *, authored_bounds=None):
         for target in binding.effective_targets:
             _set(runtime, target[1:], bound)
     config.setdefault("optimize", {})["bounds"] = PreparedOptimizationBounds(runtime, authored, plan)
+    # Retain the same reconciled authority used to build the plan's signature.
+    install_bot_policy(config, policy)
     return plan
 
 
