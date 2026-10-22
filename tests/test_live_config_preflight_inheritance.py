@@ -257,3 +257,69 @@ def test_inherited_hsl_cli_reports_unsafe_balance_override_without_starting_runt
     assert report["hsl"]["policies"]["long"]["enabled"] is True
     assert any(issue["code"] == "hsl_balance_override_account_level_replay_unsafe"
                for issue in report["issues"])
+
+
+@pytest.mark.parametrize("inspection", ["preflight", "diff"])
+@pytest.mark.parametrize("margin,valid", [(-0.1, False), (0.0, True)])
+def test_global_hysteresis_is_validated_even_when_both_sides_pin_valid_values(tmp_path, inspection, margin, valid):
+    baseline = _config()
+    baseline["live"]["account"]["balance_override"] = None
+    baseline["bot"].update({side: {"forager": {"score_hysteresis_margin": value}}
+                             for side, value in (("long", 0.1), ("short", 0.2))})
+    target = deepcopy(baseline)
+    target["bot"]["global"]["forager"] = {"score_hysteresis_margin": margin}
+    target_path = _write(tmp_path, "target.json", target)
+    original = target_path.read_bytes()
+    if inspection == "preflight":
+        report = build_live_config_preflight_report(target_path)
+    else:
+        report = build_live_config_diff_report(_write(tmp_path, "baseline.json", baseline), target_path)
+    assert report["ok"] is valid
+    if not valid:
+        assert any("bot.global.forager.score_hysteresis_margin" in issue["message"]
+                   and "non-negative" in issue["message"] for issue in report["issues"])
+    assert target_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("value,error,message", [
+    (True, TypeError, "must be a number"),
+    ("0.1", TypeError, "must be a number"),
+    (-0.1, ValueError, "must be finite and non-negative"),
+    (float("nan"), ValueError, "must be finite and non-negative"),
+    (float("inf"), ValueError, "must be finite and non-negative"),
+])
+def test_scalar_extraction_preserves_pair_validation_errors(value, error, message):
+    from config.forager_hysteresis import (
+        validate_forager_score_hysteresis, validate_forager_score_hysteresis_margin,
+    )
+    with pytest.raises(error) as scalar_error:
+        validate_forager_score_hysteresis_margin(value, path="bot.global.forager.score_hysteresis_margin")
+    assert str(scalar_error.value) == f"bot.global.forager.score_hysteresis_margin {message}"
+    with pytest.raises(error) as pair_error:
+        validate_forager_score_hysteresis({"long": value, "short": 0.2})
+    assert str(pair_error.value) == f"forager_score_hysteresis.long {message}"
+
+
+@pytest.mark.parametrize("value", [0, 0.125])
+def test_scalar_extraction_preserves_valid_pair_values(value):
+    from config.forager_hysteresis import (
+        validate_forager_score_hysteresis, validate_forager_score_hysteresis_margin,
+    )
+    assert validate_forager_score_hysteresis_margin(value, path="margin") == float(value)
+    assert validate_forager_score_hysteresis({"long": value, "short": value}) == {
+        "long": float(value), "short": float(value),
+    }
+
+
+@pytest.mark.parametrize("scope", ["coin", "position_side"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_portfolio_policy_fields_require_portfolio_scope_even_when_disabled(tmp_path, scope, enabled):
+    config = _config()
+    config["bot"]["global"]["hsl"]["enabled"] = False
+    config["bot"]["portfolio"]["hsl"] = {"scope": scope, **_hsl(enabled)}
+    report = build_live_config_preflight_report(_write(tmp_path, "config.json", config))
+    assert report["ok"] is False
+    assert any(issue["code"] == "config_schema_invalid"
+               and "policy fields require portfolio scope" in issue["message"]
+               for issue in report["issues"])
+    assert "hsl" not in report

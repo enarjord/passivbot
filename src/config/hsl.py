@@ -322,6 +322,11 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
     validate_hsl_paths({**selected, "optimize": {"scoring": overrides}})
 
 
+def validate_portfolio_policy_scope(block, mode):
+    if mode != "portfolio" and set(block) - {"scope"}:
+        raise ValueError("bot.portfolio.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/position_side scope")
+
+
 def normalize_hsl(config, template, *, verbose=True):
     """Run before hydration, and again for effective CLI/scenario configurations."""
     engine(config)
@@ -344,8 +349,7 @@ def normalize_hsl(config, template, *, verbose=True):
     normalize_risk_memory_config(config)
     mode = _mode(config)
     bot["portfolio"]["hsl"]["scope"] = mode
-    if mode != "portfolio" and set(bot["portfolio"]["hsl"]) - {"scope"}:
-        raise ValueError("bot.portfolio.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/position_side scope")
+    validate_portfolio_policy_scope(bot["portfolio"]["hsl"], mode)
     validate_hsl_paths(config)
     enabled = False
     for side in ("long", "short"):

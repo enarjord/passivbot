@@ -385,7 +385,7 @@ def test_live_config_preflight_blocks_invalid_runtime_override_with_account_hsl(
 
 def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     config = _sample_config()
-    config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
+    config["bot"]["portfolio"]["hsl"] = {"scope": "coin"}
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -408,7 +408,7 @@ def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(
     tmp_path,
 ):
     config = _sample_config()
-    del config["bot"]["portfolio"]["hsl"]["scope"]
+    config["bot"]["portfolio"]["hsl"] = {}
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -476,7 +476,7 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     target = _sample_config()
     target["live"]["account"]["user"] = "okx_01"
     target["backtest"]["exchanges"] = ["okx"]
-    target["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
+    target["bot"]["portfolio"]["hsl"] = {"scope": "position_side"}
     target['bot']["long"]['universe']['approved_coins'] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
     target['bot']["short"]['universe']['ignored_coins'] = ["DOGE", "XRP"]
     target["live"]["candles"]["max_forager_candle_staleness_minutes"] = 20
@@ -500,7 +500,9 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
 
     assert report["ok"] is True
     assert report["diff"]["ok"] is True
-    assert report["diff"]["summary"]["category_counts"]["hsl"] == 2
+    assert report["diff"]["summary"]["category_counts"]["hsl"] == 3
+    assert changes["bot.portfolio.hsl.enabled"]["before"] == {"present": True, "value": True}
+    assert changes["bot.portfolio.hsl.enabled"]["after"] == {"present": False}
     assert changes["live.account.user"]["before"] == {
         "present": True,
         "value": "binance_01",

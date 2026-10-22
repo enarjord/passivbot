@@ -310,8 +310,11 @@ def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
         policy = resolve_bot_policy(config.get("bot", {}), get_side_field_catalog())
     effective = {**config, "bot": policy.effective_view()}
     from config.authored import validate_authored_config
-    from config.forager_hysteresis import forager_score_hysteresis
-    from config.hsl import _mode, normalize_block
+    from config.access import require_config_value
+    from config.forager_hysteresis import (
+        forager_score_hysteresis, validate_forager_score_hysteresis_margin,
+    )
+    from config.hsl import _mode, normalize_block, validate_portfolio_policy_scope
     from config.schema import get_template_config
 
     # The portfolio is not part of the directional catalog. Keep its existing
@@ -319,9 +322,14 @@ def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
     validate_authored_config({"bot": {"portfolio": {
         "hsl": effective["bot"]["portfolio"].get("hsl"),
     }}}, get_template_config())
+    margin_path = "bot.global.forager.score_hysteresis_margin"
+    validate_forager_score_hysteresis_margin(
+        require_config_value(effective, margin_path), path=margin_path,
+    )
     forager_score_hysteresis(effective)
     mode = _mode(effective)
     effective["bot"]["portfolio"]["hsl"]["scope"] = mode
+    validate_portfolio_policy_scope(effective["bot"]["portfolio"]["hsl"], mode)
     if mode == "portfolio":
         normalize_block(effective["bot"]["portfolio"]["hsl"], {}, "bot.portfolio.hsl",
                         portfolio=True, verbose=False)
