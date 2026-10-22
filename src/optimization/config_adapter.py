@@ -317,6 +317,32 @@ def _validate_inherited_forager_weight_context(
         apply_bot_config_patch, apply_bot_policy_patch, get_bot_policy, install_bot_policy,
     )
 
+    def apply_pins(target, pins):
+        try:
+            apply_bot_config_patch(target, dict(pins))
+        except ValueError as exc:
+            for selector, value in pins:
+                selected_path = tuple(selector.split("."))
+                for scope in ("global", "long", "short"):
+                    weight_path = ("bot", scope, "forager", "score_weights")
+                    if weight_path[:len(selected_path)] != selected_path:
+                        continue
+                    weight_value = value
+                    for part in weight_path[len(selected_path):]:
+                        if not isinstance(weight_value, dict) or part not in weight_value:
+                            break
+                        weight_value = weight_value[part]
+                    else:
+                        if isinstance(weight_value, dict) and set(names) - set(weight_value):
+                            raise ValueError(
+                                f"{context}override removes required {'.'.join(weight_path)}; "
+                                "provide the complete object or use leaf overrides"
+                            ) from exc
+            if context:
+                raise ValueError(f"{context}{exc}") from exc
+            raise
+
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
     plan = get_bound_plan(config)
     bindings = {binding.authoring_path: binding for binding in plan.bindings}
     values = {}
@@ -327,11 +353,11 @@ def _validate_inherited_forager_weight_context(
         values[binding.key] = value
     runtime = deepcopy(config)
     install_bot_policy(runtime, apply_bot_policy_patch(get_bot_policy(config), values, channel="gene"))
-    apply_bot_config_patch(runtime, dict(runtime_pins))
+    apply_pins(runtime, runtime_pins)
     runtime_bot, runtime_origins = get_bot_policy(runtime).resolve()
     runtime_origins = {origin.target: origin for origin in runtime_origins}
     scenario = deepcopy(runtime)
-    apply_bot_config_patch(scenario, dict(scenario_pins))
+    apply_pins(scenario, scenario_pins)
     scenario_bot, scenario_origins = get_bot_policy(scenario).resolve()
     scenario_origins = {origin.target: origin for origin in scenario_origins}
 
@@ -355,7 +381,6 @@ def _validate_inherited_forager_weight_context(
             return Bound(float(value), float(value))
         return binding.bound
 
-    names = ("volume", "volatility", "ema_readiness", "unilateralness")
     for side in ("long", "short"):
         if not side_enabled(scenario, side) or any(
             field_domain(side, "risk", (field,)).high <= 0
@@ -372,11 +397,17 @@ def _validate_inherited_forager_weight_context(
                           and domains["ema_readiness"].low == domains["ema_readiness"].high)
         if varied and (fixed_positive or fallback_fixed):
             affected = sorted(fixed_positive) or ["ema_readiness (all-zero normalization fallback)"]
+            weight_source = optimizer_numeric_group_source_side(config, side, "forager")
+            source_note = (
+                f" Mirrored search domains come from bot.{weight_source}.forager.score_weights; "
+                "freeze that source group or replace the complete target weight group."
+                if weight_source != side else ""
+            )
             raise ValueError(
                 f"{context}bot.{side}.forager.score_weights: partial normalized-weight search would change "
                 f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
                 "weight or freeze the whole score_weights group; omitted zero weights must "
-                "also remain zero at the all-zero fallback."
+                f"also remain zero at the all-zero fallback.{source_note}"
             )
 
 
