@@ -5,6 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 import optimize
+from config import prepare_config
+from config.universe import universe_source_view
+from config_utils import clean_config
 from optimization.native_datasets import NativeDatasetRegistry
 from test_native_backend import guard_cpu, inputs, managed_arrays
 from test_native_datasets import contexts
@@ -14,7 +17,7 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
     from tools.gpu_parity import build_parser, fixture_inputs
 
     original = inputs(manager)
-    config = deepcopy(original.config)
+    config = universe_source_view(original.config)
     fixture, *_ = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
     ]))
@@ -38,6 +41,9 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
         config["coin_overrides"]["COIN02"] = {"bot": {"long": {"strategy": {strategy: pin}}}}
     if not coupled:
         config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 9.0
+    columns = deepcopy(config["backtest"]["coins"])
+    config = prepare_config(clean_config(config), verbose=False)
+    config["backtest"]["coins"] = columns
     return optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                               config, timestamps=original.timestamps)
 
