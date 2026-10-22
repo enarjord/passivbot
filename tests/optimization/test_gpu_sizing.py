@@ -28,11 +28,6 @@ def test_cli_sizing_reaches_native_evolution(monkeypatch, tmp_path, batch, dispa
     monkeypatch.setattr(native, "NativeBacktestService", ObserveSizing)
     with managed_arrays() as manager:
         base = inputs(manager)
-        # The fixture's native optimizer ID stays unchanged; this roundtrip
-        # authors a canonical public bound before validating GPU sizing.
-        for side in ("long", "short"):
-            entry = base.config["optimize"]["bounds"][side]["strategy"]["trailing_martingale"]["entry"]
-            entry["initial_qty_fraction"] = entry.pop("initial_qty_pct")
         # Canonical defaults for both fields are nullable; test that surface.
         base.config["optimize"]["gpu"].update(batch_size=None, max_dispatch_candidate_bars=None)
         parser = argparse.ArgumentParser()
