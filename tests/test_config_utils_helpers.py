@@ -47,6 +47,7 @@ from config_utils import (
     parse_overrides,
     format_config,
 )
+from config.schema import get_expanded_config_prototype
 from warmup_utils import compute_backtest_warmup_minutes
 from released_v8_fixtures import released_v8_policy
 
@@ -154,13 +155,16 @@ def test_default_trailing_martingale_long_example_matches_template_and_rust_defa
     raw = json.loads(
         Path("configs/examples/default_trailing_martingale_long.json").read_text()
     )
-    template_long = get_template_config()["bot"]["long"]
+    template_common = get_template_config()["bot"]["global"]
+
+    assert raw["bot"]["long"] == {"enabled": True}
+    assert raw["bot"]["short"] == {"enabled": False}
 
     for section in ("entry_cooldown", "forager", "hsl", "risk", "unstuck"):
-        assert raw["bot"]["long"][section] == template_long[section]
+        assert raw["bot"]["global"][section] == template_common[section]
 
     assert (
-        raw["bot"]["long"]["strategy"]["trailing_martingale"]
+        raw["bot"]["global"]["strategy"]["trailing_martingale"]
         == get_strategy_defaults("trailing_martingale")["long"]
     )
 
@@ -206,7 +210,7 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
 
 def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
     for value in (1.5, "1.5", True):
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         config["live"]["fills"]["fee_conversion_max_age_milliseconds"] = value
 
         with pytest.raises(
@@ -216,7 +220,7 @@ def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
 
 
 def test_limit_order_create_market_distance_default_and_validation():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
 
     assert config["live"]["execution"][
         "limit_order_create_max_market_distance_fraction"
@@ -224,7 +228,7 @@ def test_limit_order_create_market_distance_default_and_validation():
     validate_config(config, verbose=False)
 
     for value in (-0.01, 1.0, float("inf"), "invalid"):
-        invalid = get_template_config()
+        invalid = get_expanded_config_prototype()
         invalid["live"]["execution"]["limit_order_create_max_market_distance_fraction"] = value
 
         with pytest.raises(
@@ -237,7 +241,7 @@ def test_limit_order_create_market_distance_default_and_validation():
 def test_exchange_symbol_unavailable_cooldown_default_and_validation():
     from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
 
     assert config["live"]["recovery"][
         "exchange_symbol_unavailable_cooldown_hours"
@@ -253,7 +257,7 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
         MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS + 1.0,
         "invalid",
     ):
-        invalid = get_template_config()
+        invalid = get_expanded_config_prototype()
         invalid["live"]["recovery"][
             "exchange_symbol_unavailable_cooldown_hours"
         ] = value
@@ -264,11 +268,11 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
         ):
             validate_config(invalid, verbose=False)
 
-    disabled = get_template_config()
+    disabled = get_expanded_config_prototype()
     disabled["live"]["recovery"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
     validate_config(disabled, verbose=False)
 
-    maximum = get_template_config()
+    maximum = get_expanded_config_prototype()
     maximum["live"]["recovery"][
         "exchange_symbol_unavailable_cooldown_hours"
     ] = MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
@@ -276,7 +280,7 @@ def test_exchange_symbol_unavailable_cooldown_default_and_validation():
 
 
 def test_order_replacement_churn_gate_defaults_and_validation():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     live = config["live"]
     assert live["execution"]["order_replacement_churn_gate_activation_count"] == 10
     assert live["execution"][
@@ -305,13 +309,13 @@ def test_order_replacement_churn_gate_defaults_and_validation():
         ("order_replacement_churn_gate_market_distance_fraction", -0.1),
     )
     for key, value in invalid_cases:
-        invalid = get_template_config()
+        invalid = get_expanded_config_prototype()
         invalid["live"]["execution"][key] = value
         with pytest.raises((TypeError, ValueError), match=key):
             validate_config(invalid, verbose=False)
 
     for tolerance in (0.0, 0.01):
-        valid = get_template_config()
+        valid = get_expanded_config_prototype()
         valid["live"]["execution"]["order_match_tolerance_fraction"] = tolerance
         validate_config(valid, verbose=False)
 
@@ -438,14 +442,14 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["forager"].pop("volume_ema_span_minutes", None)
     config["optimize"]["bounds"]["long"]["forager"].pop("volume_ema_span_minutes", None)
 
     _ensure_bot_defaults_and_bounds(config, verbose=False)
 
     assert config["bot"]["long"]["forager"]["volume_ema_span_minutes"] == pytest.approx(
-        get_template_config()["bot"]["long"]["forager"]["volume_ema_span_minutes"]
+        get_expanded_config_prototype()["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
         config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_minutes"]
@@ -524,7 +528,7 @@ def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_pct(tmp_pat
 
 
 def test_hydrate_then_sync_with_template_adds_missing_and_removes_extras():
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     result = {
         "live": {},
         "backtest": {},
@@ -555,7 +559,7 @@ def test_normalize_position_counts_rounds_values():
 
 
 def test_apply_non_live_adjustments_sorts_and_filters():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     set_side_universe_sources(config, 'approved_coins', "btc,eth")
     set_side_universe_sources(config, 'ignored_coins', {"long": ["eth"], "short": []})
     config["backtest"]["end_date"] = "2023-01-01"
@@ -596,7 +600,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
 
 
 def test_apply_non_live_adjustments_supports_legacy_coins_file():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     set_side_universe_sources(config, 'approved_coins', "configs/approved_coins_topmcap.json")
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
@@ -1509,7 +1513,7 @@ def test_backtest_cli_max_warmup_override_updates_consumed_live_field():
             "1",
         ]
     )
-    config = get_template_config()
+    config = get_expanded_config_prototype()
 
     update_config_with_args(
         config, args, verbose=False, allowed_keys=allowed_config_keys
@@ -1537,12 +1541,9 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
         "configs/examples/default_trailing_martingale_long.json", log_info=False
     )
-    source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop(
-        "threshold_we_weight", None
-    )
-    assert (
-        "threshold_we_weight"
-        not in source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
+    assert "threshold_we_weight" not in (
+        source_config["bot"]["long"].get("strategy", {})
+        .get("trailing_martingale", {}).get("close", {})
     )
 
     args = SimpleNamespace()
@@ -1714,7 +1715,7 @@ def test_config_change_log_keeps_non_target_generic_formatting():
 
 
 def test_backtest_filter_min_cost_retains_shared_policy_inheritance():
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg['bot']['long']['universe']['filter_by_min_effective_cost'] = True
     cfg["backtest"]["filter_by_min_effective_cost"] = None
 
@@ -2054,7 +2055,7 @@ def test_risk_cli_aliases_apply_to_grouped_config(command, help_all, alias_style
 def test_risk_cli_overrides_do_not_hide_retired_authored_flat_fields(
     command, source_shape, wrapped, use_dotted, disable
 ):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     params = [("total_wallet_exposure_limit", "total_wallet_exposure_limit", "twel"),
               ("max_positions", "n_positions", "np")]
     for pside in ("long", "short"):
@@ -2065,7 +2066,7 @@ def test_risk_cli_overrides_do_not_hide_retired_authored_flat_fields(
     if wrapped:
         source = {"config": source}
     parser = argparse.ArgumentParser()
-    template = project_template_config_for_cli(get_template_config(), command)
+    template = project_template_config_for_cli(get_expanded_config_prototype(), command)
     allowed_keys = add_config_arguments(parser, template, command=command)
     argv = []
     expected = {"long": (0.0, 0.0) if disable else (1.5, 6.0),
@@ -2081,12 +2082,12 @@ def test_risk_cli_overrides_do_not_hide_retired_authored_flat_fields(
 
 
 def test_risk_cli_noop_does_not_delete_conflicting_retired_flat_fields():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["total_wallet_exposure_limit"] = 9.0
     source["bot"]["long"]["n_positions"] = 8.0
     source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
     parser = argparse.ArgumentParser()
-    allowed_keys = add_config_arguments(parser, get_template_config(), command="live")
+    allowed_keys = add_config_arguments(parser, get_expanded_config_prototype(), command="live")
     original = deepcopy(source)
     update_config_with_args(source, parser.parse_args(["-ltwel", "0"]), allowed_keys=allowed_keys)
     assert source == original
@@ -2399,7 +2400,7 @@ def test_retired_hsl_recovery_controls_are_not_runtime_inputs(key, value):
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("short_value", ["2", "2,2", "1,2,0.25"])
 def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, short_value):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 2.5
     source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     original_bot = deepcopy(source["bot"])
@@ -2408,7 +2409,7 @@ def test_optimizer_twel_aliases_override_bounds_without_changing_bot(wrapped, sh
     if wrapped:
         source = {"config": source}
     parser = argparse.ArgumentParser()
-    template = project_template_config_for_cli(get_template_config(), "optimize")
+    template = project_template_config_for_cli(get_expanded_config_prototype(), "optimize")
     allowed = add_config_arguments(parser, template, command="optimize")
     short_args = parser.parse_args(["-ltwel", "0", "-stwel", short_value, "-s", "BTC"])
     long_args = parser.parse_args([
