@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 
 from .bot import (
     ensure_optimize_bounds_for_bot,
@@ -42,7 +43,7 @@ def normalize_config(
     from .bot_inheritance import (
         reconciled_bot_policy, bot_policy_source_view, get_side_field_catalog,
         resolve_bot_policy, install_bot_policy, with_normalized_bot_values,
-        with_prepared_bot_sources,
+        with_prepared_bot_sources, apply_bot_policy_patch,
     )
     policy = reconciled_bot_policy(config)
     config = bot_policy_source_view(config) if policy is not None else activation_source_view(config)
@@ -62,9 +63,22 @@ def normalize_config(
     require_v9_runtime_config(config)
     validate_authored_config(config, get_expanded_config_prototype())
     from .universe import normalize_universe_source_bindings
-    normalize_universe_source_bindings(config, base_config_path=base_config_path)
+    normalized_sources = {}
+
+    def retain_root_binding(path, _previous, bound):
+        if (len(path) == 4 and path[0] == "bot" and path[1] in {"global", "long", "short"}
+                and path[2] == "universe" and path[3] in {"approved_coins", "ignored_coins"}):
+            normalized_sources[".".join(path)] = deepcopy(bound)
+
+    normalize_universe_source_bindings(config, base_config_path=base_config_path,
+                                       on_change=retain_root_binding)
     if policy is None:
         policy = resolve_bot_policy(config.get("bot", {}), get_side_field_catalog())
+    elif normalized_sources:
+        # The binding owner canonicalized authored source leaves, not hydrated
+        # parameters. Retain unrelated acquired facts and numeric provenance.
+        normalized = apply_bot_policy_patch(policy, normalized_sources)
+        policy = replace(normalized, _derived=policy._derived, _normalized=policy._normalized)
     flavor = "canonical"
     source_payload = config
     require_current_hsl_schema(source_payload, base_config_path=base_config_path)

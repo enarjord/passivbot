@@ -576,8 +576,14 @@ def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *
             from .bot import normalize_position_count
             value = normalize_position_count(value, path=".".join(path))
         _set(source, path[1:], deepcopy(value))
+        from .universe import raw_side_universe_sources, source_inherits_shared
+        # Common changes invalidate only inheriting sides. Explicit file pins
+        # and ignored-null clears retain their unchanged acquired facts.
         prepared = tuple(entry for entry in prepared if not _intersects(path, entry.path)
-                         and not (path[:2] == ("bot", "global") and _intersects(path[2:], entry.path[2:])))
+                         and not (path[:2] == ("bot", "global") and _intersects(path[2:], entry.path[2:])
+                                  and source_inherits_shared(
+                                      entry.path[-1], raw_side_universe_sources({"bot": source}, entry.path[-1]),
+                                      entry.path[1])))
         derived = [entry for entry in derived if not _intersects(path, entry.path)]
         if channel == "gene":
             genes.add(path)
