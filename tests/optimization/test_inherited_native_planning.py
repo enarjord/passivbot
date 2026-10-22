@@ -13,6 +13,28 @@ from tools.gpu_parity import build_parser, fixture_inputs
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("scope", ["global", "long", "short"])
+def test_projection_declines_fractional_authored_position_counts(kind, scope):
+    from optimization.native_planning import _ExecutionProjection, execution_key
+
+    config, *_ = fixture_inputs(build_parser().parse_args([
+        "--fixture", kind, "--bars", "128", "--coins", "1", "--sides", "both"]))
+    key = execution_key(config)
+    projection = _ExecutionProjection(config, key)
+    for value in (1e-300, 4.5):
+        changed = deepcopy(config)
+        changed["bot"][scope]["risk"]["max_positions"] = value
+        assert not projection.matches(changed)
+        with pytest.raises(TypeError, match="max_positions.*serialization type"):
+            execution_key(changed)
+    for value in (4, 4.0):
+        changed = deepcopy(config)
+        changed["bot"][scope]["risk"]["max_positions"] = value
+        assert projection.matches(changed)
+        assert execution_key(changed) == key
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("independent_short,topology_search", [(False, False), (True, False), (False, True)])
 def test_actual_registry_and_fast_planner_fan_out_global_gene(kind, independent_short, topology_search):
     original, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
