@@ -60,6 +60,8 @@ def validate_shared_bot_policy(config):
     for path in (
         "bot.portfolio.execution.market_order_near_touch_fraction",
         "bot.global.forager.score_hysteresis_margin",
+        "bot.long.forager.score_hysteresis_margin",
+        "bot.short.forager.score_hysteresis_margin",
         "bot.portfolio.warmup.span_multiplier",
     ):
         value = require_config_value(config, path)
