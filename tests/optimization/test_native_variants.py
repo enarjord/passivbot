@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 import optimize
+from config import prepare_config
+from config_utils import clean_config
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY
 from optimization.native_checkpoint import load_checkpoint
 from optimization.native_datasets import NativeDatasetRegistry
@@ -12,20 +14,37 @@ from test_native_backend import execute, guard_cpu, inputs, managed_arrays
 from test_native_datasets import contexts
 
 
+
+def source_config(base):
+    """Edit authored policy before rebuilding its immutable binding plan."""
+    config = clean_config(base.config)
+    for side in ("long", "short"):
+        entry = config["optimize"]["bounds"][side]["strategy"]["trailing_martingale"]["entry"]
+        entry["initial_qty_fraction"] = entry.pop("initial_qty_pct", [0.01, 0.05])
+    return config
+
+
+def prepared_config(base, config):
+    prepared = prepare_config(clean_config(config), verbose=False)
+    prepared["backtest"]["coins"] = deepcopy(base.config["backtest"]["coins"])
+    return prepared
+
+
 def variable_base(manager, *, anchor=False, disabled=False, mirror=False):
     original = inputs(manager)
-    config = deepcopy(original.config)
+    config = source_config(original)
     config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [0, 1]
     if disabled:
         config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    config = prepared_config(original, config)
     if anchor:
         seeds = [deepcopy(config), deepcopy(config)]
         seeds[0]["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0
         seeds[1]["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1
         optimize.install_anchored_fine_tune_plan(
-            config, ["long.strategy.entry.initial_qty_fraction"], None, starting_configs_override=seeds,
+            config, ["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"], None, starting_configs_override=seeds,
         )
     return optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                               config, timestamps=original.timestamps)
@@ -93,8 +112,9 @@ def test_position_rounding_and_stepped_endpoints_determine_finite_views(monkeypa
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
         original = inputs(manager)
-        config = deepcopy(original.config)
+        config = source_config(original)
         config["optimize"]["bounds"]["short"]["risk"]["max_positions"] = bounds
+        config = prepared_config(original, config)
         base = optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                                   config, timestamps=original.timestamps)
         with NativeDatasetRegistry(base, standalone_candle_coins={"binance":("COIN00", "COIN01", "COIN02")}) as registry:
@@ -114,9 +134,10 @@ def test_zero_side_search_space_is_rejected_before_service_or_evolution(monkeypa
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
         base = variable_base(manager)
-        config = deepcopy(base.config)
+        config = clean_config(base.config)
         for side in ("long", "short"):
             config["optimize"]["bounds"][side]["risk"][bound] = [0, 1, 1]
+        config = prepared_config(base, config)
         base = optimize.Evaluator(base.hlcvs_specs, base.btc_usd_specs, base.msss,
                                   config, timestamps=base.timestamps)
         import optimization.gpu.native as native
@@ -144,6 +165,7 @@ def test_reachable_ema_side_cannot_silently_enable_unsupported_enforcer(monkeypa
             }}
         config['bot']['short']['risk'].update({'total_wallet_exposure_limit': 0, 'position_exposure_enforcer': {**config['bot']['short']['risk']['position_exposure_enforcer'], 'enabled': True}})
         config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [0, 1]
+        config = prepared_config(original, config)
         base = optimize.Evaluator(original.hlcvs_specs, original.btc_usd_specs, original.msss,
                                   config, timestamps=original.timestamps)
         import optimization.gpu.native as native
@@ -232,12 +254,13 @@ def test_cuda_variants_match_independent_replays_and_reuse_one_market_pack(monke
             fixture, *_ = fixture_inputs(build_parser().parse_args([
                 "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
             ]))
-            config = deepcopy(base.config)
+            config = clean_config(base.config)
             config['bot']["portfolio"]['strategy_kind'] = strategy
             for side in ("long", "short"):
                 config["bot"][side]["strategy"] = deepcopy(fixture["bot"][side]["strategy"])
                 config["optimize"]["bounds"][side]["strategy"] = {strategy: {}}
-            config["optimize"]["bounds"]["long"]["strategy"][strategy] = {"base_qty_pct": [0.01, 0.05]}
+            config["optimize"]["bounds"]["long"]["strategy"][strategy] = {"base_qty_fraction": [0.01, 0.05]}
+            config = prepared_config(base, config)
             base = optimize.Evaluator(base.hlcvs_specs, base.btc_usd_specs, base.msss,
                                       config, timestamps=base.timestamps)
         with NativeDatasetRegistry(base, standalone_candle_coins={"binance":("COIN00", "COIN01", "COIN02")}) as registry:

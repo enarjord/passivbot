@@ -4,20 +4,22 @@ import json
 
 import pytest
 
-from config_utils import clean_config, get_template_config
+from config import prepare_config
+from config.schema import get_expanded_config_prototype
+from config_utils import clean_config
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY
 
 
 def _config():
-    config = clean_config(get_template_config())
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-10"
-    return config
+    return prepare_config(config, verbose=False)
 
 
 def _record(config):
-    return {**deepcopy(config), CONTRACT_KEY: build_evaluation_contract(config)}
+    return {**clean_config(config), CONTRACT_KEY: build_evaluation_contract(config)}
 
 
 @pytest.mark.parametrize(
@@ -47,6 +49,21 @@ def test_resume_rejects_changed_shared_bot_simulation_inputs(key, value):
     assert any(
         "evaluation.bot" in item for item in _resume_config_mismatches(old, config)
     )
+
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_resume_rejects_changed_independent_hysteresis_margin(side):
+    from optimize import _resume_config_mismatches
+
+    config = _config()
+    old = _record(config)
+    config["bot"][side]["forager"]["score_hysteresis_margin"] = 0.07
+    policy = build_evaluation_contract(config)["forager_hysteresis"]["policy"]
+    assert policy[side] == 0.07
+    other = "short" if side == "long" else "long"
+    assert policy[other] == old[CONTRACT_KEY]["forager_hysteresis"]["policy"][other]
+    assert any("evaluation.forager_hysteresis" in item for item in _resume_config_mismatches(old, config))
 
 
 def test_resume_ignores_candidate_values_but_rejects_fixed_bot_policy():
@@ -142,7 +159,7 @@ def test_resume_validates_all_anchor_fixed_values_and_rejects_unprovable_legacy(
     from optimize import _resume_config_mismatches
 
     config = _config()
-    path = ["bot", "long", "strategy", "trailing_martingale", "entry_initial_ema_dist"]
+    path = ["bot", "long", "strategy", "trailing_martingale", "entry", "initial_ema_distance_fraction"]
     config[ANCHOR_PLAN_KEY] = {
         "anchors": [
             {"source": "first.json", "fixed_values": [{"path": path, "value": 0.01}]},
@@ -152,7 +169,7 @@ def test_resume_validates_all_anchor_fixed_values_and_rejects_unprovable_legacy(
     }
     old = _record(config)
     old["optimizer_anchor"] = {"id": 0}
-    old.pop(ANCHOR_PLAN_KEY)
+    assert ANCHOR_PLAN_KEY not in old
     assert _resume_config_mismatches(old, config) == []
     config[ANCHOR_PLAN_KEY]["anchors"][1]["source"] = "moved.json"
     assert _resume_config_mismatches(old, config) == []
@@ -209,7 +226,7 @@ def test_result_writers_persist_contract_before_candidate_projection(
     if mode != "disabled":
         from config.hsl import generated_template
 
-        config = generated_template(config, mode)
+        config = prepare_config(generated_template(clean_config(config), mode), verbose=False)
     config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     metrics = {"suite_metrics": {"scenario": {}}} if suite else {}
     candidate = deepcopy(config)
@@ -306,7 +323,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
             {"fixed_values": [{"path": fixed_path, "value": 0.02}]},
         ],
         "key_paths": [["bot", "long", "entry_cooldown", "base_duration_minutes"]],
-        "tunable_keys": ["long_entry_cooldown_minutes"],
+        "tunable_keys": ["bot.long.entry_cooldown.base_duration_minutes"],
     }
     entry = build_pymoo_record_entry(
         vector=[1.0, 37.0],
@@ -621,7 +638,7 @@ def test_resume_checks_each_reconstructed_record_contract(tmp_path, change):
     second = deepcopy(first)
     if change == "fixed_policy":
         second["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
-        second[CONTRACT_KEY] = build_evaluation_contract(second)
+        second[CONTRACT_KEY] = build_evaluation_contract(prepare_config(clean_config(second), verbose=False))
     elif change == "implementation":
         second[CONTRACT_KEY]["implementation"][
             "rust_artifact_sha256"
