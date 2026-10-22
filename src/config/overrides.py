@@ -532,6 +532,16 @@ def _validate_effective_coin_config(
         if len(path) >= 4 and path[0] == "bot" and path[2] == "entry_cooldown"
     }
     if pinned_cooldown_paths:
+        from .param_paths import require_existing_config_path
+
+        # This copy validates one coin after its final precedence. A coin's
+        # explicit leaf shadows the same fixed runtime leaf as well as its
+        # search dimension; the parent keeps its original fixed policy.
+        effective["optimize"]["fixed_runtime_overrides"] = {
+            key: value
+            for key, value in effective["optimize"]["fixed_runtime_overrides"].items()
+            if require_existing_config_path(effective, key) not in pinned_cooldown_paths
+        }
         bounds = flatten_optimize_bounds(
             effective["optimize"]["bounds"],
             strategy_kind=get_optional_config_value(effective, 'bot.portfolio.strategy_kind'),

@@ -136,7 +136,10 @@ class PreparedOptimizationBounds(dict):
 
 
 def get_bound_plan(config) -> BoundPlan | None:
-    bounds = config.get("optimize", {}).get("bounds")
+    optimize = config.get("optimize", {})
+    if not isinstance(optimize, dict):
+        raise TypeError("config.optimize must be a dict")
+    bounds = optimize.get("bounds")
     if type(bounds) is not PreparedOptimizationBounds:
         return None
     if type(bounds._bound_plan) is not BoundPlan:

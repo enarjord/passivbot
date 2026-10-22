@@ -148,6 +148,12 @@ def validate_config(
         else config.get("optimize", {}).get("bounds", {})
     )
     validate_bot_config(config)
+    from .entry_cooldown import validate_entry_cooldown
+
+    for pside in BOT_POSITION_SIDES:
+        validate_entry_cooldown(
+            config["bot"][pside]["entry_cooldown"], path=f"bot.{pside}.entry_cooldown"
+        )
     validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
@@ -162,9 +168,6 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.forager.unilateralness_ema_span_minutes must be between 1 and 100000"
             )
-        from .entry_cooldown import validate_entry_cooldown
-
-        validate_entry_cooldown(bot_side["entry_cooldown"], path=f"bot.{pside}.entry_cooldown")
         from .optimize_bounds import flatten_optimize_bounds
         from optimization.bounds import Bound
 

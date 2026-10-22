@@ -109,10 +109,20 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
                 if preserve_prepared_universe and
                 type(value := config["bot"][side]["universe"].get(field)) is ResolvedCoinList}
     validate_override_paths(config, overrides)
-    canonical = {".".join(require_existing_config_path(config, selector)): deepcopy(value)
-                 for selector, value in overrides.items()}
+    canonical = {}
+    for selector, value in overrides.items():
+        path = resolve_dotted_config_path(config, selector)
+        # Prepared domains are a runtime projection: an authored common range
+        # need not have a corresponding global container in that projection.
+        # The binding owner validates every declared field and range below.
+        if bounds_source is not None and path and path[:2] == ("optimize", "bounds"):
+            resolved = path
+        else:
+            resolved = require_existing_config_path(config, selector)
+        canonical[".".join(resolved)] = deepcopy(value)
     for selector, value in canonical.items():
-        if not selector.startswith("bot.") and selector != "bot":
+        if (not selector.startswith("bot.") and selector != "bot"
+                and selector != "optimize.bounds" and not selector.startswith("optimize.bounds.")):
             _set_path(config, selector.split("."), value)
     apply_bot_config_patch(config, canonical, policy_source=policy_source, bounds_source=bounds_source)
     _restore_matching_optimizer_memberships(config, prepared, require_match=True)

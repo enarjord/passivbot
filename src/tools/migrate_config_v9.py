@@ -71,8 +71,10 @@ def _restore_authored_export_inputs(exported, authored):
         for side, source in sources.items():
             exported["bot"][side]["universe"][key] = deepcopy(source)
 
-    if "bot" in authored:
-        exported["bot"]["global"]["universe"]["approved_coins"] = deepcopy(authored.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", []))
+    shared_universe = authored.get("bot", {}).get("global", {}).get("universe", {})
+    if "approved_coins" in shared_universe:
+        exported["bot"].setdefault("global", {}).setdefault("universe", {})["approved_coins"] = (
+            deepcopy(shared_universe["approved_coins"]))
 
     if "filter_by_min_effective_cost" in authored.get("backtest", {}):
         exported["backtest"]["filter_by_min_effective_cost"] = authored["backtest"]["filter_by_min_effective_cost"]
