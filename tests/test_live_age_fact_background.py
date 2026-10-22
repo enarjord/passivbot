@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import passivbot as live
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 FIRST = 1_704_067_200_000
@@ -20,7 +20,7 @@ HELD = "HELD/USDT:USDT"
 
 def _bot(side="long", exchange="binance"):
     bot = object.__new__(live.Passivbot)
-    bot.config = get_template_config()
+    bot.config = get_expanded_config_prototype()
     for pside in ("long", "short"):
         bot.config["bot"][pside]["enabled"] = pside == side
         bot.config["bot"][pside]["risk"].update(
