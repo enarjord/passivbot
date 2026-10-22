@@ -107,3 +107,22 @@ def test_actual_metal_hysteresis_matches_native_selection_and_counts(kind, topol
         assert raw["first_fill_ts"].item() == int(fills[0][1]) - int(timestamps[0])
     if profile == "equal" or topology in ("fused", "oneway"):
         assert len(fills) > 0
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_replay_checkpoint_policy_changes_for_either_fixed_margin(side):
+    from optimization.gpu.service import _gpu_proxy_execution_checkpoint_contract
+
+    policy = {"long": 0.02, "short": 0.03}
+    params = {"coins": ["AAA"], "forager_score_hysteresis": policy,
+              "side_activation": {"long": True, "short": True}}
+    options = dict(strategy_kind="ema_anchor", exchange="binance", enabled_sides=("long", "short"),
+                   hlcvs=np.ones((3, 1, 4)), timestamps=np.arange(3, dtype=np.int64),
+                   backtest_params=params, exchange_params=[], base_params={})
+    initial = _gpu_proxy_execution_checkpoint_contract(**options)
+    assert initial["forager_hysteresis_abi"] == 1
+    assert initial["backtest"]["forager_score_hysteresis"] == {"long": 0.02, "short": 0.03}
+    policy[side] += 0.01
+    changed = _gpu_proxy_execution_checkpoint_contract(**options)
+    assert changed != initial
+    assert initial["backtest"]["forager_score_hysteresis"][side] != policy[side]

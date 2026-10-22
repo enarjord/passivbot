@@ -3187,7 +3187,6 @@ def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_ord
     assert hints["peek_hints"]["expand_grid_long"] == []
     assert hints["peek_hints"]["expand_close_long"] == []
     assert hints["forager_hysteresis"] == {
-        "score_hysteresis_pct": 0.005,
         "incumbent_long": [0],
         "incumbent_short": [],
     }
