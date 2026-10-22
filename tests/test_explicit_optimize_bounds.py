@@ -7,7 +7,7 @@ import pytest
 
 from config import prepare_config
 from config.optimize_bounds import flatten_optimize_bounds, sort_optimize_bounds_in_place
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from config_utils import clean_config, strip_config_metadata
 from optimization.config_adapter import extract_bounds_tuple_list_from_config, get_optimization_key_paths
 from optimization.warmup import build_optimizer_vector_config
@@ -21,6 +21,9 @@ def flattened(config):
 
 
 def gene_bounds(config):
+    from config.inherited_bounds import get_bound_plan
+    if get_bound_plan(config) is None:
+        config = prepare_config(config, verbose=False)
     return dict(zip((key for key, _path in get_optimization_key_paths(config)),
                     extract_bounds_tuple_list_from_config(config)))
 
@@ -28,7 +31,7 @@ def gene_bounds(config):
 @pytest.mark.parametrize("omission", ["optimize", "bounds", "empty", "side", "leaf"])
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
 def test_omitted_dimensions_freeze_effective_values_through_exports(omission, strategy):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["portfolio"]["strategy_kind"] = strategy
     if strategy == "trailing_martingale":
         source["bot"]["long"]["strategy"][strategy]["entry"]["ema_span_0_minutes"] = 123.5
@@ -51,7 +54,8 @@ def test_omitted_dimensions_freeze_effective_values_through_exports(omission, st
     assert source == original
     for result in (prepared, clean_config(source),
                    prepare_config(json.loads(json.dumps(strip_config_metadata(prepared))), verbose=False)):
-        bound = gene_bounds(result)["long_ema_span_0"]
+        entry = "entry." if strategy == "trailing_martingale" else ""
+        bound = gene_bounds(result)[f"bot.long.strategy.{strategy}.{entry}ema_span_0_minutes"]
         assert bound.low == bound.high == 123.5
         if omission in {"optimize", "bounds", "empty"}:
             assert all(item.low == item.high for item in gene_bounds(result).values())
@@ -59,7 +63,7 @@ def test_omitted_dimensions_freeze_effective_values_through_exports(omission, st
 
 @pytest.mark.parametrize("fraction", [0.0, 0.37, 1.0])
 def test_candidate_vectors_vary_only_the_authored_dimension(fraction):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {
@@ -67,27 +71,31 @@ def test_candidate_vectors_vary_only_the_authored_dimension(fraction):
     }
     prepared = prepare_config(source, verbose=False)
     bounds = gene_bounds(prepared)
-    assert {key for key, value in bounds.items() if value.low != value.high} == {"long_ema_span_0"}
+    assert {key for key, value in bounds.items() if value.low != value.high} == {"bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes"}
     candidate = build_optimizer_vector_config([b.low + fraction * (b.high - b.low) for b in bounds.values()], prepared)
     for key, path in get_optimization_key_paths(prepared):
         old, new = prepared, candidate
         for part in path:
             old, new = old[part], new[part]
-        if key == "long_ema_span_0":
+        if key == "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes":
             assert new == 100.5 + fraction * 100.0
         else:
             assert new == old, key
 
 
 def test_cleaning_and_reload_preserve_disabled_zero_weight_coordinates():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
+    source["bot"]["short"]["forager"]["score_weights"] = {
+        name: 0.0 for name in source["bot"]["short"]["forager"]["score_weights"]
+    }
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     source["optimize"]["bounds"] = {}
     prepared = prepare_config(clean_config(source), verbose=False)
     bounds = gene_bounds(prepared)
     candidate = build_optimizer_vector_config([bound.low for bound in bounds.values()], prepared)
     for name, value in source["bot"]["short"]["forager"]["score_weights"].items():
         assert value == 0.0
-        assert bounds[f"short_forager_score_weights_{name}"].low == 0.0
+        assert bounds[f"bot.short.forager.score_weights.{name}"].low == 0.0
         assert candidate["bot"]["short"]["forager"]["score_weights"][name] == value
 
 
@@ -95,18 +103,18 @@ def test_sorting_does_not_open_template_ranges_and_null_stays_outside_genome():
     bounds = {"long": {"risk": {"max_positions": [3]}}}
     sort_optimize_bounds_in_place(bounds, strategy_kind="trailing_martingale")
     assert bounds == {"long": {"risk": {"max_positions": [3, 3]}}}
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {}
     prepared = prepare_config(source, verbose=False)
-    assert "long_entry_cooldown_max_duration_minutes" not in gene_bounds(prepared)
+    assert "bot.long.entry_cooldown.max_duration_minutes" not in gene_bounds(prepared)
     source["optimize"]["bounds"] = {"long": {"entry_cooldown": {"max_duration_minutes": [30.0, 60.0]}}}
-    assert gene_bounds(prepare_config(source, verbose=False))["long_entry_cooldown_max_duration_minutes"].high == 60.0
+    assert gene_bounds(prepare_config(source, verbose=False))["bot.long.entry_cooldown.max_duration_minutes"].high == 60.0
 
 
 def weight_source(bounds):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {"long": {"forager": bounds}}
@@ -122,8 +130,9 @@ def test_partial_weight_search_cannot_move_omitted_positive_coordinates():
 def test_weight_validation_respects_the_supplied_search_space():
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
-    config = prepare_config(get_template_config(), verbose=False)
-    config["bot"]['long']["enabled"] = True
+    source = get_expanded_config_prototype()
+    source["bot"]["long"]["enabled"] = True
+    config = prepare_config(source, verbose=False)
     with pytest.raises(ValueError, match="partial normalized-weight search"):
         validate_optimize_bounds_against_bot_config(config, {
             "long": {"forager": {"score_weights": {"volume": [0.1, 1.0]}}}
@@ -157,7 +166,7 @@ def test_omitted_zero_weight_is_safe_except_at_an_unauthorized_fallback(low, all
 
 
 def test_fixed_weight_leaf_is_rejected_but_fixing_whole_group_is_safe():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["optimize"]["fixed_params"] = ["long.forager.score_weights.volume"]
@@ -167,7 +176,7 @@ def test_fixed_weight_leaf_is_rejected_but_fixing_whole_group_is_safe():
     config = prepare_config(source, verbose=False)
     from optimize import apply_fine_tune_bounds
     apply_fine_tune_bounds(config, [], set())
-    assert all(bound.low == bound.high for key, bound in gene_bounds(config).items() if "forager_score_weights" in key)
+    assert all(bound.low == bound.high for key, bound in gene_bounds(config).items() if ".forager.score_weights." in key)
 
 
 @pytest.mark.parametrize("selector,value", [
@@ -176,7 +185,7 @@ def test_fixed_weight_leaf_is_rejected_but_fixing_whole_group_is_safe():
 ])
 @pytest.mark.parametrize("mirrored", [False, True])
 def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value, mirrored):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     if mirrored:
@@ -192,7 +201,7 @@ def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value, m
     {"bot.long.forager.score_weights.unilateralness": 0.5},
 ])
 def test_scenario_weight_pins_fail_before_evaluation(patch):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "pinned", "overrides": patch}])
@@ -201,7 +210,7 @@ def test_scenario_weight_pins_fail_before_evaluation(patch):
 
 
 def test_scenario_activation_cannot_move_an_omitted_positive_coordinate():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "short-active", "overrides": {
@@ -217,6 +226,7 @@ def mirrored_weight_source(strategy="trailing_martingale"):
         name: [0.0, 1.0] for name in ("volume", "volatility", "ema_readiness")
     }})
     source["bot"]["portfolio"]["strategy_kind"] = strategy
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     return source
 
@@ -225,8 +235,8 @@ def mirrored_weight_candidate(config, volume):
     bounds = gene_bounds(config)
     selected = {"volume": volume, "volatility": 0.2, "ema_readiness": 0.3}
     return build_optimizer_vector_config([
-        selected.get(key.removeprefix("long_forager_score_weights_"), bound.low)
-        if key.startswith("long_forager_score_weights_") else bound.low
+        selected.get(key.removeprefix("bot.long.forager.score_weights."), bound.low)
+        if key.startswith("bot.long.forager.score_weights.") else bound.low
         for key, bound in bounds.items()
     ], config)
 
@@ -333,7 +343,7 @@ def test_mirrored_weight_pins_follow_effective_runtime_and_scenario_activity(fie
 
 
 def test_atomic_partial_weight_object_fails_before_evaluation():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "partial-object", "overrides": {
@@ -349,7 +359,7 @@ def test_complete_scenario_weight_group_is_fixed_after_normalization(whole_forag
     from optimization.warmup import _apply_config_overrides
     from config.bot import normalize_bot_forager_config
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     side = "short" if mirrored else "long"
     if mirrored:
         source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
@@ -375,7 +385,7 @@ async def test_external_suite_pins_fail_before_market_or_dataset_preparation(mon
     import optimize_suite
     from optimize import _materialize_suite_run_contract
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     if mirrored:
@@ -398,13 +408,14 @@ async def test_external_suite_pins_fail_before_market_or_dataset_preparation(mon
 def test_partial_fine_tune_weight_selection_fails_before_candidate_evaluation(anchored):
     from optimize import apply_fine_tune_bounds, install_anchored_fine_tune_plan
 
-    config = prepare_config(get_template_config(), verbose=False)
-    config["bot"]['long']["enabled"] = True
-    config["bot"]['short']["enabled"] = True
+    source = get_expanded_config_prototype()
+    source["bot"]["long"]["enabled"] = True
+    source["bot"]["short"]["enabled"] = True
+    config = prepare_config(source, verbose=False)
     with pytest.raises(ValueError, match="partial normalized-weight search"):
         if anchored:
             install_anchored_fine_tune_plan(config, ["long.forager.score_weights.volume"], "unused",
-                                           starting_configs_override=[get_template_config()])
+                                           starting_configs_override=[source])
         else:
             apply_fine_tune_bounds(config, ["long.forager.score_weights.volume"], set())
 
@@ -415,7 +426,7 @@ def test_explicit_recommended_preset_supplies_visible_ranges_and_is_offline(tmp_
         pytest.fail("preset authoring must not contact any network")
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(socket, "getaddrinfo", denied)
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {}
@@ -437,7 +448,7 @@ def test_explicit_recommended_preset_supplies_visible_ranges_and_is_offline(tmp_
 def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(strategy, scope):
     from config.hsl import generated_template
 
-    source = generated_template(get_template_config(), scope)
+    source = generated_template(get_expanded_config_prototype(), scope)
     source["bot"]["portfolio"]["strategy_kind"] = strategy
     source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.5
     source["optimize"]["bounds"] = {}
@@ -459,7 +470,7 @@ def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missi
         source["optimize"].pop("bounds")
     source["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 42.5
     migrated = migrate(source, memory_span_minutes=123.5)
-    bounds = flattened(migrated.config)
+    bounds = flattened(prepare_config(migrated.config, verbose=False))
     assert bounds["long_ema_span_0"] == [100.0, 2880.0, 10.0]
     assert bounds["long_hsl_red_threshold"] == [0.15, 0.15, 0.001]
     assert bounds["long_unstuck_ema_dist"] == [-0.2, 0.01, 0.0001]
@@ -523,7 +534,7 @@ def test_v8_materializing_ranges_cannot_erase_conflicting_feature_bound_aliases(
 def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
     from config.migrations.released_v8 import materialize_released_v8_optimizer_bounds
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["optimize"]["bounds"] = {
         "global": {"unknown": {"future": [2.0, 3.0]}},
         "long": {
@@ -553,7 +564,7 @@ def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
 def test_explicit_relationships_derive_effective_targets_without_opening_target_genes(
     transform, source_parts, target_parts, configured, domain,
 ):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]['long']["enabled"] = True
     source["bot"]['short']["enabled"] = True
     target = source["bot"]
@@ -571,7 +582,7 @@ def test_explicit_relationships_derive_effective_targets_without_opening_target_
     bounds = extract_bounds_tuple_list_from_config(config)
     varied = [path for (_key, path), bound in zip(key_paths, bounds) if bound.low != bound.high]
     assert varied == [("bot", "long", *source_parts)]
-    if transform == "couple_unstuck_ema_spans":
+    if transform in {"couple_unstuck_ema_spans", "mirror_short_from_long"}:
         assert ("bot", *target_parts) not in [path for _key, path in key_paths]
     else:
         gene = next(bound for (_key, path), bound in zip(key_paths, bounds) if path == ("bot", *target_parts))

@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 from config import get_template_config, prepare_config
+from config.schema import get_expanded_config_prototype
 from config.overrides import parse_overrides
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.param_paths import resolve_bound_selectors
@@ -61,7 +62,7 @@ def test_risk_selectors_exclude_the_canonical_cooldown_subtree(selector, sides):
 
 
 def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"]["long"]["entry_cooldown"].update(
         max_duration_minutes=30.0,
         weights_minutes={"exposure_ratio": 10.0, "adverse_directionality": 20.0},
@@ -109,21 +110,21 @@ def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_adaptive_optimizer_rejects_invalid_domains_before_sampling(key, bound, side):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     with pytest.raises(ValueError, match="optimize.bounds"):
         validate_optimize_bounds_against_bot_config(cfg, _nested_bounds({f"{side}_{key}": bound}))
 
 
 def test_prepare_config_rejects_nested_invalid_search_domain():
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [0.0, 60.0]
     with pytest.raises(ValueError, match="optimize.bounds"):
         prepare_config(cfg, verbose=False)
 
 
 def test_adaptive_optimizer_accepts_float_span_boundaries_and_zero_weights():
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     validate_optimize_bounds_against_bot_config(
         cfg,
         _nested_bounds({
@@ -141,18 +142,18 @@ def test_canonical_cooldown_wildcards_reach_fine_tune_fixed_params_and_compositi
     from config.overrides import get_allowed_modifications
     from tools.compose_coin_overrides import _resolve_override_params
 
-    cfg = prepare_config(get_template_config(), verbose=False)
+    cfg = get_expanded_config_prototype()
     for side in ("long", "short"):
         cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
         cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
             min_duration_minutes=[0.0, 10.0], max_duration_minutes=[20.0, 60.0],
             weights_minutes={"exposure_ratio": [0.0, 10.0], "adverse_directionality": [0.0, 10.0]},
         )
-    suffixes = ("risk_entry_cooldown_minutes", "entry_cooldown_min_duration_minutes",
-                "entry_cooldown_max_duration_minutes", "entry_cooldown_weights_minutes_exposure_ratio",
-                "entry_cooldown_weights_minutes_adverse_directionality")
-    long_keys = {f"long_{suffix}" for suffix in suffixes}
-    short_keys = {f"short_{suffix}" for suffix in suffixes}
+    cfg = prepare_config(cfg, verbose=False)
+    suffixes = ("base_duration_minutes", "min_duration_minutes", "max_duration_minutes",
+                "weights_minutes.exposure_ratio", "weights_minutes.adverse_directionality")
+    long_keys = {f"bot.long.entry_cooldown.{suffix}" for suffix in suffixes}
+    short_keys = {f"bot.short.entry_cooldown.{suffix}" for suffix in suffixes}
     _, tunable, _, fixed = _resolve_fine_tune_key_sets(cfg, ["long.entry_cooldown.*"])
     assert tunable == long_keys
     assert long_keys.isdisjoint(fixed)
@@ -178,7 +179,7 @@ def test_canonical_cooldown_wildcards_reach_fine_tune_fixed_params_and_compositi
 
 @pytest.mark.parametrize("leaf", ["base_duration_minutes", "min_duration_minutes"])
 def test_only_the_nullable_ceiling_accepts_null(leaf):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["coin_overrides"] = {"BTC": {"bot": {"long": {"entry_cooldown": {leaf: None}}}}}
     with pytest.raises(TypeError, match="may not be null"):
         parse_overrides(prepare_config(cfg, verbose=False), verbose=False)
@@ -196,7 +197,7 @@ def test_only_the_nullable_ceiling_accepts_null(leaf):
     ],
 )
 def test_cooldown_search_floor_cannot_exceed_any_reachable_ceiling(side, floor, ceiling, bounds, valid):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["entry_cooldown"].update(
         min_duration_minutes=floor, max_duration_minutes=ceiling
     )
@@ -214,7 +215,7 @@ def test_cooldown_search_floor_cannot_exceed_any_reachable_ceiling(side, floor, 
 def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, bound_span):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
@@ -236,12 +237,12 @@ def test_optimizer_can_sample_ceiling_from_default_null(side):
     from optimization.config_adapter import get_optimization_key_paths
     from optimization.warmup import build_optimizer_max_config
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     assert cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] is None
     cfg["optimize"]["bounds"][side]["entry_cooldown"]["max_duration_minutes"] = [10.0, 30.0]
     cfg = prepare_config(cfg, verbose=False)
     paths = dict(get_optimization_key_paths(cfg))
-    assert paths[f"{side}_entry_cooldown_max_duration_minutes"] == (
+    assert paths[f"bot.{side}.entry_cooldown.max_duration_minutes"] == (
         "bot", side, "entry_cooldown", "max_duration_minutes"
     )
     candidate = build_optimizer_max_config(cfg)
@@ -253,7 +254,7 @@ def test_optimizer_can_sample_ceiling_from_default_null(side):
 def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"]['long']["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
@@ -271,7 +272,7 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
 def test_active_rms_consumer_uses_larger_span_bound_and_zero_consumers_need_no_rms_history():
     from warmup_utils import compute_backtest_warmup_minutes
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"]['long']["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
@@ -286,7 +287,7 @@ def test_unbounded_seed_ceiling_projects_to_finite_search_upper_bound():
     from optimization.warmup import build_optimizer_vector_config
     from optimize import config_to_individual
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"]['long']["enabled"] = True
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["max_duration_minutes"] = [10.0, 30.0]
     cfg = prepare_config(cfg, verbose=False)
@@ -302,13 +303,14 @@ def test_unbounded_seed_ceiling_projects_to_finite_search_upper_bound():
 def test_joint_ceiling_and_modifier_search_from_null_default(side, modifier):
     from optimization.warmup import validate_optimizer_effective_configs
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     bounds = cfg["optimize"]["bounds"][side]["entry_cooldown"]
     bounds["max_duration_minutes"] = [30.0, 90.0]
     bounds["weights_minutes"] = {modifier: [0.0, 20.0]}
     assert cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] is None
     cfg = prepare_config(cfg, verbose=False)
     validate_optimizer_effective_configs(cfg)
+    cfg = clean_config(cfg)
     del cfg["optimize"]["bounds"][side]["entry_cooldown"]["max_duration_minutes"]
     with pytest.raises(ValueError, match="finite when searching modifier weights"):
         prepare_config(cfg, verbose=False)
@@ -318,7 +320,7 @@ def test_joint_ceiling_and_modifier_search_from_null_default(side, modifier):
 @pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
 @pytest.mark.parametrize("positive_bound", [False, True])
 def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side, consumer, positive_bound):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
@@ -329,16 +331,18 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
         bounds["forager"]["score_weights"]["unilateralness"] = weight_bound
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": weight_bound}
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]})
     cfg = prepare_config(cfg, verbose=False)
     from optimization.warmup import validate_optimizer_dataset_intervals
     from test_backtest_directional_eligibility import _synthetic_inputs
     _, markets, _, _ = _synthetic_inputs()
-    set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]})
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if positive_bound:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
             validate_optimizer_dataset_intervals(cfg, markets, "binance")
         cfg['bot'][side]['universe']['approved_coins'] = ["UNLOADEDCOIN"]
+        cfg = prepare_config(clean_config(cfg), verbose=False)
+        cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     validate_optimizer_dataset_intervals(cfg, markets, "binance")
 
 
@@ -357,7 +361,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
 )
 @pytest.mark.parametrize("origin", ["inline", "file"])
 def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch, valid, origin):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["entry_cooldown"].update(max_duration_minutes=60.0)
     cfg["optimize"]["bounds"][side]["entry_cooldown"].update(bounds)
     coin_patch = {"bot": {side: {"entry_cooldown": patch}}}
@@ -384,7 +388,7 @@ def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch
 @pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
 @pytest.mark.parametrize("reactivates", [False, True])
 def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consumer, reactivates):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
@@ -400,11 +404,11 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
         cfg["optimize"]["bounds"][side]["forager"].setdefault("score_weights", {})["unilateralness"] = [0, 1]
     else:
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]})
     prepared = prepare_config(cfg, verbose=False)
     from optimization.warmup import validate_optimizer_dataset_intervals
     from test_backtest_directional_eligibility import _synthetic_inputs
     _, markets, _, _ = _synthetic_inputs()
-    set_side_universe_sources(prepared, 'approved_coins', {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]})
     prepared["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if reactivates:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
@@ -422,7 +426,7 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
     from optimization.config_adapter import get_optimization_key_paths
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     bounds = cfg["optimize"]["bounds"]
     bounds[side]["risk"]["max_positions"] = [2, 3]
     bounds[side]["entry_cooldown"].update(
@@ -441,18 +445,18 @@ def test_nested_optimizer_bounds_preserve_all_adaptive_dimensions(side):
         assert all(bound[0] == bound[1] for key, bound in actual.items() if key not in expected)
         paths = dict(get_optimization_key_paths(candidate))
         for leaf in ("min_duration_minutes", "max_duration_minutes"):
-            assert paths[f"{side}_entry_cooldown_{leaf}"] == ("bot", side, "entry_cooldown", leaf)
+            assert paths[f"bot.{side}.entry_cooldown.{leaf}"] == ("bot", side, "entry_cooldown", leaf)
         for modifier in ("exposure_ratio", "adverse_directionality"):
-            assert paths[f"{side}_entry_cooldown_weights_minutes_{modifier}"] == ("bot", side, "entry_cooldown", "weights_minutes", modifier)
-        assert f"{side}_unilateralness_ema_span_1m" in paths
-        assert f"{side}_forager_score_weights_unilateralness" in paths
+            assert paths[f"bot.{side}.entry_cooldown.weights_minutes.{modifier}"] == ("bot", side, "entry_cooldown", "weights_minutes", modifier)
+        assert f"bot.{side}.forager.unilateralness_ema_span_minutes" in paths
+        assert f"bot.{side}.forager.score_weights.unilateralness" in paths
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("modifier", ["exposure_ratio", "adverse_directionality"])
 @pytest.mark.parametrize("origin", ["inline", "file"])
 def test_coin_zero_modifier_pin_can_clear_searched_ceiling(side, modifier, origin):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
         max_duration_minutes=[30, 90], weights_minutes={modifier: [0, 20]},
     )
@@ -479,7 +483,7 @@ def test_coin_zero_modifier_pin_can_clear_searched_ceiling(side, modifier, origi
 def test_nullable_cooldown_ceiling_cli_roundtrip(side, parser_ceiling, spelling, argument, expected):
     import argparse
     from config_utils import add_config_arguments, update_config_with_args
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     template["bot"][side]["entry_cooldown"]["max_duration_minutes"] = parser_ceiling
     parser = argparse.ArgumentParser()
     keys = add_config_arguments(parser, template)
@@ -488,7 +492,7 @@ def test_nullable_cooldown_ceiling_cli_roundtrip(side, parser_ceiling, spelling,
     args = parser.parse_args([] if argument is None else [f"--{option}", argument])
     if argument is None:
         assert key not in vars(args)
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     update_config_with_args(cfg, args, allowed_keys=keys)
     result = prepare_config(cfg, verbose=False)
@@ -559,7 +563,7 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     from optimization.warmup import validate_optimizer_dataset_intervals
     from test_backtest_directional_eligibility import _synthetic_inputs
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["enabled"] = True
     cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
     bounds = cfg["optimize"]["bounds"][side]
@@ -567,10 +571,10 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     bounds["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     if pinned is not None:
         cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.max_positions": pinned}
-    cfg = prepare_config(cfg, verbose=False)
-    _, markets, _, _ = _synthetic_inputs()
     set_side_universe_sources(cfg, 'approved_coins', {"long": [], "short": []})
     cfg['bot'][side]['universe']['approved_coins'] = ["LONGCOIN", "SHORTCOIN"][:eligible]
+    cfg = prepare_config(cfg, verbose=False)
+    _, markets, _, _ = _synthetic_inputs()
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if reject:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
@@ -592,7 +596,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
     from optimization.warmup import validate_optimizer_dataset_intervals, compute_optimizer_per_coin_warmup_minutes
     from test_backtest_directional_eligibility import _synthetic_inputs
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"].update(
@@ -606,8 +610,8 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
     )
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
     cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_minutes"] = [1.0, 60.0]
-    cfg = prepare_config(cfg, verbose=False)
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]})
+    cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == (1201 if reject else 3)
     _, markets, _, _ = _synthetic_inputs()
@@ -629,7 +633,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
     ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": None}, True),
 ])
 def test_cooldown_corners_apply_fixed_runtime_pins_after_genes(side, bounds, fixed, valid):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 30.0
     cfg["optimize"]["bounds"][side]["entry_cooldown"].update(bounds)
     cfg["optimize"]["fixed_runtime_overrides"] = {
@@ -644,7 +648,7 @@ def test_cooldown_corners_apply_fixed_runtime_pins_after_genes(side, bounds, fix
 
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_coin_cooldown_pins_apply_after_fixed_runtime_overrides(side):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["optimize"]["bounds"][side]["entry_cooldown"]["max_duration_minutes"] = [10, 30]
     cfg["optimize"]["fixed_runtime_overrides"] = {
         f"bot.{side}.entry_cooldown.max_duration_minutes": 20,
@@ -662,7 +666,7 @@ def test_coin_cooldown_pins_apply_after_fixed_runtime_overrides(side):
 def test_modifier_search_honors_fixed_ceiling_and_weight_pins(side, modifier, ceiling_bound):
     from optimization.warmup import validate_optimizer_effective_configs
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     bounds = cfg["optimize"]["bounds"][side]["entry_cooldown"]
     bounds["weights_minutes"] = {modifier: [0.0, 20.0]}
     if ceiling_bound:
