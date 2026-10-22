@@ -32,7 +32,7 @@ def policy():
     set_side_universe_sources(source, "ignored_coins", {"long": [], "short": []})
     source["optimize"]["bounds"] = {}
     source["optimize"]["enable_overrides"] = []
-    source["bot"]["long"]["unstuck"]["close_fraction"] = 0.05
+    source["bot"]["long"]["unstuck"] = {"close_fraction": 0.05}
     return source
 
 

@@ -494,6 +494,9 @@ def test_explain_default_activation_and_normalized_weights_are_visible():
     source = {"config_version": "v9.0.0", "bot": {}, "live": {}}
     report = explain_config(source, "bot.long.enabled")
     assert report["value"] is False
+    assert report["sources"][-1] == {"kind": "default_or_derived", "path": "bot.long.enabled"}
+    source["bot"]["global"] = {"enabled": False}
+    report = explain_config(source, "bot.long.enabled")
     assert report["sources"][-1] == {
         "kind": "inherited", "path": "bot.global.enabled", "value": False,
         "target": "bot.long.enabled",

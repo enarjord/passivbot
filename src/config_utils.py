@@ -827,7 +827,9 @@ def clean_config(config: dict) -> dict:
     # A reusable source export has complete common defaults and only declared
     # side pins. Hydrating an expanded side tree would silently freeze future
     # common edits, including equal-valued explicit pins.
-    cleaned["bot"] = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).source_view(include_defaults=True)
+    cleaned["bot"] = resolve_bot_policy(
+        _clean_dynamic_node(source.get("bot", {})), get_side_field_catalog()
+    ).source_view(include_defaults=True)
     for side in ("long", "short"):
         cleaned["bot"].setdefault(side, {})
     cleaned["optimize"]["bounds"] = deepcopy(source.get("optimize", {}).get("bounds", {}))

@@ -421,6 +421,9 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     authored, full = _authored(source, base_config_path)
     # Cleanup returns reusable authored policy. Inspection needs the resolved
     # numeric view and its validated gene bindings, without changing exports.
+    # Capture the original declarations before completed common defaults could
+    # be mistaken for authored global pins in the inspection provenance.
+    full["bot"] = deepcopy(authored.get("bot", {}))
     full = prepare_config(full, base_config_path=base_config_path, live_only=True,
                           verbose=False, log_config_transforms=False)
     parts = resolve_dotted_config_path(full, path)

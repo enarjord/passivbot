@@ -223,7 +223,7 @@ def test_explain_optimizer_transform_keeps_selected_relative_coin_file_context(
             tmp_path, monkeypatch, decoy=source_kind == "symlink-decoy",
         )
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
-    source["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 42.5
+    source["bot"]["long"]["unstuck"] = {"ema_span_0_minutes": 42.5}
     write_json(actual, source)
     before = deepcopy(source)
     source_bytes = actual.read_bytes()
