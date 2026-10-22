@@ -7,11 +7,11 @@ import backtest
 from backtest import get_cache_hash
 from backtest_universe import effective_backtest_data_coins, normalize_backtest_coin
 from config import prepare_config
-from config_utils import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 def _base_config() -> dict:
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     for side in ("long", "short"):
         cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["exchanges"] = ["binance"]
@@ -179,12 +179,13 @@ def test_hlcvs_cache_hash_changes_for_canonical_grouped_side_enablement():
     assert get_cache_hash(disabled_long, "binance") != get_cache_hash(enabled_long, "binance")
 
 
-def test_effective_backtest_data_coins_rejects_missing_approved_side():
+def test_effective_backtest_data_coins_inherits_shared_approval_for_omitted_side():
     cfg = _base_config()
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["global"]["universe"]["approved_coins"] = ["B", "C"]
     del cfg["bot"]["long"]["universe"]["approved_coins"]
 
-    with pytest.raises(KeyError, match=r"bot\.long\.universe\.approved_coins"):
-        effective_backtest_data_coins(cfg)
+    assert effective_backtest_data_coins(cfg) == ["A", "B", "C"]
 
 
 def test_effective_backtest_data_coins_inherits_shared_approval_for_null_side():
