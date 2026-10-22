@@ -58,6 +58,23 @@ impl SideActivation {
     }
 }
 
+/// Fixed side-specific normalized score margins; no independent optimizer genes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForagerScoreHysteresis {
+    pub long: f64,
+    pub short: f64,
+}
+
+impl ForagerScoreHysteresis {
+    pub const fn uniform(margin: f64) -> Self {
+        Self {
+            long: margin,
+            short: margin,
+        }
+    }
+}
+
 /// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
 ///
 /// The numeric fields mirror the values currently distributed through `mss` dictionaries in
@@ -377,7 +394,7 @@ pub struct BacktestParams {
     pub market_order_near_touch_threshold: f64,
     pub market_order_slippage_pct: f64,
     pub limit_order_fill_buffer_pct: f64,
-    pub forager_score_hysteresis_pct: f64,
+    pub forager_score_hysteresis: ForagerScoreHysteresis,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 

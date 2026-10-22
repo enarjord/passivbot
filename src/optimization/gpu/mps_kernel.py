@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from config.policy import validate_minimum_cost_filters
 from config.activation import validate_side_activation
+from config.forager_hysteresis import validate_forager_score_hysteresis
 from functools import lru_cache
 import time
 import logging
@@ -1312,7 +1313,7 @@ class _MulticoinReplayRunner:
         *,
         side: str,
         coin_overrides: np.ndarray | None = None,
-        forager_score_hysteresis_pct: float = 0.0,
+        forager_score_hysteresis: dict[str, float],
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
@@ -1541,13 +1542,7 @@ class _MulticoinReplayRunner:
         # stay in the Rust-owned shader and may differ on every dispatch.
         self.coin_overrides_absent = not bool(np.isfinite(coin_overrides).any())
         self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
-        forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
-        if not np.isfinite(forager_score_hysteresis_pct) or (
-            forager_score_hysteresis_pct < 0.0
-        ):
-            raise ValueError(
-                "forager_score_hysteresis_pct must be finite and non-negative"
-            )
+        self.forager_score_hysteresis = validate_forager_score_hysteresis(forager_score_hysteresis)
         max_realized_loss_pct = float(max_realized_loss_pct)
         if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
             raise ValueError("max_realized_loss_pct must be finite and non-negative")
@@ -1579,7 +1574,7 @@ class _MulticoinReplayRunner:
                 liq_floor,
                 run.interval_ms,
                 float(side == "short"),
-                forager_score_hysteresis_pct,
+                self.forager_score_hysteresis[side],
                 encoded_max_realized_loss_pct,
                 float(self.collect_coin_fill_counts),
                 market_order_slippage_pct,
@@ -2156,8 +2151,6 @@ class _MulticoinReplayRunner:
             first_observed=self._hourly_first_observed, coin_ranges=self._hourly_coin_ranges,
             requested_start=self.requested_start_idx, warmup_bars=self.run_config.warmup_bars,
             available=self.n, end_steps=end_steps,
-            side_activation=tuple(self.side_activation[side] for side in
-                                  (("long", "short") if self.replay_sides == 2 else (self.side,))),
         )
         # Host feature proofs consume public policy columns; the shader matrix
         # additionally carries private decimal operands after each side block.
@@ -2493,7 +2486,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         *,
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
-        forager_score_hysteresis_pct: float = 0.0,
+        forager_score_hysteresis: dict[str, float],
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
@@ -2528,7 +2521,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             data,
             side="long",
             coin_overrides=long_coin_overrides,
-            forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+            forager_score_hysteresis=forager_score_hysteresis,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
@@ -2605,7 +2598,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 liq_floor,
                 run.interval_ms,
                 0.0,
-                float(forager_score_hysteresis_pct),
+                self.forager_score_hysteresis["long"],
                 encoded_max_realized_loss_pct,
                 float(self.collect_coin_fill_counts),
                 market_order_slippage_pct,
@@ -2621,6 +2614,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
                 float(self.side_activation["long"]),  # Fused activation ABI 1.
                 float(self.side_activation["short"]),
+                self.forager_score_hysteresis["short"],  # Fused hysteresis ABI 1.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -2754,7 +2748,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         *,
         side: str,
         coin_overrides: np.ndarray | None = None,
-        forager_score_hysteresis_pct: float = 0.0,
+        forager_score_hysteresis: dict[str, float],
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
@@ -2789,7 +2783,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             data,
             side=side,
             coin_overrides=coin_overrides,
-            forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+            forager_score_hysteresis=forager_score_hysteresis,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
@@ -2947,7 +2941,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         *,
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
-        forager_score_hysteresis_pct: float = 0.0,
+        forager_score_hysteresis: dict[str, float],
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
@@ -2982,7 +2976,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             data,
             side="long",
             coin_overrides=long_coin_overrides,
-            forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+            forager_score_hysteresis=forager_score_hysteresis,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
@@ -3054,7 +3048,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 liq_floor,
                 run.interval_ms,
                 0.0,
-                float(forager_score_hysteresis_pct),
+                self.forager_score_hysteresis["long"],
                 encoded_max_realized_loss_pct,
                 float(self.collect_coin_fill_counts),
                 float(market_order_slippage_pct),
@@ -3070,6 +3064,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
                 float(self.side_activation["long"]),  # Fused activation ABI 1.
                 float(self.side_activation["short"]),
+                self.forager_score_hysteresis["short"],  # Fused hysteresis ABI 1.
             ],
             dtype=torch.float32,
             device=gpu_device(),
