@@ -65,6 +65,8 @@ def _apply_config_overrides(
         for part in parts[:-1]:
             target = target[part]
         target[parts[-1]] = value
+    from config.activation import apply_activation_patch
+    apply_activation_patch(config, overrides)
     if prepared:
         same_policy = shared == config["bot"]["global"]["universe"]["approved_coins"] and all(
             sources[field] == raw_side_universe_sources(config, field) for field in sources
@@ -417,6 +419,7 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
     from backtest import prep_backtest_args
     from warmup_utils import rms_side_enabled
     from config.entry_cooldown import uses_adverse_rms
+    from config.activation import side_enabled
 
     for candidate in _build_optimizer_boundary_configs(config, rms_consumer_corner=True):
         bot_params, _, _, _ = prep_backtest_args(candidate, mss, exchange)
@@ -429,6 +432,8 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
                     or eligible > bot_params[0][side]["n_positions"]
                 )
                 if (
+                    side_enabled(candidate, side)
+                    and
                     params["entry_eligible"]
                     and rms_side_enabled(params, side)
                     and (

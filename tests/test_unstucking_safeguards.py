@@ -493,6 +493,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "unstuck_loss_allowance_pct": 0.0,
             }
             self._live_values = {
+                "side_activation": {"long": True, "short": True},
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": False,
                 "order_match_tolerance_pct": 0.0,

@@ -14,6 +14,31 @@ from test_native_planning import set_value
 from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
 
 
+def test_projection_accepts_only_owned_activation_view_with_unchanged_source():
+    from config import prepare_config
+    from config.activation import ActivationSource, PreparedActivationBot, apply_activation_patch
+
+    config = prepare_config({"config_version": "v9.0.0", "bot": {}},
+                            live_only=True, verbose=False)
+    guard = planning._compile_projection_guard(config, ())
+    assert guard is not None and guard(deepcopy(config))
+    changed = deepcopy(config)
+    # Equal effective false, different declaration: full matching is required.
+    apply_activation_patch(changed, {"bot.short.enabled": False})
+    assert not guard(changed)
+    changed = deepcopy(config)
+    changed["bot"]["long"]["enabled"] = True
+    assert not guard(changed)
+    class ForeignBot(PreparedActivationBot):
+        pass
+    changed = deepcopy(config)
+    changed["bot"] = ForeignBot(changed["bot"], ActivationSource(None, None, None))
+    assert planning._compile_projection_guard(changed, ()) is None
+    assert not guard(changed)
+    changed["bot"] = dict(config["bot"])
+    assert not guard(changed)
+
+
 def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror=False,
                       selected_indices=(2,), max_positions=None):
     config, candles, markets, _btc, _timestamps = fixture_inputs(build_parser().parse_args([

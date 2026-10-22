@@ -63,6 +63,7 @@ DEFAULT_APPROVED_COINS = [
 def _get_shared_bot_defaults():
     return {
         "long": {
+            "enabled": False,
             "forager": {
                 "always_include": [],
                 "score_weights": {
@@ -116,6 +117,7 @@ def _get_shared_bot_defaults():
             },
         },
         "short": {
+            "enabled": False,
             "forager": {
                 "always_include": [],
                 "score_weights": {
@@ -373,6 +375,7 @@ def _build_template_config():
                     "unstuck": {"memory_ema_span_minutes": 43200.0},
                 },
                 "global": {
+                    "enabled": False,
                     "universe": {"approved_coins": list(DEFAULT_APPROVED_COINS)},
                     "forager": {"score_hysteresis_margin": 0.02},
                 },

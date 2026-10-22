@@ -22,7 +22,7 @@ def effective_end_steps(end_steps, *, candidates, available):
 
 def validate_hourly_bootstrap_inputs(
     params, keys, coin_overrides, *, first_observed, coin_ranges,
-    requested_start, warmup_bars, available, end_steps=None,
+    requested_start, warmup_bars, available, end_steps=None, side_activation=None,
 ):
     """Admit hourly-dependent GPU policies only with a real planning-time basis.
 
@@ -45,7 +45,12 @@ def validate_hourly_bootstrap_inputs(
     else:
         raise ValueError("Unsupported GPU hourly EMA parameter layout")
     ends = effective_end_steps(end_steps, candidates=len(matrix), available=available)
+    if side_activation is not None and (len(side_activation) != len(coin_overrides)
+            or any(type(flag) is not bool for flag in side_activation)):
+        raise TypeError("hourly bootstrap activation must contain one boolean per side")
     for side, overrides in enumerate(coin_overrides):
+        if side_activation is not None and not side_activation[side]:
+            continue
         policy = matrix[:, side * width:(side + 1) * width]
         enabled = ((policy[:, keys.index("total_wallet_exposure_limit")] > 0.0)
                    & (np.rint(policy[:, keys.index("n_positions")]) > 0.0))

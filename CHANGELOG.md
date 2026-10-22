@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add explicit side activation: `bot.global.enabled` defaults false, omitted directional flags
+  inherit it, and explicit side booleans pin permission. Disabled sides cannot open or increase
+  exposure; numeric capacities, operational modes and held-position close/protection policy remain
+  separate. Zero capacity no longer implies manual mode, and existing sizing/risk gates still apply.
+  Live, Rust backtests and supported GPU replay transport both strict booleans and include them in
+  evaluation/replay identity. Released-v8 conversion reports both sides enabled while retaining
+  frozen numeric defaults and search ranges; no unpublished-v9 migration is provided.
+
 - Group account-wide trading controls under `bot.portfolio`: strategy selection, hedge mode,
   execution, warmup, HSL scope and explicit portfolio policy, realized-loss gate, and unstuck
   realized-memory span. Shared approval sources and forager hysteresis remain under `bot.global`.

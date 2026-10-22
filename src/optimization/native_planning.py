@@ -140,21 +140,33 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
             return lambda current: _finite_projection_number(current) and current >= 0.0
         return _finite_projection_number
     from config.universe import ResolvedCoinList
+    from config.activation import ActivationSource, PreparedActivationBot
     kind = type(value)
-    if kind in (dict, list, tuple, ResolvedCoinList):
+    if kind in (dict, list, tuple, ResolvedCoinList, PreparedActivationBot):
         # Ignored metadata can contain cycles or arbitrarily deep containers.
         # It remains valid for the legacy cleaner; decline this optional guard.
         if len(path) > 32 or id(value) in ancestors:
             return None
         ancestors = (*ancestors, id(value))
-    if kind is dict:
+    if kind in (dict, PreparedActivationBot):
+        source_guard = None
+        if kind is PreparedActivationBot:
+            if path != ("bot",) or type(value._activation_source) is not ActivationSource:
+                return None
+            source = value._activation_source
+            if any(flag is not None and type(flag) is not bool
+                   for flag in (source.global_enabled, source.long, source.short)):
+                return None
+            source_guard = lambda current: (type(current._activation_source) is ActivationSource
+                                             and current._activation_source == source)
         if any(type(key) is not str for key in value):
             return None
         children = tuple((key, _compile_projection_guard(child, numeric_paths, (*path, key), ancestors))
                          for key, child in value.items())
         if any(guard is None for _key, guard in children):
             return None
-        return lambda current: (type(current) is dict and len(current) == len(children)
+        return lambda current: (type(current) is kind and len(current) == len(children)
+                                and (source_guard is None or source_guard(current))
                                 and all(type(key) is str for key in current)
                                 and all(key in current and guard(current[key]) for key, guard in children))
     if kind is ResolvedCoinList:

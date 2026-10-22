@@ -202,6 +202,7 @@ _FIELDS_BY_TYPE = {
         """,
         "optimize": "compress_results_file write_all_results",
         "optimize.pymoo.shared": "eliminate_duplicates",
+        "bot.global": "enabled",
         "bot.portfolio": "hedge_mode",
         "bot.portfolio.execution": "market_orders_allowed",
     },
@@ -273,7 +274,7 @@ _SHARED_SIDE_FIELDS = {
         unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
-        hsl.enabled hsl.scale_budget_with_excess_allowance
+        enabled hsl.enabled hsl.scale_budget_with_excess_allowance
         risk.position_exposure_enforcer.enabled risk.total_exposure_enforcer.enabled
         universe.filter_by_min_effective_cost
         unstuck.ema_gating_enabled unstuck.enabled

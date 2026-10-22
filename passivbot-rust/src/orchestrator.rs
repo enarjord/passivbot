@@ -3999,7 +3999,7 @@ mod core {
                     &s.long,
                 )?;
 
-                let allow_initial = symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
+                let allow_initial = enabled_long && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4092,7 +4092,7 @@ mod core {
                 )?;
 
                 let allow_initial =
-                    symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
+                    enabled_short && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                         && actives_short[s.symbol_idx]
                         && !workspace.one_way_block_initial_short[s.symbol_idx]
                         && effective_min_cost_is_low_enough(
@@ -4750,7 +4750,7 @@ mod core {
                     .map(|state| state.mode)
                     .unwrap_or_else(|| effective_mode(s.short.mode, s.short.position.size != 0.0));
                 let long_allow_initial =
-                    symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
+                    enabled_long && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                         && workspace.actives_long[s.symbol_idx]
                         && !workspace.one_way_block_initial_long[s.symbol_idx]
                         && effective_min_cost_is_low_enough(
@@ -4786,7 +4786,7 @@ mod core {
                     );
                 }
                 let short_allow_initial =
-                    symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
+                    enabled_short && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                         && workspace.actives_short[s.symbol_idx]
                         && !workspace.one_way_block_initial_short[s.symbol_idx]
                         && effective_min_cost_is_low_enough(
