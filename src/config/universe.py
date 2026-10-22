@@ -16,10 +16,13 @@ class ResolvedCoinList(list):
     This is not a cache: each refresh reads the source again. JSON input cannot
     construct this internal view, and assigning a plain public value replaces it.
     """
-    def __init__(self, values, source, shared_source=None):
+    def __init__(self, values, source, shared_source=None, *, source_present=True):
+        if type(source_present) is not bool:
+            raise TypeError("prepared source presence must be a boolean")
         super().__init__(values)
         self.source = deepcopy(source)
         self.shared_source = deepcopy(shared_source)
+        self.source_present = source_present
 
 
 def restore_universe_sources(config):
