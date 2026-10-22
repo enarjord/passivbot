@@ -29,7 +29,7 @@ def build_pymoo_record_entry(
     )
     anchor_meta = config.get("_optimizer_anchor")
     from config.universe import anchored_universe_source_view
-    entry = clean_config(strip_config_metadata(anchored_universe_source_view(config)))
+    entry = clean_config(strip_config_metadata(anchored_universe_source_view(config, candidate=True)))
     # Prepared dataset membership is result provenance, not user configuration.
     # Cleaning strips it, but single-run resume compares the exact membership.
     if "coins" in config.get("backtest", {}):

@@ -377,7 +377,8 @@ def bot_policy_source_view(config: Mapping, *, include_defaults=False, candidate
     Callers apply declared changes through ``apply_bot_policy_patch`` before
     exporting. Plain JSON fields never become a retained internal snapshot.
     """
-    result = deepcopy(dict(config))
+    from .inherited_bounds import optimize_bounds_source_view
+    result = optimize_bounds_source_view(config)
     policy = reconciled_bot_policy(config)
     if policy is not None:
         result["bot"] = (policy.candidate_view() if candidate else
@@ -522,6 +523,11 @@ def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *
                     normalize_forager_score_weights(
                         weights, path=".".join(("bot", path[1], *weights_path)),
                     )
+        if channel == "gene" and FieldType.INTEGER in field.types:
+            if field.suffix != ("risk", "max_positions"):
+                raise ValueError("integer gene requires an owning canonical adapter")
+            from .bot import normalize_position_count
+            value = normalize_position_count(value, path=".".join(path))
         _set(source, path[1:], deepcopy(value))
         prepared = tuple(entry for entry in prepared if not _intersects(path, entry.path)
                          and not (path[:2] == ("bot", "global") and _intersects(path[2:], entry.path[2:])))
@@ -531,7 +537,13 @@ def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *
         else:
             genes = {entry for entry in genes if not _intersects(path, entry)}
     result = resolve_bot_policy(source, policy.catalog)
-    return replace(result, _prepared=prepared, _derived=tuple(derived), _genes=frozenset(genes))
+    # A derived write does not reopen unrelated formatter representations.
+    # Source/gene writes deliberately clear all normalized values so their
+    # owning formatter recomputes them from the new raw policy.
+    normalized = tuple(entry for entry in policy._normalized
+                       if not any(_intersects(path, entry.path) for path in paths)) if channel == "derived" else ()
+    return replace(result, _prepared=prepared, _derived=tuple(derived),
+                   _genes=frozenset(genes), _normalized=normalized)
 
 
 def resolve_coin_bot_policy(policy: BotPolicy, patch: Mapping, *, coin: str,
@@ -595,12 +607,12 @@ def with_normalized_bot_values(policy, effective_bot):
                 continue
             path = (scope, *field.suffix)
             value = _get(effective_bot, path)
-            if value is not ABSENT and value != _get(raw, path):
+            if value is not ABSENT and (value != _get(raw, path) or type(value) is not type(_get(raw, path))):
                 entries.append(_DerivedValue(("bot", *path), _freeze(value), "normalization"))
     for spec in policy.catalog.portfolio_fields:
         path = spec.path[1:]
         value = _get(effective_bot, path)
-        if value is not ABSENT and value != _get(raw, path):
+        if value is not ABSENT and (value != _get(raw, path) or type(value) is not type(_get(raw, path))):
             entries.append(_DerivedValue(spec.path, _freeze(value), "normalization"))
     return replace(policy, _normalized=tuple(entries))
 

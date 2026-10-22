@@ -15,49 +15,12 @@ DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long
 MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS = 24.0 * 365.25 * 100.0
 
 
-DEFAULT_APPROVED_COINS = [
-    "BTC",
-    "ETH",
-    "BNB",
-    "XRP",
-    "SOL",
-    "TRX",
-    "HYPE",
-    "DOGE",
-    "ZEC",
-    "XLM",
-    "ADA",
-    "LINK",
-    "XMR",
-    "CC",
-    "BCH",
-    "TON",
-    "GRAM",
-    "LTC",
-    "HBAR",
-    "SUI",
-    "AVAX",
-    "NEAR",
-    "UNI",
-    "TAO",
-    "ASTER",
-    "ONDO",
-    "AAVE",
-    "DOT",
-    "WLD",
-    "MNT",
-    "MORPHO",
-    "POL",
-    "ATOM",
-    "RENDER",
-    "KAS",
-    "ENA",
-    "ALGO",
-    "FIL",
-    "ARB",
-    "APT",
-    "INJ"
-]
+def _side_bot_prototype():
+    result = get_common_bot_defaults()
+    # This internal shape is also used by explicit authored fixture builders.
+    # Null approval retains the shared source; [] would be a concrete deny pin.
+    result["universe"]["approved_coins"] = None
+    return result
 
 
 _template_cache = None
@@ -261,8 +224,8 @@ def _build_template_config():
                     "unstuck": {"memory_ema_span_minutes": 43200.0},
                 },
                 "global": get_common_bot_defaults(),
-                "long": get_common_bot_defaults(),
-                "short": get_common_bot_defaults(),
+                "long": _side_bot_prototype(),
+                "short": _side_bot_prototype(),
             },
             "coin_overrides": {},
             "live": {
@@ -443,6 +406,8 @@ def get_template_config():
     recommended search range.
     """
     result = get_expanded_config_prototype()
+    kind = result["bot"]["portfolio"]["strategy_kind"]
+    result["bot"]["global"]["strategy"] = {kind: result["bot"]["global"]["strategy"][kind]}
     result["bot"]["long"] = {}
     result["bot"]["short"] = {}
     result["optimize"]["bounds"] = {}

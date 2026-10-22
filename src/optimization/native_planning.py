@@ -38,6 +38,12 @@ def _remove_path(config, path):
 
 def _request_owned_paths(config):
     """Paths removed from execution identity, independent of searched bounds."""
+    from config.bot_inheritance import get_bot_policy
+    policy = get_bot_policy(config)
+    if policy is not None:
+        for field in policy.catalog.fields:
+            if field.optimizable:
+                yield ("bot", "global", *field.suffix)
     kind = config['bot']["portfolio"]['strategy_kind']
     dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
     for side in ("long", "short"):
@@ -105,6 +111,12 @@ def _static_contract(config):
             _remove_path(result, path)
     for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
         _remove_path(result, ("bot", "portfolio", "hsl", key))
+    for path in _request_owned_paths(config):
+        _remove_path(result, path)
+    from config.inherited_bounds import get_bound_plan
+    bound_plan = get_bound_plan(config)
+    if bound_plan is not None:
+        result["bot_binding_plan"] = bound_plan.identity()
     coupled = unstuck_ema_spans_coupled(config)
     # CPU worker views lower coupled unstuck spans to ordinary request inheritance.
     # Strategy coin pins remain static; their derived unstuck copies must not
@@ -142,14 +154,15 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
     from config.universe import ResolvedCoinList
     from config.activation import ActivationSource, PreparedActivationBot
     from config.bot_inheritance import BotPolicy, PreparedBotPolicy
+    from config.inherited_bounds import BoundPlan, PreparedOptimizationBounds
     kind = type(value)
-    if kind in (dict, list, tuple, ResolvedCoinList, PreparedActivationBot, PreparedBotPolicy):
+    if kind in (dict, list, tuple, ResolvedCoinList, PreparedActivationBot, PreparedBotPolicy, PreparedOptimizationBounds):
         # Ignored metadata can contain cycles or arbitrarily deep containers.
         # It remains valid for the legacy cleaner; decline this optional guard.
         if len(path) > 32 or id(value) in ancestors:
             return None
         ancestors = (*ancestors, id(value))
-    if kind in (dict, PreparedActivationBot, PreparedBotPolicy):
+    if kind in (dict, PreparedActivationBot, PreparedBotPolicy, PreparedOptimizationBounds):
         source_guard = None
         if kind is PreparedActivationBot:
             if path != ("bot",) or type(value._activation_source) is not ActivationSource:
@@ -174,6 +187,15 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                         and candidate._prepared == policy._prepared
                         and candidate._genes == policy._genes
                         and authored_guard(candidate.source_view(include_defaults=True)))
+        if kind is PreparedOptimizationBounds:
+            if path != ("optimize", "bounds") or type(value._bound_plan) is not BoundPlan:
+                return None
+            plan_identity = value._bound_plan.identity()
+            authored = value._authored_bounds
+            baseline = value._runtime_baseline
+            source_guard = lambda current: (type(current._bound_plan) is BoundPlan
+                and current._bound_plan.identity() == plan_identity
+                and current._authored_bounds == authored and current._runtime_baseline == baseline)
         if any(type(key) is not str for key in value):
             return None
         children = tuple((key, _compile_projection_guard(child, numeric_paths, (*path, key), ancestors))
@@ -194,8 +216,9 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
         if (type(value.source_present) is not bool or source_guard is None
                 or shared_guard is None or any(guard is None for guard in children)):
             return None
+        source_present = value.source_present
         return lambda current: (type(current) is ResolvedCoinList and len(current) == len(children)
-                                and type(current.source_present) is bool and current.source_present == value.source_present
+                                and type(current.source_present) is bool and current.source_present == source_present
                                 and source_guard(current.source) and shared_guard(current.shared_source)
                                 and all(guard(child) for guard, child in zip(children, current)))
     if kind in (list, tuple):

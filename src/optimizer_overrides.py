@@ -1,4 +1,5 @@
 from copy import deepcopy
+from functools import wraps
 import math
 
 from config.access import require_config_value
@@ -98,6 +99,42 @@ def unstuck_ema_spans_coupled(config):
     )
 
 
+def _typed_derived_owner(function):
+    """Retain the transform owner's actual writes as effective overlays.
+
+    Trace paths describe these existing computations; they never authorize a
+    new source field or a search coordinate. Candidate exports materialize the
+    overlays explicitly, while reusable sources retain their original pins.
+    """
+    @wraps(function)
+    def apply(*args, **kwargs):
+        from config.bot_inheritance import (
+            get_bot_policy, apply_bot_policy_patch, install_bot_policy,
+        )
+        position = 1 if function.__name__ == "optimizer_overrides" else 0
+        config = args[position] if len(args) > position else kwargs["config"]
+        policy = get_bot_policy(config)
+        if policy is None:
+            return function(*args, **kwargs)
+        writes = {}
+        caller_trace = kwargs.get("trace")
+        def trace(name, target, dependencies, value, operation):
+            target = tuple(target)
+            if (len(target) > 2 and target[:1] == ("bot",) and target[1] in ("long", "short")
+                    and policy.catalog.find(target[2:]) is not None):
+                writes[".".join(target)] = deepcopy(value)
+            if caller_trace is not None:
+                caller_trace(name, target, dependencies, value, operation)
+        kwargs["trace"] = trace
+        result = function(*args, **kwargs)
+        if writes:
+            derived = apply_bot_policy_patch(policy, writes, channel="derived")
+            install_bot_policy(result, derived, effective_bot=result["bot"])
+        return result
+    return apply
+
+
+@_typed_derived_owner
 def couple_unstuck_ema_spans(config, pside, *, trace=None):
     """Materialize the effective strategy horizons, including each coin's patches.
 
@@ -225,6 +262,7 @@ def _require_trailing_martingale_side(config, pside):
     return strategy_cfg
 
 
+@_typed_derived_owner
 def optimizer_overrides(overrides_list, config, pside=None, *, trace=None):
     if not overrides_list:
         # No overrides to apply

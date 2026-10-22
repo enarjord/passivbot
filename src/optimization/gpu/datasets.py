@@ -50,6 +50,7 @@ class PreparedGpuDataset:
     config_json: str = field(repr=False)
     markets_json: str = field(repr=False)
     universe_snapshot: PreparedUniverseSnapshot = field(repr=False)
+    bot_policy: object = field(repr=False)
 
     def __init__(self, *, config, markets, hlcvs, btc, timestamps, candle_coins, exchange, metrics,
                  time_range=None, coin_indices=None, timestamp_range=None,
@@ -124,7 +125,8 @@ class PreparedGpuDataset:
                     or eligibility_rows.shape != (timestamp_span[1] - timestamp_span[0],)):
                 raise ValueError("Organillo buffers must match selected coin columns and candle rows")
         universe_snapshot = runtime_universe_snapshot(config, available_coins=coins)
-        values = dict(universe_snapshot=universe_snapshot, hlcvs=hlcvs, btc=btc, timestamps=timestamps, exchange=exchange,
+        from config.bot_inheritance import reconciled_bot_policy
+        values = dict(bot_policy=reconciled_bot_policy(config), universe_snapshot=universe_snapshot, hlcvs=hlcvs, btc=btc, timestamps=timestamps, exchange=exchange,
                       metrics=metrics, time_range=span, timestamp_range=timestamp_span,
                       coin_indices=indices, candle_coins=candle_coins,
                        eligibility=eligibility, eligibility_rows=eligibility_rows,
@@ -135,11 +137,15 @@ class PreparedGpuDataset:
 
     def policy_config(self):
         """Source authority plus its fixed prepared membership for planning."""
-        return materialize_universe_snapshot(json.loads(self.config_json), self.universe_snapshot)
+        config = json.loads(self.config_json)
+        if self.bot_policy is not None:
+            from config.bot_inheritance import install_bot_policy
+            install_bot_policy(config, self.bot_policy)
+        return materialize_universe_snapshot(config, self.universe_snapshot)
 
     def execution_config(self):
         """Ordinary JSON-native, fixed execution membership for the native worker."""
-        return fixed_runtime_universe_view(json.loads(self.config_json), snapshot=self.universe_snapshot)
+        return fixed_runtime_universe_view(self.policy_config(), snapshot=self.universe_snapshot)
 
     @contextmanager
     def attach(self):
