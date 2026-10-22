@@ -14,10 +14,13 @@ since the latest release tag; these features may already be available when insta
   optimizer results additionally retain derived values needed for ordinary replay.
   A global optimizer range owns one coordinate feeding its inheriting sides; explicit side
   ranges are independent, and omitted ranges stay fixed. Resume and execution identities retain
-  this binding authority. Forager hysteresis now honors each resolved side policy in live,
+  this binding authority, including equal-valued side pin ownership. Prepared approvals retain
+  acquisition and routing facts before ignored-coin filtering; ignore-only patches recompute
+  eligibility within prepared venue and column limits without rereading source files during replay.
+  Forager hysteresis now honors each resolved side policy in live,
   native backtests and supported GPU replay, with directional margins validated during config
-  loading. Preflight and config diffs resolve inherited side policy while retaining explicit
-  declaration changes. Direct released-v8 migration materializes its
+  loading. Preflight and config diffs resolve inherited side policy, validate directional HSL in
+  every scope and retain explicit declaration changes. Direct released-v8 migration materializes its
   historical directional profiles and search ranges rather than adopting the common profile.
 
 - Add explicit side activation: `bot.global.enabled` defaults false, omitted directional flags
