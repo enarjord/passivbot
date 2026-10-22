@@ -273,3 +273,42 @@ def test_seed_stream_retains_an_existing_prepared_binding_plan_when_shape_is_omi
     values = dict(zip((key for key, _ in shape.key_paths), vectors[0]))
     assert values["bot.global.unstuck.close_fraction"] == 0.041
     assert values["bot.short.unstuck.close_fraction"] == 0.041
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_actual_loader_shape_candidate_and_reload_keep_shared_gene_authority(kind):
+    from config import prepare_config
+    from config.inherited_bounds import get_bound_plan, optimize_bounds_source_view
+    from config.schema import get_template_config
+    from config.universe import universe_source_view
+    from config_utils import clean_config
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+
+    source = get_template_config()
+    source["bot"]["portfolio"]["strategy_kind"] = kind
+    source["bot"]["global"]["enabled"] = True
+    source["bot"]["global"]["universe"]["approved_coins"] = []
+    source["bot"]["short"] = {"unstuck": {"close_fraction": 0.041}}
+    raw_bounds = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]},
+                              "risk": {"max_positions": [0.0, 8.0]}}}
+    source["optimize"]["bounds"] = deepcopy(raw_bounds)
+    original = deepcopy(source)
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    shape = build_optimization_shape(prepared)
+    vector = [0.055 if key == "bot.global.unstuck.close_fraction" else
+              4.5 if key == "bot.global.risk.max_positions" else bound.low
+              for (key, _), bound in zip(shape.key_paths, shape.bounds)]
+    candidate = build_optimizer_vector_config(vector, prepared, key_paths=shape.key_paths)
+    loaded = prepare_config(clean_config(candidate), verbose=False, target="canonical", runtime=None)
+    for result in (candidate, loaded):
+        assert result["bot"]["long"]["unstuck"]["close_fraction"] == 0.055
+        assert result["bot"]["short"]["unstuck"]["close_fraction"] == 0.041
+        assert result["bot"]["long"]["risk"]["max_positions"] == 4
+        assert result["bot"]["short"]["risk"]["max_positions"] == 4
+        assert optimize_bounds_source_view(result)["optimize"]["bounds"] == raw_bounds
+        raw = universe_source_view(result)["bot"]
+        assert raw["short"] == {"unstuck": {"close_fraction": 0.041}}
+        assert not raw.get("long")
+    assert get_bound_plan(loaded).identity() == get_bound_plan(prepared).identity()
+    assert source == original
