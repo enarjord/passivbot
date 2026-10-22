@@ -295,14 +295,14 @@ class BotPolicy:
                         )
                 _set(result[side], field.suffix, value)
                 origins.append(LeafOrigin(path, owner, "gene" if owner in self._genes else kind, declaration))
-        # Formatting changes the effective representation, not declaration
-        # authority. Keep the original inherited or pinned source origin.
-        for normalized in self._normalized:
-            _set(result, normalized.path[1:], _thaw(normalized.value))
         for derived in self._derived:
             _set(result, derived.path[1:], _thaw(derived.value))
             origins = [origin for origin in origins if origin.target != derived.path]
             origins.append(LeafOrigin(derived.path, None, derived.owner))
+        # Formatting follows the transform without changing its origin.
+        # A fresh derived write clears intersecting stale formatter entries.
+        for normalized in self._normalized:
+            _set(result, normalized.path[1:], _thaw(normalized.value))
         return result, tuple(origins)
 
     def effective_view(self):
@@ -503,7 +503,8 @@ def with_prepared_bot_sources(policy: BotPolicy, prepared_bot: Mapping) -> BotPo
                     or value.source != expected_source or inherited and value.shared_source != shared):
                 raise ValueError(f"prepared membership does not match {'.'.join(('bot', side, *suffix))} source")
             prepared[path] = _PreparedSource(
-                path, tuple(value), _freeze(expected_source), _freeze(shared), present,
+                path, tuple(value), _freeze(expected_source),
+                _freeze(shared if inherited else value.shared_source), present,
             )
     return replace(policy, _prepared=tuple(prepared.values()))
 

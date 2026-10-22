@@ -15,7 +15,7 @@ import math
 from typing import Mapping, Sequence
 
 from optimization.bounds import Bound
-from .bot_inheritance import (ABSENT, SIDES, BotPolicy, Path, _get, _set, _freeze, _thaw,
+from .bot_inheritance import (ABSENT, SIDES, BotPolicy, Path, _get, _set, _freeze, _thaw, _intersects,
                               apply_bot_policy_patch, install_bot_policy, reconciled_bot_policy)
 from .field_spec import FieldType
 
@@ -62,9 +62,35 @@ def _signature_fixed_value(policy, effective, path):
     return value
 
 
+def _logical_fixed_view(policy):
+    """Normalize fixed source inputs independently of candidate transforms."""
+    derived = tuple(entry.path for entry in policy._derived)
+    normalized = tuple(entry for entry in policy._normalized if not any(
+        _intersects(entry.path[:4] if entry.path[2:4] == ("forager", "score_weights")
+                    else entry.path, path) for path in derived
+    ))
+    effective = replace(policy, _derived=(), _normalized=normalized).effective_view()
+    weights = {path[:4] for path in derived if path[2:4] == ("forager", "score_weights")}
+    if weights:
+        from .bot import normalize_bot_forager_config
+
+        logical = replace(policy, _derived=(), _normalized=()).effective_view()
+        normalize_bot_forager_config({"bot": logical}, verbose=False)
+        for path in weights:
+            _set(effective, path[1:], deepcopy(_get(logical, path[1:])))
+    for path in derived:
+        if path[2:] == ("risk", "max_positions"):
+            from .bot import normalize_position_count
+
+            _set(effective, path[1:], normalize_position_count(
+                _get(effective, path[1:]), path=".".join(path),
+            ))
+    return effective
+
+
 def _source_signature(policy, bindings):
     source = policy.source_view(include_defaults=True)
-    effective = replace(policy, _derived=()).effective_view()
+    effective = _logical_fixed_view(policy)
     for binding in bindings:
         _remove(source, binding.authoring_path[1:])
     return json.dumps({
@@ -219,7 +245,7 @@ def prepare_bound_plan(config, *, authored_bounds=None):
                             hsl_scope=portfolio["hsl"]["scope"])
     fixed = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [], plan=plan)
     if fixed:
-        effective = replace(policy, _derived=()).effective_view()
+        effective = _logical_fixed_view(policy)
         bindings = []
         for binding in plan.bindings:
             if binding.key in fixed:
@@ -319,7 +345,7 @@ def build_bound_plan(
 
     # Transforms own an effective overlay, not the authored fixed values or
     # search authority from which this plan is built.
-    effective = replace(policy, _derived=()).effective_view()
+    effective = _logical_fixed_view(policy)
     bindings, unused = [], []
     for field in policy.catalog.fields:
         if (not field.optimizable or not active_hsl("global", field.suffix)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
+from dataclasses import replace
 from typing import Sequence
 
 from backtest_universe import backtest_side_enabled
@@ -101,7 +102,8 @@ def _apply_config_overrides(
 def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_universe,
                                       preserve_derived_outputs=True):
     from config.bot_inheritance import (
-        apply_bot_config_patch, reconciled_bot_policy, resolve_bot_policy,
+        _get, _intersects, _set, _thaw, apply_bot_config_patch, apply_bot_policy_patch,
+        get_bot_policy, reconciled_bot_policy, resolve_bot_policy,
         install_bot_policy, with_prepared_bot_sources, with_normalized_bot_values,
     )
     from config.inherited_bounds import PreparedOptimizationBounds
@@ -109,7 +111,7 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
     from config.universe import ResolvedCoinList
 
     policy_source = reconciled_bot_policy(config)
-    if overrides and preserve_derived_outputs and policy_source._derived:
+    if overrides and preserve_derived_outputs and (policy_source._derived or policy_source._normalized):
         # Runtime patches follow candidate transforms. Freeze their existing
         # outputs only in this disposable candidate so a later declaration
         # cannot erase an unrelated mirrored value. The reusable source and
@@ -119,13 +121,55 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
         snapshot = with_prepared_bot_sources(snapshot, candidate["bot"])
         snapshot = with_normalized_bot_values(snapshot, candidate["bot"])
         install_bot_policy(candidate, snapshot, effective_bot=candidate["bot"])
-        _apply_inherited_config_overrides(
+        canonical = _apply_inherited_config_overrides(
             candidate, overrides, preserve_prepared_universe=preserve_prepared_universe,
             preserve_derived_outputs=False,
         )
+        # The snapshot determines effective patch precedence, but its derived
+        # values must not become authored fixed inputs in a scenario's plan.
+        effective_bot = candidate["bot"]
+        bounds_source = config.get("optimize", {}).get("bounds")
+        if type(bounds_source) is not PreparedOptimizationBounds:
+            bounds_source = None
+        install_bot_policy(candidate, policy_source)
+        apply_bot_config_patch(candidate, canonical, policy_source=policy_source,
+                               bounds_source=bounds_source)
+        declared = [tuple(key.split(".")) for key in canonical
+                    if key == "bot" or key.startswith("bot.")]
+        retained = {".".join(entry.path): _get(effective_bot, entry.path[1:])
+                    for entry in policy_source._derived
+                    if not any(_intersects(entry.path, path) for path in declared)}
+        policy = apply_bot_policy_patch(get_bot_policy(candidate), retained, channel="derived")
+        policy = with_prepared_bot_sources(policy, effective_bot)
+        # Formatter output belongs to unchanged logical inputs. A weight's
+        # normalization depends on its complete group, including inherited pins.
+        before = replace(policy_source, _normalized=()).effective_view()
+        after = replace(policy, _normalized=()).effective_view()
+        def same_input(left, right):
+            if type(left) is not type(right):
+                return False
+            if isinstance(left, dict):
+                return left.keys() == right.keys() and all(same_input(left[key], right[key]) for key in left)
+            if isinstance(left, list):
+                return len(left) == len(right) and all(same_input(a, b) for a, b in zip(left, right))
+            return left == right
+        changed_weights = set()
+        for entry in policy_source._normalized:
+            dependency = (entry.path[:4] if entry.path[2:4] == ("forager", "score_weights")
+                          else entry.path)
+            if same_input(_get(before, dependency[1:]), _get(after, dependency[1:])):
+                _set(effective_bot, entry.path[1:], _thaw(entry.value))
+            elif dependency[-1] == "score_weights":
+                changed_weights.add(dependency)
+        for path in changed_weights:
+            _set(effective_bot, path[1:], normalize_forager_score_weights(
+                _get(after, path[1:]), path=".".join(path),
+            ))
+        policy = with_normalized_bot_values(policy, effective_bot)
+        install_bot_policy(candidate, policy, effective_bot=effective_bot)
         config.clear()
         config.update(candidate)
-        return
+        return canonical
     bounds_source = config.get("optimize", {}).get("bounds")
     if type(bounds_source) is not PreparedOptimizationBounds:
         bounds_source = None
@@ -152,6 +196,7 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
             _set_path(config, selector.split("."), value)
     apply_bot_config_patch(config, canonical, policy_source=policy_source, bounds_source=bounds_source)
     _restore_matching_optimizer_memberships(config, prepared, require_match=True)
+    return canonical
 
 
 def _restore_matching_optimizer_memberships(config, prepared, *, require_match):

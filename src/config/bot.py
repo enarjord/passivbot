@@ -619,10 +619,27 @@ def normalize_bot_forager_config(
     verbose: bool = True,
     tracker: Optional[object] = None,
 ) -> None:
+    from dataclasses import replace
+    from .bot_inheritance import (
+        get_bot_policy, install_bot_policy, reconciled_bot_policy, with_normalized_bot_values,
+    )
+
+    policy = get_bot_policy(result)
+    if policy is not None:
+        # Retain this owner's diagnostics before validating direct typed edits.
+        for side in BOT_POSITION_SIDES:
+            normalize_forager_score_weights(
+                get_bot_group(result["bot"][side], "forager")["score_weights"],
+                path=f"bot.{side}.forager.score_weights",
+            )
+        policy = reconciled_bot_policy(result)
+    logical = replace(policy, _normalized=()).effective_view() if policy is not None else None
+    aliases = result["bot"]._runtime_aliases if policy is not None else frozenset()
     required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
-        weights = forager_cfg["score_weights"]
+        weights = (deepcopy(logical[pside]["forager"]["score_weights"])
+                   if logical is not None else forager_cfg["score_weights"])
         if isinstance(weights, dict):
             weights.setdefault("unilateralness", 0.0)
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
@@ -665,6 +682,11 @@ def normalize_bot_forager_config(
                     ["bot", pside, "forager", "score_weights"], weights, normalized
                 )
         forager_cfg["score_weights"] = normalized
+    if policy is not None:
+        install_bot_policy(
+            result, with_normalized_bot_values(policy, result["bot"]),
+            effective_bot=result["bot"], runtime_aliases=aliases,
+        )
 
 
 def normalize_position_count(value, *, path):
