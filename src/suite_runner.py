@@ -141,7 +141,9 @@ def _scenario_universe_recipe(base_config, scenario):
     from config.age_policy import minimum_coin_age_days
     from backtest_universe import backtest_side_enabled
     base_membership = [
-        (field, side, list(value)) for field in ("approved_coins", "ignored_coins")
+        (field, side, list(value), value.acquired_members,
+         None if value.market_aliases is None else value.market_aliases.fingerprint,
+         value.available_members) for field in ("approved_coins", "ignored_coins")
         for side, value in require_side_universe_sources(base_config, field).items()
         if type(value) is ResolvedCoinList
     ]
@@ -214,17 +216,27 @@ def _prepare_scenario_universes(
 
 
 def _install_prepared_scenario_universe(config, prepared, *, available_coins, columns, exchanges):
-    from config.universe import materialize_side_universe_sources
+    from config.universe import materialize_side_universe_sources, restrict_prepared_columns
     config["bot"].setdefault("global", {}).setdefault("universe", {})["approved_coins"] = _thaw_coin_source(prepared.shared_source)
     for field in ("approved_coins", "ignored_coins"):
         sources = {side: _thaw_coin_source(source) for name, side, source in prepared.sources if name == field}
-        values = {}
-        for name, side, members in prepared.membership:
-            if name != field:
+        values, acquired, aliases, ceilings = {}, {}, {}, {}
+        for entry in prepared.membership:
+            if entry.field != field:
                 continue
-            members = _reconcile_suite_identifiers_to_available(members, available_coins, exchanges)
-            values[side] = [coin for coin in members if field != "approved_coins" or coin in columns]
-        materialize_side_universe_sources(config, field, values, sources=sources)
+            routing = entry.market_aliases or next((item.market_aliases for item in prepared.membership
+                if item.field == "approved_coins" and item.side == entry.side), None)
+            members = ((list(entry.members) if field == "ignored_coins" else
+                        routing.within_columns(entry.members, available_coins)) if routing is not None else
+                       _reconcile_suite_identifiers_to_available(entry.members, available_coins, exchanges))
+            values[entry.side] = (routing.within_columns(members, columns) if field == "approved_coins" and routing is not None
+                                  else [coin for coin in members if field != "approved_coins" or coin in columns])
+            acquired[entry.side] = entry.acquired_members
+            aliases[entry.side] = entry.market_aliases
+            ceilings[entry.side] = (restrict_prepared_columns(entry.available_members, columns, entry.market_aliases)
+                                    if field == "approved_coins" else None)
+        materialize_side_universe_sources(config, field, values, sources=sources, acquired_members=acquired,
+                                         market_aliases=aliases, available_members=ceilings)
 
 
 @dataclass
@@ -436,7 +448,7 @@ def _flatten_coin_list(value: Any) -> List[str]:
     return []
 
 
-def _normalized_coin_set(value: Any, exchanges: Sequence[str] = ()) -> set[str]:
+def _normalized_coin_set(value: Any, exchanges: Sequence[str] = (), *, prepared_aliases=None) -> set[str]:
     out: set[str] = set()
     if isinstance(value, str):
         value = [value]
@@ -448,7 +460,8 @@ def _normalized_coin_set(value: Any, exchanges: Sequence[str] = ()) -> set[str]:
         resolved_symbols = set()
         for exchange in exchanges:
             try:
-                symbol = coin_to_symbol(coin, exchange, verbose=False)
+                symbol = (prepared_aliases.resolve_identifier(coin, exchange) if prepared_aliases is not None
+                          else coin_to_symbol(coin, exchange, verbose=False))
                 resolved_symbols.add(
                     f"{qualified_exchange}::{symbol}"
                     if qualified_exchange is not None
@@ -538,10 +551,14 @@ def _coalesce_master_coins(
 def validate_suite_side_coin_lists(
     config: Dict[str, Any], exchanges: Sequence[str] = ()
 ) -> None:
+    approvals = require_side_universe_sources(config, "approved_coins")
     for field in ("approved_coins", "ignored_coins"):
         value = require_side_universe_sources(config, field)
-        long_coins = _normalized_coin_set(value["long"], exchanges)
-        short_coins = _normalized_coin_set(value["short"], exchanges)
+        resolved = {}
+        for side in ("long", "short"):
+            routing = approvals[side].market_aliases if type(approvals[side]) is ResolvedCoinList else None
+            resolved[side] = _normalized_coin_set(value[side], exchanges, prepared_aliases=routing)
+        long_coins, short_coins = resolved["long"], resolved["short"]
         if long_coins == short_coins:
             continue
         long_only = sorted(long_coins - short_coins)
@@ -1369,6 +1386,8 @@ def _materialize_scenario_universe(
         resolve_universe_sources,
         shared_universe_source,
         source_inherits_shared,
+        filter_prepared_approvals,
+        restrict_prepared_columns,
     )
 
     def replaced(path):
@@ -1391,7 +1410,7 @@ def _materialize_scenario_universe(
         sources = raw_side_universe_sources(config, field)
         old_sources = raw_side_universe_sources(prepared_base, field)
         base_values = require_side_universe_sources(prepared_base, field)
-        values, unresolved = {}, []
+        values, unresolved, acquired, aliases, ceilings = {}, [], {}, {}, {}
         for side in ("long", "short"):
             source = sources.get(side)
             same = ((side in sources) == (side in old_sources)
@@ -1405,6 +1424,10 @@ def _materialize_scenario_universe(
             previous = base_values.get(side)
             if same and type(previous) is ResolvedCoinList:
                 values[side] = list(previous)
+                acquired[side] = previous.acquired_members
+                aliases[side] = previous.market_aliases
+                ceilings[side] = (restrict_prepared_columns(previous.available_members, columns, previous.market_aliases)
+                                  if field == "approved_coins" else None)
             else:
                 if side in sources:
                     bound = bind_universe_source(source, field=field,
@@ -1421,21 +1444,23 @@ def _materialize_scenario_universe(
         for side, members in values.items():
             if field == "approved_coins" and members == ["all"]:
                 members = sorted(available_coins)
-            members = _reconcile_suite_identifiers_to_available(members, available_coins, exchanges)
+            routing = aliases.get(side)
+            if field == "ignored_coins":
+                approval = require_side_universe_sources(prepared_base, "approved_coins")[side]
+                routing = approval.market_aliases if type(approval) is ResolvedCoinList else None
+            members = (list(members) if field == "ignored_coins" and routing is not None else
+                       _reconcile_suite_identifiers_to_available(members, available_coins, exchanges,
+                       prepared_aliases=routing) if routing is not None else
+                       _reconcile_suite_identifiers_to_available(members, available_coins, exchanges))
+            acquired.setdefault(side, tuple(members))
             if field == "approved_coins" and columns is not None:
                 members = [coin for coin in members if coin in columns]
             values[side] = members
-        materialize_side_universe_sources(config, field, values)
-    approved = require_side_universe_sources(config, "approved_coins")
-    ignored = require_side_universe_sources(config, "ignored_coins")
-    materialize_side_universe_sources(
-        config,
-        "approved_coins",
-        {
-            side: [coin for coin in approved[side] if coin not in ignored[side]]
-            for side in ("long", "short")
-        },
-    )
+            aliases.setdefault(side, None)
+            ceilings.setdefault(side, tuple(columns) if field == "approved_coins" and columns is not None else None)
+        materialize_side_universe_sources(config, field, values, acquired_members=acquired,
+                                         market_aliases=aliases, available_members=ceilings)
+    filter_prepared_approvals(config)
 
 
 def apply_scenario(
@@ -1505,12 +1530,12 @@ def apply_scenario(
     scenario_exchanges = (
         list(scenario.exchanges) if scenario.exchanges else available_exchange_list
     )
+    approvals = require_side_universe_sources(prepared_base, "approved_coins")
+    routing = approvals["long"].market_aliases if type(approvals["long"]) is ResolvedCoinList else None
     scenario_coins = _reconcile_suite_identifiers_to_available(
-        scenario_coins, available_coins, scenario_exchanges
-    )
+        scenario_coins, available_coins, scenario_exchanges, prepared_aliases=routing)
     scenario_ignored = _reconcile_suite_identifiers_to_available(
-        scenario_ignored, available_coins, scenario_exchanges
-    )
+        scenario_ignored, available_coins, scenario_exchanges, prepared_aliases=routing)
 
     filtered_coins = [coin for coin in scenario_coins if coin in available_coins]
     missing = sorted(set(scenario_coins) - set(filtered_coins))

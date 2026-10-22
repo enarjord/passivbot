@@ -103,7 +103,8 @@ def _source_signature(policy, bindings):
     return json.dumps({
         "policy": _without_empty_objects(source),
         "prepared_membership": [
-            (entry.path, entry.members, entry.source_present)
+            (entry.path, entry.members, entry.acquired_members, entry.source_present,
+             None if entry.market_aliases is None else entry.market_aliases.fingerprint)
             for entry in sorted(policy._prepared, key=lambda entry: entry.path)
         ],
         "omitted_fixed_values": [

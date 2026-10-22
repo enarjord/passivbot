@@ -212,7 +212,7 @@ def _restore_matching_optimizer_memberships(config, prepared, *, require_match):
                 continue
             if (value.source_present == (side in sources) and value.source == sources.get(side)
                     and (not source_inherits_shared(field, sources, side) or value.shared_source == shared)):
-                compatible[side] = list(value)
+                compatible[side] = value
             elif require_match and any(config.get("backtest", {}).get("coins", {}).values()):
                 raise ValueError("optimizer universe source policy changed; prepare its membership before candidate replay")
         if compatible:

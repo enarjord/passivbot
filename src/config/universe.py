@@ -1,28 +1,215 @@
 """Inherited source bindings, prepared membership and persistent selections."""
 
 from copy import deepcopy
+from dataclasses import dataclass, field
+import hashlib
+import json
 from pathlib import Path
-from typing import TypeAlias
+from types import MappingProxyType
+from typing import NamedTuple, TypeAlias
 
 from .access import require_config_value
 
 COIN_SOURCE_FIELDS = frozenset({"approved_coins", "ignored_coins"})
-PreparedUniverseSnapshot: TypeAlias = tuple[tuple[str, str, tuple[str, ...]], ...]
+
+
+@dataclass(frozen=True)
+class PreparedMarketAliases:
+    """Immutable market routing facts acquired with the approval membership."""
+    venues: tuple
+    unavailable_venues: tuple[str, ...] = ()
+    fingerprint: str = field(init=False)
+    _lookups: tuple = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        if (type(self.venues) is not tuple or type(self.unavailable_venues) is not tuple
+                or any(type(exchange) is not str for exchange in self.unavailable_venues)):
+            raise TypeError("prepared market aliases must be immutable")
+        lookups = []
+        for venue in self.venues:
+            if type(venue) is not tuple or len(venue) != 3:
+                raise TypeError("prepared market venue must be an immutable triple")
+            exchange, aliases, native_ids = venue
+            if (type(exchange) is not str or type(aliases) is not tuple or type(native_ids) is not tuple
+                    or any(type(pair) is not tuple or len(pair) != 2 for pair in (*aliases, *native_ids))
+                    or any(type(alias) is not str or type(symbols) is not tuple
+                           or any(type(symbol) is not str for symbol in symbols) for alias, symbols in aliases)
+                    or any(type(symbol) is not str or type(native) is not str for symbol, native in native_ids)):
+                raise TypeError("prepared market aliases must contain immutable string facts")
+            lookups.append((exchange, MappingProxyType(dict(aliases)), MappingProxyType(dict(native_ids))))
+        object.__setattr__(self, "_lookups", tuple(lookups))
+        encoded = json.dumps((self.venues, self.unavailable_venues), separators=(",", ":"), ensure_ascii=True).encode()
+        object.__setattr__(self, "fingerprint", hashlib.sha256(encoded).hexdigest())
+
+    def __deepcopy__(self, memo):
+        return self  # All authoritative contents are immutable.
+
+    def __reduce__(self):
+        return (type(self), (self.venues, self.unavailable_venues))
+
+    @staticmethod
+    def _resolve(identifier, exchange, aliases):
+        from utils import _resolve_market_candidates, split_exchange_qualified_market_identifier
+
+        venue, raw = split_exchange_qualified_market_identifier(identifier)
+        if venue is not None and venue != exchange:
+            return None
+        for key in (identifier, raw) if venue is not None else (raw,):
+            symbol = _resolve_market_candidates(identifier, aliases.get(key, ()), exchange)
+            if symbol is not None:
+                return symbol
+        return None
+
+    def for_bound_inputs(self, members, ignored=(), *, complete_venues=()):
+        """Keep permission and declared-ignore lookup facts, without granting membership."""
+        from utils import split_exchange_qualified_market_identifier
+
+        venues, unavailable = [], set(self.unavailable_venues)
+        for exchange, aliases, native in self._lookups:
+            targets = {symbol for member in members
+                       if (symbol := self._resolve(member, exchange, aliases)) is not None}
+            if exchange not in complete_venues and any(
+                split_exchange_qualified_market_identifier(member)[0] in (None, exchange)
+                and self._resolve(member, exchange, aliases) is None for member in members
+            ):
+                unavailable.add(exchange)
+            for identifier in ignored:
+                venue, raw = split_exchange_qualified_market_identifier(identifier)
+                if venue is None or venue == exchange:
+                    for key in (identifier, raw) if venue is not None else (raw,):
+                        if key in aliases:
+                            targets.update(aliases[key])
+                            break
+            selected = tuple((alias, symbols) for alias, symbols in aliases.items() if targets.intersection(symbols))
+            venues.append((exchange, selected, tuple((symbol, native[symbol]) for symbol in sorted(targets))))
+        return type(self)(tuple(venues), tuple(sorted(unavailable)))
+
+    def subtract(self, approved, ignored):
+        """Apply the existing per-venue alias and partial-survivor rules, without I/O."""
+        from utils import (split_exchange_qualified_market_identifier,
+                           looks_like_exact_market_identifier, heuristic_symbol_to_coin)
+
+        potential = any(a != i and (looks_like_exact_market_identifier(a)
+                        or looks_like_exact_market_identifier(i)
+                        or heuristic_symbol_to_coin(a) == heuristic_symbol_to_coin(i))
+                        for a in approved for i in ignored)
+        if not potential:
+            return [coin for coin in approved if coin not in ignored]
+        for exchange in self.unavailable_venues:
+            if (any(split_exchange_qualified_market_identifier(coin)[0] in (None, exchange) for coin in approved)
+                    and any(split_exchange_qualified_market_identifier(coin)[0] in (None, exchange) for coin in ignored)):
+                raise ValueError(f"prepared market alias facts unavailable on {exchange}; prepare universe membership before changing alias-based ignores")
+        ignored_symbols = {
+            exchange: {symbol for value in ignored if (symbol := self._resolve(value, exchange, aliases)) is not None}
+            for exchange, aliases, _native in self._lookups
+        }
+        result = []
+        for identifier in approved:
+            if identifier in ignored:
+                continue
+            resolved = [(exchange, symbol, native_ids) for exchange, aliases, native_ids in self._lookups
+                        if (symbol := self._resolve(identifier, exchange, aliases)) is not None]
+            if not any(symbol in ignored_symbols[exchange] for exchange, symbol, _native in resolved):
+                result.append(identifier)
+            else:
+                result.extend(f"{exchange}::{native_ids[symbol]}" for exchange, symbol, native_ids in resolved
+                              if symbol not in ignored_symbols[exchange])
+        return list(dict.fromkeys(result))
+
+    def within_columns(self, members, columns):
+        """Intersect aliases with the exact prepared venue/column identities."""
+        def identities(identifier):
+            return {(exchange, symbol) for exchange, aliases, _native in self._lookups
+                    if (symbol := self._resolve(identifier, exchange, aliases)) is not None}
+
+        available = set().union(*(identities(value) for value in columns))
+        result = []
+        for member in members:
+            admitted = identities(member)
+            surviving = admitted & available
+            if admitted and surviving == admitted or not admitted and member in columns:
+                result.append(member)
+            elif surviving:
+                result.extend(f"{exchange}::{native_ids[symbol]}"
+                              for exchange, _aliases, native_ids in self._lookups
+                              for venue, symbol in sorted(surviving) if venue == exchange)
+        return list(dict.fromkeys(result))
+
+    def venue_columns(self, columns, exchanges):
+        result = []
+        for column in columns:
+            qualified = [f"{exchange}::{native[symbol]}" for exchange, aliases, native in self._lookups
+                         if exchange in exchanges and (symbol := self._resolve(column, exchange, aliases)) in native]
+            result.extend(qualified or [column])
+        return tuple(dict.fromkeys(result))
+
+    def permits(self, members, coin, exchange, market_symbol):
+        from utils import to_standard_exchange_name
+
+        exchange = to_standard_exchange_name(exchange)
+        if exchange in self.unavailable_venues:
+            return None  # The existing literal admission still applies.
+        for venue, aliases, _native in self._lookups:
+            if venue == exchange:
+                target = market_symbol or self._resolve(coin, exchange, aliases)
+                return target is not None and any(self._resolve(value, exchange, aliases) == target for value in members)
+        return False
+
+    def resolve_identifier(self, identifier, exchange):
+        from utils import UnknownMarketIdentifier, to_standard_exchange_name
+
+        exchange = to_standard_exchange_name(exchange)
+        if exchange in self.unavailable_venues:
+            raise ValueError(f"prepared market alias facts unavailable on {exchange}; prepare universe membership")
+        for venue, aliases, _native in self._lookups:
+            if venue == exchange:
+                symbol = self._resolve(identifier, exchange, aliases)
+                if symbol is not None:
+                    return symbol
+        raise UnknownMarketIdentifier(f"market identifier {identifier!r} is absent from prepared alias facts on {exchange}")
+
+
+class PreparedUniverseMembership(NamedTuple):
+    field: str
+    side: str
+    members: tuple[str, ...]
+    acquired_members: tuple[str, ...]
+    market_aliases: PreparedMarketAliases | None
+    available_members: tuple[str, ...] | None
+
+
+PreparedUniverseSnapshot: TypeAlias = tuple[PreparedUniverseMembership, ...]
 
 
 class ResolvedCoinList(list):
     """A runtime membership view retaining its validated authored source.
 
-    This is not a cache: each refresh reads the source again. JSON input cannot
-    construct this internal view, and assigning a plain public value replaces it.
+    Explicit refresh reads the source again. Internal replay retains acquisition
+    facts separately from filtered eligibility; JSON cannot construct this view.
     """
-    def __init__(self, values, source, shared_source=None, *, source_present=True):
+    def __init__(self, values, source, shared_source=None, *, source_present=True, acquired_members=None, market_aliases=None, available_members=None):
         if type(source_present) is not bool:
             raise TypeError("prepared source presence must be a boolean")
         super().__init__(values)
         self.source = deepcopy(source)
         self.shared_source = deepcopy(shared_source)
         self.source_present = source_present
+        if acquired_members is None:
+            acquired_members = values.acquired_members if type(values) is ResolvedCoinList else tuple(self)
+        if type(acquired_members) is not tuple or any(type(coin) is not str for coin in acquired_members):
+            raise TypeError("acquired source membership must be a tuple of strings")
+        self.acquired_members = acquired_members
+        if market_aliases is None and type(values) is ResolvedCoinList:
+            market_aliases = values.market_aliases
+        if market_aliases is not None and type(market_aliases) is not PreparedMarketAliases:
+            raise TypeError("prepared market aliases require an exact internal projection")
+        self.market_aliases = market_aliases
+        if available_members is None and type(values) is ResolvedCoinList:
+            available_members = values.available_members
+        if available_members is not None and (type(available_members) is not tuple
+                or any(type(coin) is not str for coin in available_members)):
+            raise TypeError("prepared column membership must be an immutable tuple of strings")
+        self.available_members = available_members
 
 
 def restore_universe_sources(config):
@@ -188,7 +375,7 @@ def copy_universe_source_policy(config, source):
                                            _normalized=policy._normalized))
 
 
-def materialize_side_universe_sources(config, field, values, *, sources=None):
+def materialize_side_universe_sources(config, field, values, *, sources=None, acquired_members=None, market_aliases=None, available_members=None):
     """Build the existing runtime list view without losing source bindings."""
     from .bot_inheritance import reconciled_bot_policy, install_bot_policy, with_prepared_bot_sources
 
@@ -200,10 +387,57 @@ def materialize_side_universe_sources(config, field, values, *, sources=None):
             raise ValueError(f"{field} membership must contain only long/short")
         config.setdefault("bot", {}).setdefault(side, {}).setdefault("universe", {})[field] = ResolvedCoinList(
             value, sources.get(side), shared, source_present=side in sources,
+            acquired_members=None if acquired_members is None else acquired_members[side],
+            market_aliases=None if market_aliases is None else market_aliases[side],
+            available_members=None if available_members is None else available_members[side],
         )
     if policy is not None:
         captured = with_prepared_bot_sources(policy, config["bot"])
         install_bot_policy(config, captured)
+
+
+def filter_prepared_approvals(config):
+    """Derive eligibility from acquired approvals, without reopening their sources."""
+    approved = require_side_universe_sources(config, "approved_coins")
+    ignored = require_side_universe_sources(config, "ignored_coins")
+    values, acquired, aliases, available = {}, {}, {}, {}
+    for side, value in approved.items():
+        members = value.acquired_members if type(value) is ResolvedCoinList else tuple(value)
+        acquired[side] = members
+        aliases[side] = value.market_aliases if type(value) is ResolvedCoinList else None
+        values[side] = (aliases[side].subtract(members, ignored[side]) if aliases[side] is not None
+                        else [coin for coin in members if coin not in ignored[side]])
+        available[side] = value.available_members if type(value) is ResolvedCoinList else None
+        if available[side] is not None:
+            values[side] = (aliases[side].within_columns(values[side], available[side]) if aliases[side] is not None
+                            else [coin for coin in values[side] if coin in available[side]])
+    materialize_side_universe_sources(config, "approved_coins", values, acquired_members=acquired,
+                                    market_aliases=aliases, available_members=available)
+
+
+def restrict_prepared_columns(previous, columns, aliases):
+    """A narrower execution context may restrict, but cannot expand, its ceiling."""
+    if columns is None:
+        return previous
+    if previous is None:
+        return tuple(columns)
+    return tuple(aliases.within_columns(previous, columns) if aliases is not None
+                 else [coin for coin in previous if coin in columns])
+
+
+def approval_allows_coin(value, coin, *, exchange, market_symbol=None, members=None):
+    """Lower frozen permission against one factual dataset venue/market row."""
+    from backtest_universe import normalize_backtest_coin
+    from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
+
+    members = value if members is None else members
+    if type(value) is ResolvedCoinList and value.market_aliases is not None:
+        matched = value.market_aliases.permits(members, coin, exchange, market_symbol)
+        if matched is not None:
+            return matched
+    coin = normalize_backtest_coin(coin)
+    return coin in members or any(not looks_like_exact_market_identifier(identifier)
+        and heuristic_symbol_to_coin(identifier) == heuristic_symbol_to_coin(coin) for identifier in members)
 
 
 def universe_sources_affected(overrides):
@@ -473,7 +707,7 @@ def always_include_matches(config, side, coin, *, exchange=None, market_symbol=N
     return False
 
 
-def runtime_universe_snapshot(config, *, available_coins=None) -> PreparedUniverseSnapshot:
+def runtime_universe_snapshot(config, *, available_coins=None, available_exchanges=None) -> PreparedUniverseSnapshot:
     """Freeze already prepared membership for one immutable dataset execution.
 
     This typed snapshot never grants authored permission and never reloads a file
@@ -491,7 +725,19 @@ def runtime_universe_snapshot(config, *, available_coins=None) -> PreparedUniver
                 value = list(available_coins)
             if not isinstance(value, list) or any(not isinstance(x, str) for x in value):
                 raise ValueError(f"prepared {side} {field} membership is required before dataset registration")
-            snapshot.append((field, side, tuple(value)))
+            acquired = value.acquired_members if type(value) is ResolvedCoinList else tuple(value)
+            if field == "approved_coins":
+                if acquired == ("all",):
+                    if available_coins is None:
+                        raise ValueError("all approval requires prepared dataset coin membership")
+                    acquired = tuple(available_coins)
+            aliases = value.market_aliases if type(value) is ResolvedCoinList else None
+            columns = value.available_members if type(value) is ResolvedCoinList else None
+            if field == "approved_coins" and available_coins is not None:
+                selected = (aliases.venue_columns(available_coins, available_exchanges)
+                            if aliases is not None and available_exchanges is not None else available_coins)
+                columns = restrict_prepared_columns(columns, selected, aliases)
+            snapshot.append(PreparedUniverseMembership(field, side, tuple(value), acquired, aliases, columns))
     return tuple(snapshot)
 
 
@@ -500,9 +746,22 @@ def materialize_universe_snapshot(config, snapshot):
     # replaces membership; authored serialization uses universe_source_view.
     result = deepcopy(config)
     for field in ("approved_coins", "ignored_coins"):
-        values = {side: list(value) for name, side, value in snapshot if name == field}
-        materialize_side_universe_sources(result, field, values)
+        values = {entry.side: list(entry.members) for entry in snapshot if entry.field == field}
+        acquired = {entry.side: entry.acquired_members for entry in snapshot if entry.field == field}
+        aliases = {entry.side: entry.market_aliases for entry in snapshot if entry.field == field}
+        columns = {entry.side: entry.available_members for entry in snapshot if entry.field == field}
+        materialize_side_universe_sources(result, field, values, acquired_members=acquired, market_aliases=aliases,
+                                         available_members=columns)
     return result
+
+
+def universe_snapshot_signature(snapshot):
+    """Bind immutable acquired routing facts without copying their complete maps."""
+    return [{"field": entry.field, "side": entry.side, "members": list(entry.members),
+             "acquired_members": list(entry.acquired_members),
+             "market_aliases_sha256": None if entry.market_aliases is None else entry.market_aliases.fingerprint,
+             "available_members": None if entry.available_members is None else list(entry.available_members)}
+            for entry in snapshot]
 
 
 def fixed_runtime_universe_view(config, *, snapshot=None, available_coins=None):
@@ -513,5 +772,5 @@ def fixed_runtime_universe_view(config, *, snapshot=None, available_coins=None):
     # restore inherited bindings during its internal formatting.
     result["bot"] = dict(result["bot"])
     for field in ("approved_coins", "ignored_coins"):
-        set_side_universe_sources(result, field, {side: list(value) for name, side, value in snapshot if name == field})
+        set_side_universe_sources(result, field, {entry.side: list(entry.members) for entry in snapshot if entry.field == field})
     return result

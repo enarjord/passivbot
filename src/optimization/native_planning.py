@@ -74,7 +74,7 @@ def _static_contract(config):
     Feature enablement, execution modes and coin overrides stay dataset-owned.
     Changing one requires another prepared dataset, never silently ignoring it.
     """
-    from config.universe import anchored_universe_source_view, runtime_universe_snapshot
+    from config.universe import anchored_universe_source_view, runtime_universe_snapshot, universe_snapshot_signature
     policy = {key: value for key, value in config.items()
               if not isinstance(key, str) or not key.startswith("_")}
     cleaned = clean_config(anchored_universe_source_view(policy))
@@ -83,7 +83,8 @@ def _static_contract(config):
     # chooses the registered replay's directional/fused kernel topology.
     result["enabled_sides"] = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
     available = sorted({coin for coins in config["backtest"]["coins"].values() for coin in coins})
-    result["prepared_universe"] = runtime_universe_snapshot(config, available_coins=available)
+    result["prepared_universe"] = universe_snapshot_signature(runtime_universe_snapshot(
+        config, available_coins=available, available_exchanges=tuple(config["backtest"]["coins"])))
     result["backtest"]["coins"] = config["backtest"]["coins"]
     # The standalone simulation consumes the materialized scenario, not the
     # optimizer's saved suite recipe or its candidate-dependent derived patches.
@@ -221,6 +222,8 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=(), *, in
                                 and all(type(key) is str for key in current)
                                 and all(key in current and guard(current[key]) for key, guard in children))
     if kind is ResolvedCoinList:
+        from config.universe import PreparedMarketAliases
+
         # Only the validated internal view is supported. Equal membership is
         # insufficient: changing a source or inheritance must use full matching.
         children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors,
@@ -228,13 +231,21 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=(), *, in
                          for index, child in enumerate(value))
         source_guard = _compile_projection_guard(value.source, (), (*path, "source"), ancestors)
         shared_guard = _compile_projection_guard(value.shared_source, (), (*path, "shared_source"), ancestors)
-        if (type(value.source_present) is not bool or source_guard is None
-                or shared_guard is None or any(guard is None for guard in children)):
+        acquired_guard = _compile_projection_guard(value.acquired_members, (), (*path, "acquired_members"), ancestors)
+        available_guard = _compile_projection_guard(value.available_members, (), (*path, "available_members"), ancestors)
+        if (type(value.source_present) is not bool or type(value.acquired_members) is not tuple
+                or value.market_aliases is not None and type(value.market_aliases) is not PreparedMarketAliases
+                or source_guard is None
+                or shared_guard is None or acquired_guard is None or available_guard is None
+                or any(guard is None for guard in children)):
             return None
         source_present = value.source_present
+        aliases = value.market_aliases
         return lambda current: (type(current) is ResolvedCoinList and len(current) == len(children)
                                 and type(current.source_present) is bool and current.source_present == source_present
                                 and source_guard(current.source) and shared_guard(current.shared_source)
+                                and acquired_guard(current.acquired_members)
+                                and current.market_aliases is aliases and available_guard(current.available_members)
                                 and all(guard(child) for guard, child in zip(children, current)))
     if kind in (list, tuple):
         children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors,

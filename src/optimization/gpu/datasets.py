@@ -124,7 +124,7 @@ class PreparedGpuDataset:
                     or np.dtype(eligibility_rows.dtype) != np.int32
                     or eligibility_rows.shape != (timestamp_span[1] - timestamp_span[0],)):
                 raise ValueError("Organillo buffers must match selected coin columns and candle rows")
-        universe_snapshot = runtime_universe_snapshot(config, available_coins=coins)
+        universe_snapshot = runtime_universe_snapshot(config, available_coins=coins, available_exchanges=(exchange,))
         from config.bot_inheritance import reconciled_bot_policy
         values = dict(bot_policy=reconciled_bot_policy(config), universe_snapshot=universe_snapshot, hlcvs=hlcvs, btc=btc, timestamps=timestamps, exchange=exchange,
                       metrics=metrics, time_range=span, timestamp_range=timestamp_span,
@@ -149,7 +149,19 @@ class PreparedGpuDataset:
 
     def execution_config(self):
         """Ordinary JSON-native, fixed execution membership for the native worker."""
-        return fixed_runtime_universe_view(self.policy_config(), snapshot=self.universe_snapshot)
+        from config.universe import approval_allows_coin, require_side_universe_sources
+
+        policy = self.policy_config()
+        result = fixed_runtime_universe_view(policy, snapshot=self.universe_snapshot)
+        markets = json.loads(self.markets_json)
+        approved = require_side_universe_sources(policy, "approved_coins")
+        for side, values in approved.items():
+            result["bot"][side]["universe"]["approved_coins"] = [
+                coin for coin in policy["backtest"]["coins"][self.exchange]
+                if approval_allows_coin(values, coin,
+                    exchange=markets[coin].get("exchange") or self.exchange,
+                    market_symbol=markets[coin].get("symbol"))]
+        return result
 
     @contextmanager
     def attach(self):

@@ -200,6 +200,9 @@ class _PreparedSource:
     members: tuple[str, ...]
     source: Any
     shared_source: Any
+    acquired_members: tuple[str, ...]
+    market_aliases: Any
+    available_members: tuple[str, ...] | None
     source_present: bool = True
 
 
@@ -292,6 +295,9 @@ class BotPolicy:
                         value = ResolvedCoinList(
                             prepared.members, _thaw(prepared.source), _thaw(prepared.shared_source),
                             source_present=prepared.source_present,
+                            acquired_members=prepared.acquired_members,
+                            market_aliases=prepared.market_aliases,
+                            available_members=prepared.available_members,
                         )
                 _set(result[side], field.suffix, value)
                 origins.append(LeafOrigin(path, owner, "gene" if owner in self._genes else kind, declaration))
@@ -341,7 +347,8 @@ def resolve_bot_policy(source: Mapping, catalog: SideFieldCatalog) -> BotPolicy:
                     raise ValueError("an omitted prepared source cannot carry an authored value")
                 prepared.append(_PreparedSource(
                     ("bot", scope, *suffix), tuple(value), _freeze(value.source),
-                    _freeze(value.shared_source), value.source_present,
+                    _freeze(value.shared_source), value.acquired_members, value.market_aliases,
+                    value.available_members, value.source_present,
                 ))
                 if value.source_present:
                     _set(values, suffix, deepcopy(value.source))
@@ -455,6 +462,11 @@ def reconciled_bot_policy(config: Mapping) -> BotPolicy | None:
                 if (type(frozen) is not ResolvedCoinList or current != previous
                         or current.source != frozen.source
                         or current.shared_source != frozen.shared_source
+                        or type(current.acquired_members) is not tuple
+                        or current.acquired_members != frozen.acquired_members
+                        or current.market_aliases is not frozen.market_aliases
+                        or type(current.available_members) is not type(frozen.available_members)
+                        or current.available_members != frozen.available_members
                         or type(current.source_present) is not bool
                         or current.source_present != frozen.source_present):
                     raise ValueError("prepared membership edits must pass through the universe source owner")
@@ -504,7 +516,8 @@ def with_prepared_bot_sources(policy: BotPolicy, prepared_bot: Mapping) -> BotPo
                 raise ValueError(f"prepared membership does not match {'.'.join(('bot', side, *suffix))} source")
             prepared[path] = _PreparedSource(
                 path, tuple(value), _freeze(expected_source),
-                _freeze(shared if inherited else value.shared_source), present,
+                _freeze(shared if inherited else value.shared_source), value.acquired_members,
+                value.market_aliases, value.available_members, present,
             )
     return replace(policy, _prepared=tuple(prepared.values()))
 

@@ -2751,7 +2751,7 @@ def prep_backtest_args(
     from config.hsl import engine
     from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
     from config.policy import effective_minimum_cost_filters
-    from config.universe import always_include_matches
+    from config.universe import always_include_matches, approval_allows_coin, require_side_universe_sources
 
     ew_half_life_days = validate_ew_half_life_days(
         config.get("backtest", {}).get("ew_half_life_days")
@@ -2774,6 +2774,7 @@ def prep_backtest_args(
             config
         ).items()
     }
+    prepared_approvals = require_side_universe_sources(config, "approved_coins")
     candle_interval = int(
         config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
     )
@@ -2812,15 +2813,12 @@ def prep_backtest_args(
                 market_symbol=mss.get(coin, {}).get("symbol"),
             )
         coin_key = normalize_backtest_coin(coin)
-        coin_canonical = heuristic_symbol_to_coin(coin_key)
         for pside in POSITION_SIDES:
             approved_exact = approved_by_side[pside]
-            approved_by_alias = any(
-                not looks_like_exact_market_identifier(identifier)
-                and heuristic_symbol_to_coin(identifier) == coin_canonical
-                for identifier in approved_exact
-            )
-            if coin_key not in approved_exact and not approved_by_alias:
+            approved = approval_allows_coin(prepared_approvals[pside], coin_key,
+                exchange=mss.get(coin, {}).get("exchange") or exchange,
+                market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
+            if not approved:
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
             elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
