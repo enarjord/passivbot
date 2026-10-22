@@ -306,8 +306,8 @@ def test_grouped_account_user_is_operational_while_economic_settings_remain_dist
     assert canonical_configuration_identity(source, model="v9") == identity
     node = source
     for part in path[:-1]:
-        node = node[part]
-    node[path[-1]] = (node[path[-1]] or 0.0) + 1.0
+        node = node.setdefault(part, {})
+    node[path[-1]] = (node.get(path[-1]) or 0.0) + 1.0
     assert canonical_configuration_identity(source, model="v9") != identity
     assert original == get_template_config()
 

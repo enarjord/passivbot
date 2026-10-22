@@ -6,7 +6,8 @@ import pytest
 
 from config.prefilter import resolve_prefilter
 from config.scoring import extract_objective_specs
-from config_utils import clean_config, get_template_config
+from config_utils import clean_config
+from config.schema import get_expanded_config_prototype
 from optimization.prefilter import (
     build_prefilter_payload,
     config_prefilter,
@@ -28,7 +29,7 @@ def require_real_passivbot_rust_module():
 
 
 def config():
-    result = get_template_config()
+    result = get_expanded_config_prototype()
     result["backtest"]["coins"] = {"binance": ["TEST"]}
     set_side_universe_sources(result, 'approved_coins', {"long": ["TEST"], "short": []})
     side = result["bot"]["long"]
