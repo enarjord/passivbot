@@ -1,3 +1,4 @@
+from config.schema import get_expanded_config_prototype
 from config.universe import set_side_universe_sources
 from copy import deepcopy
 
@@ -72,7 +73,7 @@ def test_gpu_rejects_invalid_buffer_before_preparing_data(buffer):
 def _native_args():
     import numpy as np
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg['backtest']['coins'] = {'binance': ['BTC']}
     cfg['backtest']['btc_collateral_cap'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
