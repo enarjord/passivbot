@@ -17,7 +17,7 @@ BASE = 1_704_067_200_000
 
 def ages(config, long, short):
     for side, value in (("long", long), ("short", short)):
-        config["bot"][side]["universe"]["minimum_coin_age_days"] = value
+        config["bot"][side].setdefault("universe", {})["minimum_coin_age_days"] = value
     return config
 
 
@@ -34,7 +34,7 @@ def test_side_defaults_types_fixed_authority_and_float_values(days):
     source = ages(get_template_config(), days, 60.0)
     output = prepare_config(source, verbose=False)
     assert output["bot"]["long"]["universe"]["minimum_coin_age_days"] == days
-    assert "minimum_coin_age_days" not in output["bot"]["global"]["universe"]
+    assert output["bot"]["global"]["universe"]["minimum_coin_age_days"] == 60.0
     for side in ("long", "short"):
         description = describe_field(f"bot.{side}.universe.minimum_coin_age_days")
         assert description["types"] == ["float"]
@@ -49,7 +49,7 @@ def test_invalid_age_fails_at_authored_boundary(value, layer):
     source = get_template_config()
     path = "bot.short.universe.minimum_coin_age_days"
     if layer == "root":
-        source["bot"]["short"]["universe"]["minimum_coin_age_days"] = value
+        source["bot"]["short"].setdefault("universe", {})["minimum_coin_age_days"] = value
     elif layer == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = {path: value}
     else:
@@ -58,9 +58,11 @@ def test_invalid_age_fails_at_authored_boundary(value, layer):
         prepare_config(source, verbose=False)
 
 
-@pytest.mark.parametrize("layer", ["root", "fixed", "scenario", "coin"])
-def test_global_age_is_not_an_unpublished_v9_alias(layer):
+@pytest.mark.parametrize("layer", ["root", "fixed", "scenario"])
+@pytest.mark.parametrize("long_pin", [0.0, 60.0])
+def test_global_age_default_keeps_explicit_zero_and_equal_side_pins(layer, long_pin):
     source = get_template_config()
+    source["bot"]["long"]["universe"] = {"minimum_coin_age_days": long_pin}
     path = "bot.global.universe.minimum_coin_age_days"
     if layer == "root":
         source["bot"]["global"]["universe"]["minimum_coin_age_days"] = 7.0
@@ -68,8 +70,20 @@ def test_global_age_is_not_an_unpublished_v9_alias(layer):
         source["optimize"]["fixed_runtime_overrides"] = {path: 7.0}
     elif layer == "scenario":
         source["backtest"]["scenarios"] = [{"label": "old", "overrides": {path: 7.0}}]
-    else:
-        source["coin_overrides"] = {"AAA": {"bot": {"long": {"universe": {"minimum_coin_age_days": 7.0}}}}}
+    effective = prepare_config(source, verbose=False)
+    if layer == "fixed":
+        from optimization.warmup import _apply_config_overrides
+        _apply_config_overrides(effective, effective["optimize"]["fixed_runtime_overrides"])
+    elif layer == "scenario":
+        from suite_runner import apply_scenario_overrides
+        apply_scenario_overrides(effective, effective["backtest"]["scenarios"][0]["overrides"])
+    assert effective["bot"]["long"]["universe"]["minimum_coin_age_days"] == long_pin
+    assert effective["bot"]["short"]["universe"]["minimum_coin_age_days"] == 7.0
+
+
+def test_age_defaults_do_not_grant_coin_override_permission():
+    source = get_template_config()
+    source["coin_overrides"] = {"AAA": {"bot": {"long": {"universe": {"minimum_coin_age_days": 7.0}}}}}
     with pytest.raises((ValueError, KeyError), match="minimum_coin_age_days|universe"):
         prepare_config(source, verbose=False)
 
@@ -350,8 +364,11 @@ def test_cli_side_age_values_keep_fractional_days(command):
                                 "--bot.short.universe.minimum_coin_age_days", "7.25"])
     update_config_with_args(config, parsed, allowed_keys=keys)
     assert [config["bot"][side]["universe"]["minimum_coin_age_days"] for side in ("long", "short")] == [0.5, 7.25]
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--bot.global.universe.minimum_coin_age_days", "1"])
+    update_config_with_args(config, parser.parse_args(
+        ["--bot.global.universe.minimum_coin_age_days", "1"]), allowed_keys=keys)
+    effective = prepare_config(config, verbose=False)
+    assert effective["bot"]["global"]["universe"]["minimum_coin_age_days"] == 1.0
+    assert [effective["bot"][side]["universe"]["minimum_coin_age_days"] for side in ("long", "short")] == [0.5, 7.25]
 
 
 def test_editor_schema_has_same_fixed_age_boundary_and_no_coin_permission():

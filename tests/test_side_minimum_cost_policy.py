@@ -12,9 +12,16 @@ from config.migrations.v9 import migrate_v8_to_v9
 from released_v8_fixtures import released_v8_policy
 
 
+def policy_source():
+    source = get_template_config()
+    for side in ("long", "short"):
+        source["bot"][side].setdefault("universe", {})
+    return source
+
+
 @pytest.mark.parametrize("long,short,override", product((False, True), (False, True), (None, False, True)))
 def test_independent_inheritance_and_authored_export_roundtrip(long, short, override):
-    source = get_template_config()
+    source = policy_source()
     source["optimize"]["bounds"] = {}
     for side, flag in (("long", long), ("short", short)):
         source["bot"][side]["universe"]["filter_by_min_effective_cost"] = flag
@@ -24,6 +31,8 @@ def test_independent_inheritance_and_authored_export_roundtrip(long, short, over
     assert effective_minimum_cost_filters(prepare_config(source, verbose=False)) == expected
     for output in (compact_config(source), resolved_config(source)):
         assert output["backtest"]["filter_by_min_effective_cost"] is override
+        assert output["bot"]["long"]["universe"]["filter_by_min_effective_cost"] is long
+        assert output["bot"]["short"]["universe"]["filter_by_min_effective_cost"] is short
         assert effective_minimum_cost_filters(prepare_config(output, verbose=False)) == expected
     report = explain_config(source, "backtest.filter_by_min_effective_cost")
     assert report["value"] == (expected if override is None else override)
@@ -45,15 +54,16 @@ def test_native_transport_pair_is_complete_and_strict(invalid):
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("invalid", [None, 0, 1, "false"])
 def test_canonical_side_flag_requires_boolean(side, invalid):
-    source = get_template_config()
+    source = policy_source()
     source["bot"][side]["universe"]["filter_by_min_effective_cost"] = invalid
     with pytest.raises((ValueError, TypeError)):
         prepare_config(source, verbose=False)
 
 
 @pytest.mark.parametrize("location", ["root", "fixed", "scenario"])
-def test_retired_development_global_path_is_not_a_loader_alias(location):
-    source = get_template_config()
+def test_global_default_preserves_an_explicit_equal_side_pin(location):
+    source = policy_source()
+    source["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = True
     path = "bot.global.universe.filter_by_min_effective_cost"
     if location == "root":
         source["bot"]["global"]["universe"]["filter_by_min_effective_cost"] = False
@@ -61,8 +71,14 @@ def test_retired_development_global_path_is_not_a_loader_alias(location):
         source["optimize"]["fixed_runtime_overrides"] = {path: False}
     else:
         source["backtest"]["scenarios"] = [{"label": "old", "overrides": {path: False}}]
-    with pytest.raises((ValueError, KeyError)):
-        prepare_config(source, verbose=False)
+    effective = prepare_config(source, verbose=False)
+    if location == "fixed":
+        from optimization.warmup import _apply_config_overrides
+        _apply_config_overrides(effective, effective["optimize"]["fixed_runtime_overrides"])
+    elif location == "scenario":
+        from suite_runner import apply_scenario_overrides
+        apply_scenario_overrides(effective, effective["backtest"]["scenarios"][0]["overrides"])
+    assert effective_minimum_cost_filters(effective) == {"long": True, "short": False}
 
 
 @pytest.mark.parametrize("value", [False, True])
@@ -109,11 +125,11 @@ def test_effective_evaluation_identity_records_both_independent_flags():
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_optimizer_mirroring_preserves_directional_admission_policy(kind):
     from optimizer_overrides import optimizer_overrides
-    source = get_template_config()
+    source = policy_source()
     source["bot"]["portfolio"]["strategy_kind"] = kind
     source["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = False
     source["bot"]["short"]["universe"]["filter_by_min_effective_cost"] = True
-    effective = optimizer_overrides(["mirror_short_from_long"], source)
+    effective = optimizer_overrides(["mirror_short_from_long"], prepare_config(source, verbose=False))
     assert effective_minimum_cost_filters(effective) == {"long": False, "short": True}
 
 
@@ -133,7 +149,7 @@ def test_released_fanout_rejects_conflicting_explicit_side_authority(location):
 def test_actual_cli_exports_and_explains_independent_inheritance(tmp_path, capsys):
     import json
     from passivbot_cli import main as cli
-    source = get_template_config()
+    source = policy_source()
     source["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = False
     source["backtest"]["filter_by_min_effective_cost"] = None
     filename = tmp_path / "source.json"
@@ -151,23 +167,27 @@ def test_actual_cli_exports_and_explains_independent_inheritance(tmp_path, capsy
 
 
 @pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
-def test_canonical_side_cli_flags_parse_independently_and_global_flag_rejects(command):
+def test_canonical_global_and_side_cli_flags_parse_independently(command):
     import argparse
-    from config_utils import add_arguments_recursively
+    from config_utils import add_config_arguments, project_template_config_for_cli
     parser = argparse.ArgumentParser()
-    add_arguments_recursively(parser, get_template_config(), command=command)
+    add_config_arguments(parser, project_template_config_for_cli(get_template_config(), command), command=command)
     args = vars(parser.parse_args(["--bot.long.universe.filter_by_min_effective_cost", "n",
                                   "--bot.short.universe.filter_by_min_effective_cost", "y"]))
     assert args["bot.long.universe.filter_by_min_effective_cost"] is False
     assert args["bot.short.universe.filter_by_min_effective_cost"] is True
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--bot.global.universe.filter_by_min_effective_cost", "n"])
+    args = vars(parser.parse_args(["--bot.global.universe.filter_by_min_effective_cost", "n"]))
+    assert args["bot.global.universe.filter_by_min_effective_cost"] is False
 
 
 @pytest.mark.parametrize("version", ["v8.6.0", "v9.0.0"])
-def test_explicit_migration_does_not_translate_unpublished_global_flag(version):
+def test_explicit_converter_accepts_released_live_policy_but_not_v9_live_alias(version):
     from tools.migrate_config_v9 import migrate
     source = released_v8_policy() if version.startswith("v8") else get_template_config()
-    source["bot"].setdefault("global", {}).setdefault("universe", {})["filter_by_min_effective_cost"] = False
-    with pytest.raises(ValueError, match="filter_by_min_effective_cost"):
-        migrate(source, memory_span_minutes=120.0)
+    source["live"]["filter_by_min_effective_cost"] = False
+    if version.startswith("v8"):
+        output = migrate(source, memory_span_minutes=120.0).config
+        assert effective_minimum_cost_filters(prepare_config(output, verbose=False)) == {"long": False, "short": False}
+    else:
+        with pytest.raises(ValueError, match="filter_by_min_effective_cost"):
+            migrate(source)

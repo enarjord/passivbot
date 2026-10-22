@@ -8,6 +8,7 @@ import pytest
 
 from backtest import build_backtest_payload, execute_backtest
 from config import prepare_config
+from config.inherited_bounds import prepare_bound_plan
 from config.universe import (
     materialize_side_universe_sources,
     require_side_universe_sources,
@@ -58,6 +59,7 @@ def prepared(tmp_path, strategy_kind, source_kind, *, pin=False):
     materialize_side_universe_sources(
         config, "ignored_coins", {side: ["COIN01"] for side in ("long", "short")}
     )
+    prepare_bound_plan(config)
     return (
         config,
         (candles, markets, btc, timestamps, coins),

@@ -14,6 +14,13 @@ from config.universe import always_include_matches
 from released_v8_fixtures import released_v8_policy
 
 
+def policy_source():
+    config = get_template_config()
+    for side in ("long", "short"):
+        config["bot"][side].update(universe={}, forager={})
+    return config
+
+
 def test_new_policy_defaults_are_shared_and_backtest_override_retains_inheritance():
     config = prepare_config(get_template_config(), verbose=False)
     assert not (
@@ -62,12 +69,13 @@ def test_backtest_payload_resolves_shared_policy_and_persistent_selection(
 ):
     from backtest import prep_backtest_args
 
-    config = get_template_config()
+    config = policy_source()
     config["bot"]["long"]["universe"]["filter_by_min_effective_cost"] = shared
     config["backtest"]["filter_by_min_effective_cost"] = override
-    config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     config["bot"]["long"]["universe"]["approved_coins"] = ["BTC", "ETH"]
     config["bot"]["long"]["forager"]["always_include"] = ["BTC"]
+    config = prepare_config(config, verbose=False)
+    config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     mss = {
         coin: {
             "qty_step": 0.001,
@@ -111,7 +119,7 @@ def test_always_include_is_ordered_deduplicated_and_scoped_to_market(
         },
     }
     utils.create_coin_symbol_map_cache("binance", markets, verbose=False)
-    config = get_template_config()
+    config = policy_source()
     config["bot"]["long"]["forager"]["always_include"] = [
         " BTC ",
         "ETH",
@@ -158,7 +166,7 @@ def test_persistent_selection_preserves_live_operational_precedence(
 ):
     from passivbot import Passivbot
 
-    config = get_template_config()
+    config = policy_source()
     config["bot"]["long"]["forager"]["always_include"] = ["BTC"]
     stub = SimpleNamespace(
         config=config, markets_dict={"BTC": {"active": True}}, exchange="binance"
@@ -242,7 +250,7 @@ def test_v8_root_scenario_fixed_sources_and_coin_normal_selection_move_together(
 
 @pytest.mark.parametrize("value", [0, 1, "false", [], float("nan")])
 def test_minimum_cost_consumer_rejects_nonboolean_policy(value):
-    config = get_template_config()
+    config = prepare_config(get_template_config(), verbose=False)
     config["backtest"]["filter_by_min_effective_cost"] = value
     with pytest.raises(TypeError, match="boolean or null"):
         effective_minimum_cost_filter(config, "long")
@@ -454,12 +462,13 @@ def test_v8_file_normal_selection_obeys_scenario_and_atomic_replacement(
 def test_optimizer_mirror_preserves_directional_selection_and_mirrors_numeric_forager():
     from optimizer_overrides import optimizer_overrides
 
-    config = get_template_config()
+    config = policy_source()
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     for side, coin in (("long", "BTC"), ("short", "ETH")):
         config["bot"][side]["forager"]["always_include"] = [coin]
-    weights = config["bot"]["long"]["forager"]["score_weights"]
-    weights.update(volume=0.7, volatility=0.3, unilateralness=0.0, ema_readiness=0.0)
+    weights = {"volume": 0.7, "volatility": 0.3, "unilateralness": 0.0, "ema_readiness": 0.0}
+    config["bot"]["long"]["forager"]["score_weights"] = weights
+    config = prepare_config(config, verbose=False)
     mirrored = optimizer_overrides(
         config["optimize"]["enable_overrides"], deepcopy(config)
     )

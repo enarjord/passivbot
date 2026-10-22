@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from config import prepare_config
+from config.inherited_bounds import prepare_bound_plan
 from config.universe import materialize_side_universe_sources, universe_source_view
 from backtest import build_backtest_payload
 from optimization.gpu.datasets import PreparedGpuDataset
@@ -30,6 +31,7 @@ def prepared(source, tmp_path, strategy_kind="trailing_martingale"):
     config=prepare_config(clean_config(config),base_config_path=str(tmp_path/'config.json'),verbose=False)
     config['backtest']['coins']=membership
     materialize_side_universe_sources(config,'approved_coins',{'long':['COIN00','COIN02'],'short':['COIN01']})
+    prepare_bound_plan(config)
     return config,candles,markets,btc,timestamps
 
 
@@ -58,6 +60,7 @@ def test_dataset_policy_identity_and_native_masks_survive_file_change_and_deleti
     assert masks(dataset.execution_config(),candles,markets,btc,timestamps)==expected
     changed=deepcopy(config)
     materialize_side_universe_sources(changed,'approved_coins',{'long':['COIN01'],'short':['COIN00','COIN02']})
+    prepare_bound_plan(changed)
     assert execution_key(changed)!=execution_key(config)  # Same union, different side eligibility.
     assert universe_source_view(config)['bot']['long']['universe']['approved_coins'] is None
     if kind == 'file':
@@ -71,6 +74,7 @@ def test_dataset_policy_identity_and_native_masks_survive_file_change_and_deleti
         with pytest.raises(ValueError, match='prepared long approved_coins membership'):
             execution_key(other_base)
         materialize_side_universe_sources(other_base, 'approved_coins', {'long':['COIN00','COIN02'],'short':['COIN01']})
+        prepare_bound_plan(other_base)
         assert execution_key(other_base) != execution_key(config)  # Equal masks, different selected file.
 
 
@@ -102,6 +106,7 @@ def test_actual_registry_and_candidate_planner_keep_prepared_universe(tmp_path, 
                 with pytest.raises(ValueError, match='prepared long approved_coins membership'):
                     registry.planner.prepare('unprepared-source-edit', vector)
                 materialize_side_universe_sources(evaluator.config, 'approved_coins', {'long':['COIN00','COIN02'],'short':['COIN01']})
+                prepare_bound_plan(evaluator.config)
                 with pytest.raises(ValueError, match='dataset-owned execution inputs'):
                     registry.planner.prepare('different-file-base', vector)
     finally:
@@ -118,6 +123,7 @@ def test_suite_planner_preserves_frozen_inherited_membership_after_source_overri
     context_config = deepcopy(config)
     context_config['bot']['global']['universe']['approved_coins'] = 'all' if kind == 'all' else 'context.json'
     materialize_side_universe_sources(context_config, 'approved_coins', {'long': ['COIN00', 'COIN02'], 'short': ['COIN01']})
+    prepare_bound_plan(context_config)
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(arr)[0] for arr in (candles, btc)]
@@ -149,6 +155,7 @@ def test_suite_planner_preserves_frozen_inherited_membership_after_source_overri
             materialize_side_universe_sources(context.config, 'approved_coins', {
                 'long': ['COIN01'], 'short': ['COIN00', 'COIN02'],
             })
+            prepare_bound_plan(context.config)
             with pytest.raises(ValueError, match='dataset-owned execution inputs'):
                 registry.planner.prepare('different-membership', vector)
     finally:
