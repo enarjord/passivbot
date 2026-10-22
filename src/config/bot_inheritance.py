@@ -317,6 +317,9 @@ class PreparedBotPolicy(dict):
             raise TypeError("a typed BotPolicy is required")
         super().__init__(deepcopy(values))
         self._bot_policy = policy
+        # A detached value projection detects direct changed-value edits. It
+        # never supplies source presence or source membership authority.
+        self._effective_baseline = _freeze(values)
 
 
 def get_bot_policy(config: Mapping) -> BotPolicy | None:
@@ -345,11 +348,49 @@ def bot_policy_source_view(config: Mapping, *, include_defaults=False, candidate
     exporting. Plain JSON fields never become a retained internal snapshot.
     """
     result = deepcopy(dict(config))
-    policy = get_bot_policy(config)
+    policy = reconciled_bot_policy(config)
     if policy is not None:
         result["bot"] = (policy.candidate_view() if candidate else
                          policy.source_view(include_defaults=include_defaults))
     return result
+
+
+def reconciled_bot_policy(config: Mapping) -> BotPolicy | None:
+    """Adopt direct changed values without guessing equal-valued declarations.
+
+    Structured patch owners record equal/parent declarations explicitly. Gene
+    and derived writers use their channels before installation, so their owned
+    values match the baseline and cannot become authored pins here.
+    """
+    policy = get_bot_policy(config)
+    if policy is None:
+        return None
+    bot = config["bot"]
+    baseline = _thaw(bot._effective_baseline)
+    expected = policy.effective_view()
+    patches = {}
+    for scope in ("global", *SIDES):
+        policy.catalog.validate_tree(bot.get(scope, {}), ("bot", scope))
+        for field in policy.catalog.fields:
+            path = (scope, *field.suffix)
+            current = _get(bot, path)
+            previous = _get(baseline, path)
+            if current is ABSENT:
+                continue  # Deletion/replacement declarations use the patch API.
+            if type(current) is ResolvedCoinList:
+                frozen = _get(expected, path)
+                if (type(frozen) is not ResolvedCoinList or current != previous
+                        or current.source != frozen.source
+                        or current.shared_source != frozen.shared_source):
+                    raise ValueError("prepared membership edits must pass through the universe source owner")
+            elif current != previous:
+                patches[".".join(("bot", *path))] = deepcopy(current)
+    for spec in policy.catalog.portfolio_fields:
+        path = spec.path[1:]
+        current = _get(bot, path)
+        if current is not ABSENT and current != _get(baseline, path):
+            patches[".".join(spec.path)] = deepcopy(current)
+    return apply_bot_policy_patch(policy, patches) if patches else policy
 
 
 def with_prepared_bot_sources(policy: BotPolicy, prepared_bot: Mapping) -> BotPolicy:

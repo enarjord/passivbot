@@ -283,6 +283,54 @@ def test_prepared_envelope_retains_one_typed_source_and_exports_sparse_pins():
     assert policy.source_view()["short"]["risk"]["capacity"] == 1.0
 
 
+def test_direct_changed_values_are_adopted_before_source_projection():
+    from config.bot_inheritance import bot_policy_source_view, install_bot_policy
+
+    policy = resolve_bot_policy({}, catalog())
+    config = {}
+    install_bot_policy(config, policy)
+    config["bot"]["global"]["enabled"] = True
+    config["bot"]["global"]["risk"]["capacity"] = 3.0
+    config["bot"]["short"]["risk"]["capacity"] = 2.0
+    source = bot_policy_source_view(config)["bot"]
+    reloaded = resolve_bot_policy(source, policy.catalog)
+    assert reloaded.effective_view()["long"]["enabled"] is True
+    assert reloaded.effective_view()["short"]["enabled"] is True
+    assert reloaded.effective_view()["long"]["risk"]["capacity"] == 3.0
+    assert reloaded.effective_view()["short"]["risk"]["capacity"] == 2.0
+    assert "enabled" not in source["short"]
+
+
+def test_owned_gene_and_derived_baselines_do_not_become_authored_side_pins():
+    from config.bot_inheritance import bot_policy_source_view, install_bot_policy
+
+    policy = apply_bot_policy_patch(resolve_bot_policy({}, catalog()),
+                                    {"bot.global.risk.capacity": 3.0}, channel="gene")
+    policy = apply_bot_policy_patch(policy, {"bot.short.risk.capacity": 2.0}, channel="derived")
+    config = {}
+    install_bot_policy(config, policy)
+    source = bot_policy_source_view(config)["bot"]
+    assert source == {"global": {"risk": {"capacity": 3.0}}}
+    candidate = bot_policy_source_view(config, candidate=True)["bot"]
+    assert candidate["short"]["risk"]["capacity"] == 2.0
+
+
+def test_direct_prepared_membership_mutation_cannot_become_source_authority():
+    from config.bot_inheritance import (
+        bot_policy_source_view, install_bot_policy, with_prepared_bot_sources,
+    )
+
+    policy = resolve_bot_policy({}, catalog())
+    effective = policy.effective_view()
+    effective["long"]["universe"]["approved_coins"] = ResolvedCoinList(["AAA"], None, ["AAA"])
+    policy = with_prepared_bot_sources(policy, effective)
+    config = {}
+    install_bot_policy(config, policy)
+    config["bot"]["long"]["universe"]["approved_coins"].append("BBB")
+    with pytest.raises(ValueError, match="prepared membership edits"):
+        bot_policy_source_view(config)
+
+
 def test_field_specific_prepared_sources_keep_ignored_omission_distinct_from_null(monkeypatch):
     from pathlib import Path
     from config.bot_inheritance import with_prepared_bot_sources
