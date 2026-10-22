@@ -8,7 +8,7 @@ import pytest
 
 from config.shared_bot import flatten_shared_bot_side
 from config.hsl import native_hsl_policy
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from config.strategy_paths import lower_runtime_strategy_side
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
@@ -73,13 +73,14 @@ build_tm_coin_parameters = partial(build_coin_override_parameters, strategy_kind
 def _complete_hsl_payload(payload):
     from copy import deepcopy
 
-    defaults = native_hsl_policy(get_template_config()["bot"]["long"]["hsl"])
+    defaults = native_hsl_policy(get_template_config()["bot"]["global"]["hsl"])
     params = getattr(payload, "backtest_params", {})
     payload.backtest_params = params
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
     params.setdefault("dynamic_wel_by_tradability", True)
     params.setdefault("minimum_coin_age_days", [0.0, 0.0])
     params.setdefault("side_activation", {"long": True, "short": True})
+    params.setdefault("forager_score_hysteresis", {"long": 0.0, "short": 0.0})
     params.setdefault("unstuck_memory_ema_span_minutes", 1440.0)
     params.setdefault("loss_gate_memory_ema_span_minutes", 1440.0)
     old = params.get("equity_hard_stop_loss", {})
@@ -115,7 +116,7 @@ def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pi
     _complete_hsl_payload(payload)
     native = payload.backtest_params["equity_hard_stop_loss"]
     assert native["coins"]["BTC"][0]["red_threshold"] == 0.27
-    default_threshold = get_template_config()["bot"]["long"]["hsl"]["drawdown_ratio_threshold"]
+    default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_ratio_threshold"]
     assert native["coins"]["BTC"][1]["red_threshold"] == default_threshold
     assert native["portfolio"]["red_threshold"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
@@ -1037,7 +1038,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     backtest = ModuleType("backtest")
     backtest._get_backtest_coin_override = lambda *args, **kwargs: {}
     monkeypatch.setitem(sys.modules, "backtest", backtest)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': ['ETH']})
     set_side_universe_sources(config, 'ignored_coins', {'long': ['ETH'], 'short': ['BTC']})
