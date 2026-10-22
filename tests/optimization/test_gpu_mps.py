@@ -11915,7 +11915,7 @@ def test_streamed_gap_moment_matches_distinct_fill_timestamps(
             if strategy_kind == "ema_anchor"
             else MpsTrailingMartingaleMulticoinFusedRunner
         )
-        runner, matrix = cls(run, data, pnl_lookback_bars=0, forager_score_hysteresis={"long": 0.0, "short": 0.0}), np.asarray([row + row])
+        runner, matrix = cls(run, data, pnl_lookback_bars=0, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}), np.asarray([row + row])
     fill_timestamps = set()
     for end in range(3, count):
         output = runner.run(matrix, end_steps=np.array([end], dtype=np.int32))

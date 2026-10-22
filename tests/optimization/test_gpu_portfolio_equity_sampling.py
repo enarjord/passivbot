@@ -94,8 +94,8 @@ def test_raw_risk_ablation_preserves_other_outputs_and_budgets_days(strategy, si
            else MpsTrailingMartingaleMulticoinRunner)
     kwargs = dict(side=side, btc_risk_enabled=btc_risk,
                   btc_prices=np.full(count, 30000.0) if btc_risk else None)
-    baseline = cls(run, data, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0})
-    enabled = cls(run, data, raw_strategy_risk_enabled=True, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0})
+    baseline = cls(run, data, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+    enabled = cls(run, data, raw_strategy_risk_enabled=True, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     assert enabled.daily_cols == baseline.daily_cols + 1
     assert (enabled._history_bytes_per_candidate() - baseline._history_bytes_per_candidate()
             == 4 * data['n_days'])
