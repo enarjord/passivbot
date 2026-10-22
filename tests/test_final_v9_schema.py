@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 
 import pytest
+
+from config.schema import get_expanded_config_prototype
 from config import prepare_config
 from config.overrides import parse_overrides
 from config.parse import load_raw_config
@@ -39,7 +41,7 @@ def test_canonical_defaults_and_sparse_defaults_load():
     ("optimize", "bounds", "long", "risk", "wrong_limit"),
 ])
 def test_unknown_authored_fields_fail_before_pruning(path):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     target = config
     for part in path[:-1]:
         target = target[part]
@@ -80,7 +82,7 @@ def test_nested_and_dotted_patch_conflict_is_rejected():
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("same_value", [False, True])
 def test_authored_object_and_descendant_authority_rejects_in_both_orders(owner, reverse, same_value):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     risk = deepcopy(config["bot"]["long"]["risk"])
     risk["max_positions"] = 2
     entries = [("bot.long.risk", risk),
@@ -98,7 +100,7 @@ def test_authored_object_and_descendant_authority_rejects_in_both_orders(owner, 
 
 @pytest.mark.parametrize("structured", [False, True])
 def test_authored_patch_accepts_one_object_or_distinct_canonical_siblings(structured):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     risk = deepcopy(config["bot"]["long"]["risk"])
     risk.update(max_positions=2, total_wallet_exposure_limit=1.25)
     patch = ({"bot.long.risk": risk} if structured else {
@@ -136,7 +138,7 @@ def test_aggregate_controls_cannot_be_coin_overridden(patch):
 
 
 def test_new_memory_dimensions_default_fixed_at_effective_config_values():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 71.5
     config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 83.5
     config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 19.5
@@ -148,7 +150,7 @@ def test_new_memory_dimensions_default_fixed_at_effective_config_values():
 
 
 def test_independent_gate_only_memory_contributes_to_bootstrap():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     for side in ("long", "short"):
         config["bot"][side]["unstuck"]["enabled"] = False
     config["bot"]["portfolio"]["loss_gate"].update(max_drawdown_ratio=0.1, memory_ema_span_minutes=17.5)
@@ -201,11 +203,12 @@ def test_converter_explicit_independent_span_choices_do_not_widen_search():
     })
     assert result.config["bot"]["short"]["hsl"]["memory_ema_span_minutes"] == 123.5
     assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 71.5
-    assert result.config["optimize"]["bounds"]["long"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
+    effective = prepare_config(result.config, verbose=False)
+    assert effective["optimize"]["bounds"]["long"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
 
 
 def test_portfolio_memory_and_smoothing_are_separate_from_scope():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     policy = deepcopy(config["bot"]["long"]["hsl"])
     policy.update(scope="portfolio", memory_ema_span_minutes=17.5,
                   drawdown_ratio_ema_span_minutes=9.5, enabled=True)
@@ -270,7 +273,7 @@ def test_invalid_intermediate_schema_never_creates_migration_output(tmp_path):
 
 
 def test_coin_only_unstuck_enablement_requires_global_memory_history():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     for side in ("long", "short"):
         config["bot"][side]["unstuck"]["enabled"] = False
     config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 71.5
@@ -400,8 +403,8 @@ def test_clean_export_preserves_explicit_global_portfolio_policy_and_fixed_span(
     prepared = prepare_config(source, verbose=False)
     exported = sanitize_prepared_config_for_dump(prepared)
     assert exported["bot"]["portfolio"]["hsl"] == prepared["bot"]["portfolio"]["hsl"]
-    assert exported["optimize"]["bounds"]["portfolio"]["hsl"]["memory_ema_span_minutes"] == [123.5, 123.5]
     loaded = prepare_config(exported, verbose=False)
+    assert loaded["optimize"]["bounds"]["portfolio"]["hsl"]["memory_ema_span_minutes"] == [123.5, 123.5]
     assert loaded["bot"]["portfolio"]["hsl"] == prepared["bot"]["portfolio"]["hsl"]
 
 

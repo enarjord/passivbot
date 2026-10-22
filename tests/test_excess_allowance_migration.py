@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 
 import pytest
+
+from config.schema import get_expanded_config_prototype
 from config.load import prepare_config
 from config.schema import get_template_config
 from config.overrides import parse_overrides
@@ -17,7 +19,7 @@ from risk_limits import (
 def test_current_schema_rejects_retired_mode_on_all_authored_surfaces(
     location, mode
 ):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     risk = {"we_excess_allowance_mode": mode}
     if location == "root":
         source["bot"]["long"]["risk"].update(risk)
@@ -73,7 +75,7 @@ def test_external_config_cannot_hide_removed_raw_policy(tmp_path, mode):
 
 @pytest.mark.parametrize("value", [True, False, "true", 1, None])
 def test_scaling_is_strict_boolean_and_defaults_off(value):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     assert source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is False
     source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = value
     if type(value) is bool:
@@ -82,7 +84,7 @@ def test_scaling_is_strict_boolean_and_defaults_off(value):
             result["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is value
         )
     else:
-        with pytest.raises(TypeError, match="must be a boolean"):
+        with pytest.raises(TypeError, match="scale_budget_with_excess_allowance"):
             prepare_config(source, verbose=False)
 
 
@@ -102,7 +104,7 @@ def test_coin_scaling_switch_is_local_and_preserves_base_policy():
 def test_scaling_rejects_aggregate_scopes(mode):
     from config.hsl import generated_template
 
-    source = generated_template(get_template_config(), mode)
+    source = generated_template(get_expanded_config_prototype(), mode)
     source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
     with pytest.raises(ValueError, match="requires coin HSL mode"):
         prepare_config(source, verbose=False)
@@ -129,11 +131,11 @@ def test_python_admission_matches_bounded_rust_contract(base, total, expected):
 
 @pytest.mark.parametrize("surface", ["helper", "full", "live", "backtest", "optimize"])
 @pytest.mark.parametrize("old_value", ["bounded", "legacy_raw"])
-def test_authored_cleanup_rejects_removed_policy_and_runtime_sanitizer_has_no_authority(surface, old_value):
+def test_authored_cleanup_and_internal_cleaner_reject_removed_policy(surface, old_value):
     from config_utils import clean_config
     from tools.clean_config import cleanup_config
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = old_value
     original = deepcopy(source)
     clean = (
@@ -141,14 +143,9 @@ def test_authored_cleanup_rejects_removed_policy_and_runtime_sanitizer_has_no_au
         if surface == "helper"
         else (lambda: cleanup_config(source, mode=surface))
     )
-    if surface == "helper":
-        assert "we_excess_allowance_mode" not in clean()["bot"]["long"]["risk"]
-        # Internal sanitization does not authorize the original authored policy.
-        with pytest.raises(ValueError, match="we_excess_allowance_mode"):
-            prepare_config(source, verbose=False)
-    else:
-        with pytest.raises(ValueError, match="we_excess_allowance_mode"):
-            clean()
+    # Internal metadata cleanup does not authorize retired public policy.
+    with pytest.raises(ValueError, match="we_excess_allowance_mode"):
+        clean()
     assert source == original
 
 

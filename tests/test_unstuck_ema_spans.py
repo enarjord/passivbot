@@ -6,6 +6,8 @@ import logging
 
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config import (
     get_template_config,
     prepare_config,
@@ -121,7 +123,7 @@ def test_legacy_composed_spans_and_roundtrip(kind, caplog):
 
 
 def test_explicit_global_spans_are_inherited_by_strategy_overrides():
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c["bot"]["long"]["unstuck"].update(ema_span_0_minutes=300.5, ema_span_1_minutes=700.25)
     c["coin_overrides"] = {
         "BTC": {
@@ -203,7 +205,7 @@ def test_partial_explicit_spans_and_bounds_win():
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True])
 @pytest.mark.parametrize("coin_override", [False, True])
 def test_invalid_spans_rejected(value, coin_override):
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     target = c["bot"]["long"]["unstuck"]
     if coin_override:
         c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {}}}}}
@@ -214,7 +216,7 @@ def test_invalid_spans_rejected(value, coin_override):
 
 
 def test_defaults_and_runtime_mapping():
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     example = load_prepared_config(
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
@@ -237,7 +239,7 @@ def test_defaults_and_runtime_mapping():
 def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
     from warmup_utils import compute_backtest_warmup_minutes
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 2.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["optimize"]["bounds"] = {}
@@ -276,7 +278,7 @@ def test_legacy_scenario_span_override_migrates():
 def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
     from optimization.config_adapter import get_optimization_key_paths
 
-    paths = dict(get_optimization_key_paths(get_template_config()))
+    paths = dict(get_optimization_key_paths(get_expanded_config_prototype()))
     assert paths["long_unstuck_ema_span_0"] == ("bot", "long", "unstuck", "ema_span_0_minutes")
     assert paths["long_ema_span_0"] == (
         "bot",
@@ -292,7 +294,7 @@ def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
 def test_optimizer_rejects_nonpositive_or_nonfinite_span_bounds(bounds):
     from optimization.config_adapter import get_optimization_key_paths
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] = bounds
     with pytest.raises(ValueError):
         get_optimization_key_paths(c)
@@ -417,7 +419,7 @@ def test_disabled_unstuck_warmup_ignores_values_and_bounds_but_honors_coin_activ
 ):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     for side in ("long", "short"):
@@ -501,7 +503,7 @@ def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog, bound):
 def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(control):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"]["short"]["unstuck"]["enabled"] = False
@@ -538,7 +540,7 @@ def test_config_version_help_matches_canonical_schema():
 def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bound):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     opposite = "short" if side == "long" else "long"
@@ -641,7 +643,7 @@ def test_inactive_scenario_zero_span_migration_uses_positive_fallback(
 def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, max_positions=1)
@@ -668,7 +670,7 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
 def test_zero_slot_unstuck_warmup_preserves_optimizer_reactivation(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
-    c = get_template_config()
+    c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, max_positions=0)
@@ -688,7 +690,7 @@ def test_zero_slot_unstuck_warmup_preserves_optimizer_reactivation(side):
 
 @pytest.mark.parametrize("version", ["v8.6.0", "v9.0.0"])
 def test_retired_v7_requires_an_explicit_retained_strategy_choice(version):
-    source = legacy_config() if version.startswith("v8") else get_template_config()
+    source = legacy_config() if version.startswith("v8") else get_expanded_config_prototype()
     source["config_version"] = version
     if version.startswith("v8"):
         source["live"]["strategy_kind"] = "trailing_grid_v7"
