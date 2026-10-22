@@ -52,7 +52,7 @@ def test_registry_declares_exact_portfolio_scope_and_remaining_global_defaults()
             if field.path[:2] == ("bot", "portfolio")} == set(PORTFOLIO_PATHS)
     assert {".".join(field.path[2:]) for field in fields
             if field.path[:2] == ("bot", "global")} == {
-                "universe.approved_coins", "forager.score_hysteresis_margin"}
+                "enabled", "universe.approved_coins", "forager.score_hysteresis_margin"}
     assert all(field.scope == "portfolio" for field in fields
                if field.path[:2] == ("bot", "portfolio"))
 

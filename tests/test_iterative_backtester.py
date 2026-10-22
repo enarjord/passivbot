@@ -287,6 +287,8 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
         "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
+    base["bot"]["long"]["enabled"] = True
+    base["bot"]["short"]["enabled"] = False
 
     same = {
         **base,

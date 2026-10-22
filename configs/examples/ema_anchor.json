@@ -51,23 +51,7 @@
     },
     "bot": {
         "global": {
-            "forager": {"score_hysteresis_margin": 0.02},
-            "universe": {"approved_coins": []}
-        },
-        "portfolio": {
-            "execution": {
-                "market_order_near_touch_fraction": 0.001,
-                "market_orders_allowed": false
-            },
-            "hedge_mode": false,
-            "hsl": {"scope": "coin"},
-            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
-            "strategy_kind": "ema_anchor",
-            "unstuck": {"memory_ema_span_minutes": 43200.0},
-            "warmup": {"max_minutes": null, "span_multiplier": 0.3}
-        },
-        "long": {
-            "enabled": true,
+            "enabled": false,
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
                 "max_duration_minutes": null,
@@ -76,6 +60,7 @@
             },
             "forager": {
                 "always_include": [],
+                "score_hysteresis_margin": 0.02,
                 "score_weights": {
                     "ema_readiness": 0.34146341463414637,
                     "unilateralness": 0.0,
@@ -89,22 +74,18 @@
             "hsl": {
                 "cooldown_after_red_minutes": 3270.0,
                 "drawdown_ratio_ema_span_minutes": 427.0,
+                "drawdown_ratio_threshold": 0.05,
                 "enabled": false,
                 "memory_ema_span_minutes": 43200.0,
                 "panic_close_order_type": "limit",
-                "drawdown_ratio_threshold": 0.05,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
                 "max_positions": 1,
-                "total_wallet_exposure_limit": 2.5,
-                "we_excess_allowance_fraction": 0.0,
                 "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
-                "total_exposure_enforcer": {
-                    "enabled": true,
-                    "threshold_ratio": 1.0,
-                    "policy": "reduce_overweight"
-                }
+                "total_exposure_enforcer": {"enabled": true, "policy": "reduce_overweight", "threshold_ratio": 1.0},
+                "total_wallet_exposure_limit": 2.5,
+                "we_excess_allowance_fraction": 0.0
             },
             "strategy": {
                 "ema_anchor": {
@@ -120,7 +101,12 @@
                     "offset_volatility_ema_span_minutes": 664.0
                 }
             },
-            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 365.0, "approved_coins": ["SOL"], "ignored_coins": []},
+            "universe": {
+                "approved_coins": ["SOL"],
+                "filter_by_min_effective_cost": true,
+                "ignored_coins": [],
+                "minimum_coin_age_days": 365.0
+            },
             "unstuck": {
                 "close_fraction": 0.099,
                 "ema_distance_fraction": -0.1046,
@@ -132,6 +118,16 @@
                 "loss_allowance_fraction": 0.0396
             }
         },
+        "portfolio": {
+            "execution": {"market_order_near_touch_fraction": 0.001, "market_orders_allowed": false},
+            "hedge_mode": false,
+            "hsl": {"scope": "coin"},
+            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
+            "strategy_kind": "ema_anchor",
+            "unstuck": {"memory_ema_span_minutes": 43200.0},
+            "warmup": {"max_minutes": null, "span_multiplier": 0.3}
+        },
+        "long": {"enabled": true},
         "short": {
             "enabled": true,
             "entry_cooldown": {
@@ -166,11 +162,7 @@
                 "total_wallet_exposure_limit": 2.5,
                 "we_excess_allowance_fraction": 0.0,
                 "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
-                "total_exposure_enforcer": {
-                    "enabled": true,
-                    "threshold_ratio": 1.0,
-                    "policy": "reduce_overweight"
-                }
+                "total_exposure_enforcer": {"enabled": true, "threshold_ratio": 1.0, "policy": "reduce_overweight"}
             },
             "strategy": {
                 "ema_anchor": {
@@ -186,7 +178,11 @@
                     "offset_volatility_ema_span_minutes": 664.0
                 }
             },
-            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 365.0, "approved_coins": ["SOL"], "ignored_coins": []},
+            "universe": {
+                "filter_by_min_effective_cost": true,
+                "minimum_coin_age_days": 365.0,
+                "ignored_coins": []
+            },
             "unstuck": {
                 "close_fraction": 0.099,
                 "ema_distance_fraction": -0.1046,

@@ -27,6 +27,53 @@ def source(kind="trailing_martingale"):
         "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit": [1.0, 3.0]}}}}}
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_resume_compares_authored_bounds_and_resolved_activation_not_hydrated_domains(enabled):
+    from optimize import _resume_config_mismatches
+    from optimization.evaluation_contract import CONTRACT_KEY
+    raw = source()
+    raw["bot"]["global"]["enabled"] = enabled
+    current = load(raw)
+    saved = clean_config(current)
+    saved["backtest"]["coins"] = deepcopy(current["backtest"]["coins"])
+    saved[CONTRACT_KEY] = build_evaluation_contract(current)
+    assert "long" not in raw["bot"]
+    assert set(saved["optimize"]["bounds"]) == {"global"}
+    assert set(current["optimize"]["bounds"]) != {"global"}
+    assert _resume_config_mismatches(saved, current) == []
+    changed = deepcopy(saved)
+    changed["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit"] = [1.0, 4.0]
+    assert any("optimize.bounds" in item for item in _resume_config_mismatches(changed, current))
+
+
+def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_numeric_gene_authority(tmp_path):
+    from types import SimpleNamespace
+    from optimize import SuiteEvaluator
+    from config.bot_inheritance import apply_bot_policy_patch
+    ignored = tmp_path / "ignored.json"
+    ignored.write_text('["BBB"]')
+    raw = source()
+    raw["bot"]["global"]["universe"]["ignored_coins"] = str(ignored)
+    context = load(raw)
+    current_raw = source()
+    current_raw["bot"]["long"] = {"universe": {"ignored_coins": []}}
+    current = load(current_raw)
+    policy = apply_bot_policy_patch(get_bot_policy(current),
+        {"bot.global.risk.total_wallet_exposure_limit": 2.75}, channel="gene")
+    install_bot_policy(current, policy)
+    ignored.unlink()
+    ctx = SimpleNamespace(config=context, overrides={}, label="base", msss={"binance": {"AAA": {}}})
+    evaluator = SimpleNamespace(base=SimpleNamespace(scoring_specs=[], limit_checks=[]), objective_bases=[])
+    result = SuiteEvaluator.build_scenario_candidate_config(evaluator, current, ctx)
+    exported = bot_policy_source_view(result)["bot"]
+    assert "ignored_coins" not in exported.get("long", {}).get("universe", {})
+    assert "ignored_coins" not in exported.get("short", {}).get("universe", {})
+    assert exported["global"]["universe"]["ignored_coins"] == str(ignored)
+    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.75
+    assert ("bot", "global", "risk", "total_wallet_exposure_limit") in get_bot_policy(result)._genes
+    assert list(result["bot"]["long"]["universe"]["ignored_coins"]) == ["BBB"]
+
+
 def load(raw):
     result = prepare_config(raw, verbose=False)
     result["backtest"]["coins"] = {"binance": ["AAA"]}
@@ -39,6 +86,19 @@ def dataset(config):
         btc=SharedArraySpec("btc", (10,), "<f8"),
         timestamps=SharedArraySpec("timestamps", (10,), "<i8"),
         candle_coins=["AAA"], exchange="binance", metrics=["fills_per_day"])
+
+
+def test_evaluation_identity_records_resolved_fixed_hysteresis_pair():
+    raw = source()
+    raw["bot"]["global"]["forager"] = {"score_hysteresis_margin": 0.03}
+    raw["bot"]["short"]["forager"] = {"score_hysteresis_margin": 0.07}
+    config = load(raw)
+    contract = build_evaluation_contract(config)
+    assert contract["forager_hysteresis"] == {"abi": 1, "policy": {"long": 0.03, "short": 0.07}}
+    apply_bot_config_patch(config, {"bot.global.forager.score_hysteresis_margin": 0.04})
+    changed = build_evaluation_contract(config)
+    assert changed != contract
+    assert changed["forager_hysteresis"]["policy"] == {"long": 0.04, "short": 0.07}
 
 
 def test_setup_reads_effective_simulation_policy_before_source_export():

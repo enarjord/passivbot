@@ -83,6 +83,8 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
     n_minutes = 60
     coins = ["COIN1", "COIN2", "COIN3", "COIN4"]
     config = _base_config(candle_interval_minutes=1)
+    for side in ("long", "short"):
+        config["bot"][side]["enabled"] = True
     config["backtest"]["coins"] = {"binance": coins}
     set_side_universe_sources(config, 'approved_coins', {
         "long": ["COIN1", "COIN2", "COIN3"],

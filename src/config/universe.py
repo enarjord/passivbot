@@ -153,6 +153,40 @@ def set_side_universe_sources(config, field, sources):
         config.setdefault("bot", {}).setdefault(side, {}).setdefault("universe", {})[field] = deepcopy(by_side.get(side, []))
 
 
+def copy_universe_source_policy(config, source):
+    """Copy declared source bindings, preserving omission and numeric authority.
+
+    Dataset/context owners call this before installing their frozen membership.
+    No files are read and no concrete list can become a new source permission.
+    """
+    from dataclasses import replace
+    from .bot_inheritance import reconciled_bot_policy, apply_bot_policy_patch, install_bot_policy
+
+    incoming = universe_source_view(source).get("bot", {})
+    policy = reconciled_bot_policy(config)
+    target = policy.source_view() if policy is not None else config.setdefault("bot", {})
+    patches = {}
+    for scope in ("global", "long", "short"):
+        original = target.get(scope, {}).get("universe", {})
+        updated = deepcopy(original)
+        declarations = incoming.get(scope, {}).get("universe", {})
+        for field in COIN_SOURCE_FIELDS:
+            if field in declarations:
+                updated[field] = deepcopy(declarations[field])
+            else:
+                updated.pop(field, None)
+        if updated != original or set(updated) != set(original):
+            if policy is None:
+                target.setdefault(scope, {})["universe"] = updated
+            else:
+                patches[f"bot.{scope}.universe"] = updated
+    if patches:
+        # Source-only changes cannot invalidate numeric formatting. The owned
+        # parent patch discards only the replaced prepared source memberships.
+        updated = apply_bot_policy_patch(policy, patches)
+        install_bot_policy(config, replace(updated, _normalized=policy._normalized))
+
+
 def materialize_side_universe_sources(config, field, values, *, sources=None):
     """Build the existing runtime list view without losing source bindings."""
     from .bot_inheritance import reconciled_bot_policy, install_bot_policy, with_prepared_bot_sources

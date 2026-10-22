@@ -115,6 +115,7 @@ def _raw_rust_input(
     **global_overrides,
 ) -> dict:
     global_input = {
+        "side_activation": {"long": True, "short": True},
         "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
         "hedge_mode": True,
         "strategy_kind": "trailing_martingale",
@@ -1271,37 +1272,33 @@ def test_raw_rust_output_rejects_missing_panic_close_for_held_side(
 
 
 @pytest.mark.parametrize(
-    ("position_size", "global_overrides", "expected_effective_mode"),
+    ("position_size", "global_overrides", "close_required"),
     [
-        (1e-12, {}, "panic"),
+        (1e-12, {}, False),
         (
             1.0,
             {
                 "long_n_positions": 0,
                 "long_total_wallet_exposure_limit": 0.0,
             },
-            "manual",
+            True,
         ),
     ],
     ids=["rust-dust", "globally-disabled"],
 )
-def test_raw_rust_output_allows_empty_panic_batch_when_rust_cannot_emit_close(
-    position_size, global_overrides, expected_effective_mode
+def test_raw_rust_output_panic_requirement_is_independent_of_entry_capacity(
+    position_size, global_overrides, close_required
 ):
     out = _raw_rust_output_for_long_mode([], "panic")
-    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = (
-        expected_effective_mode
+    orchestrator_input = _raw_rust_input(
+        long_mode="panic", long_pos_size=position_size, **global_overrides,
     )
-
-    assert reconciler.validate_rust_orchestrator_output(
-        out,
-        {0: SYMBOL},
-        _raw_rust_input(
-            long_mode="panic",
-            long_pos_size=position_size,
-            **global_overrides,
-        ),
-    ) == []
+    if close_required:
+        out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+        with pytest.raises(FatalBotException, match="missing required full-position panic close"):
+            reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}, orchestrator_input)
+    else:
+        assert reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}, orchestrator_input) == []
 
 
 def _panic_limit_case(
@@ -1564,7 +1561,7 @@ def test_raw_rust_output_rejects_active_state_for_flat_globally_disabled_side(
     input_overrides,
 ):
     out = _raw_rust_output()
-    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
     with pytest.raises(FatalBotException, match="inconsistent with submitted eligibility"):
         reconciler.validate_rust_orchestrator_output(
             out,
@@ -1642,18 +1639,15 @@ def test_raw_rust_output_rejects_flat_entry_for_globally_disabled_side(
     ],
     ids=["entry", "close"],
 )
-def test_raw_rust_output_rejects_orders_for_globally_disabled_held_side(order):
+def test_raw_rust_output_zero_capacity_held_side_blocks_entries_but_keeps_closes(order):
     out = _raw_rust_output([order])
-    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
-    with pytest.raises(FatalBotException, match="globally disabled long"):
-        reconciler.validate_rust_orchestrator_output(
-            out,
-            {0: SYMBOL},
-            _raw_rust_input(
-                long_pos_size=1.0,
-                long_total_wallet_exposure_limit=0.0,
-            ),
-        )
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+    submitted = _raw_rust_input(long_pos_size=1.0, long_total_wallet_exposure_limit=0.0)
+    if order["order_type"].startswith("entry_"):
+        with pytest.raises(FatalBotException, match="globally disabled long"):
+            reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}, submitted)
+    else:
+        assert reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}, submitted) == [order]
 
 
 def test_raw_rust_output_rejects_flat_entry_contradicted_by_symbol_state():
@@ -2856,7 +2850,7 @@ def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
 
 def test_raw_rust_output_keeps_active_held_side_when_globally_disabled():
     out = _raw_rust_output()
-    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
     assert reconciler.validate_rust_orchestrator_output(
         out,
         {0: SYMBOL},
@@ -3144,17 +3138,14 @@ def test_raw_rust_output_rejects_loss_gate_block_for_non_gateable_mode(long_mode
         )
 
 
-def test_raw_rust_output_rejects_loss_gate_block_for_globally_disabled_side():
+def test_raw_rust_output_keeps_reducer_loss_gate_block_at_zero_entry_capacity():
     out = _raw_rust_output()
-    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
     out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
 
-    with pytest.raises(FatalBotException, match="globally disabled long"):
-        reconciler.validate_rust_orchestrator_output(
-            out,
-            {0: SYMBOL},
-            _raw_rust_input(long_total_wallet_exposure_limit=0.0),
-        )
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: SYMBOL}, _raw_rust_input(long_total_wallet_exposure_limit=0.0),
+    ) == []
 
 
 def test_raw_rust_output_rejects_loss_gate_block_from_another_strategy():

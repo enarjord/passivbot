@@ -3298,6 +3298,8 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
 
     with caplog.at_level("INFO"):
         await hp.try_prepare_hlcvs_v2_local(config, "binance")

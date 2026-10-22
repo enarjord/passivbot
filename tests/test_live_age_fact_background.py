@@ -22,6 +22,7 @@ def _bot(side="long", exchange="binance"):
     bot = object.__new__(live.Passivbot)
     bot.config = get_template_config()
     for pside in ("long", "short"):
+        bot.config["bot"][pside]["enabled"] = pside == side
         bot.config["bot"][pside]["risk"].update(
             max_positions=1, total_wallet_exposure_limit=1.0 if side == pside else 0.0,
         )

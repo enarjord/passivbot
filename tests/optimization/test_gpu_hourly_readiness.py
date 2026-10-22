@@ -31,6 +31,7 @@ def runner_and_params(monkeypatch, kind, sides=1, *, first_observed=10):
     runner = SimpleNamespace(
         parameter_keys=keys, _bootstrap_coin_overrides=overrides, interval_minutes=60,
         n=20, replay_sides=sides, n_coins=1, requested_start_idx=0,
+        side="long", side_activation={"long": True, "short": True},
         run_config=SimpleNamespace(warmup_bars=1),
         _hourly_first_observed=np.array([first_observed]),
         _hourly_coin_ranges=np.array([[0, 19, 2]]),
@@ -51,6 +52,23 @@ def runner_and_params(monkeypatch, kind, sides=1, *, first_observed=10):
 def test_missing_hourly_basis_rejects_before_compilation(monkeypatch, kind, sides):
     runner, matrix, *_ = runner_and_params(monkeypatch, kind, sides)
     with pytest.raises(ValueError, match="unavailable hourly EMA.*candidate.*coin"):
+        mps_kernel._MulticoinReplayRunner._run_factual_attempt(runner, matrix)
+
+
+@pytest.mark.parametrize("kind", ["EMA_ANCHOR", "TRAILING_MARTINGALE"])
+@pytest.mark.parametrize("sides", [1, 2])
+def test_disabled_entries_retain_close_hourly_readiness(monkeypatch, kind, sides):
+    runner, matrix, keys, _, _, entry_weight = runner_and_params(monkeypatch, kind, sides)
+    runner.side_activation = {"long": False, "short": False}
+    if kind == "TRAILING_MARTINGALE":
+        # Close-only volatility remains a consumer when entry admission is off.
+        for side in range(sides):
+            matrix[:, side * len(keys) + keys.index(entry_weight)] = 0.0
+            matrix[:, side * len(keys) + keys.index("close_threshold_volatility_1h_weight")] = 1.0
+    with pytest.raises(ValueError, match="unavailable hourly EMA.*candidate.*coin"):
+        mps_kernel._MulticoinReplayRunner._run_factual_attempt(runner, matrix)
+    runner._hourly_first_observed[:] = 2
+    with pytest.raises(CompilationReached):
         mps_kernel._MulticoinReplayRunner._run_factual_attempt(runner, matrix)
 
 

@@ -141,7 +141,11 @@ class PreparedGpuDataset:
         if self.bot_policy is not None:
             from config.bot_inheritance import install_bot_policy
             install_bot_policy(config, self.bot_policy)
-        return materialize_universe_snapshot(config, self.universe_snapshot)
+        config = materialize_universe_snapshot(config, self.universe_snapshot)
+        if self.bot_policy is not None:
+            from config.inherited_bounds import prepare_bound_plan
+            prepare_bound_plan(config)
+        return config
 
     def execution_config(self):
         """Ordinary JSON-native, fixed execution membership for the native worker."""

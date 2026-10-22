@@ -60,6 +60,8 @@ def test_omitted_dimensions_freeze_effective_values_through_exports(omission, st
 @pytest.mark.parametrize("fraction", [0.0, 0.37, 1.0])
 def test_candidate_vectors_vary_only_the_authored_dimension(fraction):
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {
         "long": {"strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": [100.5, 200.5, 0.5]}}}}
     }
@@ -94,6 +96,8 @@ def test_sorting_does_not_open_template_ranges_and_null_stays_outside_genome():
     sort_optimize_bounds_in_place(bounds, strategy_kind="trailing_martingale")
     assert bounds == {"long": {"risk": {"max_positions": [3, 3]}}}
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {}
     prepared = prepare_config(source, verbose=False)
     assert "long_entry_cooldown_max_duration_minutes" not in gene_bounds(prepared)
@@ -103,6 +107,8 @@ def test_sorting_does_not_open_template_ranges_and_null_stays_outside_genome():
 
 def weight_source(bounds):
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {"long": {"forager": bounds}}
     return source
 
@@ -117,6 +123,7 @@ def test_weight_validation_respects_the_supplied_search_space():
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
     config = prepare_config(get_template_config(), verbose=False)
+    config["bot"]['long']["enabled"] = True
     with pytest.raises(ValueError, match="partial normalized-weight search"):
         validate_optimize_bounds_against_bot_config(config, {
             "long": {"forager": {"score_weights": {"volume": [0.1, 1.0]}}}
@@ -151,6 +158,8 @@ def test_omitted_zero_weight_is_safe_except_at_an_unauthorized_fallback(low, all
 
 def test_fixed_weight_leaf_is_rejected_but_fixing_whole_group_is_safe():
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["optimize"]["fixed_params"] = ["long.forager.score_weights.volume"]
     with pytest.raises(ValueError, match="partial normalized-weight search"):
         prepare_config(source, verbose=False)
@@ -168,6 +177,8 @@ def test_fixed_weight_leaf_is_rejected_but_fixing_whole_group_is_safe():
 @pytest.mark.parametrize("mirrored", [False, True])
 def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value, mirrored):
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     if mirrored:
         source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     source["optimize"]["fixed_runtime_overrides"] = {selector: value}
@@ -182,6 +193,8 @@ def test_runtime_weight_pins_cannot_be_renormalized_by_search(selector, value, m
 ])
 def test_scenario_weight_pins_fail_before_evaluation(patch):
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "pinned", "overrides": patch}])
     with pytest.raises(ValueError, match=r"scenarios\[0\].*pinned.*bot.long.forager.score_weights.*partial normalized-weight"):
         prepare_config(source, verbose=False)
@@ -189,6 +202,8 @@ def test_scenario_weight_pins_fail_before_evaluation(patch):
 
 def test_scenario_activation_cannot_move_an_omitted_positive_coordinate():
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "short-active", "overrides": {
         "bot.short.risk.total_wallet_exposure_limit": 1.0,
         "bot.short.forager.score_weights.unilateralness": 0.5,
@@ -319,6 +334,8 @@ def test_mirrored_weight_pins_follow_effective_runtime_and_scenario_activity(fie
 
 def test_atomic_partial_weight_object_fails_before_evaluation():
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "partial-object", "overrides": {
         "bot.long.forager.score_weights": {"volume": 0.5},
     }}])
@@ -359,6 +376,8 @@ async def test_external_suite_pins_fail_before_market_or_dataset_preparation(mon
     from optimize import _materialize_suite_run_contract
 
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     if mirrored:
         source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config = prepare_config(source, verbose=False)
@@ -380,6 +399,8 @@ def test_partial_fine_tune_weight_selection_fails_before_candidate_evaluation(an
     from optimize import apply_fine_tune_bounds, install_anchored_fine_tune_plan
 
     config = prepare_config(get_template_config(), verbose=False)
+    config["bot"]['long']["enabled"] = True
+    config["bot"]['short']["enabled"] = True
     with pytest.raises(ValueError, match="partial normalized-weight search"):
         if anchored:
             install_anchored_fine_tune_plan(config, ["long.forager.score_weights.volume"], "unused",
@@ -395,6 +416,8 @@ def test_explicit_recommended_preset_supplies_visible_ranges_and_is_offline(tmp_
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(socket, "getaddrinfo", denied)
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     source["optimize"]["bounds"] = {}
     before = deepcopy(source)
     prescribed = apply_recommended_bounds(source)
@@ -531,6 +554,8 @@ def test_explicit_relationships_derive_effective_targets_without_opening_target_
     transform, source_parts, target_parts, configured, domain,
 ):
     source = get_template_config()
+    source["bot"]['long']["enabled"] = True
+    source["bot"]['short']["enabled"] = True
     target = source["bot"]
     for part in target_parts[:-1]:
         target = target[part]

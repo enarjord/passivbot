@@ -128,6 +128,7 @@ def normalize_config(
     policy = with_normalized_bot_values(policy, result["bot"])
     install_bot_policy(result, policy, effective_bot=result["bot"])
     sync_canonical_strategy_config(result, tracker=tracker)
+    prune_inactive_strategy_subtrees(result, tracker=tracker)
     from .inherited_bounds import prepare_bound_plan
     prepare_bound_plan(result, authored_bounds=raw_optimize_snapshot.get("bounds", {}))
     # All missing numeric dimensions were fixed from effective bot values above;

@@ -73,6 +73,8 @@ def build_evaluation_contract(config: dict) -> dict:
     effective = parse_overrides(effective, verbose=False)
 
     filters = effective_minimum_cost_filters(effective)
+    from config.forager_hysteresis import forager_score_hysteresis
+    hysteresis = forager_score_hysteresis(effective)
     bounds = _flatten_bounds_for_config(effective, effective["optimize"]["bounds"])
     effective = clean_config(anchored_universe_source_view(effective, candidate=True))
     # Resolve before removing the base values required to validate coin patches.
@@ -122,6 +124,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "version": CONTRACT_VERSION,
         "age_admission": "side_initial_entry_v1",
         "side_activation": "explicit_side_initial_and_dca_v1",
+        "forager_hysteresis": {"abi": 1, "policy": hysteresis},
         "risk_model": "v9_independent_loss_memories_currency_drawdown_ratio_ema_finite_cooldown",
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),

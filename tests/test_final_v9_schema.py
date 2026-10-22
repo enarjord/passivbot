@@ -27,7 +27,9 @@ def test_canonical_defaults_and_sparse_defaults_load():
     sparse = prepare_config({"config_version": "v9.0.0", "bot": {}, "live": {}}, verbose=False)
     assert complete["bot"]["portfolio"]["hsl"] == {"scope": "coin"}
     assert sparse["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-    assert sparse["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert sparse["bot"]["long"]["enabled"] is False
+    assert sparse["bot"]["short"]["enabled"] is False
+    assert sparse["bot"]["long"]["risk"] == complete["bot"]["long"]["risk"]
     assert complete["live"]["modes"]["disapproved_position"] == "graceful_stop"
 
 

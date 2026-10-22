@@ -34,12 +34,11 @@ def _empty_orchestrator_output(input_json: str) -> str:
             )
             side_params = global_bot_params[pside]
             global_side_enabled = (
-                float(side_params["total_wallet_exposure_limit"]) > 0.0
+                payload["global"]["side_activation"][pside]
+                and float(side_params["total_wallet_exposure_limit"]) > 0.0
                 and int(side_params["n_positions"]) > 0
             )
-            effective_mode = (
-                selection_effective_mode if global_side_enabled else "manual"
-            )
+            effective_mode = selection_effective_mode
             symbol_side_eligible = (
                 bool(symbol.get("tradable", False))
                 and float(symbol[pside]["bot_params"]["wallet_exposure_limit"]) != 0.0
@@ -56,7 +55,7 @@ def _empty_orchestrator_output(input_json: str) -> str:
                 "input_mode": input_mode,
                 "effective_mode": effective_mode,
                 "active": active,
-                "allow_initial": active and effective_mode == "normal",
+                "allow_initial": active and global_side_enabled and effective_mode == "normal",
             }
         symbol_states.append(row)
     return json.dumps(
@@ -360,6 +359,7 @@ def _dummy_config():
     cfg = get_template_config()
     cfg["live"]["account"]["user"] = "test_user"
     for side in ("long", "short"):
+        cfg["bot"][side]["enabled"] = True
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"].update(
