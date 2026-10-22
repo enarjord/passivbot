@@ -2887,9 +2887,13 @@ def prep_backtest_args(
             }
             for coin in coins
         ]
+    from config.activation import side_activation, validate_side_activation
+    activation = side_activation(config)
     age_days = [minimum_coin_age_days(config, side) for side in POSITION_SIDES]
     inception_facts = [inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) for coin in coins]
     if backtest_params is not None:
+        if validate_side_activation(backtest_params.get("side_activation")) != activation:
+            raise ValueError("cached side activation differs from the effective config")
         if backtest_params.get("minimum_coin_age_days") != age_days or backtest_params.get("inception_timestamps_ms") != inception_facts:
             raise ValueError("cached age admission inputs differ from the effective config or market facts")
         if backtest_params.get("ew_half_life_days") != ew_half_life_days:
@@ -2937,6 +2941,7 @@ def prep_backtest_args(
                 config, "backtest.hsl_detailed_report"
             ),
             "skip_btc_analysis": False,
+            "side_activation": activation,
             "minimum_coin_age_days": age_days,
             "inception_timestamps_ms": inception_facts,
             "filter_by_min_effective_cost": effective_minimum_cost_filters(config),

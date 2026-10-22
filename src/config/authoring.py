@@ -23,6 +23,7 @@ _MISSING = object()
 _UNIVERSE_PATHS = tuple(("bot", side, "universe", field)
                         for side in ("global", "long", "short") for field in sorted(COIN_SOURCE_FIELDS))
 _PROTECTED = (
+    *(("bot", owner, "enabled") for owner in ("global", "long", "short")),
     ("coin_overrides",), ("optimize", "bounds"),
     ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
     ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),
@@ -59,8 +60,11 @@ def _set(mapping, path, value):
 
 def _patch(config, overrides):
     result = deepcopy(config)
-    for selector, value in normalize_scenario_overrides(overrides).items():
+    normalized = normalize_scenario_overrides(overrides)
+    for selector, value in normalized.items():
         _set(result, resolve_dotted_config_path(result, selector), value)
+    from .activation import apply_activation_patch
+    apply_activation_patch(result, normalized)
     return result
 
 
@@ -69,9 +73,13 @@ def _authored(source, base_config_path):
     from config_utils import strip_config_metadata
 
     from .universe import universe_source_view
-    payload = universe_source_view(extract_result_config(source, allow_unmarked_wrapper=True))
+    from .activation import activation_source_view
+    payload = universe_source_view(activation_source_view(
+        extract_result_config(source, allow_unmarked_wrapper=True)))
     # Validate the complete input before stripping metadata or pruning defaults.
     full = cleanup_config(payload, base_config_path=base_config_path, _allow_sparse=True)
+    from .activation import get_activation_source, resolve_side_activation
+    resolve_side_activation(full, get_activation_source(payload))
     payload = strip_config_metadata(payload)
     payload.get("live", {}).pop("base_config_path", None)
     return payload, full
@@ -402,10 +410,6 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         events.append({"kind": "authored", "path": ".".join(parts), "value": deepcopy(root_value)})
     elif not direct_coin:
         events.append({"kind": "default_or_derived", "path": ".".join(parts)})
-        if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"long", "short"}
-                and parts[2:] == ("risk", "total_wallet_exposure_limit")
-                and "bot" in authored and parts[1] not in authored["bot"]):
-            events[-1]["rule"] = "omitted_side_disabled"
     context = deepcopy(full)
     context.setdefault("live", {})["base_config_path"] = base_config_path
     # Materializing optimizer dependencies consumes local files. Keep their
@@ -496,6 +500,11 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     # The same non-live loader resolves null inheritance, ignored lists and
     # dynamic dates without fetching market data.
     effective = prepare_config(effective, base_config_path=base_config_path, verbose=False, log_config_transforms=False)
+    if parts in {("bot", side, "enabled") for side in ("long", "short")}:
+        from .activation import get_activation_source
+        if getattr(get_activation_source(context), parts[1]) is None:
+            events.append({"kind": "inherited", "path": "bot.global.enabled",
+                           "value": effective["bot"][parts[1]]["enabled"]})
     inherited_sources = _inherited_sources(context, parts)
     inherited_paths = {common for _, common in inherited_sources}
     for target, common in inherited_sources:

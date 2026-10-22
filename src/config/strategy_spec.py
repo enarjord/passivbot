@@ -125,6 +125,21 @@ def get_all_strategy_defaults() -> dict:
     }
 
 
+def get_common_strategy_defaults() -> dict:
+    """Read the deliberately common native metadata, never choose a profile.
+
+    Metadata still supplies directional records for stable native IDs. Their
+    common defaults must agree before one authored global profile is emitted.
+    """
+    result = {}
+    for kind in get_supported_strategy_kinds():
+        defaults = get_strategy_defaults(kind)
+        if defaults["long"] != defaults["short"]:
+            raise RuntimeError(f"{kind} metadata must declare identical common side defaults")
+        result[kind] = deepcopy(defaults["long"])
+    return result
+
+
 def get_strategy_optimize_bounds(strategy_kind: str) -> dict:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     spec = get_strategy_spec(normalized_kind)

@@ -640,6 +640,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "liquidation_threshold",
         "limit_order_fill_buffer_pct",
         "filter_by_min_effective_cost",
+        "side_activation",
         "minimum_coin_age_days",
         "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
@@ -662,8 +663,9 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee",
     )
     contract = {
-        "version": 8,
+        "version": 9,
         "age_admission_abi": 1,
+        "side_activation_abi": 1,
         "minimum_cost_filter_abi": 2,
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
         "market_ema_bootstrap_count_abi": 1,
@@ -1868,7 +1870,10 @@ class SharedAccountReplay:
         if selection is None and config["backtest"].get("organillo_csv") is not None:
             from organillo import prepare_selection
             selection = prepare_selection(config, backtest_params["coins"], timestamps)
+        from config.activation import validate_side_activation
+
         common_runner_kwargs = {
+            "side_activation": validate_side_activation(backtest_params["side_activation"]),
             "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             "max_realized_loss_pct": float(
                 backtest_params.get("max_realized_loss_pct", 1.0)

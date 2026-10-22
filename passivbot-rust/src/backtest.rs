@@ -1418,6 +1418,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             balance,
             balance_raw,
             global: orchestrator::OrchestratorGlobal {
+                side_activation: self.backtest_params.side_activation,
                 filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
                 market_orders_allowed: self.backtest_params.market_orders_allowed,
                 market_order_near_touch_threshold: self
@@ -1456,6 +1457,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         input.balance = self.balance.usd_total_balance_rounded;
         input.balance_raw = self.balance.usd_total_balance;
         input.timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
+        input.global.side_activation = self.backtest_params.side_activation;
 
         input.global.unstuck_allowance_long = self.unstuck_allowance_diagnostic(LONG);
         input.global.unstuck_allowance_short = self.unstuck_allowance_diagnostic(SHORT);
@@ -1948,6 +1950,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         let rms_enabled = crate::unilateralness::backtest_enabled_sides(
             &bot_params,
             backtest_params.dynamic_wel_by_tradability,
+            backtest_params.side_activation,
         );
         BacktestEngine {
             eligibility: None,
@@ -2833,9 +2836,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     fn check_for_fills(&mut self, k: usize) -> Result<(), String> {
         self.did_fill_long.fill(false);
         self.did_fill_short.fill(false);
-        if self.trading_enabled.long
-            || (self.hsl_enabled() && self.positions.long.iter().any(|p| p.size != 0.0))
-        {
+        if self.trading_enabled.long || self.positions.long.iter().any(|p| p.size != 0.0) {
             for idx in 0..self.n_coins {
                 // Process close fills long
                 if !self.open_orders.long[idx].closes.is_empty() {
@@ -2855,7 +2856,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     }
                 }
                 // Process entry fills long
-                if self.trading_enabled.long && !self.open_orders.long[idx].entries.is_empty() {
+                if self.backtest_params.side_activation.long
+                    && self.trading_enabled.long
+                    && !self.open_orders.long[idx].entries.is_empty()
+                {
                     let mut entries_to_process = Vec::new();
                     {
                         for entry_order in &self.open_orders.long[idx].entries {
@@ -2884,9 +2888,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 }
             }
         }
-        if self.trading_enabled.short
-            || (self.hsl_enabled() && self.positions.short.iter().any(|p| p.size != 0.0))
-        {
+        if self.trading_enabled.short || self.positions.short.iter().any(|p| p.size != 0.0) {
             for idx in 0..self.n_coins {
                 // Process close fills short
                 if !self.open_orders.short[idx].closes.is_empty() {
@@ -2906,7 +2908,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     }
                 }
                 // Process entry fills short
-                if self.trading_enabled.short && !self.open_orders.short[idx].entries.is_empty() {
+                if self.backtest_params.side_activation.short
+                    && self.trading_enabled.short
+                    && !self.open_orders.short[idx].entries.is_empty()
+                {
                     let mut entries_to_process = Vec::new();
                     {
                         for entry_order in &self.open_orders.short[idx].entries {
@@ -3323,7 +3328,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
 
     fn update_trailing_prices(&mut self, k: usize) {
         // ----- LONG side -----
-        if self.trading_enabled.long && self.any_trailing_long {
+        if self.any_trailing_long {
             for (idx, position) in self.positions.long.iter().enumerate() {
                 if position.size == 0.0 {
                     continue;
@@ -3349,7 +3354,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
 
         // ----- SHORT side -----
-        if self.trading_enabled.short && self.any_trailing_short {
+        if self.any_trailing_short {
             for (idx, position) in self.positions.short.iter().enumerate() {
                 if position.size == 0.0 {
                     continue;
@@ -4871,6 +4876,7 @@ fn calc_ema_alphas(
 
 #[cfg(test)]
 mod tests {
+    include!("backtest_activation_tests.rs");
     use super::*;
     use crate::strategies::{
         TrailingMartingaleCloseParams, TrailingMartingaleEntryParams, TrailingMartingaleParams,
@@ -4921,6 +4927,7 @@ mod tests {
 
     fn ordinary_ema_fixture_params(n: usize, interval: u64) -> BacktestParams {
         BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5461,6 +5468,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 1.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5541,6 +5549,7 @@ mod tests {
         bp_pair.short.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5609,6 +5618,7 @@ mod tests {
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5714,6 +5724,7 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5800,6 +5811,7 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5887,6 +5899,7 @@ mod tests {
         bp_pair.short.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -5983,6 +5996,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -6067,6 +6081,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -6163,6 +6178,7 @@ mod tests {
         bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
         bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -6434,6 +6450,7 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 100.0,
@@ -6590,6 +6607,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -6654,6 +6672,7 @@ mod tests {
             bp_pair.long.ema_span_1 = 20.0;
 
             let backtest_params = BacktestParams {
+                side_activation: crate::types::SideActivation::uniform(true),
                 minimum_coin_age_days: [0.0; 2],
                 inception_timestamps_ms: vec![],
                 starting_balance: 1000.0,
@@ -6726,6 +6745,7 @@ mod tests {
         let hs = EquityHardStopLossConfig::default();
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 100.0,
@@ -6802,6 +6822,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 1.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 100.0,
@@ -6884,6 +6905,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -6961,6 +6983,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7046,6 +7069,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7147,6 +7171,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7263,6 +7288,7 @@ mod tests {
         short_only.long.wallet_exposure_limit = 0.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7423,6 +7449,7 @@ mod tests {
         bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
         bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7531,6 +7558,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7647,6 +7675,7 @@ mod tests {
         short_only.long.wallet_exposure_limit = 0.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7731,6 +7760,7 @@ mod tests {
         bp_pair.long.ema_span_1 = 20.0;
 
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,
@@ -7813,6 +7843,7 @@ mod tests {
         bp_pair.short.unstuck_ema_span_0 = 10.0;
         bp_pair.short.unstuck_ema_span_1 = 20.0;
         let backtest_params = BacktestParams {
+            side_activation: crate::types::SideActivation::uniform(true),
             minimum_coin_age_days: [0.0; 2],
             inception_timestamps_ms: vec![],
             starting_balance: 1000.0,

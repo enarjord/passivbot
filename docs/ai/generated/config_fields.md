@@ -75,8 +75,10 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `bot.global.enabled` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.forager.score_hysteresis_margin` | float | `0.02` | normalized score gap | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.global.universe.approved_coins` | array \| string | 41 items (see template) | — | global; live, backtest, optimize | No | forbidden | — | python |
+| `bot.long.enabled` | boolean | `false` | — | long; live, backtest, optimize | No | forbidden | — | python |
 | `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | long; live, backtest, optimize | Eligible (`long_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |
@@ -169,6 +171,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.portfolio.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | portfolio; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
 | `bot.portfolio.warmup.max_minutes` | float \| null | `null` | minutes | portfolio; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
 | `bot.portfolio.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.short.enabled` | boolean | `false` | — | short; live, backtest, optimize | No | forbidden | — | python |
 | `bot.short.entry_cooldown.base_duration_minutes` | float | `0.0` | minutes | short; live, backtest, optimize | Eligible (`short_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.short.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
 | `bot.short.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |

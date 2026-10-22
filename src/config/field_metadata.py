@@ -113,6 +113,11 @@ def _operational_fraction_metadata(path):
 
 
 def _bot_metadata(path):
+    if path in {("bot", owner, "enabled") for owner in ("global", "long", "short")}:
+        return dict(description=(
+            "Permission for initial entries and DCA, independent of numeric capacity and operational mode. "
+            "Side omission inherits bot.global.enabled; explicit false is a pin. "
+            "Held closes and protection retain their existing sizing, risk and mode gates."))
     local = ".".join(path[2:])
     name = path[-1]
     data = {}

@@ -17,22 +17,31 @@ pub fn backtest_enabled(params: &crate::types::BotParams, ranking_possible: bool
 pub fn backtest_enabled_sides(
     params: &[crate::types::BotParamsPair],
     dynamic_wel_by_tradability: bool,
+    side_activation: crate::types::SideActivation,
 ) -> Vec<[bool; 2]> {
     let mut ranking_possible = [false; 2];
     if let Some(first) = params.first() {
         for (side, global) in [&first.long, &first.short].iter().enumerate() {
-            let eligible = params.iter().filter(|pair| {
-                let bp = if side == 0 { &pair.long } else { &pair.short };
-                bp.entry_eligible
-            }).count();
-            ranking_possible[side] = eligible > 1
-                && (dynamic_wel_by_tradability || eligible > global.n_positions);
+            let eligible = params
+                .iter()
+                .filter(|pair| {
+                    let bp = if side == 0 { &pair.long } else { &pair.short };
+                    bp.entry_eligible
+                })
+                .count();
+            ranking_possible[side] =
+                eligible > 1 && (dynamic_wel_by_tradability || eligible > global.n_positions);
         }
     }
-    params.iter().map(|pair| [
-        backtest_enabled(&pair.long, ranking_possible[0]),
-        backtest_enabled(&pair.short, ranking_possible[1]),
-    ]).collect()
+    params
+        .iter()
+        .map(|pair| {
+            [
+                side_activation.long && backtest_enabled(&pair.long, ranking_possible[0]),
+                side_activation.short && backtest_enabled(&pair.short, ranking_possible[1]),
+            ]
+        })
+        .collect()
 }
 
 pub fn warmup_returns(span: f64) -> Result<usize, String> {
@@ -171,6 +180,39 @@ pub fn calc_signed_unilateralness(closes: Vec<f64>, span: f64) -> pyo3::PyResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_activation_removes_only_inactive_entry_rms_consumers() {
+        let mut pair = crate::types::BotParamsPair::default();
+        for bp in [&mut pair.long, &mut pair.short] {
+            bp.entry_eligible = true;
+            bp.n_positions = 1;
+            bp.total_wallet_exposure_limit = 1.0;
+            bp.entry_cooldown_weights_minutes.adverse_directionality = 1.0;
+        }
+        for activation in [
+            crate::types::SideActivation {
+                long: true,
+                short: false,
+            },
+            crate::types::SideActivation {
+                long: false,
+                short: true,
+            },
+            crate::types::SideActivation {
+                long: false,
+                short: false,
+            },
+        ] {
+            assert_eq!(
+                backtest_enabled_sides(&[pair.clone()], false, activation),
+                vec![[
+                    activation.for_side(crate::constants::LONG),
+                    activation.for_side(crate::constants::SHORT)
+                ]]
+            );
+        }
+    }
     #[test]
     fn backtest_consumers_require_possible_ranking_or_adverse_weight() {
         let mut pair = crate::types::BotParamsPair::default();
@@ -180,15 +222,55 @@ mod tests {
             bp.total_wallet_exposure_limit = 1.0;
             bp.forager_score_weights.unilateralness = 1.0;
         }
-        assert_eq!(backtest_enabled_sides(&[pair.clone()], true), vec![[false; 2]]);
-        assert_eq!(backtest_enabled_sides(&[pair.clone(), pair.clone()], false), vec![[false; 2]; 2]);
-        assert_eq!(backtest_enabled_sides(&[pair.clone(), pair.clone()], true), vec![[true; 2]; 2]);
+        assert_eq!(
+            backtest_enabled_sides(
+                &[pair.clone()],
+                true,
+                crate::types::SideActivation::uniform(true)
+            ),
+            vec![[false; 2]]
+        );
+        assert_eq!(
+            backtest_enabled_sides(
+                &[pair.clone(), pair.clone()],
+                false,
+                crate::types::SideActivation::uniform(true)
+            ),
+            vec![[false; 2]; 2]
+        );
+        assert_eq!(
+            backtest_enabled_sides(
+                &[pair.clone(), pair.clone()],
+                true,
+                crate::types::SideActivation::uniform(true)
+            ),
+            vec![[true; 2]; 2]
+        );
         pair.long.n_positions = 1;
-        assert_eq!(backtest_enabled_sides(&[pair.clone(), pair.clone()], false), vec![[true, false]; 2]);
-        pair.short.entry_cooldown_weights_minutes.adverse_directionality = 1.0;
-        assert_eq!(backtest_enabled_sides(&[pair.clone()], false), vec![[false, true]]);
+        assert_eq!(
+            backtest_enabled_sides(
+                &[pair.clone(), pair.clone()],
+                false,
+                crate::types::SideActivation::uniform(true)
+            ),
+            vec![[true, false]; 2]
+        );
+        pair.short
+            .entry_cooldown_weights_minutes
+            .adverse_directionality = 1.0;
+        assert_eq!(
+            backtest_enabled_sides(
+                &[pair.clone()],
+                false,
+                crate::types::SideActivation::uniform(true)
+            ),
+            vec![[false, true]]
+        );
         pair.short.entry_eligible = false;
-        assert_eq!(backtest_enabled_sides(&[pair], false), vec![[false; 2]]);
+        assert_eq!(
+            backtest_enabled_sides(&[pair], false, crate::types::SideActivation::uniform(true)),
+            vec![[false; 2]]
+        );
     }
 
     #[test]

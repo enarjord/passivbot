@@ -40,10 +40,8 @@ fn assert_metrics_with_tolerance(
 
 #[test]
 fn equity_shared_references_match_current_producers() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../tests/fixtures/gpu_equity.json"
-    ))
-    .unwrap();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/gpu_equity.json")).unwrap();
     let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
     let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
 
@@ -62,6 +60,7 @@ fn equity_shared_references_match_current_producers() {
     let hs = EquityHardStopLossConfig::default();
 
     let backtest_params = BacktestParams {
+        side_activation: crate::types::SideActivation::uniform(true),
         minimum_coin_age_days: [0.0; 2],
         inception_timestamps_ms: vec![],
         starting_balance: 100.0,

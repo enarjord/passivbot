@@ -41,6 +41,8 @@ def _make_optimizer_config() -> dict:
     largest warmup the optimizer can actually produce is 100 * 0.3 = 30 min.
     """
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.3
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
@@ -119,6 +121,8 @@ def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_th
 
 def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
@@ -134,8 +138,10 @@ def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
     assert effective_backtest_data_coins(data_config) == ["BTC"]
 
 
-def test_optimizer_data_config_enables_template_disabled_side_when_bounds_reach_it():
+def test_optimizer_data_config_reaches_zero_capacity_when_explicitly_activated():
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     _set_bounds(config, {"short_n_positions": [1, 3, 1]})
     _set_bounds(config, {"short_total_wallet_exposure_limit": [0.5, 1.5, 0.01]})
@@ -147,6 +153,8 @@ def test_optimizer_data_config_enables_template_disabled_side_when_bounds_reach_
 
 def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
 
     with pytest.raises(KeyError, match="n_positons"):
         _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
@@ -156,6 +164,8 @@ def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
 
 def test_optimizer_rejects_invalid_effective_fixed_runtime_value_before_backend():
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.forager.score_weights.volatility": -1.0
     }
@@ -278,6 +288,8 @@ def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
@@ -331,6 +343,8 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     cfg["optimize"]["bounds"] = {}
     cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
@@ -348,6 +362,8 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {s: ["BTC", "ETH"] for s in ("long", "short")})
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
@@ -386,6 +402,8 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]} if dataset_known else {}
@@ -429,6 +447,8 @@ def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched,
     })
     coin, override_key = (symbol, "BTC") if exact_dataset else ("BTC", "binance::BTCUSDT")
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': [coin], 'short': [coin]})
     cfg["backtest"]["coins"] = {"binance": [coin]}
@@ -470,6 +490,8 @@ def test_score_only_rms_history_requires_reachable_ranking(side, dynamic, slots,
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': ['BTC', 'ETH']})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=dynamic)
@@ -510,6 +532,8 @@ def test_scoring_history_keeps_reachable_slot_bounds_and_single_coin_dormancy():
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    for activation_side in ("long", "short"):
+        cfg["bot"][activation_side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
     cfg["backtest"].update(coins={"binance": ["BTC", "ETH"]}, dynamic_wel_by_tradability=False)
@@ -529,6 +553,8 @@ def _mirrored_weight_config(strategy, short_bounds):
     from config import prepare_config
 
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     config["bot"]["portfolio"]["strategy_kind"] = strategy
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     config["optimize"]["bounds"] = {}
@@ -669,6 +695,8 @@ def test_selected_anchor_owns_fixed_zero_weights_when_risk_tuning_activates_side
     from optimization.warmup import build_optimizer_vector_config
 
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     config["optimize"]["bounds"] = {}
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     names = ("volume", "volatility", "ema_readiness", "unilateralness")
@@ -718,6 +746,8 @@ def test_preflight_validates_effective_zero_weight_activation_without_mutating_g
     from optimization import warmup
 
     config = get_template_config()
+    for activation_side in ("long", "short"):
+        config["bot"][activation_side]["enabled"] = True
     config["optimize"]["bounds"] = {}
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long"] if mirror else []
     names = ("volume", "volatility", "ema_readiness", "unilateralness")

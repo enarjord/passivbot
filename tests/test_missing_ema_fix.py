@@ -165,6 +165,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
         "balance_raw": 1000.0,
         "global": {
             # Explicit known-empty continuous realized memory for these order fixtures.
+            "side_activation": {"long": True, "short": True},
             "unstuck_realized_pnl_drawdown": 0.0,
             "loss_gate_realized_pnl_drawdown": 0.0,
             "filter_by_min_effective_cost": {"long": False, "short": False},
