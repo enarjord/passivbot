@@ -175,9 +175,9 @@ def test_global_complete_runtime_weight_pin_freezes_the_inherited_group():
     from optimization.config_adapter import validate_forager_weight_search
     config = weight_search_config()
     config["optimize"]["fixed_runtime_overrides"] = {
-        "bot.global.forager.score_weights": {
+        f"bot.global.forager.score_weights.{name}": value for name, value in {
             "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
-        },
+        }.items()
     }
     validate_forager_weight_search(config)
 
@@ -186,9 +186,9 @@ def test_global_runtime_pin_cannot_freeze_an_independently_owned_side_weight_dom
     from optimization.config_adapter import validate_forager_weight_search
     config = weight_search_config(side_domain=True)
     config["optimize"]["fixed_runtime_overrides"] = {
-        "bot.global.forager.score_weights": {
+        f"bot.global.forager.score_weights.{name}": value for name, value in {
             "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
-        },
+        }.items()
     }
     with pytest.raises(ValueError, match=r"bot.short.forager.score_weights.*partial normalized-weight"):
         validate_forager_weight_search(config)
@@ -220,3 +220,56 @@ def test_count_gene_uses_existing_runtime_rounding_without_weakening_authored_in
     assert universe_source_view(candidate)["bot"]["global"]["risk"]["max_positions"] == expected
     with pytest.raises(TypeError, match="serialization type"):
         apply_bot_policy_patch(get_bot_policy(config), {"bot.global.risk.max_positions": 4.5})
+
+
+@pytest.mark.parametrize("side_pin", [False, True])
+def test_actual_anchor_install_uses_effective_targets_and_preserves_base_side_pins(side_pin):
+    from config.schema import get_template_config
+    from config.universe import universe_source_view
+    from optimize import install_anchored_fine_tune_plan
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+    config = real_prepared(short_pin=side_pin)
+    anchor = get_template_config()
+    anchor["bot"]["global"]["unstuck"]["close_fraction"] = 0.045
+    anchor["bot"]["long"] = {"unstuck": {"close_fraction": 0.052}}
+    anchor["bot"]["short"] = {"unstuck": {"close_fraction": 0.052 if not side_pin else 0.041}}
+    install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit"],
+                                  "unused", starting_configs_override=[anchor])
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
+    assert candidate["bot"]["long"]["unstuck"]["close_fraction"] == 0.052
+    assert candidate["bot"]["short"]["unstuck"]["close_fraction"] == (0.041 if side_pin else 0.052)
+    source = universe_source_view(candidate)["bot"]
+    assert source["global"]["unstuck"]["close_fraction"] == 0.052
+    assert ("unstuck" in source.get("short", {})) is side_pin
+
+
+def test_anchor_and_seed_reject_values_that_one_shared_coordinate_cannot_represent(caplog):
+    from config.schema import get_template_config
+    from optimize import install_anchored_fine_tune_plan, _build_starting_seed_config, config_to_individual
+    from optimization.shape import build_optimization_shape
+    config = real_prepared()
+    anchor = get_template_config()
+    anchor["bot"]["long"] = {"unstuck": {"close_fraction": 0.052}}
+    anchor["bot"]["short"] = {"unstuck": {"close_fraction": 0.048}}
+    with pytest.raises(ValueError, match="at least one valid"):
+        install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit"],
+                                      "unused", starting_configs_override=[anchor])
+    assert "declare explicit side bounds" in caplog.text
+    seed = _build_starting_seed_config(anchor)
+    shape = build_optimization_shape(config)
+    with pytest.raises(ValueError, match="shared coordinate.*explicit side bounds"):
+        config_to_individual(seed, shape.bounds, optimization_shape=shape)
+
+
+def test_seed_stream_retains_an_existing_prepared_binding_plan_when_shape_is_omitted():
+    from optimize import configs_to_individuals
+    from optimization.shape import build_optimization_shape
+    config = real_prepared(short_pin=True)
+    shape = build_optimization_shape(config)
+    vectors = configs_to_individuals([config], shape.bounds, 6)
+    assert len(vectors) == 1 and len(vectors[0]) == len(shape.bounds)
+    values = dict(zip((key for key, _ in shape.key_paths), vectors[0]))
+    assert values["bot.global.unstuck.close_fraction"] == 0.041
+    assert values["bot.short.unstuck.close_fraction"] == 0.041
