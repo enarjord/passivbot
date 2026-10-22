@@ -255,3 +255,36 @@ def test_tool_exports_rounded_released_counts_as_strict_reloadable_values():
     assert output["bot"]["long"]["risk"]["max_positions"] == 4
     assert prepare_config(output, verbose=False)["bot"]["long"]["risk"]["max_positions"] == 4
     assert source == original
+
+
+@pytest.mark.parametrize("approved", [None, ["BTC"], {"long": [], "short": ["ETH"]}])
+def test_minimal_released_cli_export_preserves_sparse_approval_declarations(tmp_path, approved):
+    import json
+
+    from config import prepare_config
+    from tools.migrate_config_v9 import main
+
+    source = {
+        "config_version": "v8.6.0",
+        "bot": {side: {"hsl": {"enabled": False, "restart_after_red_policy": "always"}}
+                for side in ("long", "short")},
+        "live": {"pnls_max_lookback_days": 30.0},
+    }
+    if approved is not None:
+        source["live"]["approved_coins"] = approved
+    path = tmp_path / "input.v8.json"
+    path.write_text(json.dumps(source))
+    original = path.read_bytes()
+    destination = tmp_path / "output.v9.json"
+    expected = migrate_v8_to_v9(source, memory_span_minutes=21600.5).config
+
+    assert main([str(path), str(destination), "--lookback-ema-span-minutes", "21600.5"]) == 0
+    assert path.read_bytes() == original
+    exported = json.loads(destination.read_text())
+    for scope in ("global", "long", "short"):
+        assert exported["bot"].get(scope, {}).get("universe", {}) == (
+            expected["bot"].get(scope, {}).get("universe", {}))
+    prepared = prepare_config(exported, verbose=False)
+    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 21600.5
+    assert prepared["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 21600.5
+    assert "pnls_max_lookback_days" not in exported["live"]

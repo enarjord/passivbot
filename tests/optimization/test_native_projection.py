@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import optimization.native_planning as planning
+from config import prepare_config
 from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
 from optimize import Evaluator, SuiteEvaluator, config_to_individual
@@ -71,6 +72,9 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
         config["optimize"]["fixed_runtime_overrides"] = {"bot.portfolio.unstuck.memory_ema_span_minutes": 4096.5}
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    columns = config["backtest"].pop("coins")
+    config = prepare_config(config, verbose=False)
+    config["backtest"]["coins"] = columns
     spec = SharedArraySpec("candles", candles.shape, candles.dtype.str)
     base = Evaluator({"binance": spec}, {}, {"binance": markets}, config)
     contexts = [SimpleNamespace(
@@ -123,11 +127,11 @@ def require_eligible_projection_calls(monkeypatch, planner):
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
-def test_public_execution_key_does_not_construct_projection_paths(monkeypatch, strategy):
+def test_public_execution_key_does_not_compile_optional_projection_guard(monkeypatch, strategy):
     planner, vector = projection_inputs(strategy=strategy)
     config = planner.prepare("base", vector).record_config
     expected = planning.execution_key(config)
-    monkeypatch.setattr(planning, "_request_owned_paths", lambda _config: pytest.fail("legacy key used projection paths"))
+    monkeypatch.setattr(planning, "_compile_projection_guard", lambda *_args, **_kwargs: pytest.fail("full key compiled the optional guard"))
     assert planning.execution_key(config) == expected
 
 
@@ -144,9 +148,9 @@ def test_planner_projection_reuses_only_validated_static_inputs(monkeypatch, sui
         return cleaner(config)
     monkeypatch.setattr(planning, "clean_config", observed)
     planner, vector = projection_inputs(strategy=strategy, suite=suite, fixed=fixed, mirror=mirror)
-    first = planner.prepare("first", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 1000.0))
+    first = planner.prepare("first", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 1000.0))
     calls.clear()
-    second = planner.prepare("second", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 50000.0))
+    second = planner.prepare("second", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
     assert not calls
     assert [request.dataset_id for request in first.requests] == [request.dataset_id for request in second.requests]
     assert len(planner._execution_projections) == (2 if suite else 1)
@@ -181,7 +185,7 @@ def test_multicoin_and_ineligible_mixed_pairs_never_skip_cleaning(monkeypatch, v
     planner.prepare("warmup", vector)
     calls.clear()
     for candidate, value in (("low", 1000.0), ("high", 50000.0)):
-        planner.prepare(candidate, set_value(planner, vector, "unstuck_memory_ema_span_minutes", value))
+        planner.prepare(candidate, set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", value))
     assert len(calls) == 2
     assert planner._projection_eligible == {("base", "binance"): False}
     assert planner._execution_projections == {}
@@ -203,8 +207,8 @@ def test_projection_uses_selected_indices_instead_of_source_column_count(monkeyp
     monkeypatch.setattr(planning, "clean_config", observed)
     planner.prepare("warmup", vector)
     calls.clear()
-    low = planner.prepare("low", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 1000.0))
-    high = planner.prepare("high", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 50000.0))
+    low = planner.prepare("low", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 1000.0))
+    high = planner.prepare("high", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
     assert len(calls) == (0 if eligible else 2)
     assert planner._projection_eligible == {("base", "binance"): eligible}
     assert len(planner._execution_projections) == int(eligible)
@@ -263,7 +267,7 @@ def test_single_coin_variants_qualify_across_strategies(monkeypatch, first):
     assert [len(binding.dataset.coin_indices) for binding in planner.bindings] == [1, 1]
     planner.prepare("warmup", vector)
     monkeypatch.setattr(planning, "execution_key", lambda _config: pytest.fail("qualified warm pair was cleaned again"))
-    planner.prepare("next", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 50000.0))
+    planner.prepare("next", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
     assert planner._projection_eligible == {("base", "binance"): True}
     assert len(planner._execution_projections) == 1
 
@@ -278,7 +282,7 @@ def test_single_coin_pair_qualifies_with_multiple_execution_variants(monkeypatch
     planner = NativeCandidatePlanner(planner.scorer.evaluator, [*planner.bindings, variant])
     planner.prepare("warmup", vector)
     monkeypatch.setattr(planning, "execution_key", lambda _config: pytest.fail("eligible warm single-coin pair was cleaned again"))
-    planner.prepare("next", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 50000.0))
+    planner.prepare("next", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
     assert planner._projection_eligible == {("base", "binance"): True}
     assert len(planner._execution_projections) == 1
 
@@ -296,7 +300,7 @@ def test_scenario_pairs_decide_eligibility_independently(monkeypatch, strategy):
     require_eligible_projection_calls(monkeypatch, planner)
     planner.prepare("warmup", vector)
     calls.clear()
-    planner.prepare("next", set_value(planner, vector, "unstuck_memory_ema_span_minutes", 50000.0))
+    planner.prepare("next", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
     assert len(calls) == 1
     assert planner._projection_eligible == {("base", "binance"): True, ("stress", "binance"): False}
     assert set(planner._execution_projections) == {("base", "binance")}
@@ -392,10 +396,13 @@ def test_initial_non_numeric_transport_leaves_do_not_acquire_a_shortcut(value):
     planner, vector = projection_inputs()
     config = planner.prepare("base", vector).record_config
     config["bot"]["long"]["risk"]["max_positions"] = value
-    key = planning.execution_key(config)
-    projection = planning._ExecutionProjection(config, key)
-    assert projection.guard is None
-    assert not projection.matches(config)
+    numeric_paths = frozenset(planning._request_owned_paths(config))
+    assert planning._compile_projection_guard(config, numeric_paths) is None
+    expected = outcome(lambda: planning.execution_key(config))
+    assert expected[0] != "value"
+    pair = next(iter(planner._variants))
+    assert not planner._execution_projections[pair].matches(config)
+    assert outcome(lambda: planner._execution_key(pair, config)) == expected
 
 
 @pytest.mark.parametrize("mode", ["disabled", "initial", "reentry", "invalid"])

@@ -10,9 +10,17 @@ import numpy as np
 import pytest
 
 from config import get_template_config, prepare_config
+from config.bot_inheritance import apply_bot_config_patch
+from config.schema import get_expanded_config_prototype
 from config.entry_cooldown import maximum_duration
 from test_orchestrator_json_api import make_input, make_symbol, bot_params_pair, compute
 from live import reconciler
+
+
+def enable_side(config, side):
+    """Declare test entry permission through the source owner when prepared."""
+    if not apply_bot_config_patch(config, {f"bot.{side}.enabled": True}):
+        config["bot"].setdefault(side, {})["enabled"] = True
 
 
 def adaptive_input(*, score=-0.75, exposure=0.0, base=0.0):
@@ -240,11 +248,14 @@ def test_cooldown_cli_and_partial_override_keep_effective_weights():
 def test_zero_base_adaptive_fill_horizon_uses_ceiling():
     from passivbot import Passivbot
 
-    cfg = prepare_config(get_template_config(), verbose=False)
-    cfg["bot"]['long']["enabled"] = True
+    cfg = get_template_config()
+    cfg["bot"]["global"]["universe"]["approved_coins"] = "all"
+    cfg = prepare_config(cfg, verbose=False)
+    enable_side(cfg, "long")
     ec = cfg["bot"]["long"]["entry_cooldown"]
     ec.update(base_duration_minutes=0.0, max_duration_minutes=45.0)
     ec["weights_minutes"]["adverse_directionality"] = 20.0
+    cfg["bot"]["short"]["entry_cooldown"]["base_duration_minutes"] = 0.0
     bot = SimpleNamespace(config=cfg, coin_overrides={})
     bot.bot_value = lambda side, key: Passivbot.bot_value(bot, side, key)
     bot.is_pside_enabled = lambda side: Passivbot.is_pside_enabled(bot, side)
@@ -257,8 +268,8 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
     from optimization.config_adapter import get_optimization_key_paths
     from optimization.warmup import compute_optimizer_per_coin_warmup_minutes
 
-    cfg = get_template_config()
-    cfg["bot"]['long']["enabled"] = True
+    cfg = get_expanded_config_prototype()
+    enable_side(cfg, "long")
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
@@ -267,7 +278,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
     paths = dict(get_optimization_key_paths(cfg))
-    assert paths["long_entry_cooldown_weights_minutes_adverse_directionality"] == (
+    assert paths["bot.long.entry_cooldown.weights_minutes.adverse_directionality"] == (
         "bot",
         "long",
         "entry_cooldown",
@@ -317,7 +328,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     from config_utils import clean_config
     from config.optimize_bounds import flatten_optimize_bounds
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     parsed = prepare_config(cfg, verbose=False)
     original = flatten_optimize_bounds(
         parsed["optimize"]["bounds"], strategy_kind=parsed['bot']["portfolio"]['strategy_kind']
@@ -577,7 +588,7 @@ def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer)
     cfg = _ema_anchor_config(True, include_dataset=False)
     cfg["bot"][side]["risk"][gate] = 0
     cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
-    cfg["optimize"]["bounds"][side]["risk"][gate] = [0, 0]
+    apply_bot_config_patch(cfg, {f"optimize.bounds.{side}.risk.{gate}": [0, 0]})
     cfg["backtest"]["candle_interval_minutes"] = interval
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -644,9 +655,11 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
     from passivbot import Passivbot
 
     bot = Passivbot.__new__(Passivbot)
-    bot.config = prepare_config(get_template_config(), verbose=False)
-    bot.config["bot"]['long']["enabled"] = True
-    bot.config["bot"]['short']["enabled"] = True
+    cfg = get_template_config()
+    cfg["bot"]["global"]["universe"]["approved_coins"] = "all"
+    bot.config = prepare_config(cfg, verbose=False)
+    enable_side(bot.config, "long")
+    enable_side(bot.config, "short")
     other = "short" if side == "long" else "long"
     for pside in (side, other):
         bot.config["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
@@ -691,7 +704,7 @@ def test_adverse_rms_activates_at_first_complete_return_window(side, span):
     cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = span
     # The fixture is already parsed, so update its visible fixed history bound
     # alongside the bot span to exercise this exact return window.
-    cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_minutes"] = [span, span]
+    apply_bot_config_patch(cfg, {f"optimize.bounds.{side}.forager.unilateralness_ema_span_minutes": [span, span]})
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=0.0, max_duration_minutes=60.0,
         weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
@@ -979,8 +992,10 @@ def test_constant_clamp_cpu_needs_no_rms_history(side, interval, base, floor, ce
         base_duration_minutes=base, min_duration_minutes=floor, max_duration_minutes=ceiling,
     )
     cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 100000.0
-    cfg["optimize"]["bounds"][side]["entry_cooldown"]["base_duration_minutes"] = [base, base]
-    cfg["optimize"]["bounds"][side]["entry_cooldown"]["min_duration_minutes"] = [floor, floor]
+    apply_bot_config_patch(cfg, {
+        f"optimize.bounds.{side}.entry_cooldown.base_duration_minutes": [base, base],
+        f"optimize.bounds.{side}.entry_cooldown.min_duration_minutes": [floor, floor],
+    })
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -1164,8 +1179,10 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
     from config.runtime_compile import compile_runtime_config
 
     bot = Passivbot.__new__(Passivbot)
-    cfg = prepare_config(get_template_config(), verbose=False)
-    cfg["bot"][side]["enabled"] = True
+    cfg = get_template_config()
+    cfg["bot"]["global"]["universe"]["approved_coins"] = "all"
+    cfg = prepare_config(cfg, verbose=False)
+    enable_side(cfg, side)
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 5.0
@@ -1188,7 +1205,7 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
     assert bot._max_configured_entry_cooldown_minutes() == 5.0
     # A removed held coin still permits DCA under auto graceful-stop. Include its
     # override even on a cold restart before the per-cycle mode map is available.
-    bot.config["_coins_sources"] = {"approved_coins": {side: ["ETH"]}}
+    bot.config["bot"][side]["universe"]["approved_coins"] = ["ETH"]
     bot.approved_coins_minus_ignored_coins = {side: {"ETH"}}
     approved.add((side, "ETH"))
     bot.positions = {"BTC": {side: {"size": 1.0 if side == "long" else -1.0}}}
@@ -1347,7 +1364,7 @@ async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monke
 def test_coin_zero_modifier_shadows_positive_fixed_runtime_pin(side, modifier):
     from config.overrides import parse_overrides
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     path = f"bot.{side}.entry_cooldown.weights_minutes.{modifier}"
     cfg["optimize"]["fixed_runtime_overrides"] = {path: 10.0}
@@ -1447,7 +1464,7 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
 
     bot = Passivbot.__new__(Passivbot)
     cfg = prepare_config(get_template_config(), verbose=False)
-    cfg["bot"][side]["enabled"] = True
+    enable_side(cfg, side)
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
     set_side_universe_sources(cfg, 'approved_coins', {pside: ["BTC", "ETH"] for pside in ("long", "short")})
@@ -1497,8 +1514,8 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
     other = "short" if side == "long" else "long"
     bot = Passivbot.__new__(Passivbot)
     cfg = prepare_config(get_template_config(), verbose=False)
-    cfg["bot"]['long']["enabled"] = True
-    cfg["bot"]['short']["enabled"] = True
+    enable_side(cfg, "long")
+    enable_side(cfg, "short")
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = (

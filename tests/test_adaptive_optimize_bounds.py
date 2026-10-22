@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from config import get_template_config, prepare_config
+from config.schema import get_expanded_config_prototype
 from config.optimize_bounds import flatten_optimize_bounds
 from config_utils import clean_config, dump_config, load_config
 from optimization.config_adapter import (
@@ -43,7 +44,9 @@ def omit_cooldown_bounds(config):
         bounds.pop("max_duration_minutes", None)
 
 
-def flat_bounds(config):
+def flat_bounds(config, *, effective=False):
+    if effective:
+        config = prepare_config(config, verbose=False)
     return flatten_optimize_bounds(
         config["optimize"]["bounds"], strategy_kind=config['bot']["portfolio"]['strategy_kind']
     )
@@ -68,7 +71,7 @@ def test_parsed_template_bounds_freeze_adaptive_defaults():
 
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     original = flat_bounds(source)
     for key in (
         "forager_score_weights_unilateralness", "unilateralness_ema_span_1m",
@@ -97,7 +100,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
     freeze_other_score_weights(source)
     parsed = prepare_config(source, verbose=False)
     for cfg in (parsed, clean_config(source)):
-        bounds = flat_bounds(cfg)
+        bounds = flat_bounds(cfg, effective=True)
         for key, value in expected.items():
             assert bounds[f"{side}_{key}"] == [value, value]
     bounds = extract_bounds_tuple_list_from_config(parsed)
@@ -120,7 +123,7 @@ def test_template_edits_derive_adaptive_bounds_from_configured_values(side):
 ])
 @pytest.mark.parametrize("live_only", [False, True])
 def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_only, tmp_path):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     for side, span, weight in (("long", 12.5, 2.0), ("short", 81.25, 3.0)):
         source["bot"][side]["forager"].update(
             unilateralness_ema_span_minutes=span,
@@ -141,7 +144,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
             prepare_config({"config": source}, live_only=live_only, verbose=False)
     cfg = prepare_config(source, live_only=live_only, verbose=False)
     for candidate in (cfg, clean_config(cfg)):
-        bounds = flat_bounds(candidate)
+        bounds = flat_bounds(candidate, effective=True)
         for side in ("long", "short"):
             forager = cfg["bot"][side]["forager"]
             weight = forager["score_weights"]["unilateralness"]
@@ -155,7 +158,7 @@ def test_missing_bounds_freeze_normalized_side_values(missing, wrapped, live_onl
 
 @pytest.mark.parametrize("form", ["nested", "grouped", "flat"])
 def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     omit_unilateralness_bounds(source)
     for side in ("long", "short"):
         forager = source["optimize"]["bounds"][side]["forager"]
@@ -187,8 +190,8 @@ def test_explicit_bounds_survive_hydration_cleaning_and_loading(form, tmp_path):
             assert flat_bounds(candidate)[f"{side}_unilateralness_ema_span_1m"] == [20.5, 240.5, 0.5]
 
 
-def test_direct_cleaning_freezes_effective_weight_without_mutating_source():
-    source = get_template_config()
+def test_direct_cleaning_keeps_omitted_bounds_and_reloads_fixed_effective_weight():
+    source = get_expanded_config_prototype()
     omit_unilateralness_bounds(source)
     source["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 1.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 2.0,
@@ -198,9 +201,11 @@ def test_direct_cleaning_freezes_effective_weight_without_mutating_source():
     snapshot = deepcopy(source)
     cleaned = clean_config(source)
     assert source == snapshot
-    assert flat_bounds(cleaned)["long_forager_score_weights_unilateralness"] == [0.5, 0.5]
-    assert flat_bounds(cleaned)["long_unilateralness_ema_span_1m"] == [42.5, 42.5]
-    assert flat_bounds(prepare_config(cleaned, verbose=False)) == flat_bounds(cleaned)
+    assert "long_forager_score_weights_unilateralness" not in flat_bounds(cleaned)
+    assert "long_unilateralness_ema_span_1m" not in flat_bounds(cleaned)
+    assert flat_bounds(cleaned, effective=True)["long_forager_score_weights_unilateralness"] == [0.5, 0.5]
+    assert flat_bounds(cleaned, effective=True)["long_unilateralness_ema_span_1m"] == [42.5, 42.5]
+    assert flat_bounds(prepare_config(cleaned, verbose=False)) == flat_bounds(cleaned, effective=True)
 
 
 @pytest.mark.parametrize("weight", [0.0, 0.4])
@@ -208,7 +213,7 @@ def test_direct_cleaning_freezes_effective_weight_without_mutating_source():
 def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, fraction):
     from optimize import _canonicalize_optimizer_individual
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     omit_unilateralness_bounds(source)
     omit_cooldown_bounds(source)
     source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = weight
@@ -219,9 +224,10 @@ def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, frac
     )
     freeze_other_score_weights(source)
     hydrated = prepare_config(source, verbose=False)
-    previous = deepcopy(hydrated)
+    previous = clean_config(hydrated)
     omit_unilateralness_bounds(previous)
     omit_cooldown_bounds(previous)
+    previous = prepare_config(previous, verbose=False)
 
     def shape(cfg):
         return dict(zip((key for key, _ in get_optimization_key_paths(cfg)),
@@ -253,7 +259,7 @@ def test_frozen_bounds_preserve_candidates_search_ranges_and_warmup(weight, frac
 @pytest.mark.parametrize("ceiling", [None, 90.25])
 @pytest.mark.parametrize("missing", ["leaves", "cooldown", "bounds", "optimize"])
 def test_missing_cooldown_bounds_freeze_each_side_and_preserve_null_ceiling(ceiling, missing, tmp_path):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     omit_cooldown_bounds(source)
     for side, minimum in (("long", 2.5), ("short", 3.75)):
         source["bot"][side]["entry_cooldown"].update(
@@ -274,7 +280,7 @@ def test_missing_cooldown_bounds_freeze_each_side_and_preserve_null_ceiling(ceil
     path = str(tmp_path / "config.json")
     dump_config(parsed, path, clean=True)
     for candidate in (parsed, clean_config(parsed), clean_config(source), load_config(path, verbose=False)):
-        bounds = flat_bounds(candidate)
+        bounds = flat_bounds(candidate, effective=True)
         for side in ("long", "short"):
             cooldown = parsed["bot"][side]["entry_cooldown"]
             for key, value in cooldown["weights_minutes"].items():
@@ -290,7 +296,7 @@ def test_missing_cooldown_bounds_freeze_each_side_and_preserve_null_ceiling(ceil
 
 @pytest.mark.parametrize("form", ["nested", "grouped", "flat"])
 def test_explicit_cooldown_bounds_survive_roundtrip_with_null_bot_ceiling(form, tmp_path):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     omit_cooldown_bounds(source)
     expected = {
         "weights_minutes_exposure_ratio": [0.0, 10.0, 0.25],
@@ -331,7 +337,7 @@ def test_explicit_cooldown_bounds_survive_roundtrip_with_null_bot_ceiling(form, 
 
 @pytest.mark.parametrize("ceiling", [float("inf"), float("nan")])
 def test_cleaning_rejects_nonfinite_cooldown_ceiling_instead_of_hydrating_invalid_bound(ceiling):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = ceiling
     with pytest.raises(ValueError, match="max_duration_minutes must be finite"):
         clean_config(source)
