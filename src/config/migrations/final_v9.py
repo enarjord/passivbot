@@ -752,7 +752,19 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     migrate_entry_cooldown(result)
     move_shared_policy(result, record=record, base_config_path=base_config_path)
     migrate_entry_ema_spans(result)
-    migrate_unstuck_ema_spans(result, verbose=False)
+    from .released_v8 import get_released_v8_defaults
+    from config.strategy_spec import normalize_strategy_kind
+
+    released = get_released_v8_defaults()
+    kind = normalize_strategy_kind(
+        result.get("bot", {}).get("portfolio", {}).get("strategy_kind")
+        or released["live"]["strategy_kind"]
+    )
+    migrate_unstuck_ema_spans(
+        result, verbose=False,
+        strategy_defaults={side: released["bot"][side]["strategy"][kind]
+                           for side in ("long", "short")},
+    )
     move_operational_live(result, record=record)
     from .control_sentinels import migrate_control_sentinels
 

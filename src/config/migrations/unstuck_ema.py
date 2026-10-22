@@ -56,11 +56,16 @@ def migrate_unstuck_ema_spans(
     verbose: bool = True,
     tracker=None,
     explicit_bounds=None,
+    strategy_defaults=None,
 ) -> None:
     kind = normalize_strategy_kind(config.get("bot", {}).get("portfolio", {}).get("strategy_kind"))
+    # Explicit released conversion supplies its frozen positive fallbacks;
+    # ordinary callers retain the existing current-strategy behavior.
+    if strategy_defaults is None:
+        strategy_defaults = get_strategy_defaults(kind)
     defaults = {
         side: _price_spans(value, kind)
-        for side, value in get_strategy_defaults(kind).items()
+        for side, value in strategy_defaults.items()
     }
     migrated = {}
     for side, bot in config.get("bot", {}).items():

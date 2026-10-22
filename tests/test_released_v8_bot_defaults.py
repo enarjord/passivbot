@@ -65,6 +65,42 @@ def test_default_enablement_cannot_authorize_removing_an_ambiguous_null_restart(
     assert source == original
 
 
+def test_omitted_strategy_kind_still_uses_the_released_default():
+    source = released()
+    source["live"].pop("strategy_kind")
+    original = deepcopy(source)
+    output = migrate_v8_to_v9(source, memory_span_minutes=123.5).config
+    assert output["bot"]["portfolio"]["strategy_kind"] == "trailing_martingale"
+    assert source == original
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("span", ["ema_span_0", "ema_span_1"])
+def test_inactive_zero_span_uses_the_frozen_positive_strategy_fallback(kind, side, span):
+    source = released(kind)
+    strategy = source["bot"][side]["strategy"][kind]
+    if kind == "trailing_martingale":
+        strategy = strategy["entry"]
+    historical_fallback = strategy[span]
+    strategy[span] = 0.0
+    source["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    for key in ("ema_span_0", "ema_span_1"):
+        source["bot"][side]["unstuck"].pop(key)
+        source["optimize"]["bounds"][side]["unstuck"].pop(key)
+    original = deepcopy(source)
+    result = migrate_v8_to_v9(source, memory_span_minutes=123.5)
+    migrated = result.config["bot"][side]
+    assert migrated["unstuck"][span + "_minutes"] == historical_fallback
+    emitted_strategy = migrated["strategy"][kind]
+    if kind == "trailing_martingale":
+        emitted_strategy = emitted_strategy["entry"]
+    assert emitted_strategy[span + "_minutes"] == 0.0
+    assert any(row["new"] == historical_fallback and "unstuck" in row["path"]
+               for row in result.changes)
+    assert source == original
+
+
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_omitted_short_positive_search_bounds_keep_old_runtime_policy_and_coupled_spans(kind):
     source = released(kind)
