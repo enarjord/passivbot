@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from config.schema import get_template_config
+from config import prepare_config
+from config.schema import get_expanded_config_prototype
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
 from optimization.gpu.executor import BacktestResult
 from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
@@ -14,15 +15,15 @@ METRICS = ("adg_strategy_eq", "drawdown_worst_usd")
 
 
 def evaluator(*, suite=False, selected=None):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["scoring"] = [
         {"metric": "adg_strategy_eq", "goal": "max", "scenario": selected},
-        {"metric": "drawdown_worst_usd", "goal": "min", "scenario": None, "aggregate": "max"},
+        {"metric": "drawdown_worst_usd", "goal": "min", "scenario": None, "reducer": "max"},
     ]
     config["optimize"]["limits"] = [
         {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.2},
     ]
-    base = Evaluator(hlcvs_specs={"binance": None, "bybit": None}, btc_usd_specs={}, msss={}, config=config)
+    base = Evaluator(hlcvs_specs={"binance": None, "bybit": None}, btc_usd_specs={}, msss={}, config=prepare_config(config, verbose=False))
     if not suite:
         return base
     contexts = [SimpleNamespace(label=label, exchanges=["binance", "bybit"])
@@ -123,7 +124,7 @@ def test_partial_suite_screening_is_scored_but_cannot_be_recorded_as_full(monkey
 
 @pytest.mark.parametrize("required_by", ["objective", "limit"])
 def test_ew_screening_ranks_selected_subset_without_weakening_full_coverage(required_by):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     ew_metric = "adg_strategy_eq_ew"
     config["backtest"]["ew_half_life_days"] = 30.0
     config["optimize"]["scoring"] = [{"metric": ew_metric, "goal": "max"}]
@@ -131,7 +132,7 @@ def test_ew_screening_ranks_selected_subset_without_weakening_full_coverage(requ
     if required_by == "limit":
         config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
         config["optimize"]["limits"] = [{"metric": ew_metric, "penalize_if": "less_than", "value": .05}]
-    base = Evaluator({"binance": None}, {}, {}, config)
+    base = Evaluator({"binance": None}, {}, {}, prepare_config(config, verbose=False))
     suite = SuiteEvaluator(base, [SimpleNamespace(label=label, exchanges=["binance"])
                                  for label in ("base", "stress")], {"default": "mean"})
     scorer = CanonicalResultScorer(suite)
@@ -157,11 +158,11 @@ def test_ew_screening_ranks_selected_subset_without_weakening_full_coverage(requ
 
 def test_unavailable_selected_ew_metrics_still_penalize_screening():
     from test_gpu_suite_invalid_metrics import assert_invalid
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     metric = "adg_strategy_eq_ew"
     config["backtest"]["ew_half_life_days"] = 30.0
     config["optimize"].update(scoring=[{"metric": metric, "goal": "max"}], limits=[])
-    base = Evaluator({"binance": None}, {}, {}, config)
+    base = Evaluator({"binance": None}, {}, {}, prepare_config(config, verbose=False))
     suite = SuiteEvaluator(base, [SimpleNamespace(label=label, exchanges=["binance"])
                                  for label in ("base", "stress")], {"default": "mean"})
     pending = CandidateEvaluation("unavailable", [], [ResultSlot("request", "data", "base", "binance", (metric,))],

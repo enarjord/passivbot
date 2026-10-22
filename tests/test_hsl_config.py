@@ -7,7 +7,7 @@ import json
 import pytest
 
 from config import prepare_config
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from config.hsl import generated_template, require_runtime_support
 from config.optimize_bounds import flatten_optimize_bounds
 from config_utils import update_config_with_args
@@ -16,7 +16,7 @@ from released_v8_fixtures import released_v8_policy
 
 
 def source(mode="coin", enabled=True):
-    cfg = generated_template(get_template_config(), mode)
+    cfg = generated_template(get_expanded_config_prototype(), mode)
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block["enabled"] = enabled
     return cfg
@@ -130,7 +130,8 @@ def test_cli_mode_change_rechecks_portfolio_presence():
 def test_slow_memory_rejects_invalid_or_nondecaying_spans(span):
     cfg = source()
     cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
-    with pytest.raises(ValueError, match="memory_ema_span_minutes"):
+    error = TypeError if type(span) is bool else ValueError
+    with pytest.raises(error, match="memory_ema_span_minutes"):
         prepared(cfg)
 
 
@@ -190,9 +191,9 @@ def test_removed_metric_is_rejected_in_keys_and_values(section, tier):
 def test_portfolio_optimizer_paths_target_portfolio_only():
     cfg = prepared(source("portfolio"))
     keys = dict(get_optimization_key_paths(cfg))
-    assert keys["hsl_red_threshold"] == ("bot", "portfolio", "hsl", "drawdown_ratio_threshold")
-    assert keys["hsl_drawdown_ratio_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_ratio_ema_span_minutes")
-    assert not any(k.startswith(("long_hsl_", "short_hsl_")) for k in keys)
+    assert keys["bot.portfolio.hsl.drawdown_ratio_threshold"] == ("bot", "portfolio", "hsl", "drawdown_ratio_threshold")
+    assert keys["bot.portfolio.hsl.drawdown_ratio_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_ratio_ema_span_minutes")
+    assert not any(k.startswith(("bot.long.hsl.", "bot.short.hsl.")) for k in keys)
     assert "hsl_red_threshold" in flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
@@ -307,7 +308,8 @@ def test_scenario_rechecks_effective_hsl_contract(change):
         assert result["bot"]["long"]["hsl"]["enabled"]
         assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
     else:
-        with pytest.raises(ValueError, match="explicit|removed|inactive"):
+        reason = "missing required fields" if change == "mode" else "removed|inactive"
+        with pytest.raises(ValueError, match=reason):
             apply_scenario(cfg, scenario, ["TEST"], [], ["binance"], {"TEST"}, quiet=True)
 
 

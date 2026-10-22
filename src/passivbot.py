@@ -4486,7 +4486,12 @@ class Passivbot:
                     self._override_hits_logged.add(log_key)
                 return d
 
-        # fallback to global config
+        # Prepared membership can replace the compiled flat aliases. Resolve
+        # side parameters through the canonical owner after coin precedence.
+        if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
+            return self.bot_value(path[1], path[2])
+
+        # fallback to root config
         d = self.config
         for p in path:
             if isinstance(d, dict) and p in d:
