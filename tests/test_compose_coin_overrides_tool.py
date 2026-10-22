@@ -17,17 +17,18 @@ from config.overrides import (
     get_allowed_modifications,
     parse_overrides,
 )
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from tools.compose_coin_overrides import compose_directory, main
 
 
 def _single_coin_config(coin: str) -> dict:
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     set_side_universe_sources(config, 'approved_coins', {"long": [coin], "short": [coin]})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["live"]["account"]["user"] = "test_user"
     config["coin_overrides"] = {}
     for side in ("long", "short"):
+        config["bot"][side]["enabled"] = side == "long"
         risk = config["bot"][side]["risk"]
         risk["max_positions"] = 1.0
         risk['position_exposure_enforcer']['enabled'] = False

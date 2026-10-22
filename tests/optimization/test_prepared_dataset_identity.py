@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from config_utils import clean_config, get_template_config
+from config.load import prepare_config
+from config.schema import get_expanded_config_prototype
 from config.universe import materialize_side_universe_sources
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.prepared_dataset_identity import (
@@ -21,7 +22,7 @@ def prepared():
     candles = np.arange(8 * 3 * 4, dtype=np.float64).reshape(8, 3, 4) + 100
     spec, shared = manager.create_from(candles)
     btc_spec, btc = manager.create_from(np.arange(8, dtype=np.float64) + 60_000)
-    config = clean_config(get_template_config())
+    config = prepare_config(get_expanded_config_prototype(), verbose=False)
     config["backtest"].update(
         coins={"combined": ["A", "B", "C"]},
         start_date="2024-01-01", end_date="2024-01-10",

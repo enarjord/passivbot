@@ -69,7 +69,8 @@ class FakeEvaluator:
         self.config = {
             **_checkpoint_config(),
             "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-            "bot": {"long": {"a": 0.0, "b": 0.0}},
+            "bot": {"long": {"risk": {"total_wallet_exposure_limit": 0.0},
+                             "unstuck": {"close_fraction": 0.0}}},
             "optimize": {"scoring": list(scoring_keys), "backend": "pymoo"},
         }
 
@@ -100,8 +101,8 @@ class TinyManyObjectiveProblem(ElementwiseProblem):
 
 def _build_config(vector, overrides_fn, overrides_list, template):
     config = copy.deepcopy(template)
-    config["bot"]["long"]["a"] = float(vector[0])
-    config["bot"]["long"]["b"] = float(vector[1])
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = float(vector[0])
+    config["bot"]["long"]["unstuck"]["close_fraction"] = float(vector[1])
     return config
 
 

@@ -60,6 +60,8 @@ def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_num
     current = load(current_raw)
     policy = apply_bot_policy_patch(get_bot_policy(current),
         {"bot.global.risk.total_wallet_exposure_limit": 2.75}, channel="gene")
+    policy = apply_bot_policy_patch(policy,
+        {"bot.short.unstuck.close_fraction": 0.08}, channel="derived")
     install_bot_policy(current, policy)
     ignored.unlink()
     ctx = SimpleNamespace(config=context, overrides={}, label="base", msss={"binance": {"AAA": {}}})
@@ -71,7 +73,10 @@ def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_num
     assert exported["global"]["universe"]["ignored_coins"] == str(ignored)
     assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.75
     assert ("bot", "global", "risk", "total_wallet_exposure_limit") in get_bot_policy(result)._genes
+    assert result["bot"]["short"]["unstuck"]["close_fraction"] == 0.08
+    assert get_bot_policy(result)._derived == policy._derived
     assert list(result["bot"]["long"]["universe"]["ignored_coins"]) == ["BBB"]
+    assert execution_key(result) == execution_key(dataset(result).policy_config())
 
 
 def load(raw):

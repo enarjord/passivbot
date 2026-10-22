@@ -181,10 +181,11 @@ def copy_universe_source_policy(config, source):
             else:
                 patches[f"bot.{scope}.universe"] = updated
     if patches:
-        # Source-only changes cannot invalidate numeric formatting. The owned
-        # parent patch discards only the replaced prepared source memberships.
+        # Source-only changes cannot invalidate numeric transforms/formatting.
+        # The owned parent patch discards the replaced prepared memberships.
         updated = apply_bot_policy_patch(policy, patches)
-        install_bot_policy(config, replace(updated, _normalized=policy._normalized))
+        install_bot_policy(config, replace(updated, _derived=policy._derived,
+                                           _normalized=policy._normalized))
 
 
 def materialize_side_universe_sources(config, field, values, *, sources=None):
