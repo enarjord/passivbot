@@ -177,7 +177,7 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "market_order_slippage_pct": 0.0005,
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
-        "forager_score_hysteresis_pct": 0.02,
+        "forager_score_hysteresis": {"long": 0.02, "short": 0.02},
     }
     market = {
         "qty_step": 0.001,
@@ -1122,7 +1122,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         backtest_params={"side_activation": {"long": True, "short": True}, "minimum_coin_age_days": [0.0, 0.0],
             "candle_interval_minutes": interval_minutes,
             "dynamic_wel_by_tradability": dynamic_wel_by_tradability,
-            "forager_score_hysteresis_pct": 0.0,
+            "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
             "last_valid_indices": [2, 3],
             "first_valid_indices": [0, 0],
             "equity_hard_stop_loss": {"signal_mode": "coin"},

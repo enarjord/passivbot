@@ -115,6 +115,7 @@ def _raw_rust_input(
     **global_overrides,
 ) -> dict:
     global_input = {
+        "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
         "hedge_mode": True,
         "strategy_kind": "trailing_martingale",
         "auto_unstuck_allowed": True,

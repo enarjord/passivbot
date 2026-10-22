@@ -312,6 +312,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
         "global": {
             # Explicit known-empty continuous realized memory for these order fixtures.
             "side_activation": {"long": True, "short": True},
+            "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
             "unstuck_realized_pnl_drawdown": 0.0,
             "loss_gate_realized_pnl_drawdown": 0.0,
             "filter_by_min_effective_cost": {"long": False, "short": False},
