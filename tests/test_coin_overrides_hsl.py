@@ -158,7 +158,7 @@ def test_override_file_cannot_author_global_signal_scope(
 
 def test_inline_cannot_switch_signal_mode_to_authorize_hsl_patch():
     with pytest.raises(
-        ValueError, match=r"(effective global|inactive outside coin mode|not overridable)"
+        ValueError, match=r"(effective portfolio|inactive outside coin mode|not overridable)"
     ):
         _parse(
             {

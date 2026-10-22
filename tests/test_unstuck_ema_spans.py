@@ -586,7 +586,7 @@ def test_legacy_flat_optimizer_bounds_migrate_without_mixing_shapes(explicit, bo
         )
     )
     assert flat["long_unstuck_ema_span_0"] == [expected, expected]
-    assert set(prepared["optimize"]["bounds"]) == {"global", "long", "short"}
+    assert set(prepared["optimize"]["bounds"]) == {"portfolio", "long", "short"}
     assert (
         prepare_config(prepared, verbose=False)["optimize"]["bounds"]
         == prepared["optimize"]["bounds"]

@@ -371,9 +371,9 @@ def test_external_master_must_match_input_strategy_and_hsl_mode(
     if key == "hsl_signal_mode":
         master["bot"]["portfolio"]["hsl"]["scope"] = value
     else:
-        master["bot"]["global"][key] = value
+        master["bot"]["portfolio"][key] = value
     _write(tmp_path / "master.json", master)
-    expected_path = "bot.portfolio.hsl.scope" if key == "hsl_signal_mode" else f"bot.global.{key}"
+    expected_path = "bot.portfolio.hsl.scope" if key == "hsl_signal_mode" else f"bot.portfolio.{key}"
     with pytest.raises(ValueError, match=f"same {expected_path}"):
         compose_directory(inputs, master_config=tmp_path / "master.json")
 

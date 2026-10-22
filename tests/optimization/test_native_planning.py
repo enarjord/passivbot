@@ -66,10 +66,10 @@ def set_value(planner, vector, key, value):
 
 MEMORY_PATHS = {
     "unstuck_memory_ema_span_minutes": (
-        "bot.portfolio.unstuck.memory_ema_span_minutes", ("global", "unstuck", "memory_ema_span_minutes"),
+        "bot.portfolio.unstuck.memory_ema_span_minutes", ("portfolio", "unstuck", "memory_ema_span_minutes"),
     ),
     "loss_gate_memory_ema_span_minutes": (
-        "bot.portfolio.loss_gate.memory_ema_span_minutes", ("global", "loss_gate", "memory_ema_span_minutes"),
+        "bot.portfolio.loss_gate.memory_ema_span_minutes", ("portfolio", "loss_gate", "memory_ema_span_minutes"),
     ),
 }
 

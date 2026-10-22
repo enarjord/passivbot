@@ -933,7 +933,7 @@ def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
 
     with pytest.raises(
         ValueError,
-        match=r"fixed_runtime_overrides may not change bot\.global\.strategy_kind",
+        match=r"fixed_runtime_overrides may not change bot\.portfolio\.strategy_kind",
     ):
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
