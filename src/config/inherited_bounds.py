@@ -7,6 +7,7 @@ the registry's existing identifiers, not new public config aliases.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -14,7 +15,8 @@ import math
 from typing import Mapping, Sequence
 
 from optimization.bounds import Bound
-from .bot_inheritance import ABSENT, SIDES, BotPolicy, Path, _get, apply_bot_policy_patch
+from .bot_inheritance import (ABSENT, SIDES, BotPolicy, Path, _get, _set, _freeze, _thaw,
+                              apply_bot_policy_patch, reconciled_bot_policy)
 from .field_spec import FieldType
 
 
@@ -104,6 +106,94 @@ class BoundPlan:
                 raise ValueError(f"{binding.key} optimizer value is outside its declared bound")
             values[binding.key] = value
         return apply_bot_policy_patch(policy, values, channel="gene")
+
+
+class PreparedOptimizationBounds(dict):
+    """Expanded runtime domains with one immutable authored search plan.
+
+    JSON contains only ordinary ranges. It cannot reconstruct this trusted
+    binding authority; reload always rebuilds the plan from authored bounds.
+    """
+
+    def __init__(self, runtime, authored, plan):
+        if type(plan) is not BoundPlan:
+            raise TypeError("a typed BoundPlan is required")
+        super().__init__(deepcopy(runtime))
+        self._authored_bounds = _freeze(authored)
+        self._bound_plan = plan
+        self._runtime_baseline = _freeze(runtime)
+
+    def source_view(self):
+        return _thaw(self._authored_bounds)
+
+
+def get_bound_plan(config) -> BoundPlan | None:
+    bounds = config.get("optimize", {}).get("bounds")
+    if type(bounds) is not PreparedOptimizationBounds:
+        return None
+    if type(bounds._bound_plan) is not BoundPlan:
+        raise TypeError("prepared optimizer bounds have invalid binding authority")
+    if _freeze(bounds) != bounds._runtime_baseline:
+        raise ValueError("prepared optimizer bounds changed; rebuild their authored binding plan")
+    return bounds._bound_plan
+
+
+def optimize_bounds_source_view(config):
+    """Restore canonical authored domains before reloadable serialization."""
+    plan = get_bound_plan(config)
+    result = deepcopy(dict(config))
+    if plan is not None:
+        result["optimize"]["bounds"] = config["optimize"]["bounds"].source_view()
+    return result
+
+
+def prepare_bound_plan(config, *, authored_bounds=None):
+    """Build genotype authority before range hydration; keep native domains separate."""
+    policy = reconciled_bot_policy(config)
+    if policy is None:
+        raise TypeError("optimizer binding preparation requires a typed BotPolicy")
+    current = config.get("optimize", {}).get("bounds", {})
+    if authored_bounds is None:
+        get_bound_plan(config)  # Reject edits to a prepared runtime projection.
+        authored_bounds = current.source_view() if type(current) is PreparedOptimizationBounds else current
+    authored = deepcopy(authored_bounds)
+    portfolio = config["bot"]["portfolio"]
+    plan = build_bound_plan(policy, authored, strategy_kind=portfolio["strategy_kind"],
+                            hsl_scope=portfolio["hsl"]["scope"])
+    runtime = {}
+    for binding in plan.bindings:
+        bound = [binding.bound.low, binding.bound.high]
+        if binding.bound.step is not None:
+            bound.append(binding.bound.step)
+        for target in binding.effective_targets:
+            _set(runtime, target[1:], bound)
+    config.setdefault("optimize", {})["bounds"] = PreparedOptimizationBounds(runtime, authored, plan)
+    return plan
+
+
+def resolve_plan_selectors(config, selectors, *, plan=None):
+    """Match authored owners or effective/native targets without splitting a gene."""
+    from .param_paths import bound_path_matches_selector, resolve_dotted_config_path
+
+    plan = get_bound_plan(config) if plan is None else plan
+    if plan is None:
+        raise TypeError("a prepared optimizer binding plan is required")
+    result = {}
+    for selector in selectors:
+        if not isinstance(selector, str) or not selector.strip():
+            raise TypeError("optimizer selectors must be nonempty strings")
+        selector = selector.strip()
+        if selector.startswith("optimize.bounds."):
+            selector = "bot." + selector.removeprefix("optimize.bounds.")
+        if selector.split(".", 1)[0] in {"global", "portfolio"}:
+            selector = "bot." + selector
+        path = resolve_dotted_config_path(config, selector)
+        for binding in plan.bindings:
+            if (selector in binding.native_ids or selector == binding.key or
+                    path is not None and any(bound_path_matches_selector(target, path)
+                                             for target in (binding.authoring_path, *binding.effective_targets))):
+                result[binding.key] = binding.authoring_path
+    return result
 
 
 def _bound(value, path):
