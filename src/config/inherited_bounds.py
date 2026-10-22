@@ -138,7 +138,7 @@ class PreparedOptimizationBounds(dict):
 def get_bound_plan(config) -> BoundPlan | None:
     optimize = config.get("optimize", {})
     if not isinstance(optimize, dict):
-        raise TypeError("config.optimize must be a dict")
+        raise TypeError("config.optimize must be an object")
     bounds = optimize.get("bounds")
     if type(bounds) is not PreparedOptimizationBounds:
         return None

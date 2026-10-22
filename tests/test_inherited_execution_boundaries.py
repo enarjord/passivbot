@@ -296,6 +296,41 @@ def test_actual_canonicalizer_never_repairs_nonfinite_genes(value):
             vector, config, shape.bounds, shape.sig_digits, shape.key_paths, [])
 
 
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_runtime_patch_snapshot_preserves_unrelated_mirror_and_reusable_base(tmp_path, kind):
+    from config.bot import normalize_bot_forager_config
+    from optimization.warmup import _apply_config_overrides
+    from test_explicit_optimize_bounds import mirrored_weight_source, mirrored_weight_candidate
+
+    raw = mirrored_weight_source(kind)
+    approvals = tmp_path / "approved.json"
+    approvals.write_text('["AAA"]')
+    raw["bot"]["global"]["universe"]["approved_coins"] = str(approvals)
+    base = prepare_config(raw, verbose=False)
+    base_source = bot_policy_source_view(base)
+    base_policy = get_bot_policy(base)
+    identity = get_bound_plan(base).identity()
+    approvals.unlink()
+    candidate = mirrored_weight_candidate(base, 0.9)
+    assert get_bot_policy(candidate)._derived
+    expected_short = deepcopy(candidate["bot"]["short"]["forager"]["score_weights"])
+    patch = {"bot.long.forager.score_weights": {
+        "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.4, "unilateralness": 0.1}}
+    _apply_config_overrides(candidate, patch, preserve_prepared_universe=True)
+    normalize_bot_forager_config(candidate, verbose=False)
+    assert candidate["bot"]["short"]["forager"]["score_weights"] == expected_short
+    assert candidate["bot"]["long"]["forager"]["score_weights"] == pytest.approx(patch["bot.long.forager.score_weights"])
+    assert list(candidate["bot"]["short"]["universe"]["approved_coins"]) == ["AAA"]
+    assert get_bound_plan(candidate).identity() == identity
+    assert get_bound_plan(base).identity() == identity
+    assert get_bot_policy(base) == base_policy
+    assert bot_policy_source_view(base) == base_source
+    previous = deepcopy(candidate)
+    _apply_config_overrides(candidate, patch, preserve_prepared_universe=True)
+    normalize_bot_forager_config(candidate, verbose=False)
+    assert candidate == previous
+
+
 @pytest.mark.parametrize("value,expected", [(0.0, 0), (0.5, 0), (1.5, 2), (4.5, 4), (5.5, 6)])
 def test_continuous_count_gene_uses_existing_canonical_count_adapter(value, expected):
     from config.bot_inheritance import apply_bot_policy_patch

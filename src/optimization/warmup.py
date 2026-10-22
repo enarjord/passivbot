@@ -26,11 +26,15 @@ from warmup_utils import compute_per_coin_warmup_minutes
 
 
 def _apply_config_overrides(
-    config: dict, overrides: dict, *, preserve_prepared_universe=False
+    config: dict, overrides: dict, *, preserve_prepared_universe=False,
+    preserve_derived_outputs=True,
 ) -> None:
     from config.bot_inheritance import get_bot_policy
     if get_bot_policy(config) is not None:
-        _apply_inherited_config_overrides(config, overrides, preserve_prepared_universe=preserve_prepared_universe)
+        _apply_inherited_config_overrides(
+            config, overrides, preserve_prepared_universe=preserve_prepared_universe,
+            preserve_derived_outputs=preserve_derived_outputs,
+        )
         return
     from config.universe import (
         ResolvedCoinList,
@@ -94,13 +98,34 @@ def _apply_config_overrides(
     # Public fixed/scenario patches stay canonical until explicit runtime lowering.
 
 
-def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_universe):
-    from config.bot_inheritance import apply_bot_config_patch, reconciled_bot_policy
+def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_universe,
+                                      preserve_derived_outputs=True):
+    from config.bot_inheritance import (
+        apply_bot_config_patch, reconciled_bot_policy, resolve_bot_policy,
+        install_bot_policy, with_prepared_bot_sources, with_normalized_bot_values,
+    )
     from config.inherited_bounds import PreparedOptimizationBounds
     from config.hsl import validate_override_paths
     from config.universe import ResolvedCoinList
 
     policy_source = reconciled_bot_policy(config)
+    if overrides and preserve_derived_outputs and policy_source._derived:
+        # Runtime patches follow candidate transforms. Freeze their existing
+        # outputs only in this disposable candidate so a later declaration
+        # cannot erase an unrelated mirrored value. The reusable source and
+        # its binding plan remain unchanged outside this candidate.
+        candidate = deepcopy(config)
+        snapshot = resolve_bot_policy(policy_source.candidate_view(), policy_source.catalog)
+        snapshot = with_prepared_bot_sources(snapshot, candidate["bot"])
+        snapshot = with_normalized_bot_values(snapshot, candidate["bot"])
+        install_bot_policy(candidate, snapshot, effective_bot=candidate["bot"])
+        _apply_inherited_config_overrides(
+            candidate, overrides, preserve_prepared_universe=preserve_prepared_universe,
+            preserve_derived_outputs=False,
+        )
+        config.clear()
+        config.update(candidate)
+        return
     bounds_source = config.get("optimize", {}).get("bounds")
     if type(bounds_source) is not PreparedOptimizationBounds:
         bounds_source = None
@@ -327,7 +352,10 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         canonicalize_shared_bot_side(side_cfg, path_prefix=("bot", pside))
     config.pop(ANCHOR_PLAN_KEY, None)
     runtime_overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {})
-    _apply_config_overrides(config, runtime_overrides, preserve_prepared_universe=True)
+    _apply_config_overrides(
+        config, runtime_overrides, preserve_prepared_universe=True,
+        preserve_derived_outputs=False,
+    )
     fixed_value_paths = set(fixed_paths) | {
         require_existing_config_path(config, selector) for selector in runtime_overrides
     }
