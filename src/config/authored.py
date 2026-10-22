@@ -71,7 +71,9 @@ def validate_authored_config(config, template, *, policy_context=None):
     it affects coin-patch policy, never the authored structural field checks.
     """
     _mapping(config, "config")
-    schema = deepcopy(template)
+    from .schema import get_expanded_config_prototype
+
+    schema = get_expanded_config_prototype()
     policy_context = config if policy_context is None else policy_context
     # Added by the loader for relative file resolution, rather than user policy.
     schema["live"]["base_config_path"] = ""
@@ -87,6 +89,7 @@ def validate_authored_config(config, template, *, policy_context=None):
         cooldown["weights_minutes"] = {"exposure_ratio": [], "adverse_directionality": []}
         bounds[side]["forager"].setdefault("score_weights", {})["unilateralness"] = []
         bounds[side]["forager"]["unilateralness_ema_span_minutes"] = []
+    bounds["global"] = deepcopy(bounds["long"])
     # Optional dimensions must remain absent from default searches.
     bounds.setdefault("portfolio", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
     bounds.setdefault("portfolio", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
@@ -108,7 +111,7 @@ def validate_authored_config(config, template, *, policy_context=None):
         path = "config" + ("." + ".".join(parts) if parts else "")
         if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"global", "long", "short"}
                 and parts[2] == "universe" and parts[3] in {"approved_coins", "ignored_coins"}):
-            if parts[1] == "global" and value is None:
+            if parts[1] == "global" and parts[3] == "approved_coins" and value is None:
                 raise TypeError(f"{path} must be a coin list or source string; null is only side inheritance")
             if parts[1] == "global":
                 text = value if isinstance(value, str) else ",".join(value) if isinstance(value, list) and all(isinstance(x, str) for x in value) else ""

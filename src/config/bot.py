@@ -18,7 +18,7 @@ from .shared_bot import (
     get_grouped_bot_value,
     inject_flattened_shared_bot_side,
 )
-from .schema import get_template_config
+from .schema import get_expanded_config_prototype
 from .access import require_config_dict
 from .tree_ops import add_missing_keys_recursively
 
@@ -498,7 +498,7 @@ def normalize_cliff_edge_thresholds(
 
 
 def ensure_required_bot_params_present(result: dict) -> None:
-    template = normalization_template(get_template_config(), result)["bot"]
+    template = normalization_template(get_expanded_config_prototype(), result)["bot"]
     for pside in BOT_POSITION_SIDES:
         bot_cfg = result["bot"][pside]
         flat_bot_cfg = flatten_shared_bot_side(bot_cfg)
@@ -525,7 +525,7 @@ def ensure_required_bot_params_present(result: dict) -> None:
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
 ) -> None:
-    template_bot = normalization_template(get_template_config(), result)["bot"]
+    template_bot = normalization_template(get_expanded_config_prototype(), result)["bot"]
     for pside in BOT_POSITION_SIDES:
         canonicalize_shared_bot_side(
             result["bot"][pside],
@@ -852,7 +852,7 @@ def format_bot_config(
 ) -> dict:
     if not isinstance(bot_cfg, dict):
         raise TypeError(f"config.bot must be a dict; got {type(bot_cfg).__name__}")
-    template = normalization_template(get_template_config(), {"bot": bot_cfg})
+    template = normalization_template(get_expanded_config_prototype(), {"bot": bot_cfg})
     result = {
         "bot": deepcopy(bot_cfg),
         "live": (

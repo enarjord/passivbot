@@ -141,14 +141,15 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
         return _finite_projection_number
     from config.universe import ResolvedCoinList
     from config.activation import ActivationSource, PreparedActivationBot
+    from config.bot_inheritance import BotPolicy, PreparedBotPolicy
     kind = type(value)
-    if kind in (dict, list, tuple, ResolvedCoinList, PreparedActivationBot):
+    if kind in (dict, list, tuple, ResolvedCoinList, PreparedActivationBot, PreparedBotPolicy):
         # Ignored metadata can contain cycles or arbitrarily deep containers.
         # It remains valid for the legacy cleaner; decline this optional guard.
         if len(path) > 32 or id(value) in ancestors:
             return None
         ancestors = (*ancestors, id(value))
-    if kind in (dict, PreparedActivationBot):
+    if kind in (dict, PreparedActivationBot, PreparedBotPolicy):
         source_guard = None
         if kind is PreparedActivationBot:
             if path != ("bot",) or type(value._activation_source) is not ActivationSource:
@@ -159,6 +160,20 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                 return None
             source_guard = lambda current: (type(current._activation_source) is ActivationSource
                                              and current._activation_source == source)
+        if kind is PreparedBotPolicy:
+            if path != ("bot",) or type(value._bot_policy) is not BotPolicy:
+                return None
+            policy = value._bot_policy
+            authored_guard = _compile_projection_guard(policy.source_view(include_defaults=True),
+                                                        numeric_paths, path, ancestors)
+            if authored_guard is None:
+                return None
+            def source_guard(current):
+                candidate = current._bot_policy
+                return (type(candidate) is BotPolicy and candidate.catalog == policy.catalog
+                        and candidate._prepared == policy._prepared
+                        and candidate._genes == policy._genes
+                        and authored_guard(candidate.source_view(include_defaults=True)))
         if any(type(key) is not str for key in value):
             return None
         children = tuple((key, _compile_projection_guard(child, numeric_paths, (*path, key), ancestors))
@@ -176,9 +191,11 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                          for index, child in enumerate(value))
         source_guard = _compile_projection_guard(value.source, (), (*path, "source"), ancestors)
         shared_guard = _compile_projection_guard(value.shared_source, (), (*path, "shared_source"), ancestors)
-        if source_guard is None or shared_guard is None or any(guard is None for guard in children):
+        if (type(value.source_present) is not bool or source_guard is None
+                or shared_guard is None or any(guard is None for guard in children)):
             return None
         return lambda current: (type(current) is ResolvedCoinList and len(current) == len(children)
+                                and type(current.source_present) is bool and current.source_present == value.source_present
                                 and source_guard(current.source) and shared_guard(current.shared_source)
                                 and all(guard(child) for guard, child in zip(children, current)))
     if kind in (list, tuple):

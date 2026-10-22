@@ -14,7 +14,7 @@ from enum import Enum
 import math
 from typing import Any, Mapping
 
-from .field_spec import FieldRegistry, FieldSpec, FieldType
+from .field_spec import FieldRegistry, FieldSpec, FieldType, NO_DEFAULT
 from .universe import ResolvedCoinList
 
 
@@ -215,6 +215,7 @@ class BotPolicy:
     _prepared: tuple[_PreparedSource, ...] = ()
     _derived: tuple[_DerivedValue, ...] = ()
     _genes: frozenset[Path] = frozenset()
+    _normalized: tuple[_DerivedValue, ...] = ()
 
     def source_view(self, *, include_defaults=False):
         result = _thaw(self._source)
@@ -228,6 +229,18 @@ class BotPolicy:
                 if value is not ABSENT:
                     _set(common, field.suffix, deepcopy(value))
             result["global"] = common
+            portfolio = {}
+            for field in self.catalog.portfolio_fields:
+                if field.default is not NO_DEFAULT:
+                    _set(portfolio, field.path[2:], deepcopy(field.default))
+            def overlay(target, authored):
+                for key, value in authored.items():
+                    if isinstance(value, Mapping) and isinstance(target.get(key), dict):
+                        overlay(target[key], value)
+                    else:
+                        target[key] = deepcopy(value)
+            overlay(portfolio, result.get("portfolio", {}))
+            result["portfolio"] = portfolio
         return result
 
     def has_side_pin(self, side, suffix):
@@ -237,7 +250,7 @@ class BotPolicy:
     def resolve(self):
         source = self.source_view()
         common = source.get("global", {})
-        result = {"portfolio": deepcopy(source.get("portfolio", {})), "global": {}, "long": {}, "short": {}}
+        result = {"portfolio": self.source_view(include_defaults=True)["portfolio"], "global": {}, "long": {}, "short": {}}
         origins = []
         for field in self.catalog.fields:
             shared = _get(common, field.suffix)
@@ -271,6 +284,10 @@ class BotPolicy:
                         )
                 _set(result[side], field.suffix, value)
                 origins.append(LeafOrigin(path, owner, "gene" if owner in self._genes else kind, declaration))
+        # Formatting changes the effective representation, not declaration
+        # authority. Keep the original inherited or pinned source origin.
+        for normalized in self._normalized:
+            _set(result, normalized.path[1:], _thaw(normalized.value))
         for derived in self._derived:
             _set(result, derived.path[1:], _thaw(derived.value))
             origins = [origin for origin in origins if origin.target != derived.path]
@@ -553,3 +570,68 @@ def resolve_coin_bot_policy(policy: BotPolicy, patch: Mapping, *, coin: str,
         visit(values)
         nested_update(effective[side], deepcopy(values))
     return effective, tuple(origins)
+
+
+def get_side_field_catalog():
+    """Build the canonical directional catalog without consulting authored data."""
+    from .field_registry import get_field_registry
+    from .bot_defaults import get_common_bot_defaults
+
+    return SideFieldCatalog.from_registry(get_field_registry(), common_defaults=get_common_bot_defaults())
+
+
+def with_normalized_bot_values(policy, effective_bot):
+    """Retain owning formatter output without changing source or result pins.
+
+    Normalized weights and integral coercions are effective values. Reusable
+    source exports keep the original declarations; candidate exports materialize
+    only explicit optimizer-derived overlays.
+    """
+    raw = replace(policy, _normalized=()).effective_view()
+    entries = []
+    for scope in ("global", *SIDES):
+        for field in policy.catalog.fields:
+            if field.suffix in SOURCE_FIELDS:
+                continue
+            path = (scope, *field.suffix)
+            value = _get(effective_bot, path)
+            if value is not ABSENT and value != _get(raw, path):
+                entries.append(_DerivedValue(("bot", *path), _freeze(value), "normalization"))
+    for spec in policy.catalog.portfolio_fields:
+        path = spec.path[1:]
+        value = _get(effective_bot, path)
+        if value is not ABSENT and value != _get(raw, path):
+            entries.append(_DerivedValue(spec.path, _freeze(value), "normalization"))
+    return replace(policy, _normalized=tuple(entries))
+
+
+def apply_bot_config_patch(config, overrides, *, channel="authored"):
+    """Record canonical declarations after their existing validated patch owner.
+
+    Non-bot selectors keep their owning behavior. This facade never interprets
+    serialized metadata and never resolves source files. Equal declarations and
+    parent replacements retain presence through the same typed source API.
+    """
+    policy = get_bot_policy(config)
+    if policy is None:
+        return False
+    selected = {key: value for key, value in overrides.items()
+                if isinstance(key, str) and (key == "bot" or key.startswith("bot."))}
+    if not selected:
+        return True
+    for selector, value in selected.items():
+        path = tuple(selector.split("."))
+        if channel == "authored" and (path == ("bot",) or path[:2] == ("bot", "portfolio")
+                                      and policy.catalog.find(path[2:]) is None):
+            source = policy.source_view()
+            if path == ("bot",):
+                source = deepcopy(value)
+            else:
+                _set(source, path[1:], deepcopy(value))
+            updated = resolve_bot_policy(source, policy.catalog)
+            policy = replace(updated, _prepared=tuple(
+                entry for entry in policy._prepared if not _intersects(path, entry.path)))
+        else:
+            policy = apply_bot_policy_patch(policy, {selector: value}, channel=channel)
+    install_bot_policy(config, policy)
+    return True

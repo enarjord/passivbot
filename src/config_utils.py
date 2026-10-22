@@ -768,6 +768,7 @@ def clean_config(config: dict) -> dict:
     with dictionaries sorted recursively.
     """
     from config.hsl import FIELDS, normalization_template
+    from config.schema import get_expanded_config_prototype
     # Source validation and template preparation are read-only. The projection
     # below copies retained values, so a full input copy would be redundant.
     from config.universe import universe_source_view
@@ -779,7 +780,7 @@ def clean_config(config: dict) -> dict:
         require_v9_runtime_config(source)
     else:
         reject_retired_v9_fields(source)
-    template = normalization_template(get_template_config(), source)
+    template = normalization_template(get_expanded_config_prototype(), source)
     portfolio = source.get("bot", {}).get("portfolio", {}).get("hsl", {})
     if not isinstance(portfolio, dict):
         raise TypeError("bot.portfolio.hsl must be a mapping")
@@ -822,6 +823,14 @@ def clean_config(config: dict) -> dict:
     )
     prune_inactive_strategy_subtrees(cleaned)
     prune_inactive_optimize_strategy_bounds(cleaned)
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy
+    # A reusable source export has complete common defaults and only declared
+    # side pins. Hydrating an expanded side tree would silently freeze future
+    # common edits, including equal-valued explicit pins.
+    cleaned["bot"] = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).source_view(include_defaults=True)
+    for side in ("long", "short"):
+        cleaned["bot"].setdefault(side, {})
+    cleaned["optimize"]["bounds"] = deepcopy(source.get("optimize", {}).get("bounds", {}))
     return sort_dict_keys(cleaned)
 
 

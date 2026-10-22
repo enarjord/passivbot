@@ -34,9 +34,9 @@ def compile_runtime_config(
                 seed_missing_groups=False,
             )
     from .hsl import normalize_hsl
-    from .schema import get_template_config
+    from .schema import get_expanded_config_prototype
 
-    normalize_hsl(result, get_template_config(), verbose=False)
+    normalize_hsl(result, get_expanded_config_prototype(), verbose=False)
     if normalized_runtime == "live":
         from .hsl import require_live_runtime_support
 

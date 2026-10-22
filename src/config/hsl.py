@@ -152,12 +152,15 @@ def generated_template(template, mode="coin"):
     """Generate an explicit v9 HSL configuration."""
     config = deepcopy(template)
     config["bot"]["portfolio"]["hsl"]["scope"] = mode
-    config = normalization_template(config, config)
     if mode == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
+        from .schema import get_expanded_config_prototype
+        prototype = get_expanded_config_prototype()
+        config["bot"]["portfolio"]["hsl"].update(deepcopy(prototype["bot"]["global"]["hsl"]))
         config["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = deepcopy(
-            template["optimize"]["bounds"]["long"]["hsl"]
+            prototype["optimize"]["bounds"]["long"]["hsl"]
         )
+        for side in ("long", "short"):
+            config["optimize"]["bounds"].get(side, {}).pop("hsl", None)
     return config
 
 

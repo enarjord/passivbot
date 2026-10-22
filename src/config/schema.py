@@ -3,7 +3,7 @@ from copy import deepcopy
 from .gpu import GPU_SCREENING_DEFAULTS
 from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
-from .strategy import get_all_strategy_defaults
+from .bot_defaults import get_common_bot_defaults
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
 CONFIG_SCHEMA_VERSION = "v9.0.0"
@@ -60,123 +60,10 @@ DEFAULT_APPROVED_COINS = [
 ]
 
 
-def _get_shared_bot_defaults():
-    return {
-        "long": {
-            "enabled": False,
-            "forager": {
-                "always_include": [],
-                "score_weights": {
-                    "unilateralness": 0.0,
-                    "ema_readiness": 0.21,
-                    "volatility": 0.61,
-                    "volume": 0.18,
-                },
-                "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 2274.0,
-                "volume_ema_span_minutes": 310.0,
-            },
-            "hsl": {
-                "memory_ema_span_minutes": 43200.0,
-                "cooldown_after_red_minutes": 2160.0,
-                "drawdown_ratio_ema_span_minutes": 720.0,
-                "enabled": False,
-                "scale_budget_with_excess_allowance": False,
-                "panic_close_order_type": "limit",
-                "drawdown_ratio_threshold": 0.15,
-            },
-            "entry_cooldown": {
-                "base_duration_minutes": 24.1,
-                "min_duration_minutes": 0.0,
-                "max_duration_minutes": None,
-                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-            },
-            "risk": {
-                "max_positions": 7.0,
-                "total_wallet_exposure_limit": 1.5,
-                "we_excess_allowance_fraction": 0.37,
-                "position_exposure_enforcer": {
-                    "enabled": False,
-                    'threshold_ratio': 1.0,
-                },
-                "total_exposure_enforcer": {
-                    "enabled": False,
-                    "policy": "reduce_overweight",
-                    'threshold_ratio': 1.0,
-                },
-            },
-            "unstuck": {
-                "close_fraction": 0.041,
-                "ema_distance_fraction": -0.0269,
-                "ema_gating_enabled": True,
-                "ema_span_0_minutes": 790.0,
-                "ema_span_1_minutes": 1080.0,
-                "enabled": True,
-                "loss_allowance_fraction": 0.0052,
-                "exposure_trigger_ratio": 0.466,
-            },
-        },
-        "short": {
-            "enabled": False,
-            "forager": {
-                "always_include": [],
-                "score_weights": {
-                    "unilateralness": 0.0,
-                    "ema_readiness": 0.0,
-                    "volatility": 0.0,
-                    "volume": 0.0,
-                },
-                "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 10.0,
-                "volume_ema_span_minutes": 60.0,
-            },
-            "hsl": {
-                "memory_ema_span_minutes": 43200.0,
-                "cooldown_after_red_minutes": 1.0,
-                "drawdown_ratio_ema_span_minutes": 1.0,
-                "enabled": False,
-                "scale_budget_with_excess_allowance": False,
-                "panic_close_order_type": "limit",
-                "drawdown_ratio_threshold": 0.01,
-            },
-            "entry_cooldown": {
-                "base_duration_minutes": 0.0,
-                "min_duration_minutes": 0.0,
-                "max_duration_minutes": None,
-                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-            },
-            "risk": {
-                "max_positions": 1.0,
-                "total_wallet_exposure_limit": 0.0,
-                "we_excess_allowance_fraction": 0.0,
-                "position_exposure_enforcer": {
-                    "enabled": True,
-                    'threshold_ratio': 0.8,
-                },
-                "total_exposure_enforcer": {
-                    "enabled": True,
-                    "policy": "reduce_overweight",
-                    'threshold_ratio': 0.8,
-                },
-            },
-            "unstuck": {
-                "close_fraction": 0.01,
-                "ema_distance_fraction": -0.2,
-                "ema_gating_enabled": True,
-                "ema_span_0_minutes": 60.0,
-                "ema_span_1_minutes": 60.0,
-                "enabled": True,
-                "loss_allowance_fraction": 0.005,
-                "exposure_trigger_ratio": 0.3,
-            },
-        },
-    }
-
-
 _template_cache = None
 
 
-def get_template_config():
+def get_expanded_config_prototype():
     """Return an owned template; only its process-constant construction is cached.
 
     Retain metadata objects so cache invalidation/reload cannot reuse their ids.
@@ -191,7 +78,6 @@ def get_template_config():
 
 
 def _build_template_config():
-    strategy_defaults = get_all_strategy_defaults()
     return deepcopy(
         {
             "config_version": CONFIG_SCHEMA_VERSION,
@@ -374,31 +260,9 @@ def _build_template_config():
                     },
                     "unstuck": {"memory_ema_span_minutes": 43200.0},
                 },
-                "global": {
-                    "enabled": False,
-                    "universe": {"approved_coins": list(DEFAULT_APPROVED_COINS)},
-                    "forager": {"score_hysteresis_margin": 0.02},
-                },
-                "long": {
-                    **deepcopy(_get_shared_bot_defaults()["long"]),
-                    "strategy": strategy_defaults["long"],
-                    "universe": {
-                        "filter_by_min_effective_cost": True,
-                        "minimum_coin_age_days": 60.0,
-                        "approved_coins": None,
-                        "ignored_coins": [],
-                    },
-                },
-                "short": {
-                    **deepcopy(_get_shared_bot_defaults()["short"]),
-                    "strategy": strategy_defaults["short"],
-                    "universe": {
-                        "filter_by_min_effective_cost": True,
-                        "minimum_coin_age_days": 60.0,
-                        "approved_coins": None,
-                        "ignored_coins": [],
-                    },
-                },
+                "global": get_common_bot_defaults(),
+                "long": get_common_bot_defaults(),
+                "short": get_common_bot_defaults(),
             },
             "coin_overrides": {},
             "live": {
@@ -568,3 +432,18 @@ def _build_template_config():
             },
         }
     )
+
+
+def get_template_config():
+    """Canonical authored defaults: one common policy and sparse side pins.
+
+    Expanded runtime shapes are a separate internal prototype. In particular,
+    default false activation is not an explicit side pin in this source view.
+    An omitted optimizer bound fixes its effective value rather than opening a
+    recommended search range.
+    """
+    result = get_expanded_config_prototype()
+    result["bot"]["long"] = {}
+    result["bot"]["short"] = {}
+    result["optimize"]["bounds"] = {}
+    return result

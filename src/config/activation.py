@@ -44,6 +44,10 @@ def _authored_flag(bot, owner):
 
 
 def get_activation_source(config):
+    from .bot_inheritance import reconciled_bot_policy
+    policy = reconciled_bot_policy(config)
+    if policy is not None:
+        return get_activation_source({"bot": policy.source_view()})
     bot = config.get("bot", {})
     if not isinstance(bot, dict):
         raise TypeError("bot must be a mapping")
@@ -63,6 +67,9 @@ def get_activation_source(config):
 
 def activation_source_view(config):
     """Project actual declarations, keeping omission distinct from explicit false."""
+    from .bot_inheritance import get_bot_policy, bot_policy_source_view
+    if get_bot_policy(config) is not None:
+        return bot_policy_source_view(config)
     source = get_activation_source(config)
     result = deepcopy(dict(config))
     bot = dict(result.get("bot", {}))
@@ -80,6 +87,12 @@ def activation_source_view(config):
 
 
 def resolve_side_activation(config, source=None, *, tracker=None):
+    from .bot_inheritance import get_bot_policy, install_bot_policy
+    policy = get_bot_policy(config)
+    if policy is not None:
+        # The full policy is the single source authority after inheritance.
+        # Its installed projection already contains the resolved strict pair.
+        return config
     source = get_activation_source(config) if source is None else source
     bot = dict(config.setdefault("bot", {}))
     for owner in ("global", *POSITION_SIDES):
@@ -98,6 +111,9 @@ def apply_activation_patch(config, overrides):
     Callers supply their validated canonical selectors. Parent replacement and
     equal-value false declarations carry the same authority as leaf edits.
     """
+    from .bot_inheritance import apply_bot_config_patch
+    if apply_bot_config_patch(config, overrides):
+        return
     relevant = []
     for selector, value in overrides.items():
         if isinstance(selector, str):
