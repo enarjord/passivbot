@@ -10,10 +10,12 @@ from config import prepare_config
 from config.authoring import compact_config, resolved_config
 from config.field_registry import get_field_registry
 from config.hsl import generated_template
+from config.migrations.released_v8 import get_released_v8_defaults
 from config.json_schema import generate_schema
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_optimizer_key_path
 from config.schema import get_template_config
+from config.strategy_paths import project_native_strategy_side
 from released_v8_fixtures import released_v8_policy
 from tools.clean_config import cleanup_config
 from tools.migrate_config_v9 import migrate
@@ -144,3 +146,26 @@ def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported
         assert any(path in str(row["new"]) for row in migration.changes)
     assert source == original
     assert prepare_config(migration.config, verbose=False, live_only=True)
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
+def test_released_missing_bounds_use_portfolio_strategy_and_scope_without_changing_defaults(kind, scope):
+    source = get_released_v8_defaults(strategy_kind=kind)
+    source["backtest"]["visible_metrics"] = [metric for metric in source["backtest"]["visible_metrics"]
+                                             if not metric.endswith("_w")]
+    source["optimize"]["scoring"] = [row for row in source["optimize"]["scoring"]
+                                      if not row["metric"].endswith("_w")]
+    source["optimize"]["bounds"] = {}
+    source["live"]["hsl_signal_mode"] = {"portfolio": "unified", "position_side": "pside"}.get(scope, scope)
+    if scope == "portfolio":
+        source["bot"]["hsl"] = deepcopy(source["bot"]["long"]["hsl"])
+    original = deepcopy(source)
+    output = migrate(source, memory_span_minutes=123.5).config
+    defaults = get_released_v8_defaults(strategy_kind=kind)
+    for side in ("long", "short"):
+        expected = project_native_strategy_side(kind, defaults["optimize"]["bounds"][side]["strategy"][kind])
+        assert output["optimize"]["bounds"][side]["strategy"] == {kind: expected}
+        assert ("hsl" in output["optimize"]["bounds"][side]) == (scope != "portfolio")
+    assert output["bot"]["portfolio"]["hsl"]["scope"] == scope
+    assert source == original

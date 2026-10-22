@@ -62,7 +62,7 @@ def test_public_bounds_keep_stable_optimizer_ids_and_roundtrip_through_the_write
     config = prepare_config(generated_template(get_template_config(), scope), verbose=False)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
     key = "hsl_red_threshold" if scope == "portfolio" else "long_hsl_red_threshold"
-    owner = "global" if scope == "portfolio" else "long"
+    owner = "portfolio" if scope == "portfolio" else "long"
     assert key in flat
     assert resolve_optimizer_key_path(config, key) == ("bot", owner, "hsl", "drawdown_ratio_threshold")
     assert resolve_optimizer_key_path(config, "long_unstuck_ema_dist") == (

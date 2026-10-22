@@ -103,12 +103,13 @@ since the latest release tag; these features may already be available when insta
   optimizer-bound paths and explicit released-v8 conversion, preserving inline coin-policy
   precedence over referenced files. Native trading values are unchanged.
 - Move shared strategy, universe, execution, Forager selection and warmup policy into
-  `bot.global` and directional `bot.<side>` scopes. Keep side-specific coin-list sources
+  `bot.portfolio`, `bot.global` and directional `bot.<side>` scopes. Keep side-specific coin-list sources
   reloadable, add `forager.always_include`, and preserve nullable simulation minimum-cost
   inheritance. Released-v8 conversion preserves forced selections through scenario and fixed
   mode replacements. Update canonical CLI paths, cleanup/preflight tools and public examples.
 
-- Organize shared bot policy under `bot.global`, alongside `bot.long` and `bot.short`,
+- Organize account-wide bot policy under `bot.portfolio`, with shared directional defaults under
+  `bot.global` alongside `bot.long` and `bot.short`,
   and mirror bot parameter paths exactly in optimizer bounds, including nested forager
   score weights. Released v8 migration emits this layout; obsolete development-v9
   paths are rejected.
@@ -193,7 +194,7 @@ since the latest release tag; these features may already be available when insta
 
 - Adopt the final canonical v9 config with independent HSL, unstuck and loss-gate slow spans;
   HSL ratio smoothing remains separate. Keep local unstuck controls under each side and put
-  global risk policy under `bot.global`. Share ordered fills and risk arithmetic while retaining
+  portfolio risk policy under `bot.portfolio`. Share ordered fills and risk arithmetic while retaining
   separate enabled accumulators and recording each fill once in the economic ledger. Gate-only
   configurations retain their own realized memory. Preserve raw accounting versus snapped sizing,
   full loss/fee debits, profit paydown, batch reservations, final sizing and panic exemptions.

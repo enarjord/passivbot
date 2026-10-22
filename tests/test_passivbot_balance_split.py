@@ -78,7 +78,7 @@ def _unit_config(patch):
 def _gate_history_config(patch, *, memory_span_minutes=None):
     """Exercise explicit independent memories with auto-unstuck disabled."""
     patch = deepcopy(patch)
-    policy = patch.setdefault("bot", {}).setdefault("global", {})
+    policy = patch.setdefault("bot", {}).setdefault("portfolio", {})
     policy.setdefault("loss_gate", {}).setdefault("max_drawdown_ratio", 0.5)
     if memory_span_minutes is not None:
         policy["loss_gate"]["memory_ema_span_minutes"] = memory_span_minutes
