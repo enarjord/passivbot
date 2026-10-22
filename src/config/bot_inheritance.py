@@ -458,7 +458,12 @@ def reconciled_bot_policy(config: Mapping) -> BotPolicy | None:
                         or type(current.source_present) is not bool
                         or current.source_present != frozen.source_present):
                     raise ValueError("prepared membership edits must pass through the universe source owner")
-            elif current != previous:
+            elif current != previous or (
+                field.suffix in SOURCE_FIELDS and type(_get(expected, path)) is ResolvedCoinList
+            ):
+                # Replacing a trusted membership wrapper with a plain source
+                # is an explicit declaration even when the members are equal.
+                # Mutating the wrapper itself remains forbidden above.
                 patches[".".join(("bot", *path))] = deepcopy(current)
     for spec in policy.catalog.portfolio_fields:
         path = spec.path[1:]
@@ -668,7 +673,8 @@ def apply_bot_config_patch(config, overrides, *, channel="authored", policy_sour
     """
     if policy_source is not None and type(policy_source) is not BotPolicy:
         raise TypeError("patch source must be an exact BotPolicy")
-    policy = get_bot_policy(config) if policy_source is None else policy_source
+    policy = (policy_source if policy_source is not None else
+              reconciled_bot_policy(config) if channel == "authored" else get_bot_policy(config))
     if policy is None:
         return False
     selected = {key: value for key, value in overrides.items()

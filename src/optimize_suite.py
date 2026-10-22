@@ -21,6 +21,7 @@ from optimization.warmup import (
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
     validate_optimizer_dataset_intervals,
+    refresh_optimizer_source_bindings,
 )
 from shared_arrays import attach_shared_array
 from suite_runner import (
@@ -116,6 +117,7 @@ async def prepare_suite_contexts(
         verbose=False,
         prefer_backtest_coin_source_keys=True,
     )
+    refresh_optimizer_source_bindings(config)
     validate_suite_side_coin_lists(config, exchanges_list)
 
     base_start = require_config_value(config, "backtest.start_date")
@@ -172,6 +174,7 @@ async def prepare_suite_contexts(
     materialize_side_universe_sources(
         master_config, "ignored_coins", {side: list(master_ignored_list) for side in ("long", "short")}
     )
+    refresh_optimizer_source_bindings(master_config)
 
     candle_interval = int(base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     datasets = await prepare_master_datasets(

@@ -235,6 +235,7 @@ from optimization.warmup import (
     stamp_warmup_metadata,
     validate_optimizer_effective_configs,
     validate_optimizer_dataset_intervals,
+    refresh_optimizer_source_bindings,
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
@@ -4016,6 +4017,7 @@ async def main():
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
+    refresh_optimizer_source_bindings(config)
     if config["backtest"].get("organillo_csv") is not None:
         from organillo import freeze_config
         freeze_config(config)
@@ -4176,6 +4178,7 @@ async def main():
                     candle_coins_dict[exchange] = tuple(source_coins)
         if not suite_enabled:
             _propagate_prepared_optimizer_universe(config, data_config)
+        refresh_optimizer_source_bindings(config)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
             hlcvs_specs=hlcvs_specs,

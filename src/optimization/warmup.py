@@ -610,6 +610,15 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
                     )
 
 
+def refresh_optimizer_source_bindings(config: dict) -> None:
+    """Bind acquired membership facts at the owning preparation boundary."""
+    from config.bot_inheritance import get_bot_policy
+    from config.inherited_bounds import get_bound_plan, prepare_bound_plan
+
+    if get_bot_policy(config) is not None and get_bound_plan(config) is not None:
+        prepare_bound_plan(config)
+
+
 def build_optimizer_data_config(config: dict) -> dict:
     """Return a copy whose side gates cover every optimizer-reachable side."""
     boundary_configs = _build_optimizer_boundary_configs(config)
@@ -621,6 +630,7 @@ def build_optimizer_data_config(config: dict) -> dict:
         data_config, config.get("optimize", {}).get("fixed_runtime_overrides", {}),
         preserve_prepared_universe=True,
     )
+    gate_values = {}
     for pside in ("long", "short"):
         source = next(
             (
@@ -641,7 +651,18 @@ def build_optimizer_data_config(config: dict) -> dict:
                 raise KeyError(
                     f"optimizer data side gate is missing from boundary config: {'.'.join(path)}"
                 )
-            _set_path(data_config, path, deepcopy(value))
+            gate_values[".".join(path)] = deepcopy(value)
+    from config.bot_inheritance import get_bot_policy, apply_bot_policy_patch, install_bot_policy
+    policy = get_bot_policy(data_config)
+    if policy is not None:
+        # These sizing values come from already-finalized reachable corners,
+        # including runtime pins outside a sampled range. The policy owner
+        # fans a shared coordinate into its inheriting sides without creating
+        # new side declarations or changing the original search domains.
+        install_bot_policy(data_config, apply_bot_policy_patch(policy, gate_values, channel="gene"))
+    else:
+        for path, value in gate_values.items():
+            _set_path(data_config, path.split("."), value)
     return data_config
 
 

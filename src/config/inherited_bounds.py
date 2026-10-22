@@ -50,6 +50,18 @@ def _without_empty_objects(node):
     return node
 
 
+def _signature_fixed_value(policy, effective, path):
+    value = _get(effective, path[1:])
+    field = (next((spec for spec in policy.catalog.portfolio_fields if spec.path == path), None)
+             if path[1] == "portfolio" else policy.catalog.find(path[2:]))
+    # FLOAT fields accept integral authored literals, but their effective value
+    # is always a float. Keep preparation and finalized-candidate signatures
+    # identical without changing integer, null, boolean or source authority.
+    if field is not None and FieldType.FLOAT in field.types and type(value) in (int, float):
+        return float(value)
+    return value
+
+
 def _source_signature(policy, bindings):
     source = policy.source_view(include_defaults=True)
     effective = replace(policy, _derived=()).effective_view()
@@ -62,7 +74,7 @@ def _source_signature(policy, bindings):
             for entry in sorted(policy._prepared, key=lambda entry: entry.path)
         ],
         "omitted_fixed_values": [
-            (binding.authoring_path, _get(effective, binding.authoring_path[1:]))
+            (binding.authoring_path, _signature_fixed_value(policy, effective, binding.authoring_path))
             for binding in bindings if binding.source.startswith("omitted_fixed_")
             or binding.source == "fixed_selector"
         ],

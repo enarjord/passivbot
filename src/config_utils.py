@@ -2035,9 +2035,16 @@ def classify_config_argument(
 def project_template_config_for_cli(config: dict, command: Optional[str]) -> dict:
     result = deepcopy(config)
     omitted = object()
+    fixed_bot_fields = set()
+    if command == "optimize":
+        from config.field_registry import get_field_registry
+        fixed_bot_fields = {".".join(field.path) for field in get_field_registry()
+                            if field.path[:1] == ("bot",) and not field.optimizable}
 
     def fixed_policy(node, prefix):
-        if field_cli_exposed_on(prefix, command):
+        # New inherited fixed policy remains configurable; numeric genes keep
+        # their bounds owner. Build this registry projection once per command.
+        if prefix in fixed_bot_fields or field_cli_exposed_on(prefix, command):
             return deepcopy(node)
         if isinstance(node, dict):
             retained = {
@@ -2179,7 +2186,9 @@ def add_config_arguments(
                 node = node.setdefault(part, {})
             # Discovery alone never authors a range; parsed flags default None.
             node.setdefault(field.path[-1], [])
-        config = discovery  # CLI discovery never creates authored side pins.
+        # Expansion is discovery only; apply command ownership afterwards so
+        # optimize exposes numeric genes through bounds, not runtime bot flags.
+        config = project_template_config_for_cli(discovery, command)
     reserved_acronyms, reserved_keys = add_reserved_arguments(
         parser, command=command, help_all=help_all, group_map=group_map
     )
@@ -2504,8 +2513,9 @@ def update_config_with_args(
         if key not in supplied:
             continue
         value = supplied[key]
-        sources = value.values() if isinstance(value, dict) else (value,)
-        if any(null_source(item) for item in sources):
+        # A decoded directional object names explicit side sources. Its null
+        # approvals inherit; only an undirected/common null has no parent.
+        if not isinstance(value, dict) and null_source(value):
             raise ValueError(
                 "null inheritance requires an explicit side approved_coins flag "
                 "(--bot.long.universe.approved_coins or --bot.short.universe.approved_coins); "
