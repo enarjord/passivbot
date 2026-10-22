@@ -314,7 +314,9 @@ def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
     from config.forager_hysteresis import (
         forager_score_hysteresis, validate_forager_score_hysteresis_margin,
     )
-    from config.hsl import _mode, normalize_block, validate_portfolio_policy_scope
+    from config.hsl import (
+        _mode, normalize_block, validate_budget_scaling_scope, validate_portfolio_policy_scope,
+    )
     from config.schema import get_template_config
 
     # The portfolio is not part of the directional catalog. Keep its existing
@@ -330,12 +332,14 @@ def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
     mode = _mode(effective)
     effective["bot"]["portfolio"]["hsl"]["scope"] = mode
     validate_portfolio_policy_scope(effective["bot"]["portfolio"]["hsl"], mode)
+    for side in SIDES:
+        block = effective["bot"][side]["hsl"]
+        normalize_block(block, {}, f"bot.{side}.hsl", active=mode != "portfolio", verbose=False)
+        validate_budget_scaling_scope(block, mode, f"bot.{side}.hsl")
     if mode == "portfolio":
-        normalize_block(effective["bot"]["portfolio"]["hsl"], {}, "bot.portfolio.hsl",
-                        portfolio=True, verbose=False)
-    else:
-        for side in SIDES:
-            normalize_block(effective["bot"][side]["hsl"], {}, f"bot.{side}.hsl", verbose=False)
+        block = effective["bot"]["portfolio"]["hsl"]
+        normalize_block(block, {}, "bot.portfolio.hsl", portfolio=True, verbose=False)
+        validate_budget_scaling_scope(block, mode, "bot.portfolio.hsl")
     return effective
 
 
