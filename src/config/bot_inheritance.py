@@ -342,11 +342,18 @@ def resolve_bot_policy(source: Mapping, catalog: SideFieldCatalog) -> BotPolicy:
 class PreparedBotPolicy(dict):
     """Runtime bot view carrying one non-JSON, typed source authority."""
 
-    def __init__(self, values: Mapping, policy: BotPolicy):
+    def __init__(self, values: Mapping, policy: BotPolicy, *, runtime_aliases=frozenset()):
         if type(policy) is not BotPolicy:
             raise TypeError("a typed BotPolicy is required")
         super().__init__(deepcopy(values))
         self._bot_policy = policy
+        if (type(runtime_aliases) is not frozenset or any(
+            type(path) is not tuple or len(path) != 2 or path[0] not in SIDES
+            or not isinstance(path[1], str) or _get(values, path) is ABSENT
+            for path in runtime_aliases
+        )):
+            raise TypeError("compiled aliases require exact owned directional paths")
+        self._runtime_aliases = runtime_aliases
         # A detached value projection detects direct changed-value edits. It
         # never supplies source presence or source membership authority.
         self._effective_baseline = _freeze(values)
@@ -362,12 +369,27 @@ def get_bot_policy(config: Mapping) -> BotPolicy | None:
     return policy
 
 
-def install_bot_policy(config: dict, policy: BotPolicy, *, effective_bot=None) -> None:
+def install_bot_policy(config: dict, policy: BotPolicy, *, effective_bot=None,
+                       runtime_aliases=frozenset()) -> None:
     """Install a defensive runtime projection after its owning preparation."""
     if type(policy) is not BotPolicy:
         raise TypeError("a typed BotPolicy is required")
+    values = deepcopy(policy.effective_view() if effective_bot is None else effective_bot)
+    # The catalog retains all registered engines; execution exposes only the
+    # selected engine. Inactive authored declarations remain in policy._source.
+    active = values.get("portfolio", {}).get("strategy_kind")
+    active = active.strip().lower() if isinstance(active, str) else None
+    known = {field.suffix[1] for field in policy.catalog.fields
+             if field.suffix[:1] == ("strategy",)}
+    if active in known:
+        for side in SIDES:
+            strategies = values.get(side, {}).get("strategy", {})
+            for kind in tuple(strategies):
+                if kind != active:
+                    strategies.pop(kind)
     config["bot"] = PreparedBotPolicy(
-        policy.effective_view() if effective_bot is None else effective_bot, policy,
+        values, policy,
+        runtime_aliases=runtime_aliases,
     )
 
 
@@ -401,7 +423,16 @@ def reconciled_bot_policy(config: Mapping) -> BotPolicy | None:
     expected = policy.effective_view()
     patches = {}
     for scope in ("global", *SIDES):
-        policy.catalog.validate_tree(bot.get(scope, {}), ("bot", scope))
+        registered_view = dict(bot.get(scope, {}))
+        for alias in bot._runtime_aliases:
+            if alias[0] != scope:
+                continue
+            current = _get(bot, alias)
+            previous = _get(baseline, alias)
+            if current != previous or type(current) is not type(previous):
+                raise ValueError("compiled native aliases cannot grant authored policy")
+            registered_view.pop(alias[1])
+        policy.catalog.validate_tree(registered_view, ("bot", scope))
         for field in policy.catalog.fields:
             path = (scope, *field.suffix)
             current = _get(bot, path)
@@ -617,20 +648,20 @@ def with_normalized_bot_values(policy, effective_bot):
     return replace(policy, _normalized=tuple(entries))
 
 
-def apply_bot_config_patch(config, overrides, *, channel="authored"):
+def apply_bot_config_patch(config, overrides, *, channel="authored", policy_source=None, bounds_source=None):
     """Record canonical declarations after their existing validated patch owner.
 
     Non-bot selectors keep their owning behavior. This facade never interprets
     serialized metadata and never resolves source files. Equal declarations and
     parent replacements retain presence through the same typed source API.
     """
-    policy = get_bot_policy(config)
+    if policy_source is not None and type(policy_source) is not BotPolicy:
+        raise TypeError("patch source must be an exact BotPolicy")
+    policy = get_bot_policy(config) if policy_source is None else policy_source
     if policy is None:
         return False
     selected = {key: value for key, value in overrides.items()
                 if isinstance(key, str) and (key == "bot" or key.startswith("bot."))}
-    if not selected:
-        return True
     for selector, value in selected.items():
         path = tuple(selector.split("."))
         if channel == "authored" and (path == ("bot",) or path[:2] == ("bot", "portfolio")
@@ -645,5 +676,11 @@ def apply_bot_config_patch(config, overrides, *, channel="authored"):
                 entry for entry in policy._prepared if not _intersects(path, entry.path)))
         else:
             policy = apply_bot_policy_patch(policy, {selector: value}, channel=channel)
-    install_bot_policy(config, policy)
+    if selected:
+        install_bot_policy(config, policy)
+    if any(key == "optimize" or key == "optimize.bounds" or key.startswith("optimize.bounds.")
+           for key in overrides):
+        from .inherited_bounds import apply_inherited_bounds_patch
+        bound_options = {} if bounds_source is None else {"source_bounds": bounds_source}
+        apply_inherited_bounds_patch(config, overrides, **bound_options)
     return True

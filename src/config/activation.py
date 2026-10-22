@@ -105,14 +105,14 @@ def resolve_side_activation(config, source=None, *, tracker=None):
     return config
 
 
-def apply_activation_patch(config, overrides):
+def apply_activation_patch(config, overrides, *, policy_source=None, bounds_source=None):
     """Retain activation declarations after the real fixed/scenario patch owner.
 
     Callers supply their validated canonical selectors. Parent replacement and
     equal-value false declarations carry the same authority as leaf edits.
     """
     from .bot_inheritance import apply_bot_config_patch
-    if apply_bot_config_patch(config, overrides):
+    if apply_bot_config_patch(config, overrides, policy_source=policy_source, bounds_source=bounds_source):
         return
     relevant = []
     for selector, value in overrides.items():

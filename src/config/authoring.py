@@ -60,11 +60,14 @@ def _set(mapping, path, value):
 
 def _patch(config, overrides):
     result = deepcopy(config)
+    from .bot_inheritance import get_bot_policy
+    policy_source = get_bot_policy(result)
+    bounds_source = result.get("optimize", {}).get("bounds")
     normalized = normalize_scenario_overrides(overrides)
     for selector, value in normalized.items():
         _set(result, resolve_dotted_config_path(result, selector), value)
     from .activation import apply_activation_patch
-    apply_activation_patch(result, normalized)
+    apply_activation_patch(result, normalized, policy_source=policy_source, bounds_source=bounds_source)
     return result
 
 
