@@ -27,6 +27,7 @@ async def test_live_unknown_inception_retries_then_admits_without_losing_known_f
     bot = object.__new__(live.Passivbot)
     coin, symbol, known = "AAA", "AAA/USDT:USDT", "BBB/USDT:USDT"
     bot.config = get_template_config()
+    bot.config["bot"]["long"]["enabled"] = True
     bot.exchange = exchange
     bot.first_timestamps = {coin: unknown, symbol: unknown, known: BASE}
     bot.approved_coins_minus_ignored_coins = {"long": {coin, known}, "short": set()}
@@ -59,6 +60,7 @@ async def test_live_resolved_alias_repairs_unknown_symbol_without_refetch(monkey
     coin, symbol = "AAA", "AAA/USDT:USDT"
     bot = object.__new__(live.Passivbot)
     bot.config = get_template_config()
+    bot.config["bot"]["long"]["enabled"] = True
     bot.exchange = "binance"
     bot.first_timestamps = {coin: BASE, symbol: unknown}
     bot.approved_coins_minus_ignored_coins = {"long": {coin}, "short": set()}
@@ -80,6 +82,7 @@ def _cache_config(tmp_path, ages):
         start_date="2024-01-01", end_date="2024-01-02", exchanges=["binance"],
     )
     for side, age in zip(("long", "short"), ages):
+        config["bot"][side]["enabled"] = True
         config["bot"][side]["universe"].update(
             minimum_coin_age_days=age, approved_coins=["AAA"],
         )

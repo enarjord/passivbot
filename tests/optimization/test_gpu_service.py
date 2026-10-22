@@ -2367,10 +2367,12 @@ def test_gpu_side_enablement_uses_config_risk_not_per_coin_sentinel():
     config = {
         "bot": {
             "long": {
+                "enabled": True,
                 "risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 1},
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
+                "enabled": True,
                 "risk": {"total_wallet_exposure_limit": 0.0, "max_positions": 0},
                 "universe": {"approved_coins": ["BTC"]},
             },

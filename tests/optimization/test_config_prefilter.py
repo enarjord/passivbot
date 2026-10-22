@@ -32,6 +32,7 @@ def config():
     result["backtest"]["coins"] = {"binance": ["TEST"]}
     set_side_universe_sources(result, 'approved_coins', {"long": ["TEST"], "short": []})
     side = result["bot"]["long"]
+    side["enabled"] = True
     side["risk"].update(
         max_positions=1, total_wallet_exposure_limit=1.0, we_excess_allowance_fraction=0.0
     )

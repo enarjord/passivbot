@@ -67,6 +67,7 @@ def _base_config(**overrides):
         },
         "bot": {
             "long": {
+                "enabled": True,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "wallet_exposure_limit": 1.0,
@@ -78,6 +79,7 @@ def _base_config(**overrides):
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
             "short": {
+                "enabled": False,
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
                 "wallet_exposure_limit": 0.0,
@@ -204,6 +206,7 @@ class TestCacheHashIndependence:
     def test_same_coin_union_across_sides_has_same_hash(self):
         cfg_long = _base_config()
         cfg_short = copy.deepcopy(cfg_long)
+        cfg_short["bot"]["short"]["enabled"] = True
         cfg_short["bot"]["long"]["total_wallet_exposure_limit"] = 0.0
         cfg_short["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
         cfg_short["bot"]["short"]["n_positions"] = 1

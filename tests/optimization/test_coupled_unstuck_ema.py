@@ -19,6 +19,8 @@ from optimizer_overrides import apply_coupled_unstuck_ema_spans
 
 def config_for(kind="trailing_martingale"):
     config = get_template_config()
+    for side in ("long", "short"):
+        config["bot"][side]["enabled"] = True
     config['bot']["portfolio"]['strategy_kind'] = kind
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     config = parse_overrides(prepare_config(config, verbose=False), verbose=False)

@@ -12,6 +12,8 @@ from config_utils import get_template_config
 
 def _base_config() -> dict:
     cfg = get_template_config()
+    for side in ("long", "short"):
+        cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["exchanges"] = ["binance"]
     cfg["backtest"]["start_date"] = "2021-01-01"
     cfg["backtest"]["end_date"] = "2021-01-02"
