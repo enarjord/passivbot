@@ -18,6 +18,10 @@ def _required_side_value(bot_cfg: dict, pside: str, key: str):
 
 
 def backtest_side_enabled(config: dict, pside: str) -> bool:
+    from config.activation import side_enabled
+
+    if not side_enabled(config, pside):
+        return False
     bot_cfg = require_config_value(config, f"bot.{pside}")
     total_wallet_exposure_limit = float(
         _required_side_value(bot_cfg, pside, "total_wallet_exposure_limit")

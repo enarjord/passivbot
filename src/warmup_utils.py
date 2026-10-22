@@ -279,7 +279,7 @@ def _rms_policy_keys(config, eligible, overrides):
     return policies
 
 
-def _rms_param_sets(config, bounds, *, param_sets=None):
+def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=False):
     """Size RMS from eligible coin-side policies, retaining unresolved defaults."""
     from backtest_universe import normalize_backtest_coin
     from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
@@ -321,6 +321,11 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
         )
     for coin, long, short, *_ in (param_sets if param_sets is not None else _iter_param_sets(config)):
         for side, params in (("long", long), ("short", short)):
+            from config.activation import optimizer_side_may_activate, side_enabled
+            if not side_enabled(config, side) and (
+                for_trade_activation or not optimizer_side_may_activate(config, side)
+            ):
+                continue
             if coin not in policies_by_side[side]:
                 continue
             patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
@@ -495,7 +500,8 @@ def compute_backtest_warmup_minutes(
                     for rms_config, rms_bounds in (
                         [(config, {})] if for_trade_activation else _rms_history_configs(config, bounds)
                     )
-                    for _, side, params, effective_bounds, ranking_possible in _rms_param_sets(rms_config, rms_bounds)
+                    for _, side, params, effective_bounds, ranking_possible in _rms_param_sets(
+                        rms_config, rms_bounds, for_trade_activation=for_trade_activation)
                 ),
                 default=0,
             ),
@@ -515,7 +521,8 @@ def compute_per_coin_warmup_minutes(
     param_sets = list(_iter_param_sets(config))
     rms_pairs = {
         (coin, side): ranking_possible
-        for coin, side, _, _, ranking_possible in _rms_param_sets(config, {}, param_sets=param_sets)
+        for coin, side, _, _, ranking_possible in _rms_param_sets(
+            config, {}, param_sets=param_sets, for_trade_activation=for_trade_activation)
     } if include_rms else {}
     minute_fields = [
         "ema_span_0",

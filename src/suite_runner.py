@@ -1318,6 +1318,8 @@ def apply_scenario_overrides(config, overrides, tracker=None):
             if not isinstance(dotted_path, str):
                 raise ValueError("Scenario override keys must be dotted strings")
             _apply_override(config, dotted_path, deepcopy(value), tracker)
+        from config.activation import apply_activation_patch
+        apply_activation_patch(config, overrides)
 
     from config.hsl import normalize_hsl
     from config.schema import get_template_config

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from config.policy import validate_minimum_cost_filters
+from config.activation import validate_side_activation
 from functools import lru_cache
 import time
 import logging
@@ -315,6 +316,7 @@ def _scale_directional_minute_parameters(
     ranking_coin_counts: tuple[int, ...] | None = None,
     cooldown_coin_overrides: tuple[np.ndarray, ...] | None = None,
     dynamic_wel_by_tradability: bool = True,
+    side_activation: tuple[bool, ...] | None = None,
 ) -> np.ndarray:
     """Convert minute-denominated directional inputs to candle periods.
 
@@ -347,6 +349,9 @@ def _scale_directional_minute_parameters(
     if "forager_volatility_ema_span_1m" in keys:
         minute_keys.add("forager_volatility_ema_span_1m")
     side_width = len(keys)
+    if side_activation is not None and (len(side_activation) != sides
+            or any(type(flag) is not bool for flag in side_activation)):
+        raise TypeError("GPU scaling requires one activation boolean per side")
     for side_index in range(sides):
         offset = side_index * side_width
         span_col = offset + keys.index("unilateralness_ema_span_1m")
@@ -402,6 +407,8 @@ def _scale_directional_minute_parameters(
                     )
                     adverse_demand |= (effective_adverse > 0.0) & ~effective_constant
         rms = adverse_demand | ranking
+        if side_activation is not None:
+            rms &= side_activation[side_index]
         rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
         if np.any(rms) and interval_minutes != 1.0:
             raise ValueError("GPU RMS directionality requires one-minute candles")
@@ -1309,6 +1316,7 @@ class _MulticoinReplayRunner:
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
+        side_activation: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -1345,6 +1353,7 @@ class _MulticoinReplayRunner:
                 f"MPS multicoin runner side must be long or short, got {side!r}"
             )
         self.side = side
+        self.side_activation = validate_side_activation(side_activation)
         if factual_hsl is not True:
             raise ValueError("Retired GPU replay layout; current shared-account replay requires factual_hsl=True")
         self.native_factual_hsl = True
@@ -1581,6 +1590,7 @@ class _MulticoinReplayRunner:
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
                 float(self.loss_gate_enabled),  # Original float64 gate activation.
+                float(self.side_activation[side]),  # Directional activation ABI 1.
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -2146,6 +2156,8 @@ class _MulticoinReplayRunner:
             first_observed=self._hourly_first_observed, coin_ranges=self._hourly_coin_ranges,
             requested_start=self.requested_start_idx, warmup_bars=self.run_config.warmup_bars,
             available=self.n, end_steps=end_steps,
+            side_activation=tuple(self.side_activation[side] for side in
+                                  (("long", "short") if self.replay_sides == 2 else (self.side,))),
         )
         # Host feature proofs consume public policy columns; the shader matrix
         # additionally carries private decimal operands after each side block.
@@ -2353,6 +2365,8 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
                 ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
                 cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
                 dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
+                side_activation=tuple(self.side_activation[side] for side in
+                                      (("long", "short") if self.replay_sides == 2 else (self.side,))),
             ),
             dtype=np.float32,
         )
@@ -2483,6 +2497,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
+        side_activation: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -2517,6 +2532,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
+            side_activation=side_activation,
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -2603,6 +2619,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 0.0,  # Internal factual evaluation control, independently of capture.
                 float(self.loss_gate_enabled),  # Original float64 gate activation.
                 float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
+                float(self.side_activation["long"]),  # Fused activation ABI 1.
+                float(self.side_activation["short"]),
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -2625,6 +2643,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
                 cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
                 dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
+                side_activation=tuple(self.side_activation[side] for side in
+                                      (("long", "short") if self.replay_sides == 2 else (self.side,))),
             ),
             dtype=np.float32,
         )
@@ -2738,6 +2758,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
+        side_activation: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -2772,6 +2793,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
+            side_activation=side_activation,
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -2812,6 +2834,8 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
             cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
             dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
+                side_activation=tuple(self.side_activation[side] for side in
+                                      (("long", "short") if self.replay_sides == 2 else (self.side,))),
         )
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
@@ -2927,6 +2951,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
+        side_activation: dict[str, bool],
         market_order_slippage_pct: float = 0.0,
         market_orders_allowed: bool = False,
         market_order_near_touch_threshold: float = 0.001,
@@ -2961,6 +2986,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
+            side_activation=side_activation,
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -3042,6 +3068,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 0.0,  # Internal factual evaluation control, independently of capture.
                 float(self.loss_gate_enabled),  # Original float64 gate activation.
                 float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
+                float(self.side_activation["long"]),  # Fused activation ABI 1.
+                float(self.side_activation["short"]),
             ],
             dtype=torch.float32,
             device=gpu_device(),
@@ -3063,6 +3091,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             ranking_coin_counts=getattr(self, "rms_ranking_coin_counts", None),
             cooldown_coin_overrides=getattr(self, "rms_cooldown_coin_overrides", None),
             dynamic_wel_by_tradability=self.dynamic_wel_by_tradability,
+                side_activation=tuple(self.side_activation[side] for side in
+                                      (("long", "short") if self.replay_sides == 2 else (self.side,))),
         )
         return _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=2

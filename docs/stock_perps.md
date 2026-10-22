@@ -244,6 +244,7 @@ Minimal test config for stock perps:
             "hedge_mode": false
         },
         "long": {
+            "enabled": true,
             "universe": {
                 "filter_by_min_effective_cost": false,
                 "minimum_coin_age_days": 0.0,
@@ -264,6 +265,7 @@ Minimal test config for stock perps:
             }
         },
         "short": {
+            "enabled": false,
             "risk": {
                 "max_positions": 0,
                 "total_wallet_exposure_limit": 0.0

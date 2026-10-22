@@ -14,7 +14,7 @@ from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 
-CONTRACT_VERSION = 8
+CONTRACT_VERSION = 9
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -53,6 +53,8 @@ def build_evaluation_contract(config: dict) -> dict:
     """Retain fixed policy while excluding values owned by the candidate vector."""
     from config.universe import anchored_universe_source_view
     effective = clean_config(anchored_universe_source_view(config))
+    from config.activation import get_activation_source, resolve_side_activation
+    resolve_side_activation(effective, get_activation_source(config))
     _apply_config_overrides(
         effective, effective.get("optimize", {}).get("fixed_runtime_overrides", {})
     )
@@ -108,6 +110,7 @@ def build_evaluation_contract(config: dict) -> dict:
     contract = {
         "version": CONTRACT_VERSION,
         "age_admission": "side_initial_entry_v1",
+        "side_activation": "explicit_side_initial_and_dca_v1",
         "risk_model": "v9_independent_loss_memories_currency_drawdown_ratio_ema_finite_cooldown",
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),

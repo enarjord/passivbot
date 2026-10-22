@@ -115,6 +115,10 @@ def normalize_twel_enforcer_policy(value, *, path: str) -> str:
 
 
 def validate_bot_config(result: dict) -> None:
+    from .activation import side_activation
+
+    side_activation(result)
+    _validate_bool(result["bot"]["global"]["enabled"], path="bot.global.enabled")
     for pside in BOT_POSITION_SIDES:
         bot_side = result["bot"][pside]
         _validate_positive_ratio_when_enabled(
