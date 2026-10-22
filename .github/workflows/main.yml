@@ -16,75 +16,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python:
-    name: Python ${{ matrix.python-version }}
+  python312_shards:
+    name: Python 3.12 shards
+    uses: ./.github/workflows/python-tests.yml
+    with:
+      python-version: "3.12"
+
+  python314_shards:
+    name: Python 3.14 shards
+    uses: ./.github/workflows/python-tests.yml
+    with:
+      python-version: "3.14"
+
+  python312:
+    name: Python 3.12
+    if: ${{ always() }}
+    needs: python312_shards
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.14"]
+    timeout-minutes: 5
     steps:
-      - name: Check out repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: |
-            requirements-live.txt
-            requirements-full.txt
-            requirements-dev.txt
-            requirements-rust.txt
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          toolchain: "1.90.0"
-          components: rustfmt, clippy
-
-      - name: Install Python dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -r requirements.txt
-
-      - name: Build and verify the Python Rust extension
+      - name: Require this version's complete test gate
         env:
-          PYTHONPATH: src
-        run: |
-          .venv/bin/python -c "from rust_utils import check_and_maybe_compile; check_and_maybe_compile(force=True)"
-          .venv/bin/python -c "import passivbot_rust; from rust_utils import verify_loaded_runtime_extension; print(verify_loaded_runtime_extension())"
+          RESULT: ${{ needs.python312_shards.result }}
+        run: test "$RESULT" = success
 
-      - name: Validate AI documentation
+  python314:
+    name: Python 3.14
+    if: ${{ always() }}
+    needs: python314_shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require this version's complete test gate
         env:
-          PYTHONPATH: src
-        run: |
-          .venv/bin/python src/tools/check_ai_docs.py
-          .venv/bin/python src/tools/generate_live_event_registry.py --check
-          .venv/bin/python -m pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
-
-      - name: Run Python test suite
-        env:
-          MPLBACKEND: Agg
-          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
-          PYTHONPATH: src
-        run: .venv/bin/python -m pytest -vv --tb=short --durations=25 --maxfail=10
-
-      - name: Run release CLI smokes
-        env:
-          MPLBACKEND: Agg
-          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
-          PYTHONPATH: src
-        run: |
-          .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v9', '--help']))"
-          .venv/bin/python src/tools/run_fake_live.py \
-            configs/examples/fake_live_hsl.json \
-            scenarios/fake_live/hsl_long_red_restart.hjson \
-            --user ci_fake_hsl_restart \
-            --output-dir "${{ runner.temp }}/fake-live"
+          RESULT: ${{ needs.python314_shards.result }}
+        run: test "$RESULT" = success
 
   rust:
     name: Rust
