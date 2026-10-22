@@ -13,7 +13,7 @@ MODE_ALIASES = MappingProxyType({
     "t": "tp_only", "tp": "tp_only", "tp_only": "tp_only", "tp-only": "tp_only",
 })
 FORCED_MODES = tuple(dict.fromkeys(MODE_ALIASES.values()))
-WARMUP_CAP_PATH = ("bot", "global", "warmup", "max_minutes")
+WARMUP_CAP_PATH = ("bot", "portfolio", "warmup", "max_minutes")
 WARMUP_CONCURRENCY_PATH = ("live", "startup", "warmup_concurrency")
 
 
@@ -40,7 +40,7 @@ def optional_forced_mode(value, *, path):
         raise ValueError(f"{path} must be a supported mode or null; empty strings are not supported") from exc
 
 
-def warmup_cap(value, *, path="bot.global.warmup.max_minutes"):
+def warmup_cap(value, *, path="bot.portfolio.warmup.max_minutes"):
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -74,7 +74,7 @@ def normalize_control_values(config):
         modes[side] = optional_forced_mode(modes[side], path=f"live.modes.{side}")
     startup = config["live"]["startup"]
     startup["warmup_concurrency"] = warmup_concurrency(startup["warmup_concurrency"])
-    warmup = config["bot"]["global"]["warmup"]
+    warmup = config["bot"]["portfolio"]["warmup"]
     warmup["max_minutes"] = warmup_cap(warmup["max_minutes"])
 
 

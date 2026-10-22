@@ -5,13 +5,13 @@ from pathlib import Path
 
 
 LIVE_POLICY_PATHS = {
-    "strategy_kind": "bot.global.strategy_kind",
-    "hedge_mode": "bot.global.hedge_mode",
-    "market_orders_allowed": "bot.global.execution.market_orders_allowed",
-    "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_fraction",
+    "strategy_kind": "bot.portfolio.strategy_kind",
+    "hedge_mode": "bot.portfolio.hedge_mode",
+    "market_orders_allowed": "bot.portfolio.execution.market_orders_allowed",
+    "market_order_near_touch_threshold": "bot.portfolio.execution.market_order_near_touch_fraction",
     "forager_score_hysteresis_pct": "bot.global.forager.score_hysteresis_margin",
-    "warmup_ratio": "bot.global.warmup.span_multiplier",
-    "max_warmup_minutes": "bot.global.warmup.max_minutes",
+    "warmup_ratio": "bot.portfolio.warmup.span_multiplier",
+    "max_warmup_minutes": "bot.portfolio.warmup.max_minutes",
 }
 MINIMUM_COST_SOURCE_PATHS = {"live.filter_by_min_effective_cost"}
 

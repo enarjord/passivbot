@@ -295,7 +295,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.global.hedge_mode": {
+    "bot.portfolio.hedge_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -304,7 +304,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.global.execution.market_orders_allowed": {
+    "bot.portfolio.execution.market_orders_allowed": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -313,7 +313,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.global.execution.market_order_near_touch_fraction": {
+    "bot.portfolio.execution.market_order_near_touch_fraction": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -345,7 +345,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.global.loss_gate.max_drawdown_ratio": {
+    "bot.portfolio.loss_gate.max_drawdown_ratio": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -354,7 +354,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.global.warmup.max_minutes": {
+    "bot.portfolio.warmup.max_minutes": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -363,7 +363,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.global.unstuck.memory_ema_span_minutes": {
+    "bot.portfolio.unstuck.memory_ema_span_minutes": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -377,7 +377,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.global.hsl.scope": {
+    "bot.portfolio.hsl.scope": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -780,18 +780,18 @@ def clean_config(config: dict) -> dict:
     else:
         reject_retired_v9_fields(source)
     template = normalization_template(get_template_config(), source)
-    portfolio = source.get("bot", {}).get("global", {}).get("hsl", {})
+    portfolio = source.get("bot", {}).get("portfolio", {}).get("hsl", {})
     if not isinstance(portfolio, dict):
-        raise TypeError("bot.global.hsl must be a mapping")
+        raise TypeError("bot.portfolio.hsl must be a mapping")
     # Retain explicit portfolio policy without hydrating missing authorization.
-    template["bot"]["global"]["hsl"].update(
+    template["bot"]["portfolio"]["hsl"].update(
         {key: None for key in FIELDS if key in portfolio}
     )
-    portfolio_bounds = source.get("optimize", {}).get("bounds", {}).get("global", {}).get("hsl")
+    portfolio_bounds = source.get("optimize", {}).get("bounds", {}).get("portfolio", {}).get("hsl")
     if portfolio_bounds is not None:
         if not isinstance(portfolio_bounds, dict):
-            raise TypeError("optimize.bounds.global.hsl must be a mapping")
-        template["optimize"]["bounds"].setdefault("global", {})["hsl"] = {
+            raise TypeError("optimize.bounds.portfolio.hsl must be a mapping")
+        template["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = {
             key: None for key in FIELDS if key in portfolio_bounds
         }
     from config.optimize_bounds import (
@@ -1121,9 +1121,9 @@ RESERVED_CLI_ARGS = {
             "market*1.8 are skipped until price action moves closer."
         ),
     },
-    "bot.global.hedge_mode": {
+    "bot.portfolio.hedge_mode": {
         "visible": ["--hedge-mode", "-hm"],
-        "hidden": ["--bot_global_hedge_mode"],
+        "hidden": ["--bot_portfolio_hedge_mode"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live", "backtest", "optimize"},
@@ -1146,9 +1146,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Set leverage for this run.",
     },
-    "bot.global.execution.market_orders_allowed": {
+    "bot.portfolio.execution.market_orders_allowed": {
         "visible": ["--market-orders-allowed", "-moa"],
-        "hidden": ["--bot_global_execution_market_orders_allowed"],
+        "hidden": ["--bot_portfolio_execution_market_orders_allowed"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"live", "backtest", "optimize"},
@@ -1162,9 +1162,9 @@ RESERVED_CLI_ARGS = {
             "Disabled by default; live exchange slippage controls apply."
         ),
     },
-    "bot.global.execution.market_order_near_touch_fraction": {
+    "bot.portfolio.execution.market_order_near_touch_fraction": {
         "visible": ["--market-order-near-touch-fraction", "-montf"],
-        "hidden": ["--bot_global_execution_market_order_near_touch_fraction"],
+        "hidden": ["--bot_portfolio_execution_market_order_near_touch_fraction"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1178,9 +1178,9 @@ RESERVED_CLI_ARGS = {
             "when market orders are allowed; this is not a live slippage cap."
         ),
     },
-    "bot.global.loss_gate.max_drawdown_ratio": {
+    "bot.portfolio.loss_gate.max_drawdown_ratio": {
         "visible": ["--loss-gate-max-drawdown-ratio"],
-        "hidden": ["--bot_global_loss_gate_max_drawdown_ratio"],
+        "hidden": ["--bot_portfolio_loss_gate_max_drawdown_ratio"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1232,9 +1232,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Maximum age difference allowed when using ticker data to convert non-quote fee tokens.",
     },
-    "bot.global.unstuck.memory_ema_span_minutes": {
+    "bot.portfolio.unstuck.memory_ema_span_minutes": {
         "visible": ["--unstuck-memory-ema-span-minutes"],
-        "hidden": ["--bot_global_unstuck_memory_ema_span_minutes"],
+        "hidden": ["--bot_portfolio_unstuck_memory_ema_span_minutes"],
         "type": normalize_memory_ema_span_minutes,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1257,9 +1257,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Live reconstruction cap in minutes (maximum 90 days); requested horizon is five slow spans.",
     },
-    "bot.global.hsl.scope": {
+    "bot.portfolio.hsl.scope": {
         "visible": ["--hsl-scope"],
-        "hidden": ["--bot_global_hsl_scope"],
+        "hidden": ["--bot_portfolio_hsl_scope"],
         "type": normalize_hsl_signal_mode,
         "metavar": "MODE",
         "choices": tuple(HSL_SIGNAL_MODES),
@@ -1556,15 +1556,15 @@ for _pside in ("long", "short"):
         "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
     }
 
-for _path in ("bot.global.unstuck.memory_ema_span_minutes", "bot.global.loss_gate.max_drawdown_ratio", "bot.global.hsl.scope"):
+for _path in ("bot.portfolio.unstuck.memory_ema_span_minutes", "bot.portfolio.loss_gate.max_drawdown_ratio", "bot.portfolio.hsl.scope"):
     FIELD_RUNTIME_RULES[_path]["owner"] = "bot"
-FIELD_RUNTIME_RULES["bot.global.loss_gate.memory_ema_span_minutes"] = deepcopy(
-    FIELD_RUNTIME_RULES["bot.global.unstuck.memory_ema_span_minutes"]
+FIELD_RUNTIME_RULES["bot.portfolio.loss_gate.memory_ema_span_minutes"] = deepcopy(
+    FIELD_RUNTIME_RULES["bot.portfolio.unstuck.memory_ema_span_minutes"]
 )
-RESERVED_CLI_ARGS["bot.global.loss_gate.memory_ema_span_minutes"] = {
-    **deepcopy(RESERVED_CLI_ARGS["bot.global.unstuck.memory_ema_span_minutes"]),
+RESERVED_CLI_ARGS["bot.portfolio.loss_gate.memory_ema_span_minutes"] = {
+    **deepcopy(RESERVED_CLI_ARGS["bot.portfolio.unstuck.memory_ema_span_minutes"]),
     "visible": ["--loss-gate-memory-ema-span-minutes"],
-    "hidden": ["--bot_global_loss_gate_memory_ema_span_minutes"],
+    "hidden": ["--bot_portfolio_loss_gate_memory_ema_span_minutes"],
     "help": "Global loss-gate realized-memory EMA span in minutes.",
 }
 
@@ -1588,9 +1588,9 @@ RESERVED_CLI_ARGS["bot.global.universe.approved_coins"] = {
 # Shared fixed policy remains configurable on every consuming command. The
 # optimizer projects these settings separately from its numeric search genes.
 for _path, _group in (
-    ("bot.global.strategy_kind", "Behavior"),
-    ("bot.global.warmup.span_multiplier", "Backtest Runtime"),
-    ("bot.global.warmup.max_minutes", "Backtest Runtime"),
+    ("bot.portfolio.strategy_kind", "Behavior"),
+    ("bot.portfolio.warmup.span_multiplier", "Backtest Runtime"),
+    ("bot.portfolio.warmup.max_minutes", "Backtest Runtime"),
     ("bot.long.universe.filter_by_min_effective_cost", "Coin Selection"),
     ("bot.short.universe.filter_by_min_effective_cost", "Coin Selection"),
 ):
@@ -1761,7 +1761,7 @@ CLI_HELP_OVERRIDES = {
         "Read an explicit offline candle input, without converting the current store. Expected layout: "
         "<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz or .npy."
     ),
-    'bot.global.warmup.max_minutes': (
+    'bot.portfolio.warmup.max_minutes': (
         "Hard cap on calculated EMA/history warmup minutes for backtests and "
         "live. null leaves the cap unbounded; otherwise use a positive number."
     ),
@@ -1873,11 +1873,11 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.fills.max_abs_fee_fraction",
         "live.modes.long",
         "live.modes.short",
-        "bot.global.hedge_mode",
+        "bot.portfolio.hedge_mode",
         "live.recovery.exchange_symbol_unavailable_cooldown_hours",
         "live.account.leverage",
-        "bot.global.execution.market_orders_allowed",
-        "bot.global.loss_gate.max_drawdown_ratio",
+        "bot.portfolio.execution.market_orders_allowed",
+        "bot.portfolio.loss_gate.max_drawdown_ratio",
         "live.execution.limit_order_create_max_market_distance_fraction",
         "live.execution.order_match_tolerance_fraction",
         "live.execution.order_replacement_churn_gate_activation_count",
@@ -2258,7 +2258,7 @@ def add_arguments_recursively(
             nullable_float_override = full_name in {
                 *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
                 "backtest.ew_half_life_days",
-                "bot.global.warmup.max_minutes",
+                "bot.portfolio.warmup.max_minutes",
             }
             nullable_coin_override = full_name in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}
             nullable_mode_override = full_name in {"live.modes.long", "live.modes.short"}
@@ -2299,7 +2299,7 @@ def add_arguments_recursively(
                 from config.control_sentinels import forced_mode_cli
 
                 type_ = forced_mode_cli
-            elif full_name == "bot.global.warmup.max_minutes":
+            elif full_name == "bot.portfolio.warmup.max_minutes":
                 from config.control_sentinels import warmup_cap_cli
 
                 type_ = warmup_cap_cli
@@ -2449,7 +2449,7 @@ def update_config_with_args(
     nullable_overrides = {
         *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
         "backtest.ew_half_life_days",
-        "bot.global.warmup.max_minutes", "live.modes.long", "live.modes.short",
+        "bot.portfolio.warmup.max_minutes", "live.modes.long", "live.modes.short",
         *(f"bot.{side}.universe.approved_coins" for side in ("long", "short")),
     }
     supplied = {key: value for key, value in vars(args).items()

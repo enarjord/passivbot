@@ -68,8 +68,8 @@ def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode
     config = generated_template(inputs[0], mode)
     inputs[0] = config
     config['live'].update(lookback_ema_span_minutes=1440.0)
-    config['bot']['global']['strategy_kind'] = strategy
-    config['bot']['global']['hedge_mode'] = sides == 'both'
+    config['bot']["portfolio"]['strategy_kind'] = strategy
+    config['bot']["portfolio"]['hedge_mode'] = sides == 'both'
     policy = dict(drawdown_ratio_threshold=.002, ema_span_minutes=1,
                   cooldown_minutes_after_red=10000,
 
@@ -124,8 +124,8 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     config = generated_template(inputs[0], "coin")
     inputs[0] = config
     config['live'].update(lookback_ema_span_minutes=1440.0)
-    config['bot']['global']['strategy_kind'] = strategy
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['strategy_kind'] = strategy
+    config['bot']["portfolio"]['hedge_mode'] = False
     config["bot"]["long"]["risk"].update(n_positions=1, total_wallet_exposure_limit=5.0)
     config["bot"]["long"]["hsl"].update(
         enabled=True, drawdown_ratio_threshold=.002, ema_span_minutes=1,

@@ -138,7 +138,7 @@ def test_scenario_keeps_unchanged_prepared_fields_and_source_pins(
     monkeypatch.setattr(Path, "open", no_old_source_read)
     overrides = {
         "none": {},
-        "numeric": {"bot.global.warmup.span_multiplier": 0.8},
+        "numeric": {"bot.portfolio.warmup.span_multiplier": 0.8},
         "approved": {"bot.global.universe.approved_coins": allowed},
         "ignored": {
             f"bot.{side}.universe.ignored_coins": ["COIN01"]

@@ -194,10 +194,10 @@ def permits(bot, order):
     # Aggregate HSL decisions consume every contributing position on that scope.
     keys = {key}
     config = bot.config
-    policy = config["bot"]["global"]["hsl"]
+    policy = config["bot"]["portfolio"]["hsl"]
     mode = policy["scope"]
     if not isinstance(mode, str) or mode not in {"coin", "position_side", "portfolio"}:
-        raise ValueError("invalid HSL scope in bot.global.hsl.scope")
+        raise ValueError("invalid HSL scope in bot.portfolio.hsl.scope")
     if mode == "portfolio" and policy["enabled"]:
         keys.update(gate.pending)
     elif mode == "position_side" and config["bot"][key[1]]["hsl"]["enabled"]:

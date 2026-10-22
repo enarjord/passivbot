@@ -349,7 +349,7 @@ def test_mixed_missing_file_sources_fail_without_outputs_or_source_changes(
     flags = ({"scenario": "mixed"} if context.startswith("scenario") else
              {"optimize": True} if context == "fixed" else {})
     with pytest.raises(FileNotFoundError, match="coin-list file not found"):
-        explain_config(source, "bot.global.hedge_mode", base_config_path=str(source_path), **flags)
+        explain_config(source, "bot.portfolio.hedge_mode", base_config_path=str(source_path), **flags)
     output = tmp_path / "resolved.json"
     with pytest.raises(SystemExit) as error:
         clean_main([str(source_path), str(output), "--mode", "resolved"])

@@ -1044,7 +1044,7 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
     """
     from config.optimize_bounds import flatten_optimize_bounds
 
-    kind = config.get("bot", {}).get("global", {}).get(
+    kind = config.get("bot", {}).get("portfolio", {}).get(
         "strategy_kind", _RELEASED_V8_DEFAULTS["live"]["strategy_kind"]
     )
     # Use only the released default resolver, never the evolving v9 template or
@@ -1054,7 +1054,7 @@ def materialize_released_v8_optimizer_bounds(config, *, changes):
         "live": {"strategy_kind": kind},
     })
     defaults = released["optimize"]["bounds"]
-    portfolio = config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope") == "portfolio"
+    portfolio = config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope") == "portfolio"
     for side in ("long", "short"):
         shared = defaults[side]
         shared["strategy"] = {kind: shared["strategy"][kind]}

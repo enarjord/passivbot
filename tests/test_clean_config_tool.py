@@ -54,8 +54,8 @@ def test_public_example_exports_are_reusable_and_idempotent(source, mode, tmp_pa
     assert source.read_bytes() == original
     prepared = prepare_config(json.loads(output), live_only=True, verbose=False)
     assert (
-        prepared['bot']['global']['strategy_kind']
-        == json.loads(original)['bot']['global']['strategy_kind']
+        prepared['bot']["portfolio"]['strategy_kind']
+        == json.loads(original)['bot']["portfolio"]['strategy_kind']
     )
     if mode == "live":
         assert "optimize" not in json.loads(output)
@@ -323,8 +323,8 @@ def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
     "selector,value,expected_type",
     [
         ("bot.long.unstuck.ema_span_0_minutes", 60, float),
-        ("bot.global.unstuck.memory_ema_span_minutes", 60, float),
-        ("bot.global.loss_gate.memory_ema_span_minutes", 60, float),
+        ("bot.portfolio.unstuck.memory_ema_span_minutes", 60, float),
+        ("bot.portfolio.loss_gate.memory_ema_span_minutes", 60, float),
         ("bot.long.risk.max_positions", 7, int),
         ("bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", 60, float),
         ("coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes", 60, float),
@@ -463,11 +463,11 @@ def test_cleanup_resolves_global_portfolio_hsl_bound_numeric_types(mode, field):
     outputs = []
     for number in (int, float):
         cfg = generated_template(get_template_config(), "portfolio")
-        cfg["optimize"]["bounds"].setdefault("global", {}).setdefault("hsl", {})[field] = [
+        cfg["optimize"]["bounds"].setdefault("portfolio", {}).setdefault("hsl", {})[field] = [
             number(1), number(1), 0.01
         ]
         output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
-        bounds = json.loads(output)["optimize"]["bounds"]["global"]["hsl"][field]
+        bounds = json.loads(output)["optimize"]["bounds"]["portfolio"]["hsl"][field]
         assert all(type(value) is float for value in bounds)
         assert render_source(output, source=Path("input.json"), mode=mode) == output
         outputs.append(output)
@@ -505,7 +505,7 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
 ):
     rng = random.Random(711)
     cfg = generated_template(get_template_config(), hsl_mode)
-    cfg['bot']['global']['strategy_kind'] = strategy
+    cfg['bot']["portfolio"]['strategy_kind'] = strategy
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC", "ETH"], "short": []})
     cfg["backtest"]["scenarios"] = [{"label": "base"}]
     cfg["backtest"]["coin_sources"] = {"BTC": "binance"}
@@ -517,7 +517,7 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
         cfg["bot"][side]["hsl"].update(enabled=True, cooldown_after_red_minutes=17.5)
         cfg["bot"][side]["unstuck"]["ema_span_0_minutes"] = rng.uniform(5.1, 1000.9)
     if hsl_mode == "portfolio":
-        cfg["bot"]["global"]["hsl"].update(enabled=True, cooldown_after_red_minutes=23.5)
+        cfg["bot"]["portfolio"]["hsl"].update(enabled=True, cooldown_after_red_minutes=23.5)
     target = "canonical" if mode == "full" else mode
     projected = project_config(cfg, target, record_step=False)
     expected = project_config(
@@ -530,11 +530,11 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     result = cleanup_config(cfg, mode=mode)
     assert result == expected
     assert cleanup_config(result, mode=mode) == result
-    assert result["bot"]["global"]["hsl"]["scope"] == hsl_mode
+    assert result["bot"]["portfolio"]["hsl"]["scope"] == hsl_mode
     policies = [result["bot"][side]["hsl"] for side in ("long", "short")]
     if hsl_mode == "portfolio":
-        policies.append(result["bot"]["global"]["hsl"])
-        assert result["bot"]["global"]["hsl"]["cooldown_after_red_minutes"] == 23.5
+        policies.append(result["bot"]["portfolio"]["hsl"])
+        assert result["bot"]["portfolio"]["hsl"]["cooldown_after_red_minutes"] == 23.5
     assert all(policy["cooldown_after_red_minutes"] == 17.5 for policy in policies[:2])
     assert all("restart_after_red_policy" not in policy for policy in policies)
     assert all(policy["cooldown_after_red_minutes"] >= 0.0 for policy in policies)
@@ -632,8 +632,8 @@ def test_explicit_v9_migration_produces_reusable_cleanup_input(tmp_path):
     assert source.read_bytes() == original
     result = cleanup_config(json.loads(destination.read_text()))
     assert result["config_version"] == CONFIG_SCHEMA_VERSION
-    assert result["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 21600.5
-    assert result["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 21600.5
+    assert result["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 21600.5
+    assert result["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 21600.5
     assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 21600.5
     assert "realized_loss_gate_lookback_minutes" not in result["live"]
     assert "pnls_max_lookback_days" not in result["live"]

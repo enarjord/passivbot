@@ -256,7 +256,7 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.user = "hyperliquid_pf1"
     bot.exchange = "hyperliquid"
-    bot.config = {"bot": {"global": {"execution": {
+    bot.config = {"bot": {"portfolio": {"execution": {
         "market_orders_allowed": True,
         "market_order_near_touch_fraction": 0.001,
     }}}}

@@ -47,7 +47,7 @@ def test_old_development_spellings_are_not_normal_loader_aliases(old, new):
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_nondefault_fraction_bounds_keep_stable_native_optimizer_ids(kind):
     config = get_template_config()
-    config["bot"]["global"]["strategy_kind"] = kind
+    config["bot"]["portfolio"]["strategy_kind"] = kind
     keys = ["long_unstuck_close_pct", "long_unstuck_loss_allowance_pct", "long_risk_we_excess_allowance_pct"]
     keys += (["long_entry_initial_qty_pct", "long_entry_initial_ema_dist", "long_close_qty_pct"]
              if kind == "trailing_martingale" else ["long_base_qty_pct", "long_offset"])

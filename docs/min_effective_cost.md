@@ -24,9 +24,9 @@ With:
 - `we_allowance`: optional headroom multiplier on per-position WEL. This is always bounded to `min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit - 1))`, capped so a single symbol cannot exceed the side-level TWEL. If `wallet_exposure_limit` is non-positive/non-finite, Passivbot treats both the allowance and allowed exposure as zero; if `twel` is non-positive/non-finite, Passivbot grants no excess headroom.
 - `effective_wel = wallet_exposure_limit * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
-  order. For `bot.global.strategy_kind = "trailing_martingale"`, this is
+  order. For `bot.portfolio.strategy_kind = "trailing_martingale"`, this is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for
-  `bot.global.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
+  `bot.portfolio.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
 
 
 ## Pass/fail check

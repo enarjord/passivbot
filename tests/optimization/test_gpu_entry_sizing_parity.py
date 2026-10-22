@@ -16,9 +16,9 @@ def _fixture(side, coin_count, entry_kind):
 
     coins = ["BTC", "ETH"][:coin_count]
     config = get_template_config()
-    config['bot']['global']['strategy_kind'] = 'trailing_martingale'
-    config['bot']['global']['warmup']['max_minutes'] = 1
-    config['bot']['global']['execution']['market_orders_allowed'] = False
+    config['bot']["portfolio"]['strategy_kind'] = 'trailing_martingale'
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
+    config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     set_side_universe_sources(config, 'approved_coins', {'long': coins, 'short': coins})
     config["backtest"].update(
         coins={"bybit": coins}, exchanges=["bybit"], starting_balance=1000.0
@@ -271,8 +271,8 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
     close_on_tick = ladder == "close_on_tick"
     is_close = ladder != "entry"
     config, candles, markets, btc, timestamps = _fixture(side, coin_count, "initial")
-    config['bot']['global']['execution']['market_orders_allowed'] = market_allowed
-    config['bot']['global']['execution']['market_order_near_touch_fraction'] = near_touch
+    config['bot']["portfolio"]['execution']['market_orders_allowed'] = market_allowed
+    config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = near_touch
     config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
                              taker_fee_override=0.0, market_order_slippage_pct=0.0)
     strategy = config["bot"][side]["strategy"]["trailing_martingale"]
@@ -329,7 +329,7 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
 @pytest.mark.parametrize("hysteresis", [0.0, 0.02])
 def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hysteresis):
     config, candles, markets, _, timestamps = _fixture(side, 2, "initial")
-    config['bot']['global']['execution']['market_orders_allowed'] = False
+    config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     config['bot']['global']['forager']["score_hysteresis_margin"] = hysteresis
     config["backtest"].update(starting_balance=1000.0, maker_fee_override=0.0,
                              taker_fee_override=0.0, market_order_slippage_pct=0.0)

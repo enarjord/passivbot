@@ -75,25 +75,8 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `bot.global.execution.market_order_near_touch_fraction` | float | `0.001` | fraction / market price | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
-| `bot.global.execution.market_orders_allowed` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.forager.score_hysteresis_margin` | float | `0.02` | normalized score gap | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
-| `bot.global.hedge_mode` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
-| `bot.global.hsl.cooldown_after_red_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_cooldown_minutes_after_red`); portfolio HSL scope; recommended `[2160, 2160, 10]` | forbidden | >= 0.0; finite | python |
-| `bot.global.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_drawdown_ratio_ema_span_minutes`); portfolio HSL scope; recommended `[720, 720, 1]` | forbidden | >= 1.0; finite | python |
-| `bot.global.hsl.drawdown_ratio_threshold` | float | Not declared | fraction / scope equity plus remembered drawdown | global; live, backtest, optimize | Eligible (`hsl_red_threshold`); portfolio HSL scope; recommended `[0.15, 0.15, 0.001]` | forbidden | > 0.0; <= 1.0; finite | python |
-| `bot.global.hsl.enabled` | boolean | Not declared | — | global; live, backtest, optimize | No | forbidden | — | python |
-| `bot.global.hsl.memory_ema_span_minutes` | float | Not declared | minutes | global; live, backtest, optimize | Eligible (`hsl_memory_ema_span_minutes`); portfolio HSL scope | forbidden | >= 1.0; finite | python |
-| `bot.global.hsl.panic_close_order_type` | string | Not declared | — | global; live, backtest, optimize | No | forbidden | `limit`, `market` | python |
-| `bot.global.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | — | global; live, backtest, optimize | No | forbidden | — | python |
-| `bot.global.hsl.scope` | string | `"coin"` | — | global; live, backtest, optimize | No | forbidden | `coin`, `position_side`, `portfolio` | python |
-| `bot.global.loss_gate.max_drawdown_ratio` | float | `1.0` | fraction / raw balance plus loss-gate remembered drawdown | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
-| `bot.global.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
-| `bot.global.strategy_kind` | string | `"trailing_martingale"` | — | global; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
 | `bot.global.universe.approved_coins` | array \| string | 41 items (see template) | — | global; live, backtest, optimize | No | forbidden | — | python |
-| `bot.global.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | global; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
-| `bot.global.warmup.max_minutes` | float \| null | `null` | minutes | global; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
-| `bot.global.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | global; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | long; live, backtest, optimize | Eligible (`long_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
 | `bot.long.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | long; live, backtest, optimize | Eligible (`long_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |
@@ -169,6 +152,23 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | `bot.long.unstuck.enabled` | boolean | `true` | — | long; live, backtest, optimize | No | allowed | — | python |
 | `bot.long.unstuck.exposure_trigger_ratio` | float | `0.466` | ratio / effective per-position wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_threshold`); recommended `[0.4, 0.9, 0.001]` | allowed | finite | python |
 | `bot.long.unstuck.loss_allowance_fraction` | float | `0.0052` | fraction / applicable total wallet exposure limit | long; live, backtest, optimize | Eligible (`long_unstuck_loss_allowance_pct`); recommended `[0.005, 0.2, 0.0001]` | allowed | >= 0.0; finite | python |
+| `bot.portfolio.execution.market_order_near_touch_fraction` | float | `0.001` | fraction / market price | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.portfolio.execution.market_orders_allowed` | boolean | `false` | — | portfolio; live, backtest, optimize | No | forbidden | — | python |
+| `bot.portfolio.hedge_mode` | boolean | `false` | — | portfolio; live, backtest, optimize | No | forbidden | — | python |
+| `bot.portfolio.hsl.cooldown_after_red_minutes` | float | Not declared | minutes | portfolio; live, backtest, optimize | Eligible (`hsl_cooldown_minutes_after_red`); portfolio HSL scope; recommended `[2160, 2160, 10]` | forbidden | >= 0.0; finite | python |
+| `bot.portfolio.hsl.drawdown_ratio_ema_span_minutes` | float | Not declared | minutes | portfolio; live, backtest, optimize | Eligible (`hsl_drawdown_ratio_ema_span_minutes`); portfolio HSL scope; recommended `[720, 720, 1]` | forbidden | >= 1.0; finite | python |
+| `bot.portfolio.hsl.drawdown_ratio_threshold` | float | Not declared | fraction / scope equity plus remembered drawdown | portfolio; live, backtest, optimize | Eligible (`hsl_red_threshold`); portfolio HSL scope; recommended `[0.15, 0.15, 0.001]` | forbidden | > 0.0; <= 1.0; finite | python |
+| `bot.portfolio.hsl.enabled` | boolean | Not declared | — | portfolio; live, backtest, optimize | No | forbidden | — | python |
+| `bot.portfolio.hsl.memory_ema_span_minutes` | float | Not declared | minutes | portfolio; live, backtest, optimize | Eligible (`hsl_memory_ema_span_minutes`); portfolio HSL scope | forbidden | >= 1.0; finite | python |
+| `bot.portfolio.hsl.panic_close_order_type` | string | Not declared | — | portfolio; live, backtest, optimize | No | forbidden | `limit`, `market` | python |
+| `bot.portfolio.hsl.scale_budget_with_excess_allowance` | boolean | Not declared | — | portfolio; live, backtest, optimize | No | forbidden | — | python |
+| `bot.portfolio.hsl.scope` | string | `"coin"` | — | portfolio; live, backtest, optimize | No | forbidden | `coin`, `position_side`, `portfolio` | python |
+| `bot.portfolio.loss_gate.max_drawdown_ratio` | float | `1.0` | fraction / raw balance plus loss-gate remembered drawdown | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
+| `bot.portfolio.loss_gate.memory_ema_span_minutes` | float | `43200.0` | minutes | portfolio; live, backtest, optimize | Eligible (`loss_gate_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
+| `bot.portfolio.strategy_kind` | string | `"trailing_martingale"` | — | portfolio; live, backtest, optimize | No | forbidden | `trailing_martingale`, `ema_anchor` | python |
+| `bot.portfolio.unstuck.memory_ema_span_minutes` | float | `43200.0` | minutes | portfolio; live, backtest, optimize | Eligible (`unstuck_memory_ema_span_minutes`) | forbidden | >= 1.0; finite | python |
+| `bot.portfolio.warmup.max_minutes` | float \| null | `null` | minutes | portfolio; live, backtest, optimize | No | forbidden | > 0.0; finite | python |
+| `bot.portfolio.warmup.span_multiplier` | float | `0.3` | multiplier / indicator span | portfolio; live, backtest, optimize | No | forbidden | >= 0.0; finite | python |
 | `bot.short.entry_cooldown.base_duration_minutes` | float | `0.0` | minutes | short; live, backtest, optimize | Eligible (`short_risk_entry_cooldown_minutes`); recommended `[0, 60, 0.1]` | allowed | >= 0.0; finite | python |
 | `bot.short.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_max_duration_minutes`) | allowed | >= 0.0; finite | python |
 | `bot.short.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | short; live, backtest, optimize | Eligible (`short_entry_cooldown_min_duration_minutes`) | allowed | >= 0.0; finite | python |

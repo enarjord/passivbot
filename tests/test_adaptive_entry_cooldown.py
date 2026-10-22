@@ -258,7 +258,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
 
     cfg = get_template_config()
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
-    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
         "adverse_directionality": [0.0, 20.0]
     }
@@ -318,7 +318,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     cfg = get_template_config()
     parsed = prepare_config(cfg, verbose=False)
     original = flatten_optimize_bounds(
-        parsed["optimize"]["bounds"], strategy_kind=parsed['bot']['global']['strategy_kind']
+        parsed["optimize"]["bounds"], strategy_kind=parsed['bot']["portfolio"]['strategy_kind']
     )
     for side in ("long", "short"):
         assert original[f"{side}_forager_score_weights_unilateralness"] == [0.0, 0.0]
@@ -332,7 +332,7 @@ def test_optional_bounds_survive_export_without_changing_defaults():
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [20.0, 80.5]
     cfg = clean_config(prepare_config(cfg, verbose=False))
     bounds = flatten_optimize_bounds(
-        cfg["optimize"]["bounds"], strategy_kind=cfg['bot']['global']['strategy_kind']
+        cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
     assert bounds["long_forager_score_weights_unilateralness"] == [0.0, 1.0]
     assert bounds["long_unilateralness_ema_span_1m"] == [20.0, 80.5]
@@ -790,7 +790,7 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     # This legacy span would impose a shared delay beyond the entire test.
     cfg["bot"][side]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 1.0
@@ -819,7 +819,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']['global']['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
     cfg["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}

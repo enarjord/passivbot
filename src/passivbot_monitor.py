@@ -1667,7 +1667,7 @@ def _build_monitor_trailing_close_payload(
 ) -> Optional[dict[str, Any]]:
     strategy_kind = (
         str(
-            getattr(self, "config", {}).get("bot", {}).get("global", {}).get("strategy_kind")
+            getattr(self, "config", {}).get("bot", {}).get("portfolio", {}).get("strategy_kind")
             or ""
         )
         .strip()
@@ -1778,9 +1778,9 @@ def _build_monitor_trailing_section(
     if balance_strategy is None:
         balance_strategy = balance_raw
     config = getattr(self, "config", {})
-    global_cfg = config.get("bot", {}).get("global", {}) if isinstance(config, dict) else {}
+    portfolio_cfg = config.get("bot", {}).get("portfolio", {}) if isinstance(config, dict) else {}
     strategy_kind = (
-        str(global_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+        str(portfolio_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
     )
     if strategy_kind != "trailing_martingale":
         reason = (

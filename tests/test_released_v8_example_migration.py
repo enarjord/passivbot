@@ -47,7 +47,7 @@ def test_unused_backtest_cap_never_overrides_or_supplies_the_shared_live_cap(
         source["live"]["max_warmup_minutes"] = live_cap
     original = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
-    assert result.config["bot"]["global"]["warmup"]["max_minutes"] == (
+    assert result.config["bot"]["portfolio"]["warmup"]["max_minutes"] == (
         live_cap if live_cap else None
     )
     assert "max_warmup_minutes" not in result.config["backtest"]
@@ -71,7 +71,7 @@ def test_ignored_override_caps_disappear_without_creating_policy(layer, best_eff
         path = "backtest.scenarios[0].overrides.backtest.max_warmup_minutes"
     original = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
-    assert result.config["bot"]["global"]["warmup"]["max_minutes"] == 12.5
+    assert result.config["bot"]["portfolio"]["warmup"]["max_minutes"] == 12.5
     discarded(result, path, 99.5)
     converted = (result.config["optimize"]["fixed_runtime_overrides"] if layer == "fixed"
                  else result.config["backtest"]["scenarios"][0]["overrides"])
@@ -116,7 +116,7 @@ def test_cli_reports_ignored_cap_and_preserves_the_input_file(tmp_path):
     exported = json.loads(dst.read_text())
     assert type(exported["backtest"]["maker_fee_override"]) is float
     assert exported["backtest"]["maker_fee_override"] == 0.000375
-    assert prepare_config(exported, verbose=False)["bot"]["global"]["warmup"]["max_minutes"] == 17.5
+    assert prepare_config(exported, verbose=False)["bot"]["portfolio"]["warmup"]["max_minutes"] == 17.5
     assert any(item["path"] == "backtest.max_warmup_minutes"
                and item["reason"].startswith("removed unused released-v8")
                for item in json.loads(report.read_text())["changes"])
@@ -159,7 +159,7 @@ def test_referenced_full_config_discards_only_its_unused_backtest_cap(tmp_path):
     original, original_file = deepcopy(source), policy.read_bytes()
     result = migrate(source, memory_span_minutes=123.5,
                      base_config_path=str(tmp_path / "input.json"))
-    assert result.config["bot"]["global"]["warmup"]["max_minutes"] == 12.5
+    assert result.config["bot"]["portfolio"]["warmup"]["max_minutes"] == 12.5
     assert result.config["coin_overrides"]["TEST"] == {"live": {"modes": {"long": "manual"}}}
     discarded(result, "coin_overrides.TEST.override_config_path::backtest.max_warmup_minutes", 777)
     assert source == original and policy.read_bytes() == original_file

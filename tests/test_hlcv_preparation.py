@@ -236,10 +236,7 @@ def sample_config():
                 "entry_volatility_ema_span_1h": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
-            "global": {
-                "universe": {},
-                "warmup": {"max_minutes": None, "span_multiplier": 3.0},
-            },
+            "portfolio": {"warmup": {"max_minutes": None, "span_multiplier": 3.0}}, "global": {"universe": {}},
         },
         "live": {},
         "backtest": {
@@ -3298,10 +3295,7 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
                 "wallet_exposure_limit": 0.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": []},
             },
-            "global": {
-                "universe": {},
-                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
-            },
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
     }
 

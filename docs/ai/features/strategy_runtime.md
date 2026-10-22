@@ -245,13 +245,13 @@ EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance
 threshold, close sizing, and valid market/exchange inputs.
 
 V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
-`bot.global.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
+`bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
 ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
 order. UPNL and external balance changes do not. HSL episode transitions never reset it.
 Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
 graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
 exposure thresholds and close sizing retain their existing policies. The global
-`bot.global.loss_gate` consumes the same ordered facts using its independently configured
+`bot.portfolio.loss_gate` consumes the same ordered facts using its independently configured
 `memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_ratio`,
 without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
 configs still produce gate memory. Each enabled filter consumes each fill once and the
@@ -312,8 +312,8 @@ values or ratios outside `[0, 1)` before order construction.
 `backtest.market_order_slippage_fraction` is a backtest simulation knob only. Live orchestrator input
 must not read or forward it; live callers intentionally omit `market_order_slippage_fraction` and rely
 on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
-current bid/ask snapshot plus exchange-side behavior, controlled by `bot.global.execution.market_orders_allowed`
-and `bot.global.execution.market_order_near_touch_fraction`.
+current bid/ask snapshot plus exchange-side behavior, controlled by `bot.portfolio.execution.market_orders_allowed`
+and `bot.portfolio.execution.market_order_near_touch_fraction`.
 
 ## Close Recursion Contract
 

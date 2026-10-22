@@ -386,19 +386,19 @@ def load_single_coin_directory(
 
 def _validate_shared_policies(sources: list[ConfigSource]) -> None:
     strategy_kinds = {
-        str(get_optional_config_value(item.config, 'bot.global.strategy_kind')) for item in sources
+        str(get_optional_config_value(item.config, 'bot.portfolio.strategy_kind')) for item in sources
     }
     if len(strategy_kinds) != 1:
         raise ValueError(
-            "master and all single-coin configs must use the same bot.global.strategy_kind; found "
+            "master and all single-coin configs must use the same bot.portfolio.strategy_kind; found "
             + ", ".join(sorted(strategy_kinds))
         )
     signal_modes = {
-        str(item.config["bot"]["global"]["hsl"]["scope"]) for item in sources
+        str(item.config["bot"]["portfolio"]["hsl"]["scope"]) for item in sources
     }
     if len(signal_modes) != 1:
         raise ValueError(
-            "master and all single-coin configs must use the same bot.global.hsl.scope; found "
+            "master and all single-coin configs must use the same bot.portfolio.hsl.scope; found "
             + ", ".join(sorted(signal_modes))
         )
 
@@ -611,7 +611,7 @@ def compose_configs(
     configs, master_source = deepcopy((configs, master_source))
     sources = [master_source, *(item for item in configs if item.path != master_source.path)]
     _validate_shared_policies(sources)
-    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["bot"]["global"]["hsl"]["scope"])
+    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["bot"]["portfolio"]["hsl"]["scope"])
     selected_paths = None
     selectors = []
     if override_params is not None:

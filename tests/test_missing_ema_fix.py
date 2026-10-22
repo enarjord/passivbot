@@ -2788,7 +2788,7 @@ async def test_trailing_martingale_threshold_volatility_requires_h1_log_range():
     )
     bot.config = {
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
-        "bot": {"global": {"strategy_kind": "trailing_martingale"}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
 
     def trailing_martingale_params(_pside, _symbol=None):
@@ -2827,7 +2827,7 @@ async def test_trailing_martingale_threshold_h1_missing_is_scoped_in_rust():
     )
     bot.config = {
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
-        "bot": {"global": {"strategy_kind": "trailing_martingale"}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
 
     def trailing_martingale_params(_pside, _symbol=None):
@@ -2863,7 +2863,7 @@ async def test_trailing_martingale_present_none_threshold_weight_fails_loudly():
     )
     bot.config = {
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
-        "bot": {"global": {"strategy_kind": "trailing_martingale"}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
 
     def trailing_martingale_params(_pside, _symbol=None):
@@ -2946,7 +2946,7 @@ async def test_ema_anchor_h1_offset_weight_path_is_tuple_not_character_path():
     )
     bot.config = {
         "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
-        "bot": {"global": {"strategy_kind": "ema_anchor"}},
+        "bot": {"portfolio": {"strategy_kind": "ema_anchor"}},
     }
 
     def ema_anchor_params(_pside, _symbol=None):

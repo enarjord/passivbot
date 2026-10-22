@@ -29,7 +29,7 @@ def get_shared_optimizer_bindings():
             for local, flat in keys.items():
                 paths[f"{side}_{flat}"] = ("bot", side, group, *_shared_bound_local_path(group, local))
     for local, native in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].items():
-        paths[native] = ("bot", "global", "hsl", local)
+        paths[native] = ("bot", "portfolio", "hsl", local)
     return paths
 
 
@@ -180,11 +180,11 @@ _FIELDS_BY_TYPE = {
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
         "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
-        "bot.global.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
-        "bot.global.unstuck": "memory_ema_span_minutes",
-        "bot.global.execution": "market_order_near_touch_fraction",
+        "bot.portfolio.loss_gate": "max_drawdown_ratio memory_ema_span_minutes",
+        "bot.portfolio.unstuck": "memory_ema_span_minutes",
+        "bot.portfolio.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
-        "bot.global.warmup": "span_multiplier",
+        "bot.portfolio.warmup": "span_multiplier",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -202,8 +202,8 @@ _FIELDS_BY_TYPE = {
         """,
         "optimize": "compress_results_file write_all_results",
         "optimize.pymoo.shared": "eliminate_duplicates",
-        "bot.global": "hedge_mode",
-        "bot.global.execution": "market_orders_allowed",
+        "bot.portfolio": "hedge_mode",
+        "bot.portfolio.execution": "market_orders_allowed",
     },
     FieldType.STRING: {
         "": "config_version",
@@ -218,8 +218,8 @@ _FIELDS_BY_TYPE = {
         "optimize.gpu": "tuning_mode",
         "optimize.pymoo": "algorithm",
         "optimize.pymoo.algorithms.nsga3.ref_dirs": "method",
-        "bot.global.hsl": "scope",
-        "bot.global": "strategy_kind",
+        "bot.portfolio.hsl": "scope",
+        "bot.portfolio": "strategy_kind",
     },
     FieldType.ARRAY: {
         "backtest": "exchanges scenarios visible_metrics",
@@ -240,7 +240,7 @@ _FIELDS_BY_TYPE = {
 
 _NULLABLE_FIELDS = {
     FieldType.FLOAT: (
-        "bot.global.warmup.max_minutes",
+        "bot.portfolio.warmup.max_minutes",
         "backtest.btc_collateral_ltv_cap", "backtest.ew_half_life_days",
         "live.balance_override", "live.max_forager_candle_staleness_minutes",
     ),
@@ -313,7 +313,7 @@ def get_field_registry() -> FieldRegistry:
         is_bot_field = semantic_parts[:1] == ("bot",)
         scope = None
         if is_bot_field:
-            scope = semantic_parts[1] if semantic_parts[1] in {"long", "short"} else "global"
+            scope = semantic_parts[1] if semantic_parts[1] in {"portfolio", "long", "short"} else "global"
         fields.append(FieldSpec(
             path=parts, types=types if isinstance(types, tuple) else (types,),
             nullable=nullable, default=_template_value(template, parts), source=source,
@@ -353,11 +353,11 @@ def get_field_registry() -> FieldRegistry:
 
     # Portfolio HSL authority is explicitly optional; no default is synthesized.
     for name in ("enabled", "scale_budget_with_excess_allowance"):
-        add(f"bot.global.hsl.{name}", FieldType.BOOLEAN)
-    add("bot.global.hsl.panic_close_order_type", FieldType.STRING)
+        add(f"bot.portfolio.hsl.{name}", FieldType.BOOLEAN)
+    add("bot.portfolio.hsl.panic_close_order_type", FieldType.STRING)
     for name in ("drawdown_ratio_threshold", "drawdown_ratio_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_after_red_minutes"):
-        add(f"bot.global.hsl.{name}", FieldType.FLOAT)
+        add(f"bot.portfolio.hsl.{name}", FieldType.FLOAT)
 
     for kind in get_supported_strategy_kinds():
         spec = get_strategy_spec(kind)

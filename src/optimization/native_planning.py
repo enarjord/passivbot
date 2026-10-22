@@ -38,7 +38,7 @@ def _remove_path(config, path):
 
 def _request_owned_paths(config):
     """Paths removed from execution identity, independent of searched bounds."""
-    kind = config['bot']['global']['strategy_kind']
+    kind = config['bot']["portfolio"]['strategy_kind']
     dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
@@ -59,7 +59,7 @@ def _request_owned_paths(config):
         if path is not None:
             yield path
     for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
-        yield ("bot", "global", "hsl", key)
+        yield ("bot", "portfolio", "hsl", key)
 
 
 def _static_contract(config):
@@ -83,7 +83,7 @@ def _static_contract(config):
     # optimizer's saved suite recipe or its candidate-dependent derived patches.
     for key in ("scenarios", "suite_enabled", "suite_reducers", "cache_dir", "base_dir"):
         result["backtest"].pop(key, None)
-    kind = config['bot']['global']['strategy_kind']
+    kind = config['bot']["portfolio"]['strategy_kind']
     dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
@@ -104,7 +104,7 @@ def _static_contract(config):
         if path is not None:
             _remove_path(result, path)
     for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
-        _remove_path(result, ("bot", "global", "hsl", key))
+        _remove_path(result, ("bot", "portfolio", "hsl", key))
     coupled = unstuck_ema_spans_coupled(config)
     # CPU worker views lower coupled unstuck spans to ordinary request inheritance.
     # Strategy coin pins remain static; their derived unstuck copies must not

@@ -180,7 +180,7 @@ def test_shared_conversion_preserves_separate_gate_acknowledgment(owner):
     output = migrate(source, memory_span_minutes=123.5,
         acknowledge_realized_loss_gate_memory_change=True).config
     assert get_patch(output, owner) == {"bot.long.risk.max_positions": 4,
-        "bot.global.loss_gate.max_drawdown_ratio": 0.1}
+        "bot.portfolio.loss_gate.max_drawdown_ratio": 0.1}
     assert source == before
 
 
@@ -224,7 +224,7 @@ def test_released_atomic_shared_selectors_preserve_actual_final_bound_targets(
     converted = result.config
     assert converted["optimize"]["fixed_params"] == [expected]
     bounds = flatten_optimize_bounds(
-        converted["optimize"]["bounds"], strategy_kind=converted["bot"]["global"]["strategy_kind"],
+        converted["optimize"]["bounds"], strategy_kind=converted["bot"]["portfolio"]["strategy_kind"],
     )
     selected = resolve_bound_selectors(converted, converted["optimize"]["fixed_params"], bounds)
     assert set(selected) == {f"{side}_{family}" for side in sides}
@@ -250,7 +250,7 @@ def test_unmatched_shared_selectors_do_not_gain_authority(selector):
     converted = migrate(source, memory_span_minutes=123.5).config
     assert converted["optimize"]["fixed_params"] == [selector]
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
-                                     strategy_kind=converted["bot"]["global"]["strategy_kind"])
+                                     strategy_kind=converted["bot"]["portfolio"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [selector], bounds) == {}
 
 
@@ -267,7 +267,7 @@ def test_changed_risk_group_selector_requires_explicit_canonical_choices(selecto
 @pytest.mark.parametrize("selector,expected", [
     ("ema_span_minutes", "drawdown_ratio_ema_span_minutes"),
     ("hsl.ema_span_minutes", "hsl.drawdown_ratio_ema_span_minutes"),
-    ("bot.hsl.ema_span_minutes", "bot.global.hsl.drawdown_ratio_ema_span_minutes"),
+    ("bot.hsl.ema_span_minutes", "bot.portfolio.hsl.drawdown_ratio_ema_span_minutes"),
 ])
 def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(selector, expected):
     from config.optimize_bounds import flatten_optimize_bounds
@@ -282,9 +282,9 @@ def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(sele
     converted = migrate(source, memory_span_minutes=123.5).config
     assert converted["optimize"]["fixed_params"] == [expected]
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
-                                     strategy_kind=converted["bot"]["global"]["strategy_kind"])
+                                     strategy_kind=converted["bot"]["portfolio"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [expected], bounds) == {
-        "hsl_drawdown_ratio_ema_span_minutes": ("bot", "global", "hsl", "drawdown_ratio_ema_span_minutes")
+        "hsl_drawdown_ratio_ema_span_minutes": ("bot", "portfolio", "hsl", "drawdown_ratio_ema_span_minutes")
     }
 
 

@@ -239,7 +239,7 @@ Minimal test config for stock perps:
 {
     "config_version": "v9.0.0",
     "bot": {
-        "global": {
+        "portfolio": {
             "strategy_kind": "trailing_martingale",
             "hedge_mode": false
         },

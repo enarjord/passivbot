@@ -44,10 +44,7 @@ def _base_config():
                 "n_positions": 1,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": [], "ignored_coins": []},
             },
-            "global": {
-                "universe": {},
-                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
-            },
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
         "optimize": {

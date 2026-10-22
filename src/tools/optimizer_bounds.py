@@ -60,7 +60,7 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     template = get_template_config()
     validate_authored_config(source, template)
     result = strip_config_metadata(source)
-    mode = result.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")
+    mode = result.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
     profile = generated_template(template, mode)
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
     # Unilateralness is optional in the starting profile. A positive fixed

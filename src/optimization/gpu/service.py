@@ -1517,7 +1517,7 @@ class SharedAccountReplay:
                 f"got {coin_count}"
             )
         self.strategy_kind = (
-            str(get_optional_config_value(config, 'bot.global.strategy_kind', "")).strip().lower()
+            str(get_optional_config_value(config, 'bot.portfolio.strategy_kind', "")).strip().lower()
         )
         if self.strategy_kind not in {"ema_anchor", "trailing_martingale"}:
             raise ValueError(

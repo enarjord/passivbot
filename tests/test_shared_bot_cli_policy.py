@@ -20,13 +20,13 @@ def test_shared_policy_flags_and_directional_sources_apply_to_every_consumer(com
     parser, keys = parser_for(command)
     # Directional authority wins regardless of argv order.
     args = parser.parse_args(["--bot.short.universe.approved_coins", "SOL", "-s", "BTC,ETH",
-                              "--bot.global.warmup.span_multiplier", "0.8", "--hedge-mode", "y"])
+                              "--bot.portfolio.warmup.span_multiplier", "0.8", "--hedge-mode", "y"])
     config = get_template_config()
     update_config_with_args(config, args, allowed_keys=keys)
     assert config["bot"]["long"]["universe"]["approved_coins"] == ["BTC", "ETH"]
     assert config["bot"]["short"]["universe"]["approved_coins"] == ["SOL"]
-    assert config["bot"]["global"]["warmup"]["span_multiplier"] == 0.8
-    assert config["bot"]["global"]["hedge_mode"] is True
+    assert config["bot"]["portfolio"]["warmup"]["span_multiplier"] == 0.8
+    assert config["bot"]["portfolio"]["hedge_mode"] is True
     assert config["_coins_sources"]["approved_coins"] == {"long": ["BTC", "ETH"], "short": ["SOL"]}
     assert "approved_coins" not in config["live"]
 

@@ -51,8 +51,8 @@ def reject_backtest_inherited_live_fields(result: dict) -> None:
         owners = {
             "fee_pct_fallback": "live.fills.fallback_fee_fraction",
             "fee_pct_sanity_abs_max": "live.fills.max_abs_fee_fraction",
-            "market_orders_allowed": "bot.global.execution.market_orders_allowed",
-            "market_order_near_touch_threshold": "bot.global.execution.market_order_near_touch_fraction",
+            "market_orders_allowed": "bot.portfolio.execution.market_orders_allowed",
+            "market_order_near_touch_threshold": "bot.portfolio.execution.market_order_near_touch_fraction",
         }
         owner_paths = ", ".join(owners.get(key, f"live.{key}") for key in invalid)
         raise ValueError(
@@ -137,15 +137,15 @@ def sync_with_template(
     bounds = result["optimize"]["bounds"]
     for key in list(bounds):
         if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")):
-            set_flat_optimize_bound(bounds, result['bot']['global']['strategy_kind'], key, bounds.pop(key))
+            set_flat_optimize_bound(bounds, result['bot']["portfolio"]['strategy_kind'], key, bounds.pop(key))
     preserve_optional_adaptive_bounds(template_with_extras, result)
     # Keep only explicitly supplied HSL portfolio authority and its search bounds.
     for section in (("bot",), ("optimize", "bounds")):
         target, source = template_with_extras, result
         for key in section:
             target, source = target[key], source[key]
-        if "global" in source:
-            target["global"] = deepcopy(source["global"])
+        if "portfolio" in source:
+            target["portfolio"] = deepcopy(source["portfolio"])
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
     preserved_live_optimize_bounds = [
         ("optimize", "bounds", key)
@@ -300,6 +300,6 @@ def normalize_optimizer_settings(
     result["optimize"]["limits"] = resolved_limits
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
-        strategy_kind=get_optional_config_value(result, 'bot.global.strategy_kind'),
-        portfolio_hsl=result["bot"]["global"]["hsl"]["scope"] == "portfolio",
+        strategy_kind=get_optional_config_value(result, 'bot.portfolio.strategy_kind'),
+        portfolio_hsl=result["bot"]["portfolio"]["hsl"]["scope"] == "portfolio",
     )

@@ -634,7 +634,7 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 12,
@@ -754,7 +754,7 @@ async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 12,
@@ -1227,7 +1227,7 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
                     "max_forager_candle_staleness_minutes": 10,
                 }
             },
-            "bot": {"global": {"strategy_kind": "trailing_martingale"}},
+            "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
         }
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
@@ -1441,7 +1441,7 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
                     "max_forager_candle_staleness_minutes": 10,
                 }
             },
-            "bot": {"global": {"strategy_kind": "trailing_martingale"}},
+            "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
         }
         positions = {
             symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}
@@ -2250,7 +2250,7 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
     class FakeBot:
         config = {
             "live": {},
-            "bot": {"global": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
         }
         cm = FakeCM()
         approved_coins_minus_ignored_coins = {
@@ -2359,7 +2359,7 @@ def test_required_candle_health_window_failures_are_bounded_and_keep_other_side_
 
     class FakeBot:
         cm = FakeCM()
-        config = {"live": {}, "bot": {"global": {"warmup": {"max_minutes": None}}}}
+        config = {"live": {}, "bot": {"portfolio": {"warmup": {"max_minutes": None}}}}
 
         def get_max_n_positions(self, pside):
             if pside == "long":
@@ -2624,7 +2624,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
             "live": {"startup": {"force_cold_startup": False}},
         }
         exchange = "bybit"
@@ -2827,7 +2827,7 @@ async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
             "live": {
                 "startup": {"force_cold_startup": True, "warmup_jitter_seconds": 30.0}
             }
@@ -2995,7 +2995,7 @@ async def test_forager_candidate_refresh_rotates_by_completed_candle_staleness(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
         }
         approved_coins_minus_ignored_coins = {
@@ -3092,7 +3092,7 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -3188,7 +3188,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
     class FakeBot:
         config = {
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
-            "bot": {"global": {"warmup": {"max_minutes": cap}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": cap}}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
@@ -3319,7 +3319,7 @@ async def test_forager_candidate_refresh_does_not_charge_healthy_scan(monkeypatc
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
         }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
@@ -3407,7 +3407,7 @@ async def test_forager_candidate_refresh_skips_unused_native_h1_surface(monkeypa
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -3486,7 +3486,7 @@ async def test_forager_candidate_refresh_tolerates_tail_within_target_age(monkey
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 4,
@@ -3568,7 +3568,7 @@ async def test_forager_candidate_refresh_bounds_and_rotates_health_scans(monkeyp
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
         }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
@@ -3652,7 +3652,7 @@ async def test_forager_candidate_refresh_keeps_unfetched_stale_surfaces_pending(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
         }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
@@ -3736,7 +3736,7 @@ async def test_forager_candidate_staleness_counts_only_refreshable_surfaces(monk
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
         }
         approved_coins_minus_ignored_coins = {
@@ -3822,7 +3822,7 @@ async def test_forager_candidate_refresh_prioritizes_cold_1m_before_1h(monkeypat
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
         }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
@@ -3918,7 +3918,7 @@ async def test_forager_candidate_refresh_interleaves_h1_health_scans(monkeypatch
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
         }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
@@ -4044,7 +4044,7 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -4174,7 +4174,7 @@ async def test_forager_candidate_refresh_does_not_back_off_empty_h1_result(monke
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -4253,7 +4253,7 @@ async def test_forager_candidate_refresh_success_detail_is_debug(monkeypatch, ca
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 8,
@@ -4343,7 +4343,7 @@ async def test_forager_candidate_refresh_skips_only_urgent_symbols(monkeypatch):
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 8}},
         }
         approved_coins_minus_ignored_coins = {
@@ -4436,7 +4436,7 @@ async def test_forager_candidate_refresh_caps_accumulated_budget(monkeypatch):
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 30}},
         }
         approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
@@ -4508,7 +4508,7 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 30,
@@ -4627,7 +4627,7 @@ async def test_forager_candidate_refresh_shares_wall_time_across_surfaces(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 8,
@@ -4733,7 +4733,7 @@ async def test_forager_candidate_refresh_cancels_child_fetch_with_parent(
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 1,
@@ -4812,7 +4812,7 @@ async def test_forager_candidate_refresh_sleep_respects_wall_time_cap(monkeypatc
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
                 "candles": {
                     "max_ohlcv_fetches_per_minute": 30,
@@ -4887,7 +4887,7 @@ async def test_forager_candidate_refresh_skips_latest_final_candles(monkeypatch)
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 30}},
         }
         approved_coins_minus_ignored_coins = {
@@ -4972,7 +4972,7 @@ async def test_forager_candidate_refresh_skips_non_refreshable_sparse_gap(monkey
 
     class FakeBot:
         config = {
-            "bot": {"global": {"warmup": {"max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {"candles": {"max_ohlcv_fetches_per_minute": 30}},
         }
         approved_coins_minus_ignored_coins = {

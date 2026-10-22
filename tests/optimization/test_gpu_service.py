@@ -1037,10 +1037,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     backtest._get_backtest_coin_override = lambda *args, **kwargs: {}
     monkeypatch.setitem(sys.modules, "backtest", backtest)
     config = get_template_config()
-    config['bot']['global']['strategy_kind'] = strategy_kind
+    config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': ['ETH']})
     set_side_universe_sources(config, 'ignored_coins', {'long': ['ETH'], 'short': ['BTC']})
-    config['bot']['global']['hedge_mode'] = False
+    config['bot']["portfolio"]['hedge_mode'] = False
     config["backtest"]["dynamic_wel_by_tradability"] = dynamic_wel_by_tradability
     for side in ("long", "short"):
         config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
@@ -1135,7 +1135,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "filter_by_min_effective_cost": {"long": True, "short": True},
             "max_realized_loss_pct": 1.0,
             "market_order_slippage_pct": 0.0,
-            "hedge_mode": config['bot']['global']['hedge_mode'],
+            "hedge_mode": config['bot']["portfolio"]['hedge_mode'],
         },
     )
     _complete_hsl_payload(payload)

@@ -8,7 +8,7 @@ the [user guide](../../equity_hard_stop_loss.md) covers configuration.
 ## Signal authority
 
 - `coin` is one symbol/position-side scope; `position_side` is every position on one side;
-  `portfolio` has one explicit `bot.global.hsl` policy across both sides.
+  `portfolio` has one explicit `bot.portfolio.hsl` policy across both sides.
 - Slow decaying currency drawdown uses scoped UPNL deltas and ordered net realized
   cashflows, including fees and signed rebates. Balance/slot changes are budget facts,
   never scoped trading PnL. The independent fast EMA smooths the contemporaneous ratio,
@@ -69,7 +69,7 @@ runs after protection in one owned background task with one coalesced pending re
 slow or failed diagnostics cannot become a protective prerequisite. Ordinary strategy, auto-unstuck
 and the realized-loss gate retain their own readiness requirements. Unstuck and
 the gate own independent account-wide net-realized drawdown memories and spans under
-`bot.global.unstuck` and `bot.global.loss_gate`; the gate's allowance uses its fraction directly,
+`bot.portfolio.unstuck` and `bot.portfolio.loss_gate`; the gate's allowance uses its fraction directly,
 without TWEL. Both read one canonical tape, each enabled memory consumes each actual net
 fill once even when HSL is disabled, and the ordinary ledger debits it once. A bounded authoritative
 suffix starts from an explicitly unknown-prefix zero initializer unless a known

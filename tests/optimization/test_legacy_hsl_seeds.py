@@ -73,10 +73,10 @@ def test_explicitly_migrated_seed_retains_numeric_suggestions_and_discards_old_f
     seed=_build_starting_seed_config(extract_configs(str(path))[0])
     assert seed['config_version']==CONFIG_SCHEMA_VERSION
     assert 'fitness' not in seed
-    scope=('bot','global','hsl','drawdown_ratio_threshold') if mode=='unified' else ('bot','long','hsl','drawdown_ratio_threshold')
+    scope=('bot',"portfolio",'hsl','drawdown_ratio_threshold') if mode=='unified' else ('bot','long','hsl','drawdown_ratio_threshold')
     values,count=configs_to_individuals_streaming([seed],[Bound.from_config('threshold',[0.1,0.4])],sig_digits=6,key_paths=[('threshold',scope)])
     assert count==1 and values==[(0.234,)]
-    assert seed['bot']['global']['hsl']['scope']=={'unified':'portfolio','pside':'position_side'}.get(mode,mode)
+    assert seed['bot']["portfolio"]['hsl']['scope']=={'unified':'portfolio','pside':'position_side'}.get(mode,mode)
 
 
 def test_bot_only_old_policy_cannot_bypass_migration():
@@ -118,9 +118,9 @@ def test_nonfinite_current_numeric_seed_is_skipped(field,value,artifact,tmp_path
 @pytest.mark.parametrize(('authored', 'expected'), [(1440.5, 1440.5), (0.5, 1000.0), (100000.0, 50000.0)])
 def test_current_slow_span_seed_survives_extraction_and_normal_bounds_clamp(tmp_path, artifact, authored, expected):
     cfg = get_template_config()
-    cfg['bot']['global']['unstuck']['memory_ema_span_minutes'] = authored
+    cfg['bot']["portfolio"]['unstuck']['memory_ema_span_minutes'] = authored
     seeds = extract_configs(str(save(tmp_path, cfg, artifact)))
-    keys = [('unstuck_memory_ema_span_minutes', ('bot', 'global', 'unstuck', 'memory_ema_span_minutes'))]
+    keys = [('unstuck_memory_ema_span_minutes', ('bot', "portfolio", 'unstuck', 'memory_ema_span_minutes'))]
     values, count = configs_to_individuals_streaming(seeds,
         [Bound.from_config(keys[0][0], [1000.0, 50000.0])], sig_digits=7, key_paths=keys)
     assert count == 1 and values == [(expected,)]
@@ -141,7 +141,7 @@ def test_old_v9_active_gate_seed_requires_explicit_migration(tmp_path):
 @pytest.mark.parametrize('value', ['NaN', 'Infinity', '-Infinity', True, 'bad'])
 def test_invalid_current_live_numeric_seed_is_not_replaced_with_default(tmp_path, value, caplog):
     cfg = get_template_config()
-    cfg['bot']['global']['unstuck']['memory_ema_span_minutes'] = value
+    cfg['bot']["portfolio"]['unstuck']['memory_ema_span_minutes'] = value
     assert extract_configs(str(save(tmp_path, cfg, 'json'))) == []
     assert 'risk optimizer seed value' in caplog.text
 
@@ -152,7 +152,7 @@ def test_anchored_fine_tune_retains_tunable_live_slow_span_suggestions(tmp_path)
 
     config = prepare_config(get_template_config(), verbose=False)
     config['optimize']['bounds'] = {
-        'global': {'unstuck': {'memory_ema_span_minutes': [1000.0, 50000.0]}},
+        "portfolio": {'unstuck': {'memory_ema_span_minutes': [1000.0, 50000.0]}},
         'long': {'hsl': {'drawdown_ratio_threshold': [0.1, 0.4]}},
     }
     for side in ('long', 'short'):
@@ -164,12 +164,12 @@ def test_anchored_fine_tune_retains_tunable_live_slow_span_suggestions(tmp_path)
     directory.mkdir()
     for index, span in enumerate((1440.5, 2880.25)):
         seed = deepcopy(config)
-        seed['bot']['global']['unstuck']['memory_ema_span_minutes'] = span
+        seed['bot']["portfolio"]['unstuck']['memory_ema_span_minutes'] = span
         (directory / f'anchor-{index}.json').write_text(json.dumps(seed))
-    install_anchored_fine_tune_plan(config, ['bot.global.unstuck.memory_ema_span_minutes'], str(directory))
+    install_anchored_fine_tune_plan(config, ['bot.portfolio.unstuck.memory_ema_span_minutes'], str(directory))
     shape = build_optimization_shape(config)
     seeds = list(iter_anchored_fine_tune_seed_configs(config))
-    assert [seed['bot']['global']['unstuck']['memory_ema_span_minutes'] for seed in seeds] == [1440.5, 2880.25]
+    assert [seed['bot']["portfolio"]['unstuck']['memory_ema_span_minutes'] for seed in seeds] == [1440.5, 2880.25]
     values, count = configs_to_individuals_streaming(seeds, shape.bounds, sig_digits=7, optimization_shape=shape)
     assert count == 2
     assert sorted(tuple(row) for row in values) == [(0.0, 1440.5), (1.0, 2880.25)]
@@ -180,16 +180,16 @@ RISK_SPAN_PATHS = [
     for side in ("long", "short")
     for field in ("memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes")
 ] + [
-    ("bot", "global", "hsl", field)
+    ("bot", "portfolio", "hsl", field)
     for field in ("memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes")
 ] + [
-    ("bot", "global", "unstuck", "memory_ema_span_minutes"),
-    ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
+    ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
+    ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
 ]
 
 
 def span_seed_config(path, value):
-    mode = "portfolio" if path[1:3] == ("global", "hsl") else "coin"
+    mode = "portfolio" if path[1:3] == ("portfolio", "hsl") else "coin"
     config = generated_template(get_template_config(), mode)
     node = config
     for key in path[:-1]:
@@ -250,7 +250,7 @@ def test_direct_in_memory_seed_cannot_bypass_unknown_field_validation():
 @pytest.mark.parametrize("scope", ["portfolio", "PORTFOLIO", " portfolio "])
 def test_portfolio_scope_normalization_preserves_numeric_suggestions(scope):
     config = generated_template(get_template_config(), "portfolio")
-    config["bot"]["global"]["hsl"].update(scope=scope, memory_ema_span_minutes=0.5)
+    config["bot"]["portfolio"]["hsl"].update(scope=scope, memory_ema_span_minutes=0.5)
     seed = _build_starting_seed_config(config)
-    assert seed["bot"]["global"]["hsl"]["memory_ema_span_minutes"] == 0.5
-    assert seed["bot"]["global"]["hsl"]["scope"] == "portfolio"
+    assert seed["bot"]["portfolio"]["hsl"]["memory_ema_span_minutes"] == 0.5
+    assert seed["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"

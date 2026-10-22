@@ -406,7 +406,7 @@ def _config_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
 def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     backtest_cfg = config.get("backtest", {}) or {}
     bot_cfg = config.get("bot", {}) or {}
-    global_policy = bot_cfg.get("global", {})
+    portfolio_policy = bot_cfg.get("portfolio", {})
     return {
         "backtest": {
             "start_date": backtest_cfg.get("start_date"),
@@ -420,7 +420,7 @@ def _dataset_hash_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "bot": {
             "universe": {side: deepcopy(bot_cfg.get(side, {}).get("universe", {}))
                          for side in ("long", "short")},
-            "warmup": deepcopy(global_policy.get("warmup", {})),
+            "warmup": deepcopy(portfolio_policy.get("warmup", {})),
         },
         "warmup": {
             "global_minutes": compute_backtest_warmup_minutes(config),

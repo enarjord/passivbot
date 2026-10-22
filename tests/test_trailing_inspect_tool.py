@@ -184,12 +184,12 @@ def test_extract_strategy_params_requires_canonical_trailing_martingale():
         "live": {},
         "bot": {
             "long": {"strategy": {"trailing_martingale": _params()}},
-            "global": {"strategy_kind": "trailing_martingale"},
+            "portfolio": {"strategy_kind": "trailing_martingale"},
         },
     }
 
     assert trailing_inspect._extract_strategy_params(config, "long") == _params()
-    config['bot']['global']['strategy_kind'] = "ema_anchor"
+    config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     with pytest.raises(ValueError, match="supports only"):
         trailing_inspect._extract_strategy_params(config, "long")
 
@@ -315,14 +315,11 @@ def test_extract_side_context_includes_global_and_risk_paths():
     config = {
         "live": {"modes": {"long": "p"}},
         "bot": {
-            "global": {
-                "hsl": {
+            "portfolio": {"hsl": {
                     "scope": "coin",
-                },
-                "loss_gate": {
+                }, "loss_gate": {
                     "max_drawdown_ratio": 0.05,
-                },
-            },
+                }},
             "long": {
                 "entry_cooldown": {
                     "base_duration_minutes": 2.0,
@@ -382,9 +379,9 @@ def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
     from config.schema import get_template_config
 
     config = get_template_config()
-    config["bot"]["global"]["hsl"].update(scope="portfolio", enabled=True)
+    config["bot"]["portfolio"]["hsl"].update(scope="portfolio", enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.125
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.125
     config["bot"]["long"]["risk"]["max_positions"] = 3.0
     config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 0.75
 
@@ -402,14 +399,11 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     config = {
         "live": {"modes": {"long": "normal"}},
         "bot": {
-            "global": {
-                "hsl": {
+            "portfolio": {"hsl": {
                     "scope": "coin",
-                },
-                "loss_gate": {
+                }, "loss_gate": {
                     "max_drawdown_ratio": 1.0,
-                },
-            },
+                }},
             "long": {
                 "hsl": {
                     "enabled": False,
@@ -526,14 +520,11 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
     config = {
         "live": {"modes": {"long": "not-a-mode"}},
         "bot": {
-            "global": {
-                "hsl": {
+            "portfolio": {"hsl": {
                     "scope": "coin",
-                },
-                "loss_gate": {
+                }, "loss_gate": {
                     "max_drawdown_ratio": 1.0,
-                },
-            },
+                }},
             "long": {
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,

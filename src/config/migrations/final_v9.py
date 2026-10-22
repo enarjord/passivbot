@@ -436,11 +436,11 @@ def released_runtime_selector(path):
             parts[-1] = new
     path = ".".join(parts)
     for old, new in (
-        ("live.hsl_signal_mode", "bot.global.hsl.scope"),
-        ("live.max_realized_loss_pct", "bot.global.loss_gate.max_drawdown_ratio"),
+        ("live.hsl_signal_mode", "bot.portfolio.hsl.scope"),
+        ("live.max_realized_loss_pct", "bot.portfolio.loss_gate.max_drawdown_ratio"),
         ("backtest.liquidation_threshold", "backtest.equity_floor_ratio"),
         ("live.auto_gs", "live.disapproved_position_mode"),
-        ("bot.hsl.", "bot.global.hsl."),
+        ("bot.hsl.", "bot.portfolio.hsl."),
         (".hsl.ema_span_minutes", ".hsl.drawdown_ratio_ema_span_minutes"),
         (".risk.n_positions", ".risk.max_positions"),
         (".risk.position_exposure_enforcer_enabled", ".risk.position_exposure_enforcer.enabled"),
@@ -496,13 +496,13 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
 
     def policy_scope(node, inherited):
         mode = node.get("live", {}).get("hsl_signal_mode", inherited)
-        mode = node.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", mode)
+        mode = node.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", mode)
         return "portfolio" if mode == "unified" else mode
 
     def memory_paths(scope):
-        paths = [("bot", "global", "unstuck", "memory_ema_span_minutes"),
-                 ("bot", "global", "loss_gate", "memory_ema_span_minutes")]
-        return paths + ([("bot", "global", "hsl", "memory_ema_span_minutes")]
+        paths = [("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
+                 ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes")]
+        return paths + ([("bot", "portfolio", "hsl", "memory_ema_span_minutes")]
                         if scope == "portfolio" else
                         [("bot", side, "hsl", "memory_ema_span_minutes") for side in ("long", "short")])
 
@@ -519,7 +519,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
         from config.scenario_overrides import normalize_scenario_overrides
 
         values = normalize_scenario_overrides(raw)
-        scope = values.get("live.hsl_signal_mode", values.get("bot.global.hsl.scope", inherited_scope))
+        scope = values.get("live.hsl_signal_mode", values.get("bot.portfolio.hsl.scope", inherited_scope))
         scope = "portfolio" if scope == "unified" else scope
         converted = {}
         for key, value in values.items():
@@ -597,7 +597,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             new = selector(key)
             if key.startswith("live.approved_coins.") and value is None:
                 value = []  # Released null selected nothing; v9 null means inheritance.
-            if new == "bot.global.hsl.scope" and value in {"unified", "pside"}:
+            if new == "bot.portfolio.hsl.scope" and value in {"unified", "pside"}:
                 value = "portfolio" if value == "unified" else "position_side"
             if key == "live.auto_gs":
                 if type(value) is not bool:
@@ -613,8 +613,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     scope = policy_scope(result, "coin")
     live = result.setdefault("live", {})
     for old, target in (
-        ("hsl_signal_mode", ("bot", "global", "hsl", "scope")),
-        ("max_realized_loss_pct", ("bot", "global", "loss_gate", "max_drawdown_ratio")),
+        ("hsl_signal_mode", ("bot", "portfolio", "hsl", "scope")),
+        ("max_realized_loss_pct", ("bot", "portfolio", "loss_gate", "max_drawdown_ratio")),
     ):
         if old in live:
             value = live.pop(old)
@@ -622,7 +622,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
             if old == "hsl_signal_mode" and value in {"unified", "pside"}:
                 value = "portfolio" if value == "unified" else "position_side"
             put(result, target, value, f"live.{old}")
-            record(f"live.{old}", authored_value, {".".join(target): value}, "consumer-owned global risk policy")
+            record(f"live.{old}", authored_value, {".".join(target): value}, "consumer-owned portfolio risk policy")
     if "auto_gs" in live:
         value = live.pop("auto_gs")
         if type(value) is not bool:
@@ -641,8 +641,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     if "hsl" in bot:
         old = bot.pop("hsl")
         for key, value in old.items():
-            put(result, ("bot", "global", "hsl", key), value, f"bot.hsl.{key}")
-        record("bot.hsl", old, {"bot.global.hsl": old}, "portfolio HSL authority")
+            put(result, ("bot", "portfolio", "hsl", key), value, f"bot.hsl.{key}")
+        record("bot.hsl", old, {"bot.portfolio.hsl": old}, "portfolio HSL authority")
     rename(result.setdefault("backtest", {}), "liquidation_threshold", "equity_floor_ratio", "backtest")
 
     def visit(node, path=""):
@@ -772,8 +772,8 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     bounds = result.get("optimize", {}).get("bounds", {})
     if "hsl" in bounds:
         old = bounds.pop("hsl")
-        put(bounds, ("global", "hsl"), old, "optimize.bounds.hsl")
-        record("optimize.bounds.hsl", old, {"global.hsl": old}, "portfolio HSL bound authority")
+        put(bounds, ("portfolio", "hsl"), old, "optimize.bounds.hsl")
+        record("optimize.bounds.hsl", old, {"portfolio.hsl": old}, "portfolio HSL bound authority")
     rewrite_released_public_names(result, record=record)
     sync_canonical_strategy_config(result)
     from config.limits import normalize_limit_entries
@@ -799,7 +799,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     if "live" in bounds and "lookback_ema_span_minutes" in bounds["live"]:
         raise ValueError("optimize.bounds.live.lookback_ema_span_minutes requires explicit independent memory bounds")
     from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
-    kind = result.get("bot", {}).get("global", {}).get("strategy_kind", "trailing_martingale")
+    kind = result.get("bot", {}).get("portfolio", {}).get("strategy_kind", "trailing_martingale")
     for side in ("long", "short"):
         forager = bounds.get(side, {}).get("forager", {})
         nested = forager.get("score_weights", {})

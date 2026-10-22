@@ -141,9 +141,9 @@ def optimizer_dead_param_values(
 ) -> dict[str, float]:
     """Return exact canonical values for optimizer genes made semantically dead."""
 
-    global_cfg = config.get("bot", {}).get("global", {})
+    portfolio_cfg = config.get("bot", {}).get("portfolio", {})
     strategy_kind = (
-        str(global_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+        str(portfolio_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
     )
     if strategy_kind != "trailing_martingale":
         return {}
@@ -247,7 +247,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         weights = forager_cfg["score_weights"]
         flat_bounds = flatten_optimize_bounds(
             config.get("optimize", {}).get("bounds", {}),
-            strategy_kind=config["bot"]["global"]["strategy_kind"],
+            strategy_kind=config["bot"]["portfolio"]["strategy_kind"],
         )
         source_side = optimizer_numeric_group_source_side(
             config, pside, "forager", overrides_list=overrides_list,

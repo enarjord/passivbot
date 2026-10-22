@@ -41,7 +41,7 @@ def test_defaults_are_explicit_and_roundtrip():
     result = prepare_config(source, verbose=False)
     assert result["live"]["modes"]["long"] is None
     assert result["live"]["modes"]["short"] is None
-    assert result["bot"]["global"]["warmup"]["max_minutes"] is None
+    assert result["bot"]["portfolio"]["warmup"]["max_minutes"] is None
     assert result["live"]["startup"]["warmup_concurrency"] == "auto"
     assert prepare_config(result, verbose=False)["live"] == result["live"]
     assert source == original
@@ -51,7 +51,7 @@ def test_defaults_are_explicit_and_roundtrip():
     ("live.modes.long", ""), ("live.modes.short", " "),
     ("live.modes.long", False), ("live.modes.long", 0),
     ("live.modes.long", "null"), ("live.modes.long", "unknown"),
-    *[("bot.global.warmup.max_minutes", value)
+    *[("bot.portfolio.warmup.max_minutes", value)
       for value in (0, 0.0, -1, True, False, float("nan"), float("inf"), "0", [])],
     *[("live.startup.warmup_concurrency", value)
       for value in (0, -1, 1.5, 1.0, True, False, None, float("nan"), "0", "3", "AUTO")],
@@ -115,13 +115,13 @@ def test_optimizer_and_suite_apply_explicit_controls_before_actual_consumers():
     source = get_template_config()
     source["live"]["modes"]["long"] = "manual"
     source["live"]["startup"]["warmup_concurrency"] = 3
-    source["bot"]["global"]["warmup"]["max_minutes"] = 4.0
+    source["bot"]["portfolio"]["warmup"]["max_minutes"] = 4.0
     source["optimize"]["fixed_runtime_overrides"] = {
         "live.modes.long": None, "live.startup.warmup_concurrency": "auto",
-        "bot.global.warmup.max_minutes": None,
+        "bot.portfolio.warmup.max_minutes": None,
     }
     scenario = {"live.modes.long": "panic", "live.startup.warmup_concurrency": 2,
-                "bot.global.warmup.max_minutes": 1.0}
+                "bot.portfolio.warmup.max_minutes": 1.0}
     source["backtest"]["scenarios"] = [{"label": "one", "overrides": scenario}]
     original = deepcopy(source)
     config = parse_overrides(prepare_config(source, verbose=False), verbose=False)
@@ -145,14 +145,14 @@ def test_uncapped_and_positive_warmup_round_up_at_acquisition():
     uncapped = compute_backtest_warmup_minutes(source, include_rms=False)
     assert uncapped > 1
     assert live_warmup_cap_minutes(source) == 0
-    source["bot"]["global"]["warmup"]["max_minutes"] = 1.0
+    source["bot"]["portfolio"]["warmup"]["max_minutes"] = 1.0
     assert compute_backtest_warmup_minutes(source, include_rms=False) == 1
-    source["bot"]["global"]["warmup"]["max_minutes"] = 5.5
+    source["bot"]["portfolio"]["warmup"]["max_minutes"] = 5.5
     assert live_warmup_cap_minutes(source) == 6
-    source["bot"]["global"]["warmup"]["max_minutes"] = 0.5
+    source["bot"]["portfolio"]["warmup"]["max_minutes"] = 0.5
     assert live_warmup_cap_minutes(source) == 1
     assert compute_backtest_warmup_minutes(source, include_rms=False) == 1
-    source["bot"]["global"]["warmup"]["max_minutes"] = 0
+    source["bot"]["portfolio"]["warmup"]["max_minutes"] = 0
     with pytest.raises(ValueError, match="positive finite"):
         compute_backtest_warmup_minutes(source)
 
@@ -177,22 +177,22 @@ def test_auto_concurrency_retains_context_and_exchange_policy(exchange, context,
 def test_cli_distinguishes_omission_from_null_and_keeps_nullable_projection():
     source = get_template_config()
     source["live"]["modes"]["long"] = "manual"
-    source["bot"]["global"]["warmup"]["max_minutes"] = 500.0
+    source["bot"]["portfolio"]["warmup"]["max_minutes"] = 500.0
     parser = ArgumentParser()
     add_arguments_recursively(parser, source)
     update_config_with_args(source, parser.parse_args([]))
     assert source["live"]["modes"]["long"] == "manual"
-    args = parser.parse_args(["--live.modes.long", "null", "--bot.global.warmup.max_minutes", "null",
+    args = parser.parse_args(["--live.modes.long", "null", "--bot.portfolio.warmup.max_minutes", "null",
                               "--live.startup.warmup_concurrency", "3"])
     update_config_with_args(source, args)
     assert source["live"]["modes"]["long"] is None
-    assert source["bot"]["global"]["warmup"]["max_minutes"] is None
+    assert source["bot"]["portfolio"]["warmup"]["max_minutes"] is None
     assert source["live"]["startup"]["warmup_concurrency"] == 3
-    assert "max_minutes" in project_template_config_for_cli(source, "optimize")["bot"]["global"]["warmup"]
+    assert "max_minutes" in project_template_config_for_cli(source, "optimize")["bot"]["portfolio"]["warmup"]
 
 
 @pytest.mark.parametrize("flag,value", [("--live.modes.long", ""),
-    ("--bot.global.warmup.max_minutes", "0"), ("--bot.global.warmup.max_minutes", "nan"),
+    ("--bot.portfolio.warmup.max_minutes", "0"), ("--bot.portfolio.warmup.max_minutes", "nan"),
     ("--live.startup.warmup_concurrency", "0"), ("--live.startup.warmup_concurrency", "1.5")])
 def test_cli_rejects_retired_or_malformed_sentinels(flag, value):
     parser = ArgumentParser()
@@ -210,7 +210,7 @@ def test_generated_schema_models_null_and_numeric_auto_domains():
     assert not list(validator.iter_errors(source))
     for path, valid, invalid in (
         ("live.modes.long", [None, "manual"], ["", False]),
-        ("bot.global.warmup.max_minutes", [None, 0.5], [0, -1, False]),
+        ("bot.portfolio.warmup.max_minutes", [None, 0.5], [0, -1, False]),
         ("live.startup.warmup_concurrency", ["auto", 1, 7], [0, None, "unknown", 1.5, False]),
     ):
         for value in valid:
@@ -314,7 +314,7 @@ def test_released_v8_sentinels_convert_at_every_layer_and_report(tmp_path):
     assert result.config["coin_overrides"]["BTC"]["live"]["modes"]["long"] is None
     for patch in (result.config["optimize"]["fixed_runtime_overrides"],
                   result.config["backtest"]["scenarios"][0]["overrides"]):
-        assert patch["bot.global.warmup.max_minutes"] is None
+        assert patch["bot.portfolio.warmup.max_minutes"] is None
         assert patch["live.startup.warmup_concurrency"] == "auto"
     assert result.config["optimize"]["fixed_runtime_overrides"]["live.modes.long"] is None
     assert result.config["backtest"]["scenarios"][0]["overrides"]["live.modes.short"] is None

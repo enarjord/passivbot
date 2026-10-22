@@ -46,7 +46,7 @@
 
 ## Non-Obvious Details
 
-Span-based warmup acquisition rounds positive `bot.global.warmup.max_minutes` caps upward to
+Span-based warmup acquisition rounds positive `bot.portfolio.warmup.max_minutes` caps upward to
 whole minutes in live and backtest paths; `0.5` means one minute, never uncapped. Null remains
 uncapped. Round only the acquisition window, preserving fractional EMA spans and naturally shorter
 requirements. Native hourly acquisition retains whole-hour alignment, and independent RMS history

@@ -71,7 +71,9 @@ that set.
 
 ## Configuration Surfaces
 
-Use `config.live` only for behavior consumed by live and shared with backtest/optimizer.
+Shared trading policy belongs in `config.bot`: account-wide controls under `bot.portfolio`,
+shared directional defaults under `bot.global`, and directional policy under `bot.long` or
+`bot.short`. Use `config.live` for operational account, process and exchange-I/O controls.
 Simulation-only settings belong in `config.backtest`; optimizer-only settings belong in
 `config.optimize`. See `principles.md` for the canonical ownership rule.
 

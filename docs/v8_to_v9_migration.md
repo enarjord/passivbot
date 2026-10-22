@@ -13,36 +13,36 @@ before backtesting a proposed replacement.
 
 | Released field | Final v9 field or action |
 |---|---|
-| `live.hsl_signal_mode` | `bot.global.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
+| `live.hsl_signal_mode` | `bot.portfolio.hsl.scope`: `coin`, `position_side` or `portfolio`; `pside` becomes `position_side`, `unified` becomes `portfolio` |
 | `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_ratio_threshold`, with the same fractional value |
 | `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
-| `bot.hsl` portfolio policy | `bot.global.hsl` alongside its scope |
+| `bot.hsl` portfolio policy | `bot.portfolio.hsl` alongside its scope |
 | HSL `ema_span_minutes` | `drawdown_ratio_ema_span_minutes` in the same policy |
 | HSL `cooldown_minutes_after_red` | `cooldown_after_red_minutes` in the same policy |
 | Strategy and unstuck `ema_span_0`, `ema_span_1` | `ema_span_0_minutes`, `ema_span_1_minutes`; trailing-martingale spans live under `entry` |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
-| `live.max_realized_loss_pct` | `bot.global.loss_gate.max_drawdown_ratio` |
+| `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_ratio` |
 | Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
 | `backtest.liquidation_threshold` | `backtest.equity_floor_ratio` |
 | `live.auto_gs` | `live.modes.disapproved_position`: `graceful_stop` or `manual` |
-| `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.global` |
+| `live.strategy_kind`, `live.hedge_mode` | Same leaves under `bot.portfolio` |
 | `live.approved_coins` | Common inline approvals become `bot.global.universe.approved_coins`; directional approvals and file bindings remain explicit `bot.<side>.universe.approved_coins` sources |
 | `live.ignored_coins` | Separate `bot.<side>.universe.ignored_coins` sources |
 | Shared minimum age | Copy `live.minimum_coin_age_days` to `bot.long.universe.minimum_coin_age_days` and `bot.short.universe.minimum_coin_age_days`; report consistent all-mode initial-entry admission |
 | Shared minimum-cost filter | Copy to both `bot.<side>.universe.filter_by_min_effective_cost` leaves; simulation override remains nullable |
-| Shared market-order policy | `bot.global.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
-| `live.warmup_ratio` | `bot.global.warmup.span_multiplier`, with the same value |
+| Shared market-order policy | `bot.portfolio.execution`; `market_order_near_touch_threshold` becomes `market_order_near_touch_fraction` with the same value |
+| `live.warmup_ratio` | `bot.portfolio.warmup.span_multiplier`, with the same value |
 | Exposure-enforcer numeric thresholds | `bot.<side>.risk.<enforcer>.threshold_ratio`, with the same value |
-| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_margin`, `bot.global.warmup` |
+| `live.forager_score_hysteresis_pct`, warmup controls | `bot.global.forager.score_hysteresis_margin`, `bot.portfolio.warmup` |
 | Scale-one sizing, allowance, fee, fill and execution `_pct` fields | Public `_fraction` names; values are unchanged |
 | `fee_pct_fallback`, `fee_pct_sanity_abs_max` | `live.fills.fallback_fee_fraction`, `live.fills.max_abs_fee_fraction` |
 | TM `entry.initial_ema_dist`, EMA-anchor `offset` | `entry.initial_ema_distance_fraction`, `offset_fraction` |
 | Coin-specific `normal` mode | Retained operational mode plus `bot.<side>.forager.always_include` |
 | Flat operational `live` fields | `live.account`, `api`, `candles`, `startup`, `fills`, `execution`, `recovery`, `modes`; long/short mode leaves become `live.modes.long`/`short` |
-| Empty forced modes, zero warmup cap, zero warmup concurrency | `null` modes, `bot.global.warmup.max_minutes: null`, and `live.startup.warmup_concurrency: "auto"`; each conversion is reported in every authored layer |
+| Empty forced modes, zero warmup cap, zero warmup concurrency | `null` modes, `bot.portfolio.warmup.max_minutes: null`, and `live.startup.warmup_concurrency: "auto"`; each conversion is reported in every authored layer |
 | Stale `backtest.max_warmup_minutes` | Removed and reported; released v8 read the shared cap from `live.max_warmup_minutes`, even when the stale value differed |
 | Numeric strings in `backtest.maker_fee_override`/`taker_fee_override` | Reported as the same finite numeric fees; `null` retains exchange fees, and booleans require an explicit numeric choice |
 | `forager.volume_drop_pct` | Removed; volume-based ranking remains |
@@ -53,8 +53,8 @@ before backtesting a proposed replacement.
 
 V9 uses separate slow EMA spans for each HSL policy, global unstuck realized memory and
 global loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
-The global span is `bot.global.unstuck.memory_ema_span_minutes`; the gate span is
-`bot.global.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
+The global span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate span is
+`bot.portfolio.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
 
 These unit spelling changes do not rescale values. Price and minute-volatility horizons remain
@@ -93,7 +93,7 @@ passivbot tool migrate-config-v9 input.v8.json \
 
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
   --lookback-ema-span-minutes 43200.0 \
-  --memory-span bot.global.unstuck.memory_ema_span_minutes=21600.0 \
+  --memory-span bot.portfolio.unstuck.memory_ema_span_minutes=21600.0 \
   --report migration-report.json
 ```
 

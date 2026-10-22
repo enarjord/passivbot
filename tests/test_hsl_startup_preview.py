@@ -19,11 +19,9 @@ def _sample_config() -> dict:
         "config_version": "v9.0.0",
         "live": {"account": {"user": "binance_01"}},
         "bot": {
-            "global": {
-                "hsl": {
+            "portfolio": {"hsl": {
                     "scope": "coin",
-                },
-            },
+                }},
             "long": {
                 "hsl": {
                     "enabled": True,
@@ -185,7 +183,7 @@ def test_hsl_preview_degraded_capture_never_becomes_current_by_timestamp():
 
 def test_hsl_preview_portfolio_policy_uses_explicit_block():
     config = _sample_config()
-    config["bot"]["global"]["hsl"] = {
+    config["bot"]["portfolio"]["hsl"] = {
         "scope": "portfolio",
         "enabled": True,
         "drawdown_ratio_threshold": 0.25,

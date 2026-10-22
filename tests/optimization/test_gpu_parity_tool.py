@@ -30,11 +30,11 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
         "--loss-gate-memory-ema-span-minutes", "7200.5",
         "--price-shock", "0", "64", ".7", "--price-shock", "0", "96", "1.3"))
     config, candles, markets, btc, timestamps = modified
-    assert config["bot"]["global"]["hsl"]["scope"] == mode
-    assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 5400.25
-    assert config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 7200.5
+    assert config["bot"]["portfolio"]["hsl"]["scope"] == mode
+    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 5400.25
+    assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 7200.5
     for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
-            [config["bot"]["global"]["hsl"]] if mode == "portfolio" else []):
+            [config["bot"]["portfolio"]["hsl"]] if mode == "portfolio" else []):
         assert policy["drawdown_ratio_threshold"] == .002
         assert policy["drawdown_ratio_ema_span_minutes"] == 2.5
         assert policy["memory_ema_span_minutes"] == 3600.0
@@ -102,7 +102,7 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
         validate_gpu_metric_names=lambda names, **_: names,
     ))
     def comparison(inputs, *a, **kw):
-        assert inputs[0]["bot"]["global"]["hsl"]["drawdown_ratio_threshold"] == .002
+        assert inputs[0]["bot"]["portfolio"]["hsl"]["drawdown_ratio_threshold"] == .002
         return {"passed": False}
     monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
     assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "portfolio",
@@ -424,7 +424,7 @@ def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl
     config, candles, markets, btc, timestamps = gpu_parity.fixture_inputs(options)
     assert candles.shape == (128, 2, 4)
     assert config["backtest"]["coins"]["binance"] == ["COIN00", "COIN01"]
-    assert config['bot']['global']['strategy_kind'] == strategy
+    assert config['bot']["portfolio"]['strategy_kind'] == strategy
     from utils import date_to_ts
     assert date_to_ts(config["backtest"]["start_date"]) == timestamps[0]
     assert date_to_ts(config["backtest"]["end_date"]) == timestamps[-1] + 60_000

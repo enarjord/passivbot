@@ -19,7 +19,7 @@ from optimizer_overrides import apply_coupled_unstuck_ema_spans
 
 def config_for(kind="trailing_martingale"):
     config = get_template_config()
-    config['bot']['global']['strategy_kind'] = kind
+    config['bot']["portfolio"]['strategy_kind'] = kind
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     config = parse_overrides(prepare_config(config, verbose=False), verbose=False)
     for side in ("long", "short"):
@@ -284,8 +284,8 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
         backtest_params={
             "coins": ["BTC"],
             "dynamic_wel_by_tradability": True,
-            "unstuck_memory_ema_span_minutes": config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"],
-            "loss_gate_memory_ema_span_minutes": config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"],
+            "unstuck_memory_ema_span_minutes": config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"],
+            "loss_gate_memory_ema_span_minutes": config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"],
             "equity_hard_stop_loss": {
                 "engine": "hsl",
                 "mode": "coin",
@@ -325,8 +325,8 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
 
 def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins():
     config = config_for()
-    config['bot']['global']['warmup']['span_multiplier'] = 1.0
-    config['bot']['global']['warmup']['max_minutes'] = 1000000
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 900_000.5}}}}
     }

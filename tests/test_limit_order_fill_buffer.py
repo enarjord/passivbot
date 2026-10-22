@@ -77,7 +77,7 @@ def _native_args():
     cfg['backtest']['btc_collateral_cap'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
     set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
-    cfg['bot']['global']['execution']['market_orders_allowed'] = False
+    cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     for side in ['long', 'short']:
         # This synthetic replay isolates fill rules, without inception metadata.
         cfg['bot'][side]['universe']['minimum_coin_age_days'] = 0.0

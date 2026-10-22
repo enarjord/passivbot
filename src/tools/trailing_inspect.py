@@ -98,11 +98,11 @@ def _validate_derived_finite(value: Any, path: str = "result") -> None:
 
 
 def _extract_strategy_params(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
-    global_policy = _require_mapping(config.get("bot", {}).get("global"), "bot.global")
-    strategy_kind = str(global_policy.get("strategy_kind") or STRATEGY_KIND).strip().lower()
+    portfolio_policy = _require_mapping(config.get("bot", {}).get("portfolio"), "bot.portfolio")
+    strategy_kind = str(portfolio_policy.get("strategy_kind") or STRATEGY_KIND).strip().lower()
     if strategy_kind != STRATEGY_KIND:
         raise ValueError(
-            f"config uses bot.global.strategy_kind={strategy_kind!r}; this inspector supports "
+            f"config uses bot.portfolio.strategy_kind={strategy_kind!r}; this inspector supports "
             f"only {STRATEGY_KIND!r}"
         )
     bot = _require_mapping(config.get("bot"), "bot")
@@ -140,7 +140,7 @@ def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str
     return _extract_strategy_params(
         {
             "bot": {
-                "global": {"strategy_kind": STRATEGY_KIND},
+                "portfolio": {"strategy_kind": STRATEGY_KIND},
                 pside: {
                     "strategy": {STRATEGY_KIND: defaults[pside]},
                 }
@@ -156,11 +156,11 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
-    global_risk = _require_mapping(bot.get("global"), "bot.global")
-    hsl_policy = _require_mapping(global_risk.get("hsl"), "bot.global.hsl")
+    portfolio_risk = _require_mapping(bot.get("portfolio"), "bot.portfolio")
+    hsl_policy = _require_mapping(portfolio_risk.get("hsl"), "bot.portfolio.hsl")
     hsl_scope = hsl_policy["scope"]
     hsl = hsl_policy if hsl_scope == "portfolio" else _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
-    loss_gate = _require_mapping(global_risk.get("loss_gate"), "bot.global.loss_gate")
+    loss_gate = _require_mapping(portfolio_risk.get("loss_gate"), "bot.portfolio.loss_gate")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
     unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
@@ -244,11 +244,11 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "hsl_enabled_global": hsl_enabled_global,
         "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
         "hsl_scope": hsl_scope,
-        "hedge_mode": bool(global_risk.get("hedge_mode", False)),
+        "hedge_mode": bool(portfolio_risk.get("hedge_mode", False)),
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
         "loss_gate_max_drawdown_ratio": _finite_float(
-            loss_gate["max_drawdown_ratio"], "bot.global.loss_gate.max_drawdown_ratio"
+            loss_gate["max_drawdown_ratio"], "bot.portfolio.loss_gate.max_drawdown_ratio"
         ),
         "position_exposure_enforcer_enabled": bool(
             risk.get('position_exposure_enforcer', {}).get('enabled', False)

@@ -48,14 +48,14 @@ def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
     assert source == before
     assert len(json.dumps(compact)) < len(json.dumps(source)) * 0.7
     assert "logging" not in compact
-    assert compact["bot"]["global"]["warmup"] == {"max_minutes": None}
+    assert compact["bot"]["portfolio"]["warmup"] == {"max_minutes": None}
     assert effective(compact) == effective(source)
     assert compact_config(compact) == compact
 
 
 @pytest.mark.parametrize("sections", [
     {}, {"bot": {}}, {"live": {}}, {"bot": {}, "live": {}},
-    {"bot": {"long": {}}}, {"bot": {"global": {"strategy_kind": "ema_anchor"}}},
+    {"bot": {"long": {}}}, {"bot": {"portfolio": {"strategy_kind": "ema_anchor"}}},
 ])
 def test_authoring_views_preserve_whole_section_omission(sections):
     source = {"config_version": "v9.0.0", **deepcopy(sections)}
@@ -76,7 +76,7 @@ def test_authoring_views_preserve_whole_section_omission(sections):
 
 
 @pytest.mark.parametrize("export", [compact_config, resolved_config,
-                                    lambda config: explain_config(config, "bot.global.hedge_mode")])
+                                    lambda config: explain_config(config, "bot.portfolio.hedge_mode")])
 @pytest.mark.parametrize("patch", [{"unknown": {}}, {"live": {"hsl_engine": "legacy"}},
                                    {"bot": {"global": {"unknown": True}}}])
 def test_sparse_authoring_does_not_bypass_unknown_or_retired_validation(export, patch):
@@ -87,9 +87,9 @@ def test_sparse_authoring_does_not_bypass_unknown_or_retired_validation(export, 
 
 def test_compact_preserves_nondefault_strategy_selector():
     source = policy()
-    source['bot']['global']['strategy_kind'] = "ema_anchor"
+    source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     compact = compact_config(source)
-    assert compact['bot']['global']['strategy_kind'] == "ema_anchor"
+    assert compact['bot']["portfolio"]['strategy_kind'] == "ema_anchor"
     assert effective(compact) == effective(source)
 
 
@@ -147,7 +147,7 @@ def test_compact_preserves_null_inheritance_and_eligibility_sources():
 def test_compact_retains_optional_portfolio_authorization():
     source = generated_template(policy(), "portfolio")
     compact = compact_config(source)
-    assert compact["bot"]["global"]["hsl"] == source["bot"]["global"]["hsl"]
+    assert compact["bot"]["portfolio"]["hsl"] == source["bot"]["portfolio"]["hsl"]
     assert effective(compact) == effective(source)
 
 
@@ -532,7 +532,7 @@ def test_authoring_tools_never_connect_to_network(monkeypatch):
 def test_explain_cli_prints_report_and_never_rewrites_input(tmp_path, capsys):
     path = write_json(tmp_path / "input.json", policy())
     before = path.read_bytes()
-    assert cli_main(["tool", "config-explain", str(path), "bot.global.warmup.span_multiplier", "--json"]) == 0
+    assert cli_main(["tool", "config-explain", str(path), "bot.portfolio.warmup.span_multiplier", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["value"] == 0.3
     assert report["context"]["scope"] == "offline_policy"

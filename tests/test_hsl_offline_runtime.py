@@ -37,8 +37,8 @@ def deny_network(monkeypatch):
 
 def runtime_inputs(mode):
     cfg, markets, candles = inputs(mode)
-    cfg['bot']['global']['warmup']['span_multiplier'] = 1.0
-    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     for side in ("long", "short"):
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
     cfg["backtest"].update(start_date="2024-01-01", end_date="2024-01-01T02:40:00")
@@ -72,7 +72,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     fixed_side_bounds(cfg)
     target = (
-        cfg["optimize"]["bounds"]["global"]
+        cfg["optimize"]["bounds"]["portfolio"]
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
@@ -111,7 +111,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         )
         # Exercise effective scenario overrides through the complete suite evaluator.
         path = (
-            "bot.global.hsl.drawdown_ratio_threshold"
+            "bot.portfolio.hsl.drawdown_ratio_threshold"
             if mode == "portfolio"
             else "bot.long.hsl.drawdown_ratio_threshold"
         )
@@ -240,14 +240,14 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
     from config.param_paths import resolve_optimizer_key_path
 
     fixed_bounds = {}
-    kind = cfg['bot']['global']['strategy_kind']
+    kind = cfg['bot']["portfolio"]['strategy_kind']
     for key in flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind=kind):
         value = cfg
         for part in resolve_optimizer_key_path(cfg, key):
             value = value[part]
         set_flat_optimize_bound(fixed_bounds, kind, key, [value, value])
     cfg["optimize"]["bounds"] = fixed_bounds
-    cfg["optimize"]["bounds"]["global"]["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.1]}
+    cfg["optimize"]["bounds"]["portfolio"]["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.1]}
     # Spawned workers and the manager also deny IP networking; local Unix IPC
     # remains available for the real multiprocessing backend.
     guard = tmp_path / "guard"

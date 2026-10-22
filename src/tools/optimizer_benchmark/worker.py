@@ -371,7 +371,7 @@ def search_run(entry, arrays, args):
         iters=args.search_iters, seed=entry["seed"], n_cpus=args.workers, write_all_results=True)
     config["optimize"]["bounds"] = {}
     for spec in entry["bounds"]:
-        set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']['global']['strategy_kind'],
+        set_flat_optimize_bound(config["optimize"]["bounds"], config['bot']["portfolio"]['strategy_kind'],
             spec["key"], [spec["low"], spec["high"]]
             + ([spec["step"]] if spec["step"] is not None else []))
     config["optimize"]["scoring"] = [dict(metric="adg_strategy_eq", goal="max"),

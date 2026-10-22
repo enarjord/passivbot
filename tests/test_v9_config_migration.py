@@ -54,7 +54,7 @@ def test_v8_gate_window_removal_requires_separate_ack_and_explicit_memory(window
         migrate(source, memory_span_minutes=12.5)
     result = migrate(source, memory_span_minutes=12.5,
                      acknowledge_realized_loss_gate_memory_change=True)
-    assert result.config["bot"]["global"]["loss_gate"] == {
+    assert result.config["bot"]["portfolio"]["loss_gate"] == {
         "max_drawdown_ratio": fraction, "memory_ema_span_minutes": 12.5}
     assert "realized_loss_gate_lookback_minutes" not in json.dumps(result.config)
     assert any(item["path"] == "live.realized_loss_gate_lookback_minutes" and item["old"] == window
@@ -347,7 +347,7 @@ def test_v8_active_gate_requires_both_memory_choice_and_semantic_ack():
         migrate_v8_to_v9(source, memory_span_minutes=12.5)
     output = migrate_v8_to_v9(source, memory_span_minutes=12.5,
                              acknowledge_realized_loss_gate_memory_change=True).config
-    assert output["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 12.5
+    assert output["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 12.5
     assert "realized_loss_gate_lookback_minutes" not in output["live"]
 
 
@@ -434,8 +434,8 @@ def test_spans_and_bootstrap_are_independent_float_settings():
     cfg = get_template_config()
     prepared = prepare_config(cfg, verbose=False)
     assert prepared["config_version"] == "v9.0.0"
-    assert prepared["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-    assert isinstance(prepared["bot"]["global"]["unstuck"]["memory_ema_span_minutes"], float)
+    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert isinstance(prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"], float)
     assert risk_bootstrap_horizon_minutes(prepared) == (129600.0, True)
     assert "realized_loss_gate_lookback_minutes" not in prepared["live"]
     with pytest.raises(ValueError):
@@ -510,7 +510,7 @@ def test_migration_requires_a_memory_choice_and_does_not_mutate_input():
         migrate_v8_to_v9(source)
     result = migrate_v8_to_v9(source, memory_span_minutes=1234.5)
     assert source == before
-    assert result.config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 1234.5
+    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 1234.5
     assert "realized_loss_gate_lookback_minutes" not in result.config["live"]
     assert "pnls_max_lookback_days" not in result.config["live"]
     assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
@@ -635,9 +635,9 @@ def test_distinct_scenario_window_requires_path_specific_choice():
     result = migrate_v8_to_v9(source, memory_span_minutes=43200,
                              memory_span_choices={path: 1200.5})
     patch = result.config["backtest"]["scenarios"][0]["overrides"]
-    assert patch["bot.global.unstuck.memory_ema_span_minutes"] == 1200.5
+    assert patch["bot.portfolio.unstuck.memory_ema_span_minutes"] == 1200.5
     assert "live.realized_loss_gate_lookback_minutes" not in patch
-    assert patch["bot.global.hsl.scope"] == "portfolio"
+    assert patch["bot.portfolio.hsl.scope"] == "portfolio"
 
 
 def test_legacy_all_history_is_removed_without_infinite_risk_memory():
@@ -645,7 +645,7 @@ def test_legacy_all_history_is_removed_without_infinite_risk_memory():
     source["live"]["pnls_max_lookback_days"] = "all"
     output = migrate_v8_to_v9(source, memory_span_minutes=43200).config
     assert "realized_loss_gate_lookback_minutes" not in output["live"]
-    assert output["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert output["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
 
 
 def test_old_bounds_are_not_converted_as_equivalent_policy():
@@ -695,7 +695,7 @@ def test_cli_dry_run_default_output_and_atomic_backup(tmp_path):
     assert main([str(source), "--lookback-ema-span-minutes", "1234.5"]) == 0
     assert source.read_bytes() == original
     output = tmp_path / "config.v9.json"
-    assert json.loads(output.read_text())["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 1234.5
+    assert json.loads(output.read_text())["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 1234.5
     with pytest.raises(SystemExit):
         main([str(source), "--lookback-ema-span-minutes", "1234.5"])
     assert source.read_bytes() == original
@@ -1369,7 +1369,7 @@ def test_live_rejects_cooldown_longer_than_reconstructible_history_cap():
     from config.hsl import require_live_runtime_support
 
     cfg = get_template_config()
-    cfg["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 1.0
+    cfg["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 1.0
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     cfg["bot"]["long"]["hsl"].update(enabled=True, cooldown_after_red_minutes=200.0)
     prepared = prepare_config(cfg, verbose=False)
@@ -1398,16 +1398,16 @@ def test_global_slow_span_bounds_survive_loader_cleanup_and_optimizer_shape():
     from optimization.shape import build_optimization_shape
 
     cfg = get_template_config()
-    cfg["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 4321.5
+    cfg["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 4321.5
     cfg["optimize"]["bounds"].pop("live", None)
     prepared = prepare_config(cfg, verbose=False)
     fixed_shape = build_optimization_shape(prepared)
     index = [key for key, _ in fixed_shape.key_paths].index("unstuck_memory_ema_span_minutes")
     assert fixed_shape.bounds[index].low == fixed_shape.bounds[index].high == 4321.5
-    prepared["optimize"]["bounds"]["global"]["unstuck"] = {"memory_ema_span_minutes": [2000.5, 6000.5, 1.0]}
+    prepared["optimize"]["bounds"]["portfolio"]["unstuck"] = {"memory_ema_span_minutes": [2000.5, 6000.5, 1.0]}
     exported = clean_config(prepared)
     shape = build_optimization_shape(prepare_config(exported, verbose=False))
     index = [key for key, _ in shape.key_paths].index("unstuck_memory_ema_span_minutes")
-    assert shape.key_paths[index][1] == ("bot", "global", "unstuck", "memory_ema_span_minutes")
+    assert shape.key_paths[index][1] == ("bot", "portfolio", "unstuck", "memory_ema_span_minutes")
     assert shape.bounds[index].low == 2000.5
     assert shape.bounds[index].high == 6000.5

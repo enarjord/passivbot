@@ -799,39 +799,6 @@
             "global": {
               "type": "object",
               "properties": {
-                "execution": {
-                  "type": "object",
-                  "properties": {
-                    "market_order_near_touch_fraction": {
-                      "type": "number",
-                      "default": 0.001,
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "fraction",
-                      "x-passivbot-denominator": "market price",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "market_orders_allowed": {
-                      "type": "boolean",
-                      "default": false,
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    }
-                  },
-                  "additionalProperties": false
-                },
                 "forager": {
                   "type": "object",
                   "properties": {
@@ -852,212 +819,6 @@
                     }
                   },
                   "additionalProperties": false
-                },
-                "hedge_mode": {
-                  "type": "boolean",
-                  "default": false,
-                  "x-passivbot-scope": "global",
-                  "x-passivbot-consumers": [
-                    "live",
-                    "backtest",
-                    "optimize"
-                  ],
-                  "x-passivbot-optimizable": false,
-                  "x-passivbot-coin-override": "forbidden"
-                },
-                "hsl": {
-                  "type": "object",
-                  "properties": {
-                    "cooldown_after_red_minutes": {
-                      "type": "number",
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "hsl_cooldown_minutes_after_red",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-optimize-when": "portfolio HSL scope",
-                      "x-passivbot-recommended-bounds": [
-                        2160,
-                        2160,
-                        10
-                      ],
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "drawdown_ratio_ema_span_minutes": {
-                      "type": "number",
-                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
-                      "minimum": 1.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "hsl_drawdown_ratio_ema_span_minutes",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-optimize-when": "portfolio HSL scope",
-                      "x-passivbot-recommended-bounds": [
-                        720,
-                        720,
-                        1
-                      ],
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "drawdown_ratio_threshold": {
-                      "type": "number",
-                      "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
-                      "exclusiveMinimum": 0.0,
-                      "maximum": 1.0,
-                      "x-passivbot-unit": "fraction",
-                      "x-passivbot-denominator": "scope equity plus remembered drawdown",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "hsl_red_threshold",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-optimize-when": "portfolio HSL scope",
-                      "x-passivbot-recommended-bounds": [
-                        0.15,
-                        0.15,
-                        0.001
-                      ],
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "enabled": {
-                      "type": "boolean",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "memory_ema_span_minutes": {
-                      "type": "number",
-                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
-                      "minimum": 1.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "hsl_memory_ema_span_minutes",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-optimize-when": "portfolio HSL scope",
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "panic_close_order_type": {
-                      "type": "string",
-                      "enum": [
-                        "limit",
-                        "market"
-                      ],
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "scale_budget_with_excess_allowance": {
-                      "type": "boolean",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "scope": {
-                      "type": "string",
-                      "default": "coin",
-                      "enum": [
-                        "coin",
-                        "position_side",
-                        "portfolio"
-                      ],
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "loss_gate": {
-                  "type": "object",
-                  "properties": {
-                    "max_drawdown_ratio": {
-                      "type": "number",
-                      "default": 1.0,
-                      "description": "Values at least 1 disable the gate; zero blocks lossy non-panic closes.",
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "fraction",
-                      "x-passivbot-denominator": "raw balance plus loss-gate remembered drawdown",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "memory_ema_span_minutes": {
-                      "type": "number",
-                      "default": 43200.0,
-                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
-                      "minimum": 1.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "loss_gate_memory_ema_span_minutes",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-coin-override": "forbidden"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "strategy_kind": {
-                  "type": "string",
-                  "default": "trailing_martingale",
-                  "enum": [
-                    "trailing_martingale",
-                    "ema_anchor"
-                  ],
-                  "x-passivbot-scope": "global",
-                  "x-passivbot-consumers": [
-                    "live",
-                    "backtest",
-                    "optimize"
-                  ],
-                  "x-passivbot-optimizable": false,
-                  "x-passivbot-coin-override": "forbidden"
                 },
                 "universe": {
                   "type": "object",
@@ -1130,67 +891,6 @@
                           }
                         }
                       ]
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "unstuck": {
-                  "type": "object",
-                  "properties": {
-                    "memory_ema_span_minutes": {
-                      "type": "number",
-                      "default": 43200.0,
-                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
-                      "minimum": 1.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizer-key": "unstuck_memory_ema_span_minutes",
-                      "x-passivbot-optimizable": true,
-                      "x-passivbot-coin-override": "forbidden"
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "warmup": {
-                  "type": "object",
-                  "properties": {
-                    "max_minutes": {
-                      "type": [
-                        "number",
-                        "null"
-                      ],
-                      "default": null,
-                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
-                      "exclusiveMinimum": 0.0,
-                      "x-passivbot-unit": "minutes",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
-                    },
-                    "span_multiplier": {
-                      "type": "number",
-                      "default": 0.3,
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "multiplier",
-                      "x-passivbot-denominator": "indicator span",
-                      "x-passivbot-scope": "global",
-                      "x-passivbot-consumers": [
-                        "live",
-                        "backtest",
-                        "optimize"
-                      ],
-                      "x-passivbot-optimizable": false,
-                      "x-passivbot-coin-override": "forbidden"
                     }
                   },
                   "additionalProperties": false
@@ -2720,6 +2420,312 @@
                         0.0001
                       ],
                       "x-passivbot-coin-override": "allowed"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "portfolio": {
+              "type": "object",
+              "properties": {
+                "execution": {
+                  "type": "object",
+                  "properties": {
+                    "market_order_near_touch_fraction": {
+                      "type": "number",
+                      "default": 0.001,
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "market price",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "market_orders_allowed": {
+                      "type": "boolean",
+                      "default": false,
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "hedge_mode": {
+                  "type": "boolean",
+                  "default": false,
+                  "x-passivbot-scope": "portfolio",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "hsl": {
+                  "type": "object",
+                  "properties": {
+                    "cooldown_after_red_minutes": {
+                      "type": "number",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "hsl_cooldown_minutes_after_red",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-optimize-when": "portfolio HSL scope",
+                      "x-passivbot-recommended-bounds": [
+                        2160,
+                        2160,
+                        10
+                      ],
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "drawdown_ratio_ema_span_minutes": {
+                      "type": "number",
+                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
+                      "minimum": 1.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-optimize-when": "portfolio HSL scope",
+                      "x-passivbot-recommended-bounds": [
+                        720,
+                        720,
+                        1
+                      ],
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "drawdown_ratio_threshold": {
+                      "type": "number",
+                      "description": "RED requires both current and smoothed drawdown ratios to exceed this threshold.",
+                      "exclusiveMinimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "scope equity plus remembered drawdown",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "hsl_red_threshold",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-optimize-when": "portfolio HSL scope",
+                      "x-passivbot-recommended-bounds": [
+                        0.15,
+                        0.15,
+                        0.001
+                      ],
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "enabled": {
+                      "type": "boolean",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "memory_ema_span_minutes": {
+                      "type": "number",
+                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
+                      "minimum": 1.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "hsl_memory_ema_span_minutes",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-optimize-when": "portfolio HSL scope",
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "panic_close_order_type": {
+                      "type": "string",
+                      "enum": [
+                        "limit",
+                        "market"
+                      ],
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "scale_budget_with_excess_allowance": {
+                      "type": "boolean",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "scope": {
+                      "type": "string",
+                      "default": "coin",
+                      "enum": [
+                        "coin",
+                        "position_side",
+                        "portfolio"
+                      ],
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "loss_gate": {
+                  "type": "object",
+                  "properties": {
+                    "max_drawdown_ratio": {
+                      "type": "number",
+                      "default": 1.0,
+                      "description": "Values at least 1 disable the gate; zero blocks lossy non-panic closes.",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "raw balance plus loss-gate remembered drawdown",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "memory_ema_span_minutes": {
+                      "type": "number",
+                      "default": 43200.0,
+                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
+                      "minimum": 1.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "loss_gate_memory_ema_span_minutes",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "strategy_kind": {
+                  "type": "string",
+                  "default": "trailing_martingale",
+                  "enum": [
+                    "trailing_martingale",
+                    "ema_anchor"
+                  ],
+                  "x-passivbot-scope": "portfolio",
+                  "x-passivbot-consumers": [
+                    "live",
+                    "backtest",
+                    "optimize"
+                  ],
+                  "x-passivbot-optimizable": false,
+                  "x-passivbot-coin-override": "forbidden"
+                },
+                "unstuck": {
+                  "type": "object",
+                  "properties": {
+                    "memory_ema_span_minutes": {
+                      "type": "number",
+                      "default": 43200.0,
+                      "description": "Floating-point EMA span; native f32 decay representability is validated at load time.",
+                      "minimum": 1.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizer-key": "unstuck_memory_ema_span_minutes",
+                      "x-passivbot-optimizable": true,
+                      "x-passivbot-coin-override": "forbidden"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "warmup": {
+                  "type": "object",
+                  "properties": {
+                    "max_minutes": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "default": null,
+                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "minutes",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
+                    },
+                    "span_multiplier": {
+                      "type": "number",
+                      "default": 0.3,
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "multiplier",
+                      "x-passivbot-denominator": "indicator span",
+                      "x-passivbot-scope": "portfolio",
+                      "x-passivbot-consumers": [
+                        "live",
+                        "backtest",
+                        "optimize"
+                      ],
+                      "x-passivbot-optimizable": false,
+                      "x-passivbot-coin-override": "forbidden"
                     }
                   },
                   "additionalProperties": false
@@ -5393,7 +5399,7 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "global": {
+                "portfolio": {
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
@@ -5427,7 +5433,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.loss_gate.memory_ema_span_minutes"
+                          "x-passivbot-target": "bot.portfolio.loss_gate.memory_ema_span_minutes"
                         }
                       }
                     },
@@ -5461,7 +5467,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.unstuck.memory_ema_span_minutes"
+                          "x-passivbot-target": "bot.portfolio.unstuck.memory_ema_span_minutes"
                         }
                       }
                     },
@@ -5495,7 +5501,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.hsl.drawdown_ratio_threshold",
+                          "x-passivbot-target": "bot.portfolio.hsl.drawdown_ratio_threshold",
                           "examples": [
                             [
                               0.15,
@@ -5530,7 +5536,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.hsl.drawdown_ratio_ema_span_minutes",
+                          "x-passivbot-target": "bot.portfolio.hsl.drawdown_ratio_ema_span_minutes",
                           "examples": [
                             [
                               720,
@@ -5565,7 +5571,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.hsl.memory_ema_span_minutes"
+                          "x-passivbot-target": "bot.portfolio.hsl.memory_ema_span_minutes"
                         },
                         "cooldown_after_red_minutes": {
                           "anyOf": [
@@ -5593,7 +5599,7 @@
                               "items": false
                             }
                           ],
-                          "x-passivbot-target": "bot.global.hsl.cooldown_after_red_minutes",
+                          "x-passivbot-target": "bot.portfolio.hsl.cooldown_after_red_minutes",
                           "examples": [
                             [
                               2160,
@@ -9912,10 +9918,10 @@
             "properties": {
               "bot": {
                 "required": [
-                  "global"
+                  "portfolio"
                 ],
                 "properties": {
-                  "global": {
+                  "portfolio": {
                     "required": [
                       "hsl"
                     ],
@@ -14433,83 +14439,17 @@
         "bot.global": {
           "$ref": "#/$defs/config/properties/bot/properties/global"
         },
-        "bot.global.execution": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution"
-        },
-        "bot.global.execution.market_order_near_touch_fraction": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
-        },
-        "bot.global.execution.market_orders_allowed": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
-        },
         "bot.global.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager"
         },
         "bot.global.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
-        "bot.global.hedge_mode": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hedge_mode"
-        },
-        "bot.global.hsl": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl"
-        },
-        "bot.global.hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
-        },
-        "bot.global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
-        },
-        "bot.global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
-        },
-        "bot.global.hsl.enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
-        },
-        "bot.global.hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/memory_ema_span_minutes"
-        },
-        "bot.global.hsl.panic_close_order_type": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/panic_close_order_type"
-        },
-        "bot.global.hsl.scale_budget_with_excess_allowance": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scale_budget_with_excess_allowance"
-        },
-        "bot.global.hsl.scope": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scope"
-        },
-        "bot.global.loss_gate": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate"
-        },
-        "bot.global.loss_gate.max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/max_drawdown_ratio"
-        },
-        "bot.global.loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
-        },
-        "bot.global.strategy_kind": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
-        },
         "bot.global.universe": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
         },
         "bot.global.universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
-        },
-        "bot.global.unstuck": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
-        },
-        "bot.global.unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
-        },
-        "bot.global.warmup": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup"
-        },
-        "bot.global.warmup.max_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
-        },
-        "bot.global.warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         },
         "bot.long": {
           "$ref": "#/$defs/config/properties/bot/properties/long"
@@ -14780,6 +14720,75 @@
         },
         "bot.long.unstuck.loss_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck/properties/loss_allowance_fraction"
+        },
+        "bot.portfolio": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio"
+        },
+        "bot.portfolio.execution": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution"
+        },
+        "bot.portfolio.execution.market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_order_near_touch_fraction"
+        },
+        "bot.portfolio.execution.market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_orders_allowed"
+        },
+        "bot.portfolio.hedge_mode": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hedge_mode"
+        },
+        "bot.portfolio.hsl": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl"
+        },
+        "bot.portfolio.hsl.cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
+        },
+        "bot.portfolio.hsl.drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        },
+        "bot.portfolio.hsl.drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        },
+        "bot.portfolio.hsl.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
+        },
+        "bot.portfolio.hsl.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
+        },
+        "bot.portfolio.hsl.panic_close_order_type": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/panic_close_order_type"
+        },
+        "bot.portfolio.hsl.scale_budget_with_excess_allowance": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scale_budget_with_excess_allowance"
+        },
+        "bot.portfolio.hsl.scope": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scope"
+        },
+        "bot.portfolio.loss_gate": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate"
+        },
+        "bot.portfolio.loss_gate.max_drawdown_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        },
+        "bot.portfolio.loss_gate.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
+        },
+        "bot.portfolio.strategy_kind": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/strategy_kind"
+        },
+        "bot.portfolio.unstuck": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/unstuck"
+        },
+        "bot.portfolio.unstuck.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
+        },
+        "bot.portfolio.warmup": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup"
+        },
+        "bot.portfolio.warmup.max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
+        },
+        "bot.portfolio.warmup.span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         },
         "bot.short": {
           "$ref": "#/$defs/config/properties/bot/properties/short"
@@ -15444,35 +15453,35 @@
         "optimize.bounds": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds"
         },
-        "optimize.bounds.global": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global"
+        "optimize.bounds.portfolio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio"
         },
-        "optimize.bounds.global.loss_gate": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate"
+        "optimize.bounds.portfolio.loss_gate": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate"
         },
-        "optimize.bounds.global.loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
+        "optimize.bounds.portfolio.loss_gate.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
         },
-        "optimize.bounds.global.unstuck": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck"
+        "optimize.bounds.portfolio.unstuck": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck"
         },
-        "optimize.bounds.global.unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        "optimize.bounds.portfolio.unstuck.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
         },
-        "optimize.bounds.global.hsl": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl"
+        "optimize.bounds.portfolio.hsl": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl"
         },
-        "optimize.bounds.global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "optimize.bounds.portfolio.hsl.drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
         },
-        "optimize.bounds.global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "optimize.bounds.portfolio.hsl.drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
         },
-        "optimize.bounds.global.hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/memory_ema_span_minutes"
+        "optimize.bounds.portfolio.hsl.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
         },
-        "optimize.bounds.global.hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
+        "optimize.bounds.portfolio.hsl.cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
         "optimize.bounds.long": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long"
@@ -16540,83 +16549,17 @@
         "global": {
           "$ref": "#/$defs/scenarioPatch:bot.global"
         },
-        "global.execution": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution"
-        },
-        "global.execution.market_order_near_touch_fraction": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
-        },
-        "global.execution.market_orders_allowed": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
-        },
         "global.forager": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager"
         },
         "global.forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
-        "global.hedge_mode": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hedge_mode"
-        },
-        "global.hsl": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl"
-        },
-        "global.hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
-        },
-        "global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
-        },
-        "global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
-        },
-        "global.hsl.enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
-        },
-        "global.hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/memory_ema_span_minutes"
-        },
-        "global.hsl.panic_close_order_type": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/panic_close_order_type"
-        },
-        "global.hsl.scale_budget_with_excess_allowance": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scale_budget_with_excess_allowance"
-        },
-        "global.hsl.scope": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scope"
-        },
-        "global.loss_gate": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate"
-        },
-        "global.loss_gate.max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/max_drawdown_ratio"
-        },
-        "global.loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
-        },
-        "global.strategy_kind": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
-        },
         "global.universe": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe"
         },
         "global.universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
-        },
-        "global.unstuck": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck"
-        },
-        "global.unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
-        },
-        "global.warmup": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup"
-        },
-        "global.warmup.max_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
-        },
-        "global.warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         },
         "long": {
           "$ref": "#/$defs/scenarioPatch:bot.long"
@@ -16887,6 +16830,75 @@
         },
         "long.unstuck.loss_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck/properties/loss_allowance_fraction"
+        },
+        "portfolio": {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio"
+        },
+        "portfolio.execution": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution"
+        },
+        "portfolio.execution.market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_order_near_touch_fraction"
+        },
+        "portfolio.execution.market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_orders_allowed"
+        },
+        "portfolio.hedge_mode": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hedge_mode"
+        },
+        "portfolio.hsl": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl"
+        },
+        "portfolio.hsl.cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
+        },
+        "portfolio.hsl.drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        },
+        "portfolio.hsl.drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        },
+        "portfolio.hsl.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
+        },
+        "portfolio.hsl.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
+        },
+        "portfolio.hsl.panic_close_order_type": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/panic_close_order_type"
+        },
+        "portfolio.hsl.scale_budget_with_excess_allowance": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scale_budget_with_excess_allowance"
+        },
+        "portfolio.hsl.scope": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scope"
+        },
+        "portfolio.loss_gate": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate"
+        },
+        "portfolio.loss_gate.max_drawdown_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        },
+        "portfolio.loss_gate.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
+        },
+        "portfolio.strategy_kind": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/strategy_kind"
+        },
+        "portfolio.unstuck": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/unstuck"
+        },
+        "portfolio.unstuck.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
+        },
+        "portfolio.warmup": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup"
+        },
+        "portfolio.warmup.max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
+        },
+        "portfolio.warmup.span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         },
         "short": {
           "$ref": "#/$defs/scenarioPatch:bot.short"
@@ -17165,96 +17177,17 @@
     "scenarioPatch:bot.global": {
       "type": "object",
       "properties": {
-        "execution": {
-          "$ref": "#/$defs/scenarioPatch:bot.global.execution"
-        },
-        "execution.market_order_near_touch_fraction": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
-        },
-        "execution.market_orders_allowed": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
-        },
         "forager": {
           "$ref": "#/$defs/scenarioPatch:bot.global.forager"
         },
         "forager.score_hysteresis_margin": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/forager/properties/score_hysteresis_margin"
         },
-        "hedge_mode": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hedge_mode"
-        },
-        "hsl": {
-          "$ref": "#/$defs/scenarioPatch:bot.global.hsl"
-        },
-        "hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
-        },
-        "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
-        },
-        "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
-        },
-        "hsl.enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
-        },
-        "hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/memory_ema_span_minutes"
-        },
-        "hsl.panic_close_order_type": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/panic_close_order_type"
-        },
-        "hsl.scale_budget_with_excess_allowance": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scale_budget_with_excess_allowance"
-        },
-        "hsl.scope": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scope"
-        },
-        "loss_gate": {
-          "$ref": "#/$defs/scenarioPatch:bot.global.loss_gate"
-        },
-        "loss_gate.max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/max_drawdown_ratio"
-        },
-        "loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
-        },
-        "strategy_kind": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/strategy_kind"
-        },
         "universe": {
           "$ref": "#/$defs/scenarioPatch:bot.global.universe"
         },
         "universe.approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
-        },
-        "unstuck": {
-          "$ref": "#/$defs/scenarioPatch:bot.global.unstuck"
-        },
-        "unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
-        },
-        "warmup": {
-          "$ref": "#/$defs/scenarioPatch:bot.global.warmup"
-        },
-        "warmup.max_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
-        },
-        "warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
-        }
-      },
-      "patternProperties": {},
-      "additionalProperties": false
-    },
-    "scenarioPatch:bot.global.execution": {
-      "type": "object",
-      "properties": {
-        "market_order_near_touch_fraction": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_order_near_touch_fraction"
-        },
-        "market_orders_allowed": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/execution/properties/market_orders_allowed"
         }
       },
       "patternProperties": {},
@@ -17270,78 +17203,11 @@
       "patternProperties": {},
       "additionalProperties": false
     },
-    "scenarioPatch:bot.global.hsl": {
-      "type": "object",
-      "properties": {
-        "cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
-        },
-        "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
-        },
-        "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
-        },
-        "enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/enabled"
-        },
-        "memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/memory_ema_span_minutes"
-        },
-        "panic_close_order_type": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/panic_close_order_type"
-        },
-        "scale_budget_with_excess_allowance": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scale_budget_with_excess_allowance"
-        },
-        "scope": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/hsl/properties/scope"
-        }
-      },
-      "patternProperties": {},
-      "additionalProperties": false
-    },
-    "scenarioPatch:bot.global.loss_gate": {
-      "type": "object",
-      "properties": {
-        "max_drawdown_ratio": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/max_drawdown_ratio"
-        },
-        "memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
-        }
-      },
-      "patternProperties": {},
-      "additionalProperties": false
-    },
     "scenarioPatch:bot.global.universe": {
       "type": "object",
       "properties": {
         "approved_coins": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/universe/properties/approved_coins"
-        }
-      },
-      "patternProperties": {},
-      "additionalProperties": false
-    },
-    "scenarioPatch:bot.global.unstuck": {
-      "type": "object",
-      "properties": {
-        "memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
-        }
-      },
-      "patternProperties": {},
-      "additionalProperties": false
-    },
-    "scenarioPatch:bot.global.warmup": {
-      "type": "object",
-      "properties": {
-        "max_minutes": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/max_minutes"
-        },
-        "span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -18174,6 +18040,159 @@
         },
         "loss_allowance_fraction": {
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/unstuck/properties/loss_allowance_fraction"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.portfolio": {
+      "type": "object",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.execution"
+        },
+        "execution.market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_order_near_touch_fraction"
+        },
+        "execution.market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_orders_allowed"
+        },
+        "hedge_mode": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hedge_mode"
+        },
+        "hsl": {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.hsl"
+        },
+        "hsl.cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
+        },
+        "hsl.drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        },
+        "hsl.drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        },
+        "hsl.enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
+        },
+        "hsl.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
+        },
+        "hsl.panic_close_order_type": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/panic_close_order_type"
+        },
+        "hsl.scale_budget_with_excess_allowance": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scale_budget_with_excess_allowance"
+        },
+        "hsl.scope": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scope"
+        },
+        "loss_gate": {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.loss_gate"
+        },
+        "loss_gate.max_drawdown_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        },
+        "loss_gate.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
+        },
+        "strategy_kind": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/strategy_kind"
+        },
+        "unstuck": {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.unstuck"
+        },
+        "unstuck.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
+        },
+        "warmup": {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.warmup"
+        },
+        "warmup.max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
+        },
+        "warmup.span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.portfolio.execution": {
+      "type": "object",
+      "properties": {
+        "market_order_near_touch_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_order_near_touch_fraction"
+        },
+        "market_orders_allowed": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution/properties/market_orders_allowed"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.portfolio.hsl": {
+      "type": "object",
+      "properties": {
+        "cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
+        },
+        "drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        },
+        "drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
+        },
+        "enabled": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/enabled"
+        },
+        "memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
+        },
+        "panic_close_order_type": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/panic_close_order_type"
+        },
+        "scale_budget_with_excess_allowance": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scale_budget_with_excess_allowance"
+        },
+        "scope": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hsl/properties/scope"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.portfolio.loss_gate": {
+      "type": "object",
+      "properties": {
+        "max_drawdown_ratio": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/max_drawdown_ratio"
+        },
+        "memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.portfolio.unstuck": {
+      "type": "object",
+      "properties": {
+        "memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
+        }
+      },
+      "patternProperties": {},
+      "additionalProperties": false
+    },
+    "scenarioPatch:bot.portfolio.warmup": {
+      "type": "object",
+      "properties": {
+        "max_minutes": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
+        },
+        "span_multiplier": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -19613,35 +19632,35 @@
         "bounds": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds"
         },
-        "bounds.global": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global"
+        "bounds.portfolio": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio"
         },
-        "bounds.global.loss_gate": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate"
+        "bounds.portfolio.loss_gate": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate"
         },
-        "bounds.global.loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
+        "bounds.portfolio.loss_gate.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
         },
-        "bounds.global.unstuck": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck"
+        "bounds.portfolio.unstuck": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck"
         },
-        "bounds.global.unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        "bounds.portfolio.unstuck.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
         },
-        "bounds.global.hsl": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl"
+        "bounds.portfolio.hsl": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl"
         },
-        "bounds.global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "bounds.portfolio.hsl.drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
         },
-        "bounds.global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "bounds.portfolio.hsl.drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
         },
-        "bounds.global.hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/memory_ema_span_minutes"
+        "bounds.portfolio.hsl.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
         },
-        "bounds.global.hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
+        "bounds.portfolio.hsl.cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
         "bounds.long": {
           "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/long"
@@ -20306,35 +20325,35 @@
     "scenarioPatch:optimize.bounds": {
       "type": "object",
       "properties": {
-        "global": {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global"
+        "portfolio": {
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio"
         },
-        "global.loss_gate": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate"
+        "portfolio.loss_gate": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate"
         },
-        "global.loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
+        "portfolio.loss_gate.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
         },
-        "global.unstuck": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck"
+        "portfolio.unstuck": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck"
         },
-        "global.unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+        "portfolio.unstuck.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
         },
-        "global.hsl": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl"
+        "portfolio.hsl": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl"
         },
-        "global.hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+        "portfolio.hsl.drawdown_ratio_threshold": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
         },
-        "global.hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+        "portfolio.hsl.drawdown_ratio_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
         },
-        "global.hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/memory_ema_span_minutes"
+        "portfolio.hsl.memory_ema_span_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
         },
-        "global.hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
+        "portfolio.hsl.cooldown_after_red_minutes": {
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         },
         "long": {
           "$ref": "#/$defs/scenarioPatch:optimize.bounds.long"
@@ -20790,74 +20809,74 @@
       "patternProperties": {},
       "additionalProperties": false
     },
-    "scenarioPatch:optimize.bounds.global": {
+    "scenarioPatch:optimize.bounds.portfolio": {
       "type": "object",
       "properties": {
         "loss_gate": {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.loss_gate"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.loss_gate"
         },
         "loss_gate.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
         },
         "unstuck": {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.unstuck"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.unstuck"
         },
         "unstuck.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
         },
         "hsl": {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.hsl"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.hsl"
         },
         "hsl.drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
         },
         "hsl.drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
         },
         "hsl.memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/memory_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
         },
         "hsl.cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         }
       },
       "patternProperties": {},
       "additionalProperties": false
     },
-    "scenarioPatch:optimize.bounds.global.loss_gate": {
+    "scenarioPatch:optimize.bounds.portfolio.loss_gate": {
       "type": "object",
       "properties": {
         "memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/loss_gate/properties/memory_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/loss_gate/properties/memory_ema_span_minutes"
         }
       },
       "patternProperties": {},
       "additionalProperties": false
     },
-    "scenarioPatch:optimize.bounds.global.unstuck": {
+    "scenarioPatch:optimize.bounds.portfolio.unstuck": {
       "type": "object",
       "properties": {
         "memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/unstuck/properties/memory_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/unstuck/properties/memory_ema_span_minutes"
         }
       },
       "patternProperties": {},
       "additionalProperties": false
     },
-    "scenarioPatch:optimize.bounds.global.hsl": {
+    "scenarioPatch:optimize.bounds.portfolio.hsl": {
       "type": "object",
       "properties": {
         "drawdown_ratio_threshold": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_threshold"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_threshold"
         },
         "drawdown_ratio_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/drawdown_ratio_ema_span_minutes"
         },
         "memory_ema_span_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/memory_ema_span_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/memory_ema_span_minutes"
         },
         "cooldown_after_red_minutes": {
-          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/global/properties/hsl/properties/cooldown_after_red_minutes"
+          "$ref": "#/$defs/config/properties/optimize/properties/bounds/properties/portfolio/properties/hsl/properties/cooldown_after_red_minutes"
         }
       },
       "patternProperties": {},
@@ -22360,13 +22379,8 @@
                 "backtest.reducer",
                 "bot",
                 "bot.global",
-                "bot.global.execution",
                 "bot.global.forager",
-                "bot.global.hsl",
-                "bot.global.loss_gate",
                 "bot.global.universe",
-                "bot.global.unstuck",
-                "bot.global.warmup",
                 "bot.long",
                 "bot.long.entry_cooldown",
                 "bot.long.entry_cooldown.weights_minutes",
@@ -22383,6 +22397,12 @@
                 "bot.long.strategy.trailing_martingale.entry",
                 "bot.long.universe",
                 "bot.long.unstuck",
+                "bot.portfolio",
+                "bot.portfolio.execution",
+                "bot.portfolio.hsl",
+                "bot.portfolio.loss_gate",
+                "bot.portfolio.unstuck",
+                "bot.portfolio.warmup",
                 "bot.short",
                 "bot.short.entry_cooldown",
                 "bot.short.entry_cooldown.weights_minutes",
@@ -22429,10 +22449,10 @@
                 "optimize.pymoo.algorithms.nsga3.ref_dirs",
                 "optimize.pymoo.shared",
                 "optimize.bounds",
-                "optimize.bounds.global",
-                "optimize.bounds.global.loss_gate",
-                "optimize.bounds.global.unstuck",
-                "optimize.bounds.global.hsl",
+                "optimize.bounds.portfolio",
+                "optimize.bounds.portfolio.loss_gate",
+                "optimize.bounds.portfolio.unstuck",
+                "optimize.bounds.portfolio.hsl",
                 "optimize.bounds.long",
                 "optimize.bounds.long.risk",
                 "optimize.bounds.long.risk.position_exposure_enforcer",
@@ -22592,13 +22612,8 @@
             "not": {
               "enum": [
                 "global",
-                "global.execution",
                 "global.forager",
-                "global.hsl",
-                "global.loss_gate",
                 "global.universe",
-                "global.unstuck",
-                "global.warmup",
                 "long",
                 "long.entry_cooldown",
                 "long.entry_cooldown.weights_minutes",
@@ -22615,6 +22630,12 @@
                 "long.strategy.trailing_martingale.entry",
                 "long.universe",
                 "long.unstuck",
+                "portfolio",
+                "portfolio.execution",
+                "portfolio.hsl",
+                "portfolio.loss_gate",
+                "portfolio.unstuck",
+                "portfolio.warmup",
                 "short",
                 "short.entry_cooldown",
                 "short.entry_cooldown.weights_minutes",
@@ -22649,29 +22670,11 @@
           "propertyNames": {
             "not": {
               "enum": [
-                "execution",
                 "forager",
-                "hsl",
-                "loss_gate",
-                "universe",
-                "unstuck",
-                "warmup"
+                "universe"
               ]
             }
           }
-        }
-      ]
-    },
-    "fixedPatch:bot.global.execution": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/scenarioPatch:bot.global.execution"
-        },
-        {
-          "type": "object",
-          "properties": {},
-          "patternProperties": {},
-          "propertyNames": {}
         }
       ]
     },
@@ -22688,62 +22691,10 @@
         }
       ]
     },
-    "fixedPatch:bot.global.hsl": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/scenarioPatch:bot.global.hsl"
-        },
-        {
-          "type": "object",
-          "properties": {},
-          "patternProperties": {},
-          "propertyNames": {}
-        }
-      ]
-    },
-    "fixedPatch:bot.global.loss_gate": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/scenarioPatch:bot.global.loss_gate"
-        },
-        {
-          "type": "object",
-          "properties": {},
-          "patternProperties": {},
-          "propertyNames": {}
-        }
-      ]
-    },
     "fixedPatch:bot.global.universe": {
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:bot.global.universe"
-        },
-        {
-          "type": "object",
-          "properties": {},
-          "patternProperties": {},
-          "propertyNames": {}
-        }
-      ]
-    },
-    "fixedPatch:bot.global.unstuck": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/scenarioPatch:bot.global.unstuck"
-        },
-        {
-          "type": "object",
-          "properties": {},
-          "patternProperties": {},
-          "propertyNames": {}
-        }
-      ]
-    },
-    "fixedPatch:bot.global.warmup": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/scenarioPatch:bot.global.warmup"
         },
         {
           "type": "object",
@@ -23007,6 +22958,94 @@
       "allOf": [
         {
           "$ref": "#/$defs/scenarioPatch:bot.long.unstuck"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.portfolio": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "execution",
+                "hsl",
+                "loss_gate",
+                "unstuck",
+                "warmup"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "fixedPatch:bot.portfolio.execution": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.execution"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.portfolio.hsl": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.hsl"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.portfolio.loss_gate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.loss_gate"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.portfolio.unstuck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.unstuck"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "patternProperties": {},
+          "propertyNames": {}
+        }
+      ]
+    },
+    "fixedPatch:bot.portfolio.warmup": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/scenarioPatch:bot.portfolio.warmup"
         },
         {
           "type": "object",
@@ -23484,10 +23523,10 @@
                 "pymoo.algorithms.nsga3.ref_dirs",
                 "pymoo.shared",
                 "bounds",
-                "bounds.global",
-                "bounds.global.loss_gate",
-                "bounds.global.unstuck",
-                "bounds.global.hsl",
+                "bounds.portfolio",
+                "bounds.portfolio.loss_gate",
+                "bounds.portfolio.unstuck",
+                "bounds.portfolio.hsl",
                 "bounds.long",
                 "bounds.long.risk",
                 "bounds.long.risk.position_exposure_enforcer",
@@ -23695,10 +23734,10 @@
           "propertyNames": {
             "not": {
               "enum": [
-                "global",
-                "global.loss_gate",
-                "global.unstuck",
-                "global.hsl",
+                "portfolio",
+                "portfolio.loss_gate",
+                "portfolio.unstuck",
+                "portfolio.hsl",
                 "long",
                 "long.risk",
                 "long.risk.position_exposure_enforcer",
@@ -23735,10 +23774,10 @@
         }
       ]
     },
-    "fixedPatch:optimize.bounds.global": {
+    "fixedPatch:optimize.bounds.portfolio": {
       "allOf": [
         {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio"
         },
         {
           "type": "object",
@@ -23756,10 +23795,10 @@
         }
       ]
     },
-    "fixedPatch:optimize.bounds.global.loss_gate": {
+    "fixedPatch:optimize.bounds.portfolio.loss_gate": {
       "allOf": [
         {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.loss_gate"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.loss_gate"
         },
         {
           "type": "object",
@@ -23769,10 +23808,10 @@
         }
       ]
     },
-    "fixedPatch:optimize.bounds.global.unstuck": {
+    "fixedPatch:optimize.bounds.portfolio.unstuck": {
       "allOf": [
         {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.unstuck"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.unstuck"
         },
         {
           "type": "object",
@@ -23782,10 +23821,10 @@
         }
       ]
     },
-    "fixedPatch:optimize.bounds.global.hsl": {
+    "fixedPatch:optimize.bounds.portfolio.hsl": {
       "allOf": [
         {
-          "$ref": "#/$defs/scenarioPatch:optimize.bounds.global.hsl"
+          "$ref": "#/$defs/scenarioPatch:optimize.bounds.portfolio.hsl"
         },
         {
           "type": "object",

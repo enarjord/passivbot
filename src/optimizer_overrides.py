@@ -56,7 +56,7 @@ def _trace_copy(trace, name, value, target, source):
 
 
 def _mirror_short_from_long(config, *, trace=None):
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
 
     bot_cfg = config.get("bot", {})
     long_side = bot_cfg.get(_MIRROR_SIDE_SOURCES["short"])
@@ -104,7 +104,7 @@ def couple_unstuck_ema_spans(config, pside, *, trace=None):
     This is optimizer finalization only. Saved candidates contain ordinary explicit
     unstuck parameters and require no live/backtest coupling mode.
     """
-    kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     if any(
         patch.get("override_config_path")
         for patch in (config.get("coin_overrides") or {}).values()
@@ -212,10 +212,10 @@ def validate_optimizer_overrides(overrides_list):
 
 
 def _require_trailing_martingale_side(config, pside):
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     if strategy_kind != DEFAULT_STRATEGY_KIND:
         raise ValueError(
-            f"optimizer override requires bot.global.strategy_kind = {DEFAULT_STRATEGY_KIND!r}; got {strategy_kind!r}"
+            f"optimizer override requires bot.portfolio.strategy_kind = {DEFAULT_STRATEGY_KIND!r}; got {strategy_kind!r}"
         )
     strategy_cfg = require_config_value(config, f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}")
     if not isinstance(strategy_cfg, dict):

@@ -62,7 +62,7 @@ def test_public_bounds_keep_stable_optimizer_ids_and_roundtrip_through_the_write
     config = prepare_config(generated_template(get_template_config(), scope), verbose=False)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
     key = "hsl_red_threshold" if scope == "portfolio" else "long_hsl_red_threshold"
-    owner = "global" if scope == "portfolio" else "long"
+    owner = "portfolio" if scope == "portfolio" else "long"
     assert key in flat
     assert resolve_optimizer_key_path(config, key) == ("bot", owner, "hsl", "drawdown_ratio_threshold")
     assert resolve_optimizer_key_path(config, "long_unstuck_ema_dist") == (
@@ -102,9 +102,9 @@ def test_released_scope_conversion_reports_the_authored_value_without_rescaling(
     source = released_v8_policy()
     source["live"]["hsl_signal_mode"] = old
     migration = migrate(source, memory_span_minutes=123.5)
-    assert migration.config["bot"]["global"]["hsl"]["scope"] == new
+    assert migration.config["bot"]["portfolio"]["hsl"]["scope"] == new
     assert any(change["path"] == "live.hsl_signal_mode" and change["old"] == old
-               and change["new"] == {"bot.global.hsl.scope": new} for change in migration.changes)
+               and change["new"] == {"bot.portfolio.hsl.scope": new} for change in migration.changes)
     for side in ("long", "short"):
         assert migration.config["bot"][side]["hsl"]["drawdown_ratio_threshold"] == source["bot"][side]["hsl"]["red_threshold"]
         assert migration.config["bot"][side]["unstuck"]["ema_distance_fraction"] == source["bot"][side]["unstuck"]["ema_dist"]
@@ -138,7 +138,7 @@ def test_retired_quantity_names_are_converter_inputs_only(section, group, old):
 
 def test_retired_pside_scope_is_not_a_current_loading_alias():
     config = get_template_config()
-    config["bot"]["global"]["hsl"]["scope"] = "pside"
+    config["bot"]["portfolio"]["hsl"]["scope"] = "pside"
     with pytest.raises(ValueError, match="position_side"):
         prepare_config(config, verbose=False)
 
@@ -170,7 +170,7 @@ def test_released_scope_override_reports_exact_old_value(owner):
     migration = migrate(source, memory_span_minutes=123.5)
     target = (migration.config["optimize"]["fixed_runtime_overrides"] if owner == "fixed" else
               migration.config["backtest"]["scenarios"][0]["overrides"])
-    assert target == {"bot.global.hsl.scope": "position_side"}
+    assert target == {"bot.portfolio.hsl.scope": "position_side"}
     assert any(change["path"] == prefix + ".live.hsl_signal_mode" and change["old"] == "pside"
                and change["new"] == target for change in migration.changes)
 
@@ -237,7 +237,7 @@ def test_released_position_side_scope_validates_materialized_non_hsl_coin_policy
     source["coin_overrides"] = {"TEST": {"override_config_path": file.name}}
     config = migrate(source, memory_span_minutes=123.5,
                      base_config_path=str(tmp_path / "input.json")).config
-    assert config["bot"]["global"]["hsl"]["scope"] == "position_side"
+    assert config["bot"]["portfolio"]["hsl"]["scope"] == "position_side"
     assert config["coin_overrides"]["TEST"]["bot"]["long"]["unstuck"]["ema_distance_fraction"] == 0.125
 
 

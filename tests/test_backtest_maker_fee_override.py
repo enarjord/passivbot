@@ -136,7 +136,7 @@ def test_prep_backtest_args_passes_market_order_slippage_pct():
 
 def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload():
     config = _base_config()
-    config['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.0017
+    config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0017
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_order_near_touch_threshold"] == 0.0017
@@ -144,7 +144,7 @@ def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload(
 
 def test_prep_backtest_args_uses_market_orders_allowed_from_live():
     config = _base_config()
-    config['bot']['global']['execution']['market_orders_allowed'] = True
+    config['bot']["portfolio"]['execution']['market_orders_allowed'] = True
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["market_orders_allowed"] is True
@@ -152,8 +152,8 @@ def test_prep_backtest_args_uses_market_orders_allowed_from_live():
 
 def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_gate_transport():
     config = _base_config()
-    config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 1234.5
-    config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 2345.5
+    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 1234.5
+    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 2345.5
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["unstuck_memory_ema_span_minutes"] == 1234.5
@@ -165,7 +165,7 @@ def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_ga
 
 def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     config = _base_config()
-    config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.1
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.1
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["max_realized_loss_pct"] == 0.1
@@ -273,7 +273,7 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
 
 def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
-    config["bot"]["global"]["hsl"]["scope"] = "coin"
+    config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
     config["bot"]["long"]["hsl"]["enabled"] = False
     config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.2
     config["coin_overrides"] = {
@@ -360,7 +360,7 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
 
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     config = _base_config()
-    config['bot']['global']['strategy_kind'] = "ema_anchor"
+    config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 3.0
     config["bot"]["long"]["strategy"]["ema_anchor"] = {
         "base_qty_fraction": 0.02,
@@ -428,7 +428,7 @@ def test_log_backtest_execution_settings_emits_summary(caplog):
     assert "[backtest] effective execution settings:" in caplog.text
     assert "market_orders_allowed" in caplog.text
     assert "market_order_near_touch_fraction =" in caplog.text
-    assert "(bot.global.execution)" in caplog.text
+    assert "(bot.portfolio.execution)" in caplog.text
     assert "market_order_near_touch_threshold =" not in caplog.text
     assert "unstuck_memory_ema_span_minutes" in caplog.text
     assert "loss_gate_memory_ema_span_minutes" in caplog.text
@@ -470,7 +470,7 @@ def _native_strategy_payload(strategy_kind):
 
     verify_loaded_runtime_extension()
     config = _base_config()
-    config['bot']['global']['strategy_kind'] = strategy_kind
+    config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config["backtest"]["candle_interval_minutes"] = 1
     mss = _base_mss()
     hlcvs = np.array(

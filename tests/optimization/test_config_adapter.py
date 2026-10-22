@@ -22,7 +22,7 @@ def _get_path(mapping, path):
 
 def _canonical_config_with_bounds(bounds, *, strategy_kind="trailing_martingale"):
     config = get_template_config()
-    config['bot']['global']['strategy_kind'] = strategy_kind
+    config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config["optimize"]["bounds"] = bounds
     for side in ("long", "short"):
         config["bot"][side]["risk"].update(max_positions=1.0, total_wallet_exposure_limit=1.0)
@@ -72,7 +72,7 @@ class TestConfigAdapter:
                              "memory_ema_span_minutes": [100.0, 200.0, 1.0]}},
             "short": {"hsl": {"drawdown_ratio_ema_span_minutes": [30.0, 180.0, 5.0]}},
         })
-        config["bot"]["global"]["hsl"]["scope"] = "position_side"
+        config["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
 
         key_paths = get_optimization_key_paths(config)
 
@@ -229,7 +229,7 @@ class TestConfigAdapter:
     @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
     def test_strategy_optimizer_key_path_map_is_exhaustive_for_rust_spec(self, strategy_kind):
         config = get_template_config()
-        config['bot']['global']['strategy_kind'] = strategy_kind
+        config['bot']["portfolio"]['strategy_kind'] = strategy_kind
         prepared = prepare_config(config, verbose=False, target="canonical", runtime=None)
         spec = pbr.get_strategy_spec(strategy_kind)
 

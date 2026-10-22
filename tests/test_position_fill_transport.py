@@ -77,7 +77,7 @@ async def test_change_during_connector_queue_defers_at_transport(
 
     bot = SimpleNamespace(
         cca=client, _position_fill_sync=sync,
-        config={"bot": {'global': {'hsl': {'scope': 'coin'}}}},
+        config={"bot": {"portfolio": {'hsl': {'scope': 'coin'}}}},
     )
 
     owner = SimpleNamespace(_write_lock=asyncio.Lock(), admit=lambda order: True)
@@ -171,7 +171,7 @@ def test_submission_bookkeeping_waits_for_write_and_survives_ambiguous_retry():
     bot = SimpleNamespace(
         cca=SimpleNamespace(_position_fill_transport_guard=True),
         _position_fill_sync=gate,
-        config={"bot": {'global': {'hsl': {'scope': 'coin'}}}},
+        config={"bot": {"portfolio": {'hsl': {'scope': 'coin'}}}},
     )
     calls = []
     with syncmod.connector_context(bot, dict(symbol=key[0], position_side=key[1])):

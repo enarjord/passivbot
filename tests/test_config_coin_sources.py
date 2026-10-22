@@ -42,13 +42,10 @@ def _base_config():
                     "ignored_coins": []
                 }
             },
-            "global": {
-                "universe": {},
-                "warmup": {
+            "portfolio": {"warmup": {
                     "span_multiplier": 0.2,
                     "max_minutes": None
-                }
-            }
+                }}, "global": {"universe": {}}
         },
         "live": {},
         "optimize": {
