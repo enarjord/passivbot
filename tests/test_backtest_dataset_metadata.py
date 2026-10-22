@@ -97,11 +97,13 @@ def test_build_backtest_dataset_metadata_separates_runtime_and_cache_build_sides
         },
         "bot": {
             "long": {
+                "enabled": True,
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
+                "enabled": True,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "universe": {"approved_coins": ["BTC"]},

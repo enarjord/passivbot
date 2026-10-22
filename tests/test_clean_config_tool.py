@@ -582,7 +582,8 @@ def test_live_projection_keeps_omitted_side_disabled():
     del cfg["bot"]["long"]
     result = cleanup_config(cfg, mode="live")
     assert "backtest" not in result and "optimize" not in result
-    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert result["bot"]["long"]["enabled"] is False
+    assert result["bot"]["long"]["risk"] == get_template_config()["bot"]["long"]["risk"]
 
 
 @pytest.mark.parametrize(
