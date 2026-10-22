@@ -45,6 +45,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         coins = list(config["backtest"]["coins"]["binance"])
         set_side_universe_sources(config, 'approved_coins', {side: list(coins) for side in ("long", "short")})
     config["optimize"].update(backend="gpu", population_size=4, iters=8, seed=12)
+    # This persistence fixture searches two coordinates among many fixed leaves.
+    # Use explicit mutation rates so its four-member cohorts remain populated.
+    config["optimize"]["pymoo"]["shared"].update(
+        mutation_prob=1.0, mutation_prob_per_variable=0.5,
+    )
     if prefilter:
         config["optimize"]["prefilter"] = {"checks": [
             {"metric": "entry_close_span", "enabled": True, "max": 100},
