@@ -10,7 +10,7 @@ from config.field_registry import get_field_registry
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.param_paths import resolve_optimizer_key_path
 from config.public_names import PUBLIC_PATH_RENAMES, SHARED_SIDE_PATH_RENAMES
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from config.strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
 from released_v8_fixtures import released_v8_policy
 from tools.migrate_config_v9 import migrate
@@ -35,7 +35,7 @@ PUBLIC_PAIRS = [(old, new) for old, new in PUBLIC_PAIRS
 
 @pytest.mark.parametrize("old,new", PUBLIC_PAIRS, ids=lambda path: ".".join(path))
 def test_old_development_spellings_are_not_normal_loader_aliases(old, new):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     target = source
     for name in new[:-1]:
         target = target[name]
@@ -102,7 +102,7 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
     *_, payload = prep_backtest_args(config, {"BTC": market}, "binance")
     assert payload["market_order_slippage_pct"] == 0.00073
     assert payload["limit_order_fill_buffer_pct"] == 0.00051
-    assert payload["forager_score_hysteresis_pct"] == 0.037
+    assert payload["forager_score_hysteresis"] == {"long": 0.037, "short": 0.037}
     assert source == original
 
 
@@ -141,7 +141,7 @@ def test_resume_detects_changed_canonical_execution_assumptions(field):
 def test_trailing_inspection_reads_authored_unstuck_fractions(side, close, allowance):
     from tools.trailing_inspect import _extract_side_context
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     for name, value in (("close_fraction", close), ("loss_allowance_fraction", allowance)):
         if value is None:
             source["bot"][side]["unstuck"].pop(name)
