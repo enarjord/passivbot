@@ -158,7 +158,7 @@ def test_cuda_long_replay_tail_ablation_capacity_and_temporal_parity(strategy, s
 
     def replay(enabled, capacity=None, temporal=False):
         runner = cls(run, data, hsl_raw_drawdown_enabled=True,
-                     hsl_raw_tail_enabled=enabled, **kwargs)
+                     hsl_raw_tail_enabled=enabled, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0})
         expected_capacity = _raw_drawdown_tail_capacity(data["n_days"]) if enabled else 1
         assert runner.hsl_raw_tail_capacity == expected_capacity
         if capacity is not None:

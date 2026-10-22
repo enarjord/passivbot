@@ -126,3 +126,22 @@ def test_replay_checkpoint_policy_changes_for_either_fixed_margin(side):
     changed = _gpu_proxy_execution_checkpoint_contract(**options)
     assert changed != initial
     assert initial["backtest"]["forager_score_hysteresis"][side] != policy[side]
+
+
+@pytest.mark.parametrize("field", ["max_realized_loss_pct", "market_order_near_touch_threshold"])
+def test_explicit_neutral_pair_preserves_other_runner_validation(monkeypatch, field):
+    kernel, run, data = cpu_data(monkeypatch)
+    with pytest.raises(ValueError, match=field):
+        kernel.MpsEmaAnchorMulticoinRunner(
+            run, data, side="long", forager_score_hysteresis={"long": 0.0, "short": 0.0},
+            side_activation={"long": True, "short": True},
+            filter_by_min_effective_cost={"long": False, "short": False},
+            **{field: float("nan")})
+
+
+def test_runner_hysteresis_pair_cannot_be_omitted(monkeypatch):
+    kernel, run, data = cpu_data(monkeypatch)
+    with pytest.raises(TypeError, match="forager_score_hysteresis"):
+        kernel.MpsEmaAnchorMulticoinFusedRunner(
+            run, data, side_activation={"long": True, "short": True},
+            filter_by_min_effective_cost={"long": False, "short": False})
