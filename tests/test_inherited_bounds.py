@@ -175,11 +175,24 @@ def test_current_registry_native_ids_and_omission_domains_are_preserved(kind):
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 @pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_current_registry_hsl_bindings_follow_explicit_scope(kind, scope):
-    policy = resolve_bot_policy({}, real_catalog())
+    from config.hsl import generated_template
+    from config.schema import get_template_config
+
+    portfolio = generated_template(get_template_config(), scope)["bot"]["portfolio"]
+    policy = resolve_bot_policy({"portfolio": portfolio}, real_catalog())
     plan = build_bound_plan(policy, {}, strategy_kind=kind, hsl_scope=scope)
     side_hsl = [binding for binding in plan.bindings
                 if binding.authoring_path[1] != "portfolio" and binding.authoring_path[2] == "hsl"]
     assert bool(side_hsl) is (scope != "portfolio")
+    portfolio_hsl = [binding for binding in plan.bindings
+                     if binding.authoring_path[1:3] == ("portfolio", "hsl")]
+    assert bool(portfolio_hsl) is (scope == "portfolio")
+    if scope != "portfolio":
+        with pytest.raises(ValueError, match=f"inactive in {scope} HSL scope"):
+            build_bound_plan(
+                policy, {"portfolio": {"hsl": {"drawdown_ratio_threshold": [0.1, 0.2]}}},
+                strategy_kind=kind, hsl_scope=scope,
+            )
     if scope == "portfolio":
         for side in ("global", "long", "short"):
             with pytest.raises(ValueError, match="inactive in portfolio HSL scope"):
