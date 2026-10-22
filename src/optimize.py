@@ -2126,6 +2126,14 @@ class SuiteEvaluator:
 
         if unstuck_ema_spans_coupled(scenario_config):
             scenario_config = apply_coupled_unstuck_ema_spans(deepcopy(scenario_config))
+        from config.bot_inheritance import get_bot_policy
+        if get_bot_policy(scenario_config) is not None:
+            from config.inherited_bounds import prepare_bound_plan
+            # The scenario now owns its final source and frozen membership.
+            # Bind that exact context before registry deduplication, without
+            # changing the candidate's shared optimizer container.
+            scenario_config["optimize"] = dict(scenario_config["optimize"])
+            prepare_bound_plan(scenario_config)
         from config.hsl import validate_optimizer_metrics
 
         validate_optimizer_metrics(

@@ -12,15 +12,15 @@ from config.universe import (
 from config.authoring import compact_config, resolved_config, explain_config
 from config.load import prepare_config
 from config.overrides import parse_overrides
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from config.hsl import generated_template
 from config_utils import strip_config_metadata
 from passivbot_cli.main import main as cli_main
 from tools.clean_config import cleanup_config, main as clean_main
 
 
-def policy():
-    config = get_template_config()
+def policy(*, lean=False):
+    config = get_template_config() if lean else get_expanded_config_prototype()
     set_side_universe_sources(config, 'approved_coins', {'long': ['BTC', 'ETH'], 'short': []})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     return config
@@ -30,6 +30,9 @@ def effective(source, base=""):
     prepared = prepare_config(source, base_config_path=base, verbose=False)
     # This helper compares execution membership, rather than reloadable source spelling.
     snapshot = fixed_runtime_universe_view(parse_overrides(prepared, verbose=False))
+    # Compare the common effective defaults, rather than whether a source
+    # export explicitly spells their empty approval/ignore fallback.
+    snapshot["bot"]["global"] = deepcopy(prepared["bot"]["global"])
     result = strip_config_metadata(snapshot)
     result["live"].pop("base_config_path", None)
     return result
@@ -42,7 +45,7 @@ def write_json(path, value):
 
 
 def test_compact_default_view_is_smaller_and_reloads_with_same_policy():
-    source = policy()
+    source = policy(lean=True)
     before = deepcopy(source)
     compact = compact_config(source)
     assert source == before
@@ -493,6 +496,7 @@ def test_explain_default_activation_and_normalized_weights_are_visible():
     assert report["value"] is False
     assert report["sources"][-1] == {
         "kind": "inherited", "path": "bot.global.enabled", "value": False,
+        "target": "bot.long.enabled",
     }
     source = policy()
     source["bot"]["long"]["forager"]["score_weights"] = {

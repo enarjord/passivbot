@@ -9,7 +9,7 @@ import pytest
 
 import optimize_suite
 from config.authored import validate_authored_config
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 from suite_runner import ExchangeDataset
 
@@ -83,7 +83,7 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     monkeypatch, rms_search, interval,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["candle_interval_minutes"] = interval
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -249,7 +249,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     monkeypatch,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -333,7 +333,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkeypatch):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -390,7 +390,7 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
     monkeypatch,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance", "bybit"]
@@ -450,7 +450,7 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
     monkeypatch,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -495,7 +495,7 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
 async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
     monkeypatch,
 ):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -540,7 +540,7 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
 
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeypatch):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -591,7 +591,7 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
     from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = backend
     config["backtest"].update(
         start_date="2024-01-01",

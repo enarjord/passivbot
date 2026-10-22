@@ -381,6 +381,21 @@ def search_run(entry, arrays, args):
     config["optimize"]["gpu"].update(batch_size=None if args.width == "auto" else int(args.width),
         tuning_mode="refresh" if args.width == "auto" else "off", max_dispatch_candidate_bars=args.dispatch_budget,
         exact_workers=args.workers)
+    from config.load import prepare_config
+    from config_utils import clean_config
+    from config.universe import materialize_universe_snapshot, runtime_universe_snapshot
+    from config.inherited_bounds import prepare_bound_plan
+
+    # Frozen workloads serialize concrete policy, not trusted runtime wrappers.
+    # Recreate canonical policy/binding authority before attaching their known
+    # candle columns and building the recording/execution identities.
+    candle_coins = deepcopy(config["backtest"]["coins"])
+    config = prepare_config(clean_config(config), verbose=False)
+    config["backtest"]["coins"] = candle_coins
+    available = sorted({coin for coins in candle_coins.values() for coin in coins})
+    config = materialize_universe_snapshot(config,
+        runtime_universe_snapshot(config, available_coins=available))
+    prepare_bound_plan(config)
     # Match optimize.main: construct the immutable recording contract once during
     # preparation, before creating the evaluator and starting the backend clock.
     config[optimize.CONTRACT_CACHE_KEY] = optimize.build_evaluation_contract(config)

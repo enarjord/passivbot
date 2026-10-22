@@ -16,19 +16,19 @@ def test_activation_settings_keep_factual_cost_and_age_layouts(monkeypatch, kind
     filters = {'long': True, 'short': False}
     for side in ('long', 'short'):
         runner = getattr(kernel, f'Mps{kind}MulticoinRunner')(
-            run, data, side=side, filter_by_min_effective_cost=filters, side_activation=activation)
+            run, data, side=side, filter_by_min_effective_cost=filters, side_activation=activation, forager_score_hysteresis={"long": 0.0, "short": 0.0})
         assert len(runner.settings) == 16
         assert runner.settings[15].item() == activation[side]
         assert runner.settings[11].item() == filters[side]
         assert runner.settings[12:14].tolist() == [0., 0.]
     runner = getattr(kernel, f'Mps{kind}MulticoinFusedRunner')(
-        run, data, filter_by_min_effective_cost=filters, side_activation=activation)
-    assert len(runner.settings) == 20
-    assert runner.settings[18:].tolist() == [long, short]
+        run, data, filter_by_min_effective_cost=filters, side_activation=activation, forager_score_hysteresis={"long": 0.0, "short": 0.0})
+    assert len(runner.settings) == 21
+    assert runner.settings[18:20].tolist() == [long, short]
     assert runner.settings[13].item() == 1
     assert runner.settings[17].item() == 0
     runner.settings[14], runner.settings[15] = 7, 1
-    assert runner.settings[18:].tolist() == [long, short]
+    assert runner.settings[18:20].tolist() == [long, short]
     assert data['coin_settings'].shape[1] == 15
 
 
@@ -37,10 +37,10 @@ def test_runner_activation_is_required_complete_boolean_policy(monkeypatch, inva
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(TypeError):
         kernel.MpsEmaAnchorMulticoinFusedRunner(run, data,
-            filter_by_min_effective_cost={'long': False, 'short': False}, side_activation=invalid)
+            filter_by_min_effective_cost={'long': False, 'short': False}, side_activation=invalid, forager_score_hysteresis={"long": 0.0, "short": 0.0})
     with pytest.raises(TypeError, match='side_activation'):
         kernel.MpsEmaAnchorMulticoinFusedRunner(run, data,
-            filter_by_min_effective_cost={'long': False, 'short': False})
+            filter_by_min_effective_cost={'long': False, 'short': False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
 
 def test_shader_and_cuda_lowering_keep_entry_gate_separate_from_management():

@@ -126,3 +126,44 @@ def test_replay_checkpoint_policy_changes_for_either_fixed_margin(side):
     changed = _gpu_proxy_execution_checkpoint_contract(**options)
     assert changed != initial
     assert initial["backtest"]["forager_score_hysteresis"][side] != policy[side]
+
+
+@pytest.mark.parametrize("field", ["max_realized_loss_pct", "market_order_near_touch_threshold"])
+def test_explicit_neutral_pair_preserves_other_runner_validation(monkeypatch, field):
+    kernel, run, data = cpu_data(monkeypatch)
+    with pytest.raises(ValueError, match=field):
+        kernel.MpsEmaAnchorMulticoinRunner(
+            run, data, side="long", forager_score_hysteresis={"long": 0.0, "short": 0.0},
+            side_activation={"long": True, "short": True},
+            filter_by_min_effective_cost={"long": False, "short": False},
+            **{field: float("nan")})
+
+
+def test_runner_hysteresis_pair_cannot_be_omitted(monkeypatch):
+    kernel, run, data = cpu_data(monkeypatch)
+    with pytest.raises(TypeError, match="forager_score_hysteresis"):
+        kernel.MpsEmaAnchorMulticoinFusedRunner(
+            run, data, side_activation={"long": True, "short": True},
+            filter_by_min_effective_cost={"long": False, "short": False})
+
+
+@pytest.mark.parametrize("kind", ["EmaAnchor", "TrailingMartingale"])
+@pytest.mark.parametrize("fused", [False, True])
+def test_minimal_raw_replay_constructor_has_all_required_policy_pairs(monkeypatch, kind, fused):
+    kernel, run, data = cpu_data(monkeypatch)
+    cls = getattr(kernel, f"Mps{kind}Multicoin{'Fused' if fused else ''}Runner")
+    options = {} if fused else {"side": "long"}
+    runner = cls(run, data, pnl_lookback_bars=0,
+                 forager_score_hysteresis={"long": 0.0, "short": 0.0},
+                 side_activation={"long": True, "short": True},
+                 filter_by_min_effective_cost={"long": False, "short": False}, **options)
+    assert runner.replay_sides == (2 if fused else 1)
+    assert runner.settings[4].item() == 0.0
+
+
+def test_runner_minimum_cost_pair_cannot_be_omitted(monkeypatch):
+    kernel, run, data = cpu_data(monkeypatch)
+    with pytest.raises(TypeError, match="filter_by_min_effective_cost"):
+        kernel.MpsEmaAnchorMulticoinFusedRunner(
+            run, data, side_activation={"long": True, "short": True},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0})

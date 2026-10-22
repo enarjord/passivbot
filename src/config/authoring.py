@@ -81,8 +81,6 @@ def _authored(source, base_config_path):
         extract_result_config(source, allow_unmarked_wrapper=True)))
     # Validate the complete input before stripping metadata or pruning defaults.
     full = cleanup_config(payload, base_config_path=base_config_path, _allow_sparse=True)
-    from .activation import get_activation_source, resolve_side_activation
-    resolve_side_activation(full, get_activation_source(payload))
     payload = strip_config_metadata(payload)
     payload.get("live", {}).pop("base_config_path", None)
     return payload, full
@@ -218,7 +216,12 @@ def _resolve_coin_sources(config, *, require_complete):
                 replacements[path] = values[side]
     policy = reconciled_bot_policy(result)
     if policy is not None:
-        install_bot_policy(result, apply_bot_policy_patch(policy, replacements))
+        from dataclasses import replace
+        projected = apply_bot_policy_patch(policy, replacements)
+        # Resolving only source spellings cannot change numeric candidate
+        # transforms or their formatter representations.
+        install_bot_policy(result, replace(projected, _derived=policy._derived,
+                                           _normalized=policy._normalized))
     else:
         for selector, value in replacements.items():
             _set(result, tuple(selector.split(".")), value)
@@ -313,6 +316,12 @@ def _bound_target(config, path):
     selected = path[2:]
     if selected and str(selected[-1]).isdigit():
         selected = selected[:-1]
+    from .inherited_bounds import get_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        target = ("bot", *selected)
+        return target if any(target == binding.authoring_path or target in binding.effective_targets
+                             for binding in plan.bindings) else None
     kind = config["bot"]["portfolio"]["strategy_kind"]
     bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
     for key, target in iter_optimizer_key_paths(config, bounds):
@@ -343,23 +352,43 @@ def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, app
     from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
     from optimization.bounds import Bound
 
-    bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["portfolio"]["strategy_kind"])
-    matches = [(key, bounds[key]) for key, target in iter_optimizer_key_paths(config, bounds) if target == path]
-    if not matches:
-        return {"status": "not_in_bounds"}
-    key, raw_bound = matches[0]
-    try:
-        bound = Bound.from_config(key, raw_bound)
-    except Exception as exc:
-        raise ValueError(f"invalid optimize bound {key!r}: {exc}") from exc
+    from .inherited_bounds import get_bound_plan, resolve_plan_selectors
+    plan = get_bound_plan(config)
     selectors = config["optimize"].get("fixed_params", [])
-    fixed_by = [selector for selector in selectors
-                if key in resolve_bound_selectors(config, [selector], bounds)]
-    authored_bounds = flatten_optimize_bounds(
-        authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["portfolio"]["strategy_kind"],
-    )
+    if plan is not None:
+        binding = next((binding for binding in plan.bindings
+                        if path == binding.authoring_path or path in binding.effective_targets), None)
+        if binding is None:
+            return {"status": "not_in_bounds"}
+        key, bound = binding.key, binding.bound
+        raw_bound = _get(authored, binding.bound_path)
+        declared = raw_bound is not _MISSING
+        if not declared:
+            raw_bound = [bound.low, bound.high]
+            if bound.step is not None:
+                raw_bound.append(bound.step)
+        fixed_by = [selector for selector in selectors
+                    if key in resolve_plan_selectors(config, [selector], plan=plan)]
+        native_keys = binding.native_ids
+    else:
+        bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["portfolio"]["strategy_kind"])
+        matches = [(key, bounds[key]) for key, target in iter_optimizer_key_paths(config, bounds) if target == path]
+        if not matches:
+            return {"status": "not_in_bounds"}
+        key, raw_bound = matches[0]
+        try:
+            bound = Bound.from_config(key, raw_bound)
+        except Exception as exc:
+            raise ValueError(f"invalid optimize bound {key!r}: {exc}") from exc
+        fixed_by = [selector for selector in selectors
+                    if key in resolve_bound_selectors(config, [selector], bounds)]
+        authored_bounds = flatten_optimize_bounds(
+            authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["portfolio"]["strategy_kind"],
+        )
+        declared = key in authored_bounds
+        native_keys = (key,)
     status = ("fixed_selector" if fixed_by else
-              "fixed_bound" if key in authored_bounds and bound.low == bound.high else
+              "fixed_bound" if declared and bound.low == bound.high else
               "omitted_fixed" if bound.low == bound.high else "searched")
     gene_status = status
     shadowed_by = [event for event in applied_overrides
@@ -372,7 +401,8 @@ def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, app
         status = coin_events[-1]["kind"] if coin_events else "coin_override"
         shadowed_by.extend(coin_events)
     from optimizer_overrides import COUPLED_UNSTUCK_EMA_BOUND_KEYS, unstuck_ema_spans_coupled
-    independent = not (key in COUPLED_UNSTUCK_EMA_BOUND_KEYS and unstuck_ema_spans_coupled(config))
+    independent = not (any(key in COUPLED_UNSTUCK_EMA_BOUND_KEYS for key in native_keys)
+                       and unstuck_ema_spans_coupled(config))
     if not independent:
         gene_status = "not_in_genome"
     return {
@@ -380,7 +410,7 @@ def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, app
         "independent_gene": independent,
         "shadowed_by": [{"kind": event["kind"], "path": event["path"]} for event in shadowed_by],
         "key": key, "bounds": deepcopy(raw_bound),
-        "bounds_source": "authored" if key in authored_bounds else
+        "bounds_source": "authored" if declared else
                          "configured_value" if bound.low == bound.high else "loader_default_or_derived",
         "fixed_selectors": fixed_by,
     }
@@ -389,6 +419,10 @@ def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, app
 def explain_config(source, path, *, base_config_path="", coin=None, scenario=None, optimize=False):
     """Return a report envelope without adding provenance to authored policy."""
     authored, full = _authored(source, base_config_path)
+    # Cleanup returns reusable authored policy. Inspection needs the resolved
+    # numeric view and its validated gene bindings, without changing exports.
+    full = prepare_config(full, base_config_path=base_config_path, live_only=True,
+                          verbose=False, log_config_transforms=False)
     parts = resolve_dotted_config_path(full, path)
     if parts is None or not parts:
         raise ValueError("configuration path must not be empty")
@@ -503,11 +537,6 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
     # The same non-live loader resolves null inheritance, ignored lists and
     # dynamic dates without fetching market data.
     effective = prepare_config(effective, base_config_path=base_config_path, verbose=False, log_config_transforms=False)
-    if parts in {("bot", side, "enabled") for side in ("long", "short")}:
-        from .activation import get_activation_source
-        if getattr(get_activation_source(context), parts[1]) is None:
-            events.append({"kind": "inherited", "path": "bot.global.enabled",
-                           "value": effective["bot"][parts[1]]["enabled"]})
     inherited_sources = _inherited_sources(context, parts)
     inherited_paths = {common for _, common in inherited_sources}
     for target, common in inherited_sources:
@@ -583,6 +612,8 @@ def explain_config(source, path, *, base_config_path="", coin=None, scenario=Non
         if coin is not None:
             effective = nested_update(deepcopy(effective), coin_patch)
     value = _get(effective, parts)
+    if bound_target is not None:
+        value = _get(authored, parts, _get(full, parts))
     if value is _MISSING:
         raise KeyError(f"unknown or inactive configuration path {path!r}")
     # Bounds explain declarations; target transformations are separate evidence.

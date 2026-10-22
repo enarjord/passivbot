@@ -138,11 +138,16 @@ def _finite_projection_number(value):
             (type(value) is int and -sys.float_info.max <= value <= sys.float_info.max))
 
 
-def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
+def _compile_projection_guard(value, numeric_paths, path=(), ancestors=(), *, integer_paths=frozenset()):
     """Compile an exact input comparison, permitting selected numeric leaves."""
     if path in numeric_paths and value is not None:
         if not _finite_projection_number(value):
             return None
+        if path in integer_paths:
+            if not float(value).is_integer():
+                return None
+            return lambda current: (_finite_projection_number(current)
+                                    and float(current).is_integer())
         if "score_weights" in path:
             # The cleaner normalizes a copy only to hydrate discarded bounds.
             # Finite nonnegative inputs, including all-zero weights, cannot fail
@@ -178,8 +183,14 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                 return None
             policy = value._bot_policy
             runtime_aliases = value._runtime_aliases
+            from config.field_registry import FieldType
+            integer_paths = integer_paths | frozenset(
+                (*path, scope, *field.suffix)
+                for field in policy.catalog.fields if FieldType.INTEGER in field.types
+                for scope in ("global", "long", "short")
+            )
             authored_guard = _compile_projection_guard(policy.source_view(include_defaults=True),
-                                                        numeric_paths, path, ancestors)
+                numeric_paths, path, ancestors, integer_paths=integer_paths)
             if authored_guard is None:
                 return None
             def source_guard(current):
@@ -200,7 +211,8 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                 and current._authored_bounds == authored and current._runtime_baseline == baseline)
         if any(type(key) is not str for key in value):
             return None
-        children = tuple((key, _compile_projection_guard(child, numeric_paths, (*path, key), ancestors))
+        children = tuple((key, _compile_projection_guard(child, numeric_paths, (*path, key), ancestors,
+                                                        integer_paths=integer_paths))
                          for key, child in value.items())
         if any(guard is None for _key, guard in children):
             return None
@@ -211,7 +223,8 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
     if kind is ResolvedCoinList:
         # Only the validated internal view is supported. Equal membership is
         # insufficient: changing a source or inheritance must use full matching.
-        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors)
+        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors,
+                                                    integer_paths=integer_paths)
                          for index, child in enumerate(value))
         source_guard = _compile_projection_guard(value.source, (), (*path, "source"), ancestors)
         shared_guard = _compile_projection_guard(value.shared_source, (), (*path, "shared_source"), ancestors)
@@ -224,7 +237,8 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=()):
                                 and source_guard(current.source) and shared_guard(current.shared_source)
                                 and all(guard(child) for guard, child in zip(children, current)))
     if kind in (list, tuple):
-        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors)
+        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors,
+                                                    integer_paths=integer_paths)
                          for index, child in enumerate(value))
         if any(guard is None for guard in children):
             return None
