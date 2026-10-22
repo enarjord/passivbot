@@ -58,11 +58,13 @@ def _source_signature(policy, bindings):
     return json.dumps({
         "policy": _without_empty_objects(source),
         "prepared_membership": [
-            (entry.path, entry.members, entry.source_present) for entry in policy._prepared
+            (entry.path, entry.members, entry.source_present)
+            for entry in sorted(policy._prepared, key=lambda entry: entry.path)
         ],
         "omitted_fixed_values": [
             (binding.authoring_path, _get(effective, binding.authoring_path[1:]))
             for binding in bindings if binding.source.startswith("omitted_fixed_")
+            or binding.source == "fixed_selector"
         ],
     }, sort_keys=True, allow_nan=False)
 
@@ -160,6 +162,19 @@ def prepare_bound_plan(config, *, authored_bounds=None):
     portfolio = config["bot"]["portfolio"]
     plan = build_bound_plan(policy, authored, strategy_kind=portfolio["strategy_kind"],
                             hsl_scope=portfolio["hsl"]["scope"])
+    fixed = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [], plan=plan)
+    if fixed:
+        effective = replace(policy, _derived=()).effective_view()
+        bindings = []
+        for binding in plan.bindings:
+            if binding.key in fixed:
+                value = _get(effective, binding.authoring_path[1:])
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    raise TypeError(f"fixed selector {binding.key} requires a finite configured value")
+                binding = replace(binding, bound=Bound(float(value), float(value), binding.bound.step),
+                                  source="fixed_selector")
+            bindings.append(binding)
+        plan = replace(plan, bindings=tuple(bindings), source_signature=_source_signature(policy, bindings))
     runtime = {}
     for binding in plan.bindings:
         bound = [binding.bound.low, binding.bound.high]

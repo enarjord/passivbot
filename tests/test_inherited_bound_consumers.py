@@ -70,3 +70,38 @@ def test_reprepare_keeps_original_domains_and_unused_common_authority():
     assert rebuilt.identity() == original.identity()
     assert rebuilt.unused_bounds == (("optimize", "bounds", "global", "risk", "capacity"),)
     assert optimize_bounds_source_view(config)["optimize"]["bounds"] == raw
+
+
+def test_prepared_source_capture_order_cannot_change_binding_identity():
+    from dataclasses import replace
+    from config.bot_inheritance import get_bot_policy
+    from config.inherited_bounds import build_bound_plan
+    from config.universe import materialize_side_universe_sources
+    config = prepared(source={"global": {"universe": {"approved_coins": ["BTC", "ETH"],
+                                                        "ignored_coins": ["SOL", "XRP"]}}})
+    for field, values in (("approved_coins", ["BTC", "ETH"]), ("ignored_coins", ["SOL", "XRP"])):
+        materialize_side_universe_sources(config, field, {side: values for side in ("long", "short")})
+    policy = get_bot_policy(config)
+    assert len(policy._prepared) == 4
+    reverse = replace(policy, _prepared=tuple(reversed(policy._prepared)))
+    kwargs = {"strategy_kind": "trailing_martingale", "hsl_scope": "coin"}
+    first = build_bound_plan(policy, {}, **kwargs)
+    second = build_bound_plan(reverse, {}, **kwargs)
+    assert first.source_signature == second.source_signature
+    assert first.identity() == second.identity()
+    assert reverse.effective_view()["long"]["universe"]["approved_coins"] == ["BTC", "ETH"]
+
+
+def test_fixed_target_selector_freezes_shared_gene_at_current_value_outside_prior_range():
+    from config.bot_inheritance import get_bot_policy
+    config = prepared(bounds={"global": {"risk": {"capacity": [4.0, 6.0]}}})
+    original = optimize_bounds_source_view(config)["optimize"]["bounds"]
+    config["optimize"]["fixed_params"] = ["short.risk.capacity"]
+    plan = prepare_bound_plan(config)
+    binding = next(binding for binding in plan.bindings if binding.key == "bot.global.risk.capacity")
+    assert binding.bound.low == binding.bound.high == 1.0
+    assert binding.effective_targets == (("bot", "long", "risk", "capacity"), ("bot", "short", "risk", "capacity"))
+    assert optimize_bounds_source_view(config)["optimize"]["bounds"] == original
+    candidate = plan.apply_vector(get_bot_policy(config), [item.bound.low for item in plan.bindings])
+    assert candidate.effective_view()["long"]["risk"]["capacity"] == 1.0
+    assert candidate.effective_view()["short"]["risk"]["capacity"] == 1.0
