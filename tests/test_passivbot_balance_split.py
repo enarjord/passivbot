@@ -7757,7 +7757,7 @@ def test_unstuck_allowance_uses_raw_not_snapped_balance():
 
 def test_effective_min_cost_filter_uses_snapped_balance():
     bot = _unit_bot()
-    bot.config['bot']['global']['strategy_kind'] = "ema_anchor"
+    bot.config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
     bot.balance = 100.0
     bot.balance_raw = 10.0
@@ -7781,7 +7781,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
     bot.balance = 100.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.config = _unit_config(
-        {"live": {}, "bot": {"long": {}, "global": {"strategy_kind": "ema_anchor"}}}
+        {"live": {}, "bot": {"long": {}, "portfolio": {"strategy_kind": "ema_anchor"}}}
     )
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
@@ -7887,7 +7887,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
         active_symbols = []
         _config_hedge_mode = True
         hedge_mode = True
-        config = _unit_config({"live": {}, "bot": {"global": {"strategy_kind": "trailing_martingale"}}})
+        config = _unit_config({"live": {}, "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}}})
         coin_overrides = {}
         markets_dict = {symbol: {"active": True, "maker": 0.0002, "taker": 0.0004}}
         qty_steps = {symbol: 0.001}
@@ -8020,9 +8020,9 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
 def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
     bot = _unit_bot()
     assert bot._live_max_realized_loss_pct() == pytest.approx(1.0)
-    bot.config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] = 0.0
+    bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.0
     assert bot._live_max_realized_loss_pct() == pytest.approx(0.0)
-    del bot.config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"]
+    del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"]
     with pytest.raises(KeyError, match="max_drawdown_ratio"):
         bot._live_max_realized_loss_pct()
 
@@ -12125,7 +12125,7 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(
         {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     if failure == "config_value":
-        bot.config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
+        bot.config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]

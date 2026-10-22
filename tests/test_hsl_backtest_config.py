@@ -38,7 +38,7 @@ def inputs(mode="coin"):
         for branch in ("entry", "close"):
             strategy[branch]["threshold_volatility_1h_weight"] = 0.0
             strategy[branch]["retracement_volatility_1h_weight"] = 0.0
-    active = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    active = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     active.update(
         enabled=True,
         drawdown_ratio_threshold=0.01,

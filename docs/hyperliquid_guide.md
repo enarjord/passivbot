@@ -27,9 +27,9 @@ For the `"private_key"`, use the API wallet created in the API section on Hyperl
 Now Passivbot may be run as normal with `passivbot live ...`. Note that Hyperliquid has a minimum
 $10 order size:
 `initial_entry_cost = balance * (total_wallet_exposure_limit / n_positions) * strategy_initial_sizing_fraction`.
-For `bot.global.strategy_kind = "trailing_martingale"`, this fraction is
+For `bot.portfolio.strategy_kind = "trailing_martingale"`, this fraction is
 `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for
-`bot.global.strategy_kind = "ema_anchor"`, it is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
+`bot.portfolio.strategy_kind = "ema_anchor"`, it is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
 
 #### HyperLiquid with a Vault (CopyTrading-like)
 1. In HyperLiquid, navigate to "Vaults" in the top menu and create a new vault.

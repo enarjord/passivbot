@@ -9,8 +9,8 @@ from tools.clean_config import cleanup_config
 
 
 @pytest.mark.parametrize("parts,old,new", [
-    (("bot", "global", "warmup"), "ratio", "span_multiplier"),
-    (("bot", "global", "execution"), "market_order_near_touch_threshold", "market_order_near_touch_fraction"),
+    (("bot", "portfolio", "warmup"), "ratio", "span_multiplier"),
+    (("bot", "portfolio", "execution"), "market_order_near_touch_threshold", "market_order_near_touch_fraction"),
     (("bot", "long", "risk", "position_exposure_enforcer"), "threshold", "threshold_ratio"),
     (("bot", "short", "risk", "total_exposure_enforcer"), "threshold", "threshold_ratio"),
 ])
@@ -41,8 +41,8 @@ def test_ratio_thresholds_preserve_native_ids_and_full_float_precision(side):
 def test_ratio_units_and_denominators_are_declared_at_the_canonical_path():
     registry = get_field_registry()
     cases = {
-        ("bot", "global", "warmup", "span_multiplier"): ("multiplier", "indicator span"),
-        ("bot", "global", "execution", "market_order_near_touch_fraction"): ("fraction", "market price"),
+        ("bot", "portfolio", "warmup", "span_multiplier"): ("multiplier", "indicator span"),
+        ("bot", "portfolio", "execution", "market_order_near_touch_fraction"): ("fraction", "market price"),
         ("bot", "long", "risk", "position_exposure_enforcer", "threshold_ratio"):
             ("ratio", "effective per-position wallet exposure limit"),
     }

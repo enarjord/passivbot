@@ -62,7 +62,7 @@ def test_released_migration_exports_policy_without_internal_source_context(
     }
     jsonschema.Draft202012Validator(generate_schema()).validate(output)
     reloaded = prepare_config(output, verbose=False)
-    assert reloaded["bot"]["global"]["strategy_kind"] == strategy_kind
+    assert reloaded["bot"]["portfolio"]["strategy_kind"] == strategy_kind
     assert (
         reloaded["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"]
         == 17.5

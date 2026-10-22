@@ -41,7 +41,7 @@ def _nested_strategy_values_from_spec(spec, field):
 
 def _strategy_side(config, pside, kind=None):
     if kind is None:
-        kind = config['bot']['global']['strategy_kind']
+        kind = config['bot']["portfolio"]['strategy_kind']
     return config["bot"][pside]["strategy"][kind]
 
 
@@ -53,13 +53,13 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     compiled = compile_runtime_config(config, runtime="backtest")
 
     assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
-    assert config['bot']['global']['strategy_kind'] == "ema_anchor"
+    assert config['bot']["portfolio"]['strategy_kind'] == "ema_anchor"
     assert config["live"]["account"]["user"] == "example"
     # This explicit demonstration span is not a converted rolling-window policy.
-    assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
     assert config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
-    assert config["bot"]["global"]["loss_gate"]["max_drawdown_ratio"] == 1.0
-    assert config["bot"]["global"]["hsl"]["scope"] == "coin"
+    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] == 1.0
+    assert config["bot"]["portfolio"]["hsl"]["scope"] == "coin"
     assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
     }
@@ -205,7 +205,7 @@ def test_authored_patches_accept_sparse_local_coin_paths(location, path, value):
     assert prepare_config(source, verbose=False)
 
 
-@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.global.loss_gate.memory_ema_span_minutes",
+@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.portfolio.loss_gate.memory_ema_span_minutes",
                                   "bot.long.risk.max_positions", "bot.long.hsl.ema_span_minutes"])
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
 def test_authored_coin_path_pins_reject_aliases_and_global_policy(path, location):
@@ -225,7 +225,7 @@ def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
     from config.hsl import require_live_balance_support
 
     config = get_template_config()
-    config["bot"]["global"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
+    config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
     override = 100.0 if location == "runtime" else None
     if location == "config":
         config["live"]["account"]["balance_override"] = 100.0
@@ -240,7 +240,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     from config.hsl import validate_optimizer_metrics
 
     config = get_template_config()
-    config["bot"]["global"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
+    config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
         validate_optimizer_metrics(config, ["hard_stop_restarts"])
     else:
@@ -303,7 +303,7 @@ def test_startup_phase_budgets_reject_invalid_values(budgets, error_type, error_
 @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
 def test_rust_strategy_spec_matches_python_template_defaults(strategy_kind):
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = strategy_kind
+    source['bot']["portfolio"]['strategy_kind'] = strategy_kind
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     expected = _nested_strategy_values_from_spec(
         project_strategy_spec(strategy_kind, pbr.get_strategy_spec(strategy_kind)), "default"
@@ -440,7 +440,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
     assert "long_filter_volume_ema_span_1m" not in prepared["optimize"]["bounds"]
     assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
-    assert prepared['bot']['global']['strategy_kind'] == "trailing_martingale"
+    assert prepared['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
     assert "ema_span_0" not in get_template_config()["bot"]["long"]
     assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
     assert (
@@ -453,7 +453,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
 
 def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_martingale():
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "trailing_martingale"
+    source['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
     source["bot"]["long"]["entry_grid_spacing_pct"] = 0.01
     source["bot"]["long"]["entry_trailing_grid_ratio"] = -0.5
     source["bot"]["long"]["close_grid_markup_start"] = 0.01
@@ -471,7 +471,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_k
     flat_key,
 ):
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = strategy_kind
+    source['bot']["portfolio"]['strategy_kind'] = strategy_kind
     source["bot"]["long"][flat_key] = 0.5
 
     with pytest.raises(
@@ -483,7 +483,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_k
 
 def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "trailing_martingale"
+    source['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
     source["bot"]["long"]["entry_grid_spacing_weight"] = 0.5
     source["bot"]["long"]["entry_grid_spacing_log_weight"] = 0.6
     source["bot"]["long"]["entry_grid_spacing_log_span_hours"] = 12.0
@@ -502,7 +502,7 @@ def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
 )
 def test_parse_overrides_rejects_v7_flat_strategy_override_keys(flat_key):
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "trailing_martingale"
+    source['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
     source["coin_overrides"] = {
         "BTC": {
             "bot": {
@@ -599,7 +599,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared['bot']['global']['strategy_kind'] == "trailing_martingale"
+    assert prepared['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
     assert _strategy_side(prepared, "long")["entry"]["ema_span_0_minutes"] == pytest.approx(
         321.0
     )
@@ -610,7 +610,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 
 def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "ema_anchor"
+    source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.5
     source["bot"]["long"]["strategy"]["ema_anchor"] = {
         "base_qty_fraction": 0.02,
@@ -632,7 +632,7 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     compiled = compile_runtime_config(prepared, runtime="backtest")
 
-    assert prepared['bot']['global']['strategy_kind'] == "ema_anchor"
+    assert prepared['bot']["portfolio"]['strategy_kind'] == "ema_anchor"
     assert prepared["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
     assert _strategy_side(prepared, "long")["base_qty_fraction"] == pytest.approx(0.02)
     assert _strategy_side(prepared, "long")[
@@ -649,13 +649,13 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
 
 def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missing():
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "ema_anchor"
+    source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     source["bot"]["long"]["strategy"] = {}
     source["bot"]["short"]["strategy"] = {}
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared['bot']['global']['strategy_kind'] == "ema_anchor"
+    assert prepared['bot']["portfolio"]['strategy_kind'] == "ema_anchor"
     assert _strategy_side(prepared, "long")["base_qty_fraction"] == pytest.approx(0.01)
     assert _strategy_side(prepared, "long")["ema_span_0_minutes"] == pytest.approx(200.0)
     assert _strategy_side(prepared, "long")[
@@ -814,7 +814,7 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
     tmp_path,
 ):
     source = get_template_config()
-    source['bot']['global']['strategy_kind'] = "ema_anchor"
+    source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     rounded = {
         "volume": 0.323,
         "ema_readiness": 0.434,
@@ -970,12 +970,12 @@ def test_prepare_config_rejects_malformed_config_version():
 
 def test_prepare_config_preserves_independent_memory_spans():
     source = get_template_config()
-    source["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 30.5
-    source["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
+    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 30.5
+    source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
     source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 90.5
     prepared = prepare_config(source, verbose=False)
-    assert prepared["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 30.5
-    assert prepared["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 60.5
+    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 30.5
+    assert prepared["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 60.5
     assert prepared["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 90.5
     assert "lookback_ema_span_minutes" not in prepared["live"]
 
@@ -996,8 +996,8 @@ def test_prepare_config_rejects_retired_all_history_gate_window():
 
 def test_prepare_config_rejects_invalid_memory_ema_span_minutes_string():
     source = get_template_config()
-    source["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = "everything"
-    with pytest.raises(ValueError, match="bot.global.unstuck.memory_ema_span_minutes must be a finite number"):
+    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = "everything"
+    with pytest.raises(ValueError, match="bot.portfolio.unstuck.memory_ema_span_minutes must be a finite number"):
         prepare_config(source, verbose=False)
 
 
@@ -1033,11 +1033,9 @@ def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_overri
         "bot": {
             "long": {},
             "short": {},
-            "global": {
-                "execution": {
+            "portfolio": {"execution": {
                     "market_orders_allowed": True
-                }
-            }
+                }}
         },
         "coin_overrides": {},
         "live": {},
@@ -1048,13 +1046,13 @@ def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_overri
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared['bot']['global']['execution']['market_orders_allowed'] is True
+    assert prepared['bot']["portfolio"]['execution']['market_orders_allowed'] is True
     assert "market_orders_allowed" not in prepared["backtest"]
 
 
 def test_template_config_defaults_market_orders_disabled():
     template = get_template_config()
-    assert template['bot']['global']['execution']['market_orders_allowed'] is False
+    assert template['bot']["portfolio"]['execution']['market_orders_allowed'] is False
 
 
 def test_prepare_config_rejects_cancellations_not_greater_than_creations():

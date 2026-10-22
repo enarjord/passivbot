@@ -18,7 +18,7 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
     fixture, *_ = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
     ]))
-    config['bot']['global']['strategy_kind'] = strategy
+    config['bot']["portfolio"]['strategy_kind'] = strategy
     for side in ("long", "short"):
         config["bot"][side]["strategy"] = deepcopy(fixture["bot"][side]["strategy"])
         config["bot"][side]["unstuck"].update(
@@ -44,8 +44,8 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
 
 def candidate(base, value):
     config = deepcopy(base.config)
-    strategy = config["bot"]["long"]["strategy"][config['bot']['global']['strategy_kind']]
-    if config['bot']['global']['strategy_kind'] == "trailing_martingale":
+    strategy = config["bot"]["long"]["strategy"][config['bot']["portfolio"]['strategy_kind']]
+    if config['bot']["portfolio"]['strategy_kind'] == "trailing_martingale":
         strategy = strategy["entry"]
     strategy["ema_span_0_minutes"] = value
     return optimize.config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
@@ -55,7 +55,7 @@ def registry_for(base, suite):
     evaluator = base
     if suite:
         prepared = contexts(base, base.timestamps["binance"], lazy=True)
-        kind = base.config['bot']['global']['strategy_kind']
+        kind = base.config['bot']["portfolio"]['strategy_kind']
         entry = "entry." if kind == "trailing_martingale" else ""
         prepared[1].overrides = {f"bot.long.strategy.{kind}.{entry}ema_span_1_minutes": 3.5}
         evaluator = optimize.SuiteEvaluator(base, prepared, {"default": "mean"})

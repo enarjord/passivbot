@@ -17,7 +17,7 @@ from tools.migrate_config_v9 import migrate
 @pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_canonical_bounds_mirror_their_bot_parameter_paths(strategy, scope):
     source = generated_template(get_template_config(), scope)
-    source["bot"]["global"]["strategy_kind"] = strategy
+    source["bot"]["portfolio"]["strategy_kind"] = strategy
     config = prepare_config(source, verbose=False)
     bounds = config["optimize"]["bounds"]
     flat = flatten_optimize_bounds(bounds, strategy_kind=strategy)
@@ -53,12 +53,12 @@ def test_flat_forager_bound_spelling_is_not_public_authoring_authority():
 
 def test_global_loss_memories_remain_independent():
     source = get_template_config()
-    source["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 37.5
-    source["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = 93.5
+    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 37.5
+    source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 93.5
     source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 17.5
     config = prepare_config(source, verbose=False)
-    assert config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 37.5
-    assert config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 93.5
+    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 37.5
+    assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 93.5
     assert config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 17.5
 
 

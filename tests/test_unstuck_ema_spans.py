@@ -84,8 +84,8 @@ def test_legacy_fixture_requires_explicit_v9_migration():
         prepare_config(source, verbose=False)
     migrated = _prepare_explicitly_migrated(source)
     assert migrated["config_version"] == "v9.0.0"
-    assert migrated["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-    assert migrated["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] == 43200.0
+    assert migrated["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert migrated["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 43200.0
 
 
 @pytest.mark.parametrize(
@@ -238,8 +238,8 @@ def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
-    c['bot']['global']['warmup']['span_multiplier'] = 2.0
-    c['bot']['global']['warmup']['max_minutes'] = 1000000
+    c['bot']["portfolio"]['warmup']['span_multiplier'] = 2.0
+    c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["optimize"]["bounds"] = {}
     for side in ("long", "short"):
         strategy = c["bot"][side]["strategy"]["trailing_martingale"]
@@ -418,8 +418,8 @@ def test_disabled_unstuck_warmup_ignores_values_and_bounds_but_honors_coin_activ
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
-    c['bot']['global']['warmup']['span_multiplier'] = 1.0
-    c['bot']['global']['warmup']['max_minutes'] = 1000000
+    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     for side in ("long", "short"):
         c["bot"][side]["unstuck"][toggle] = False
     baseline = compute_backtest_warmup_minutes(c)
@@ -502,8 +502,8 @@ def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(c
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
-    c['bot']['global']['warmup']['span_multiplier'] = 1.0
-    c['bot']['global']['warmup']['max_minutes'] = 1000000
+    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"]["short"]["unstuck"]["enabled"] = False
     c["bot"]["long"]["unstuck"][control] = 0.0
     c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0, 1]
@@ -539,8 +539,8 @@ def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bo
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
-    c['bot']['global']['warmup']['span_multiplier'] = 1.0
-    c['bot']['global']['warmup']['max_minutes'] = 1000000
+    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     opposite = "short" if side == "long" else "long"
     c["bot"][opposite]["unstuck"]["enabled"] = False
     c["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0
@@ -642,8 +642,8 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
-    c['bot']['global']['warmup']['span_multiplier'] = 1.0
-    c['bot']['global']['warmup']['max_minutes'] = 1000000
+    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, max_positions=1)
     c["optimize"]["bounds"] = {}
     baseline = compute_backtest_warmup_minutes(c)
@@ -669,8 +669,8 @@ def test_zero_slot_unstuck_warmup_preserves_optimizer_reactivation(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
-    c['bot']['global']['warmup']['span_multiplier'] = 1.0
-    c['bot']['global']['warmup']['max_minutes'] = 1000000
+    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, max_positions=0)
     c["optimize"]["bounds"][side]["risk"]["max_positions"] = [0, 0]
     baseline = compute_backtest_warmup_minutes(c)
@@ -693,7 +693,7 @@ def test_retired_v7_requires_an_explicit_retained_strategy_choice(version):
     if version.startswith("v8"):
         source["live"]["strategy_kind"] = "trailing_grid_v7"
     else:
-        source["bot"]["global"]["strategy_kind"] = "trailing_grid_v7"
+        source["bot"]["portfolio"]["strategy_kind"] = "trailing_grid_v7"
     source["bot"]["long"]["strategy"]["trailing_grid_v7"] = {}
     before = deepcopy(source)
     with pytest.raises(ValueError, match="trailing_grid_v7"):

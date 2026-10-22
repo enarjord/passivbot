@@ -7,8 +7,8 @@ metadata never adds optimizer genes or per-coin permissions.
 from .strategy_spec import BOT_POSITION_SIDES
 
 SPECIAL_OPTIMIZER_KEY_PATHS = {
-    "unstuck_memory_ema_span_minutes": ("bot", "global", "unstuck", "memory_ema_span_minutes"),
-    "loss_gate_memory_ema_span_minutes": ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
+    "unstuck_memory_ema_span_minutes": ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
+    "loss_gate_memory_ema_span_minutes": ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
     "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_minutes"),
     "long_forager_volatility_ema_span_1m": (
         "bot",

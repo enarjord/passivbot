@@ -117,7 +117,7 @@ def validate_config(
         raise ValueError("optimize.backend must be one of ['pymoo', 'gpu']")
     config["optimize"]["backend"] = backend
     policy = resolve_prefilter(config["optimize"].get("prefilter"))
-    if prefilter_enabled(policy) and config['bot']['global']['strategy_kind'] != "trailing_martingale":
+    if prefilter_enabled(policy) and config['bot']["portfolio"]['strategy_kind'] != "trailing_martingale":
         raise ValueError("enabled config prefilters currently require trailing_martingale")
 
     from .hsl import normalize_hsl
@@ -140,7 +140,7 @@ def validate_config(
         require_existing_config_path(config, key): value
         for key, value in config["optimize"]["fixed_runtime_overrides"].items()
     }
-    strategy_kind = normalize_strategy_kind(config["bot"]["global"].get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(config["bot"]["portfolio"].get("strategy_kind"))
     optimize_bounds = (
         raw_optimize.get("bounds")
         if isinstance(raw_optimize, dict)
@@ -212,7 +212,7 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
             )
-    normalize_hsl_signal_mode(config["bot"]["global"]["hsl"]["scope"])
+    normalize_hsl_signal_mode(config["bot"]["portfolio"]["hsl"]["scope"])
     if config["live"]["modes"]["disapproved_position"] not in {
         "graceful_stop",
         "manual",

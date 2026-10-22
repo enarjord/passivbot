@@ -33,7 +33,7 @@ def enrich_fields(fields):
                         coin_override=CoinOverridePolicy.FORBIDDEN)
             if path[2] != "strategy" and key in recommendations:
                 data["recommended_bounds"] = tuple(recommendations[key])
-            elif path[:3] == ("bot", "global", "hsl") and "long_" + str(key) in recommendations:
+            elif path[:3] == ("bot", "portfolio", "hsl") and "long_" + str(key) in recommendations:
                 data["recommended_bounds"] = tuple(recommendations["long_" + key])
             if path[1] in {"long", "short"}:
                 if local in allowed:
@@ -43,7 +43,7 @@ def enrich_fields(fields):
                 if path[2] == "strategy" and ".".join(path[4:]) in get_strategy_param_keys(path[3]):
                     data["coin_override"] = CoinOverridePolicy.ALLOWED
             if "hsl" in path and key:
-                data["optimize_when"] = ("portfolio HSL scope" if path[1] == "global"
+                data["optimize_when"] = ("portfolio HSL scope" if path[1] == "portfolio"
                                          else "coin or position_side HSL scope")
             elif path[2] == "strategy" and key:
                 data["optimize_when"] = f"{path[3]} is the active strategy"

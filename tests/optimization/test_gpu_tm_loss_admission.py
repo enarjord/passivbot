@@ -98,8 +98,8 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     original, inputs = fee_only_close_fixture(sides, 2, 8.0, 0.0004)
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
-    config['bot']['global']['execution']['market_orders_allowed'] = market
-    config['bot']['global']['execution']['market_order_near_touch_fraction'] = 0.01
+    config['bot']["portfolio"]['execution']['market_orders_allowed'] = market
+    config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.01
     config["backtest"]["market_order_slippage_fraction"] = 0.001
     candles[:, :, :3] = (105.0, 95.0, 100.4)
     for side in sides:

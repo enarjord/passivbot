@@ -26,8 +26,8 @@ def canonical_optimizer_key(key: str) -> str:
 
 
 def active_strategy_kind(config: dict) -> str:
-    global_cfg = config.get("bot", {}).get("global", {})
-    raw_kind = global_cfg.get("strategy_kind")
+    portfolio_cfg = config.get("bot", {}).get("portfolio", {})
+    raw_kind = portfolio_cfg.get("strategy_kind")
     return normalize_strategy_kind(raw_kind)
 
 
@@ -59,7 +59,7 @@ def iter_optimizer_key_paths(
 
 def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
-        if config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope") == "portfolio":
+        if config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope") == "portfolio":
             field = {
                 "red_threshold": "drawdown_ratio_threshold",
                 "drawdown_ratio_ema_span_minutes": "drawdown_ratio_ema_span_minutes",
@@ -67,7 +67,7 @@ def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
                 "cooldown_minutes_after_red": "cooldown_after_red_minutes",
             }.get(canonical_key.removeprefix("hsl_"))
             if field is not None:
-                return ("bot", "global", "hsl", field)
+                return ("bot", "portfolio", "hsl", field)
         return None
     if strategy_path_map is None:
         strategy_path_map = _strategy_path_map_for_config(config)

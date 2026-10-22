@@ -54,7 +54,7 @@ DIFF_SETTING_PATHS = (
     ("identity", "live.account.user", ("live", "account", "user")),
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
-    ("hsl", "bot.global.hsl.scope", ("bot", "global", "hsl", "scope")),
+    ("hsl", "bot.portfolio.hsl.scope", ("bot", "portfolio", "hsl", "scope")),
     ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
     ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
     (
@@ -82,10 +82,10 @@ DIFF_SETTING_PATHS = (
     ),
     (
         "cache",
-        "bot.global.warmup.max_minutes",
-        ("bot", "global", "warmup", "max_minutes"),
+        "bot.portfolio.warmup.max_minutes",
+        ("bot", "portfolio", "warmup", "max_minutes"),
     ),
-    ("cache", "bot.global.warmup.span_multiplier", ("bot", "global", "warmup", "span_multiplier")),
+    ("cache", "bot.portfolio.warmup.span_multiplier", ("bot", "portfolio", "warmup", "span_multiplier")),
 )
 
 
@@ -312,7 +312,7 @@ def _hsl_policy_reports(config):
     live = live if isinstance(live, dict) else {}
     bot = bot if isinstance(bot, dict) else {}
     if _effective_hsl_signal_mode(config) == "portfolio":
-        return {"portfolio": _hsl_side_report({"hsl": bot.get("global", {}).get("hsl", {})})}
+        return {"portfolio": _hsl_side_report({"hsl": bot.get("portfolio", {}).get("hsl", {})})}
     return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
 
 
@@ -547,7 +547,7 @@ def _balance_hysteresis_report(
 
 
 def _effective_hsl_signal_mode(config: dict[str, Any]) -> str:
-    raw = _path_value(config, ("bot", "global", "hsl", "scope"))
+    raw = _path_value(config, ("bot", "portfolio", "hsl", "scope"))
     return DEFAULT_HSL_SIGNAL_MODE if raw is _MISSING else str(raw)
 
 
@@ -587,8 +587,8 @@ def _cache_readiness_report(
     balance_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
-    warmup = config.get("bot", {}).get("global", {}).get("warmup", {})
-    checks.update({f"bot.global.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
+    warmup = config.get("bot", {}).get("portfolio", {}).get("warmup", {})
+    checks.update({f"bot.portfolio.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -656,19 +656,19 @@ def _cache_readiness_report(
     max_minutes_status = "present" if cap is None else _numeric_status(cap)
     if max_minutes_status != "present":
         _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
-                          f"bot.global.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
+                          f"bot.portfolio.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
     warmup_ratio_status = _numeric_status(_setting_value(warmup, "span_multiplier"), allow_zero=True)
     if warmup_ratio_status == "missing":
         _append_attention(
             candles,
             "warmup_ratio_missing",
-            "bot.global.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
+            "bot.portfolio.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
         )
     elif warmup_ratio_status != "present":
         _append_attention(
             candles,
             f"warmup_ratio_{warmup_ratio_status}",
-            f"bot.global.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"bot.portfolio.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
         )
 
     archive_status = _bool_status(
@@ -708,12 +708,12 @@ def _cache_readiness_report(
     for key, path, validator in (
         (
             "unstuck_memory_ema_span_minutes",
-            ("bot", "global", "unstuck", "memory_ema_span_minutes"),
+            ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
             normalize_memory_ema_span_minutes,
         ),
         (
             "loss_gate_memory_ema_span_minutes",
-            ("bot", "global", "loss_gate", "memory_ema_span_minutes"),
+            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
             normalize_memory_ema_span_minutes,
         ),
         (
@@ -794,7 +794,7 @@ def _cache_readiness_report(
                 (
                     "HSL account-level history replay is unsafe with an active "
                     "balance override; runtime will fail before replay for "
-                    f"bot.global.hsl.scope={signal_mode!r}"
+                    f"bot.portfolio.hsl.scope={signal_mode!r}"
                 ),
             )
         if lookback_status in {
@@ -1174,7 +1174,7 @@ def build_live_config_preflight_report(
                 (
                     "HSL signal modes 'portfolio' and 'position_side' reconstruct "
                     "account-level equity history and are unsafe with an active "
-                    "balance override; use bot.global.hsl.scope='coin', remove the "
+                    "balance override; use bot.portfolio.hsl.scope='coin', remove the "
                     "balance override, or disable HSL before live trading"
                 ),
                 path=(
@@ -1192,7 +1192,7 @@ def build_live_config_preflight_report(
         "identity": identity_report,
         "hsl": {
             "signal_mode": _display_value(
-                _path_value(parsed, ("bot", "global", "hsl", "scope"))
+                _path_value(parsed, ("bot", "portfolio", "hsl", "scope"))
             ).get("value"),
             "effective_signal_mode": hsl_signal_mode,
             "balance_override": balance_override_report,
@@ -1222,7 +1222,7 @@ def build_live_config_preflight_report(
         "cache": {
             "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("global", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
+                bot.get("portfolio", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
             ),
             "readiness": _cache_readiness_report(
                 live,

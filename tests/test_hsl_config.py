@@ -17,16 +17,16 @@ from released_v8_fixtures import released_v8_policy
 
 def source(mode="coin", enabled=True):
     cfg = generated_template(get_template_config(), mode)
-    block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block["enabled"] = enabled
     return cfg
 
 
 def as_legacy(cfg, version="v8.6.0"):
     """Use frozen v8 authoring with the requested HSL scope and enablement."""
-    mode = cfg["bot"]["global"]["hsl"]["scope"]
+    mode = cfg["bot"]["portfolio"]["hsl"]["scope"]
     enabled = {side: cfg["bot"][side]["hsl"]["enabled"] for side in ("long", "short")}
-    portfolio_enabled = cfg["bot"]["global"]["hsl"].get("enabled", False)
+    portfolio_enabled = cfg["bot"]["portfolio"]["hsl"].get("enabled", False)
     legacy = released_v8_policy()
     legacy["config_version"] = version
     legacy["live"]["hsl_signal_mode"] = {
@@ -61,7 +61,7 @@ def test_explicit_hsl_config_roundtrips_without_legacy_fields(mode):
     result2 = prepared(result)
     assert result2["bot"] == result["bot"]
     assert "hsl_engine" not in result["live"]
-    block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
     assert "restart_after_red_policy" not in block
     assert block["cooldown_after_red_minutes"] >= 0.0
     assert not (
@@ -89,7 +89,7 @@ def test_explicit_legacy_selector_is_rejected_before_runtime():
 @pytest.mark.parametrize("policy", [None, "always", "never", "threshold", [], {}])
 def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
     cfg = source(mode)
-    block = cfg["bot"]["global"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block["restart_after_red_policy"] = policy
     with pytest.raises(ValueError, match="restart_after_red_policy"):
         prepared(cfg)
@@ -98,10 +98,10 @@ def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode):
     cfg = prepared(source(mode, enabled=False))
-    path = "bot.global.hsl" if mode == "portfolio" else "bot.long.hsl"
+    path = "bot.portfolio.hsl" if mode == "portfolio" else "bot.long.hsl"
     update_config_with_args(cfg, Namespace(**{f"{path}.enabled": True}), verbose=False)
     result = prepared(cfg)
-    block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
     assert block["enabled"]
     assert block["cooldown_after_red_minutes"] >= 0.0
     assert "restart_after_red_policy" not in block
@@ -111,18 +111,18 @@ def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode)
 
 def test_portfolio_missing_portfolio_block_is_not_hydrated_even_with_equal_sides():
     cfg = source("portfolio", enabled=False)
-    cfg["bot"]["global"]["hsl"] = {"scope": "portfolio"}
+    cfg["bot"]["portfolio"]["hsl"] = {"scope": "portfolio"}
     cfg["bot"]["short"]["hsl"] = deepcopy(cfg["bot"]["long"]["hsl"])
-    with pytest.raises(ValueError, match="bot.global.hsl missing required fields"):
+    with pytest.raises(ValueError, match="bot.portfolio.hsl missing required fields"):
         prepared(cfg)
 
 
 def test_cli_mode_change_rechecks_portfolio_presence():
     cfg = prepared(source("position_side"))
     update_config_with_args(
-        cfg, Namespace(**{"bot.global.hsl.scope": "portfolio"}), verbose=False
+        cfg, Namespace(**{"bot.portfolio.hsl.scope": "portfolio"}), verbose=False
     )
-    with pytest.raises(ValueError, match="explicit bot.global.hsl"):
+    with pytest.raises(ValueError, match="explicit bot.portfolio.hsl"):
         prepared(cfg)
 
 
@@ -190,11 +190,11 @@ def test_removed_metric_is_rejected_in_keys_and_values(section, tier):
 def test_portfolio_optimizer_paths_target_portfolio_only():
     cfg = prepared(source("portfolio"))
     keys = dict(get_optimization_key_paths(cfg))
-    assert keys["hsl_red_threshold"] == ("bot", "global", "hsl", "drawdown_ratio_threshold")
-    assert keys["hsl_drawdown_ratio_ema_span_minutes"] == ("bot", "global", "hsl", "drawdown_ratio_ema_span_minutes")
+    assert keys["hsl_red_threshold"] == ("bot", "portfolio", "hsl", "drawdown_ratio_threshold")
+    assert keys["hsl_drawdown_ratio_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_ratio_ema_span_minutes")
     assert not any(k.startswith(("long_hsl_", "short_hsl_")) for k in keys)
     assert "hsl_red_threshold" in flatten_optimize_bounds(
-        cfg["optimize"]["bounds"], strategy_kind=cfg['bot']['global']['strategy_kind']
+        cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
 
 
@@ -295,7 +295,7 @@ def test_scenario_rechecks_effective_hsl_contract(change):
     cfg = prepared(cfg)
     overrides = {
         "enable": {"bot.long.hsl.enabled": True},
-        "mode": {"bot.global.hsl.scope": "portfolio"},
+        "mode": {"bot.portfolio.hsl.scope": "portfolio"},
         "removed": {"bot.long.hsl.no_restart_drawdown_threshold": 0.3},
         "inactive": {"bot.long.hsl.drawdown_ratio_threshold": 0.3},
     }[change]
@@ -347,7 +347,7 @@ def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
 def test_hsl_numeric_bounds_rejected_before_candidate_generation(field, bounds, mode):
     cfg = source(mode)
     target = (
-        cfg["optimize"]["bounds"]["global"]
+        cfg["optimize"]["bounds"]["portfolio"]
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
@@ -381,7 +381,7 @@ async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, m
 
     def stop_after_config(config, **kwargs):
         assert "hsl_engine" not in config["live"]
-        assert config["bot"]["global"]["hsl"]["scope"] == mode
+        assert config["bot"]["portfolio"]["hsl"]["scope"] == mode
         raise OfflineBoundary()
 
     def forbidden(*args, **kwargs):
@@ -775,14 +775,14 @@ def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mod
     result = migrate(cfg, memory_span_minutes=43200.0).config
     assert cfg == original
     assert "hsl_engine" not in result["live"]
-    path = "bot.global.hsl" if mode == "portfolio" else "bot.long.hsl"
-    block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    path = "bot.portfolio.hsl" if mode == "portfolio" else "bot.long.hsl"
+    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
     assert "restart_after_red_policy" not in block
     assert block["enabled"] is False
     result = prepared(result)
     update_config_with_args(result, Namespace(**{f"{path}.enabled": True}))
     result = prepared(result)
-    block = result["bot"]["global"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
     assert block["enabled"] and block["cooldown_after_red_minutes"] >= 0.0
 
 

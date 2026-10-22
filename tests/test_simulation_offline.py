@@ -209,7 +209,7 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     for side in ("long", "short"):
         config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
-    config['bot']['global']['warmup']['max_minutes'] = 1
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(tmp_path / "caches/ohlcvs/catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches/ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -491,7 +491,7 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
     set_side_universe_sources(config, 'approved_coins', {'long': ['ETH', 'UNLISTED'], 'short': []})
     for side in ("long", "short"):
         config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
-    config['bot']['global']['warmup']['max_minutes'] = 1
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
     store = OhlcvStore(cache / "ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -599,7 +599,7 @@ async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeyp
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     for side in ("long", "short"):
         config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
-    config['bot']['global']['warmup']['max_minutes'] = 1
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     monkeypatch.setattr(backtest, "coin_to_symbol", lambda *args, **kwargs: SYMBOL)
     ts = START + np.arange(10, dtype=np.int64) * 60000
     hlcvs = np.tile([101.0, 99.0, 100.0, 10.0], (10, 1, 1))

@@ -282,11 +282,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                 },
                 "universe": {"minimum_coin_age_days": 365, "approved_coins": []},
             },
-            "global": {
-                "strategy_kind": "ema_anchor",
-                "warmup": {"span_multiplier": 1.0, "max_minutes": None},
-                "universe": {},
-            },
+            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"span_multiplier": 1.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
@@ -302,7 +298,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
         },
     }
     warmup_changed = deepcopy(base)
-    warmup_changed["bot"]["global"]["warmup"]["max_minutes"] = 720
+    warmup_changed["bot"]["portfolio"]["warmup"]["max_minutes"] = 720
     bot_quote_changed = deepcopy(base)
     bot_quote_changed["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] = 0.01
     universe_changed = deepcopy(base)
@@ -337,11 +333,7 @@ def test_run_signature_changes_for_optimize_changes():
                 "universe": {"minimum_coin_age_days": 365, "approved_coins": ["BTC"]},
             },
             "short": {"universe": {"minimum_coin_age_days": 365, "approved_coins": []}},
-            "global": {
-                "strategy_kind": "ema_anchor",
-                "warmup": {"span_multiplier": 0.0, "max_minutes": None},
-                "universe": {},
-            },
+            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},

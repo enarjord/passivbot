@@ -66,10 +66,10 @@ def set_value(planner, vector, key, value):
 
 MEMORY_PATHS = {
     "unstuck_memory_ema_span_minutes": (
-        "bot.global.unstuck.memory_ema_span_minutes", ("global", "unstuck", "memory_ema_span_minutes"),
+        "bot.portfolio.unstuck.memory_ema_span_minutes", ("global", "unstuck", "memory_ema_span_minutes"),
     ),
     "loss_gate_memory_ema_span_minutes": (
-        "bot.global.loss_gate.memory_ema_span_minutes", ("global", "loss_gate", "memory_ema_span_minutes"),
+        "bot.portfolio.loss_gate.memory_ema_span_minutes", ("global", "loss_gate", "memory_ema_span_minutes"),
     ),
 }
 
@@ -150,8 +150,8 @@ def test_last_scenario_global_memory_span_override_is_request_owned(memory_key):
     "path,value",
     [
         ("live.startup.risk_bootstrap_max_lookback_minutes", 64800.0),
-        ("bot.global.loss_gate.max_drawdown_ratio", 0.5),
-        ("bot.global.execution.market_orders_allowed", True),
+        ("bot.portfolio.loss_gate.max_drawdown_ratio", 0.5),
+        ("bot.portfolio.execution.market_orders_allowed", True),
         ("backtest.starting_balance", 2000.0),
     ],
 )

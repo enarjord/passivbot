@@ -32,10 +32,10 @@ def _load_npy(path: Path) -> np.ndarray:
 
 def _ensure_ema_anchor_config(config: dict) -> dict:
     normalized = deepcopy(config)
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(normalized, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(normalized, 'bot.portfolio.strategy_kind'))
     if strategy_kind != EMA_ANCHOR_STRATEGY_KIND:
         raise ValueError(
-            f"ema_anchor analysis helpers require bot.global.strategy_kind = {EMA_ANCHOR_STRATEGY_KIND!r}; got {strategy_kind!r}"
+            f"ema_anchor analysis helpers require bot.portfolio.strategy_kind = {EMA_ANCHOR_STRATEGY_KIND!r}; got {strategy_kind!r}"
         )
     return normalized
 

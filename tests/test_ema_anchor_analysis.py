@@ -58,7 +58,7 @@ def _ema_anchor_config() -> dict:
                     }
                 }
             },
-            "global": {"strategy_kind": "ema_anchor"},
+            "portfolio": {"strategy_kind": "ema_anchor"},
         },
     }
 

@@ -17,7 +17,7 @@ from tools.optimizer_bounds import apply_recommended_bounds, main
 
 
 def flattened(config):
-    return flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["global"]["strategy_kind"])
+    return flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["portfolio"]["strategy_kind"])
 
 
 def gene_bounds(config):
@@ -29,7 +29,7 @@ def gene_bounds(config):
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
 def test_omitted_dimensions_freeze_effective_values_through_exports(omission, strategy):
     source = get_template_config()
-    source["bot"]["global"]["strategy_kind"] = strategy
+    source["bot"]["portfolio"]["strategy_kind"] = strategy
     if strategy == "trailing_martingale":
         source["bot"]["long"]["strategy"][strategy]["entry"]["ema_span_0_minutes"] = 123.5
         branch = source["optimize"]["bounds"]["long"]["strategy"][strategy]["entry"]
@@ -201,7 +201,7 @@ def mirrored_weight_source(strategy="trailing_martingale"):
     source = weight_source({"score_weights": {
         name: [0.0, 1.0] for name in ("volume", "volatility", "ema_readiness")
     }})
-    source["bot"]["global"]["strategy_kind"] = strategy
+    source["bot"]["portfolio"]["strategy_kind"] = strategy
     source["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     return source
 
@@ -415,12 +415,12 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
     from config.hsl import generated_template
 
     source = generated_template(get_template_config(), scope)
-    source["bot"]["global"]["strategy_kind"] = strategy
+    source["bot"]["portfolio"]["strategy_kind"] = strategy
     source["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 0.5
     source["optimize"]["bounds"] = {}
     prescribed = apply_recommended_bounds(source)
-    assert prescribed["bot"]["global"]["strategy_kind"] == strategy
-    assert prescribed["bot"]["global"]["hsl"]["scope"] == scope
+    assert prescribed["bot"]["portfolio"]["strategy_kind"] == strategy
+    assert prescribed["bot"]["portfolio"]["hsl"]["scope"] == scope
     assert flattened(prescribed)["long_forager_score_weights_unilateralness"] == [0.0, 1.0, 0.01]
     assert gene_bounds(prepare_config(prescribed, verbose=False)) == gene_bounds(prescribed)
 

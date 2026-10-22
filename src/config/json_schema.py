@@ -95,7 +95,7 @@ def generate_schema():
     # their owners. At the root, the mode can also restrict inline coin HSL.
     root["allOf"] = [{
         "if": {"required": ["bot"], "properties": {"bot": {
-            "required": ["global"], "properties": {"global": {
+            "required": ["portfolio"], "properties": {"portfolio": {
                 "required": ["hsl"], "properties": {"hsl": {
                     "required": ["scope"], "properties": {"scope": {"enum": ["position_side", "portfolio"]}}
                 }}
