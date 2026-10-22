@@ -118,8 +118,8 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
     inputs = list(_fixture("long", 1, "initial"))
     config = generated_template(inputs[0], "coin")
     inputs[0] = config
-    config['bot']['global']['strategy_kind'] = strategy
-    config['bot']['global']['hedge_mode'] = sides == 'both'
+    config['bot']["portfolio"]['strategy_kind'] = strategy
+    config['bot']["portfolio"]['hedge_mode'] = sides == 'both'
     for side in ("long", "short"):
         bot = config["bot"][side]
         enabled = side == "long" or sides == "both"

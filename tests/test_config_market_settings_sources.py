@@ -27,10 +27,7 @@ def _base_config():
                 "risk": {"max_positions": 4},
                 "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
             },
-            "global": {
-                "universe": {},
-                "warmup": {"span_multiplier": 0.2, "max_minutes": None},
-            },
+            "portfolio": {"warmup": {"span_multiplier": 0.2, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {"account": {}, "candles": {}},
         "optimize": {"bounds": {}, "scoring": []},

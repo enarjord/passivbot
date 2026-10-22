@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Group account-wide trading controls under `bot.portfolio`: strategy selection, hedge mode,
+  execution, warmup, HSL scope and explicit portfolio policy, realized-loss gate, and unstuck
+  realized-memory span. Shared approval sources and forager hysteresis remain under `bot.global`.
+  Optimizer bounds mirror the portfolio namespace; values, native optimizer IDs and execution
+  behavior are unchanged. Released-v8 conversion reports the final paths directly, and normal
+  loading rejects retired global portfolio paths.
+
 - Move minimum coin age to `bot.long.universe.minimum_coin_age_days` and the matching short
   path. Both default to `60.0`; fractional days and zero bypass are preserved. Rust now gates
   new initial entries consistently across live/backtest/optimizer selection modes, including

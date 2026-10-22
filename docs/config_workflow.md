@@ -54,10 +54,10 @@ live/scenario coin settings still control data preparation.
 - Keep one normal JSON or HJSON config per strategy/account instead of relying on many CLI overrides.
 - Use CLI overrides for temporary experiments, not as your main configuration workflow.
 - Treat `bot`, `live`, `backtest`, and `optimize` as one config file with command-specific sections.
-- Keep shared strategy/universe/execution/warmup policy in `bot.global` and `bot.<side>`. Backtests consume `bot.global.execution.market_orders_allowed` and `market_order_near_touch_fraction`; live fee fallback/sanity settings retain their operational `live` ownership. These execution and fee fields are not accepted under `backtest`. The nullable `backtest.filter_by_min_effective_cost` override inherits each side's `bot.<side>.universe.filter_by_min_effective_cost` by default; an explicit boolean overrides both sides.
+- Keep shared strategy/universe/execution/warmup policy in `bot.global` and `bot.<side>`. Backtests consume `bot.portfolio.execution.market_orders_allowed` and `market_order_near_touch_fraction`; live fee fallback/sanity settings retain their operational `live` ownership. These execution and fee fields are not accepted under `backtest`. The nullable `backtest.filter_by_min_effective_cost` override inherits each side's `bot.<side>.universe.filter_by_min_effective_cost` by default; an explicit boolean overrides both sides.
 - Risk policy belongs to its consumers: each HSL policy has its own slow and ratio-smoothing
-  spans; global unstuck uses `bot.global.unstuck.memory_ema_span_minutes`; global loss gate uses
-  `bot.global.loss_gate.memory_ema_span_minutes`. Acquisition uses the separately bounded
+  spans; global unstuck uses `bot.portfolio.unstuck.memory_ema_span_minutes`; global loss gate uses
+  `bot.portfolio.loss_gate.memory_ema_span_minutes`. Acquisition uses the separately bounded
   live bootstrap cap. A rolling window is not an equivalent EMA span.
 - Keep new configs on the canonical schema. Use nested active strategy paths and explicit
   [migration reports](v8_to_v9_migration.md) for released-v8 changes.
@@ -73,7 +73,7 @@ The default profile mirrored by `configs/examples/default_trailing_martingale_lo
 - short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
 - `bot.long.risk.total_wallet_exposure_limit = 1.5`
 - HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
-- HSL signal mode set to per-coin slots with `bot.global.hsl.scope = "coin"`
+- HSL signal mode set to per-coin slots with `bot.portfolio.hsl.scope = "coin"`
 - approved-coin universe declared once as the current 41-coin shared starter list; sides inherit it
 - optimizer backend defaulting to `pymoo`
 

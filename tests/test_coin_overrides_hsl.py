@@ -14,7 +14,7 @@ from config.hsl import generated_template
 def _parse(overrides, *, mode="coin", loaded=None, configure_source=None):
     source = generated_template(get_template_config(), mode)
     source["live"]["account"]["user"] = "tester"
-    source["bot"]["global"]["hsl"]["scope"] = mode
+    source["bot"]["portfolio"]["hsl"]["scope"] = mode
     if configure_source is not None:
         configure_source(source)
     # Schema validation must see the same real authored file that the resolver
@@ -147,7 +147,7 @@ def test_override_file_cannot_author_global_signal_scope(
         mode=global_mode,
         loaded=loaded,
     )
-    assert parsed["bot"]["global"]["hsl"]["scope"] == global_mode
+    assert parsed["bot"]["portfolio"]["hsl"]["scope"] == global_mode
     patch = parsed["coin_overrides"]["BTC"]["bot"]
     assert "risk" not in patch
     if global_mode == "coin":
@@ -163,7 +163,7 @@ def test_inline_cannot_switch_signal_mode_to_authorize_hsl_patch():
         _parse(
             {
                 "BTC": {
-                    "bot": {'global': {'hsl': {'scope': 'coin'}}, 'long': {'hsl': {'enabled': False}}},
+                    "bot": {"portfolio": {'hsl': {'scope': 'coin'}}, 'long': {'hsl': {'enabled': False}}},
                 }
             },
             mode="position_side",

@@ -227,15 +227,15 @@ def test_v8_root_scenario_fixed_sources_and_coin_normal_selection_move_together(
     assert result["coin_overrides"]["BTC"]["live"]["modes"]["long"] == "normal"
     assert result["optimize"]["fixed_params"] == [
         "bot.*.universe.approved_coins",
-        "bot.global.hedge_mode",
+        "bot.portfolio.hedge_mode",
     ]
     assert result["optimize"]["fixed_runtime_overrides"] == {
-        "bot.global.execution.market_orders_allowed": True
+        "bot.portfolio.execution.market_orders_allowed": True
     }
     patch = result["backtest"]["scenarios"][0]["overrides"]
     assert patch["bot.long.universe.approved_coins"] == ["ETH"]
     assert patch["bot.short.universe.approved_coins"] == []
-    assert patch["bot.global.warmup.span_multiplier"] == 0.5
+    assert patch["bot.portfolio.warmup.span_multiplier"] == 0.5
     assert patch["bot.long.forager.always_include"] == ["ETH"]
     assert patch["bot.short.forager.always_include"] == []
 

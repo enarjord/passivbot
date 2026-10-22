@@ -262,7 +262,7 @@ def test_inactive_strategy_subtrees_in_full_override_file_are_ignored():
 
 def test_override_file_strategy_kind_mismatch_fails():
     loaded = get_template_config()
-    loaded['bot']['global']['strategy_kind'] = "ema_anchor"
+    loaded['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     with pytest.raises(ValueError, match=r"bot\.global\.strategy_kind.*does not match"):
         _parse(
             {"BTC": {"override_config_path": "unused-by-test.json"}},
@@ -362,7 +362,7 @@ def test_canonical_grouped_patch_has_live_and_backtest_consumer_parity():
         parsed["bot"]["long"],
         pside="long",
         override_side=override_side,
-        strategy_kind=parsed['bot']['global']['strategy_kind'],
+        strategy_kind=parsed['bot']["portfolio"]['strategy_kind'],
     )
 
     bot = Passivbot.__new__(Passivbot)

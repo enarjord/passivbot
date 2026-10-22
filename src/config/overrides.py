@@ -266,13 +266,13 @@ def _extract_allowed_patch(
     source_doc = deepcopy(_unwrap_override_document(document, source=source))
     _reject_flat_strategy_coin_overrides(source_doc, coin=coin)
     source_bot = source_doc.get("bot")
-    source_global = source_bot.get("global", {}) if isinstance(source_bot, dict) else {}
-    if isinstance(source_global, dict) and "strategy_kind" in source_global:
-        source_strategy_kind = normalize_strategy_kind(source_global["strategy_kind"])
+    source_portfolio = source_bot.get("portfolio", {}) if isinstance(source_bot, dict) else {}
+    if isinstance(source_portfolio, dict) and "strategy_kind" in source_portfolio:
+        source_strategy_kind = normalize_strategy_kind(source_portfolio["strategy_kind"])
         if source_strategy_kind != strategy_kind:
             raise ValueError(
-                f"{source}.bot.global.strategy_kind {source_strategy_kind!r} does not match "
-                f"the global strategy_kind {strategy_kind!r}"
+                f"{source}.bot.portfolio.strategy_kind {source_strategy_kind!r} does not match "
+                f"the portfolio strategy_kind {strategy_kind!r}"
             )
     bot = source_doc.get("bot")
     if bot is not None and not isinstance(bot, dict):
@@ -287,7 +287,7 @@ def _extract_allowed_patch(
             from .hsl import validate_override_paths
 
             validate_override_paths(
-                {"bot": {"global": {"hsl": {"scope": hsl_signal_mode if strict else "coin"}}}},
+                {"bot": {"portfolio": {"hsl": {"scope": hsl_signal_mode if strict else "coin"}}}},
                 {"bot": {pside: side}},
             )
             hsl_group = side.get("hsl")
@@ -298,8 +298,8 @@ def _extract_allowed_patch(
             if has_hsl_patch and hsl_signal_mode != "coin":
                 path = _format_override_path(coin, ("bot", pside, "hsl"))
                 message = (
-                    f"{path} is overridable only when the effective global "
-                    f"bot.global.hsl.scope is 'coin'; got {hsl_signal_mode!r}"
+                    f"{path} is overridable only when the effective portfolio "
+                    f"bot.portfolio.hsl.scope is 'coin'; got {hsl_signal_mode!r}"
                 )
                 if strict:
                     raise ValueError(message)
@@ -324,7 +324,7 @@ def _extract_allowed_patch(
             mismatched = sorted(kind for kind in strategy if kind != strategy_kind)
             if mismatched:
                 declares_strategy_kind = (
-                    isinstance(source_global, dict) and "strategy_kind" in source_global
+                    isinstance(source_portfolio, dict) and "strategy_kind" in source_portfolio
                 )
                 if strict or not declares_strategy_kind:
                     raise ValueError(
@@ -534,14 +534,14 @@ def _validate_effective_coin_config(
     if pinned_cooldown_paths:
         bounds = flatten_optimize_bounds(
             effective["optimize"]["bounds"],
-            strategy_kind=get_optional_config_value(effective, 'bot.global.strategy_kind'),
+            strategy_kind=get_optional_config_value(effective, 'bot.portfolio.strategy_kind'),
         )
         from .optimize_bounds import set_flat_optimize_bound
 
         effective["optimize"]["bounds"] = {}
         for key, value in bounds.items():
             if resolve_optimizer_key_path(effective, key) not in pinned_cooldown_paths:
-                set_flat_optimize_bound(effective["optimize"]["bounds"], effective['bot']['global']['strategy_kind'], key, value)
+                set_flat_optimize_bound(effective["optimize"]["bounds"], effective['bot']["portfolio"]['strategy_kind'], key, value)
     try:
         prepared = prepare_config(
             effective,
@@ -606,13 +606,13 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
     require_v9_runtime_config(config, additional_inputs=(raw,))
     if "config_version" in raw:
         require_v9_runtime_config(raw)
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     source_bot = raw.get("bot")
-    source_global = source_bot.get("global", {}) if isinstance(source_bot, dict) else {}
-    if isinstance(source_global, dict) and "strategy_kind" in source_global:
-        if normalize_strategy_kind(source_global["strategy_kind"]) != strategy_kind:
-            raise ValueError(f"{source}.bot.global.strategy_kind {source_global['strategy_kind']!r} "
-                             f"does not match the global strategy_kind {strategy_kind!r}")
+    source_portfolio = source_bot.get("portfolio", {}) if isinstance(source_bot, dict) else {}
+    if isinstance(source_portfolio, dict) and "strategy_kind" in source_portfolio:
+        if normalize_strategy_kind(source_portfolio["strategy_kind"]) != strategy_kind:
+            raise ValueError(f"{source}.bot.portfolio.strategy_kind {source_portfolio['strategy_kind']!r} "
+                             f"does not match the portfolio strategy_kind {strategy_kind!r}")
 
     validation = deepcopy(raw)
     # This is a per-coin extension, not a global canonical bot parameter.
@@ -628,7 +628,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
     _validate_patch_leaf_types(config, wallet_patch, coin=coin, origin=source)
     validation.setdefault("config_version", config["config_version"])
     validate_authored_config(validation, get_template_config(), policy_context=config)
-    validation.setdefault("bot", {}).setdefault("global", {}).setdefault("strategy_kind", strategy_kind)
+    validation.setdefault("bot", {}).setdefault("portfolio", {}).setdefault("strategy_kind", strategy_kind)
 
     with _override_file_validation(resolved_path):
         # Recursive file references remain validated. The active path stack
@@ -637,7 +637,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
                        log_config_transforms=False)
         patch = _extract_allowed_patch(
             raw, coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
-            hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("global", {}).get("hsl", {}).get("scope", "coin")),
+            hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")),
         )
         _validate_patch_leaf_types(config, patch, coin=coin, origin=source)
         return _validate_effective_coin_config(config, patch, coin=coin, origin=source)
@@ -809,10 +809,10 @@ def parse_overrides(
     result["coin_overrides"] = normalize_coin_override_keys(
         result["coin_overrides"], symbol_normalizer=symbol_normalizer, verbose=verbose
     )
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(result, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(result, 'bot.portfolio.strategy_kind'))
     live_config = result.get("live", {})
     hsl_signal_mode = normalize_hsl_signal_mode(
-        result["bot"]["global"]["hsl"]["scope"]
+        result["bot"]["portfolio"]["hsl"]["scope"]
     )
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}

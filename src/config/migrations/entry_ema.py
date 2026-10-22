@@ -89,8 +89,8 @@ def migrate_entry_ema_spans(config, *, tracker=None):
     path_context = config
     if "strategy_kind" in config.get("live", {}):
         bot = config.get("bot", {})
-        path_context = {**config, "bot": {**bot, "global": {
-            **bot.get("global", {}), "strategy_kind": config["live"]["strategy_kind"],
+        path_context = {**config, "bot": {**bot, "portfolio": {
+            **bot.get("portfolio", {}), "strategy_kind": config["live"]["strategy_kind"],
         }}}
 
     for scenario in config.get("backtest", {}).get("scenarios", []):

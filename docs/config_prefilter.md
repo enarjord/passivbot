@@ -29,7 +29,7 @@ For example, explicitly enable a normalized grid-span range of 10% to 35%:
 
 This is a policy example, not a recommended universal range. Optional `min` and
 `max` bounds are inclusive. An enabled check needs at least one bound. All checks
-currently require `bot.global.strategy_kind = "trailing_martingale"`.
+currently require `bot.portfolio.strategy_kind = "trailing_martingale"`.
 
 ## Available checks
 

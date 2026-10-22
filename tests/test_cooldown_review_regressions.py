@@ -215,7 +215,7 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
     bounds["risk"].update(max_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
@@ -253,7 +253,7 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"]["long"]
     bounds["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
@@ -270,7 +270,7 @@ def test_active_rms_consumer_uses_larger_span_bound_and_zero_consumers_need_no_r
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
-    cfg['bot']['global']['warmup']['max_minutes'] = 1
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
     assert compute_backtest_warmup_minutes(cfg) == 1
@@ -596,7 +596,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
         base_duration_minutes=base_bounds, min_duration_minutes=floor_bounds,
         max_duration_minutes=ceil_bounds, weights_minutes={"adverse_directionality": [0, 20]},
     )
-    cfg['bot']['global']['warmup']['max_minutes'] = 3
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 3
     cfg["optimize"]["bounds"][side]["forager"]["unilateralness_ema_span_minutes"] = [1.0, 60.0]
     cfg = prepare_config(cfg, verbose=False)
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]})

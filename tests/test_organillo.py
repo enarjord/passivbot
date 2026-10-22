@@ -790,7 +790,7 @@ def test_future_only_warmup_does_not_delay_initial_coin(tmp_path, require_real_p
     from warmup_utils import compute_per_coin_warmup_minutes
     inputs = fixture_inputs(strategy="ema_anchor", bars=2880)
     config, candles, markets, btc, timestamps = inputs
-    config['bot']['global']['warmup']['max_minutes'] = 2000
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 2000
     config["coin_overrides"] = {"COIN01": {"bot": {"long": {"strategy": {
         "ema_anchor": {"ema_span_0_minutes": 20000.0, "ema_span_1_minutes": 40000.0}}}}}}
     for coin in ("COIN00", "COIN01"):

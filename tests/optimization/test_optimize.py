@@ -95,7 +95,7 @@ def _flat_bounds(config):
 
     return flatten_optimize_bounds(
         config["optimize"]["bounds"],
-        strategy_kind=get_optional_config_value(config, 'bot.global.strategy_kind', "trailing_martingale"),
+        strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind', "trailing_martingale"),
     )
 
 
@@ -305,7 +305,7 @@ class TestApplyConfigOverrides:
 
     def test_strategy_override_uses_canonical_active_strategy_path(self):
         config = get_template_config()
-        config['bot']['global']['strategy_kind'] = "trailing_martingale"
+        config['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
         with pytest.raises(KeyError, match="missing"):
             _apply_config_overrides(config, {"bot.long.entry_threshold_base_pct": 0.25})
         _apply_config_overrides(config, {
@@ -849,7 +849,7 @@ def test_materialize_suite_run_contract_updates_cpu_config():
 def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "pymoo"
-    config['bot']['global']['strategy_kind'] = "trailing_grid_v7"
+    config['bot']["portfolio"]['strategy_kind'] = "trailing_grid_v7"
     config["backtest"]["btc_collateral_cap"] = 1.0
 
     original_import = builtins.__import__
@@ -923,12 +923,12 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
 def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
-    source_strategy = config['bot']['global']['strategy_kind']
+    source_strategy = config['bot']["portfolio"]['strategy_kind']
     target_strategy = (
         "trailing_martingale" if source_strategy == "ema_anchor" else "ema_anchor"
     )
     config["optimize"]["fixed_runtime_overrides"] = {
-        'bot.global.strategy_kind': target_strategy,
+        'bot.portfolio.strategy_kind': target_strategy,
     }
 
     with pytest.raises(
@@ -1600,7 +1600,7 @@ class TestIndividualToConfig:
                         }
                     },
                 },
-                "global": {"strategy_kind": "ema_anchor"},
+                "portfolio": {"strategy_kind": "ema_anchor"},
             },
             "optimize": {
                 "enable_overrides": ["mirror_short_from_long"],
@@ -1702,7 +1702,7 @@ class TestIndividualToConfig:
                         "ema_anchor": {"ema_span_0_minutes": 123.0},
                     },
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -1757,7 +1757,7 @@ class TestIndividualToConfig:
                     "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
                     "strategy": {strategy_kind: {}},
                 },
-                "global": {"strategy_kind": strategy_kind},
+                "portfolio": {"strategy_kind": strategy_kind},
             },
             "optimize": {
                 "bounds": _bounds_from_flat({bound_key: [new_value, new_value]}, strategy_kind)
@@ -1960,7 +1960,7 @@ class TestIndividualToConfig:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             "backtest": {"start_date": "2024-01-01"},
             "optimize": {
@@ -2599,7 +2599,7 @@ class TestApplyPolishBounds:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2635,7 +2635,7 @@ class TestApplyPolishBounds:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2668,7 +2668,7 @@ class TestApplyPolishBounds:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2690,7 +2690,7 @@ class TestApplyPolishBounds:
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 1.0}}}
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2710,7 +2710,7 @@ class TestApplyPolishBounds:
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.09}}}
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2730,7 +2730,7 @@ class TestApplyPolishBounds:
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 1.0}}}
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2760,7 +2760,7 @@ class TestApplyPolishBounds:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2792,7 +2792,7 @@ class TestApplyPolishBounds:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2834,7 +2834,7 @@ class TestApplyPolishBounds:
                         "trailing_martingale": {"entry": {"threshold_base_fraction": 0.05}}
                     },
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2860,7 +2860,7 @@ class TestApplyPolishBounds:
                 "long": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.05}}}
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -2954,7 +2954,7 @@ class TestApplyFineTuneBounds:
                     },
                     "unstuck": {"exposure_trigger_ratio": 0.44},
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3060,7 +3060,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"total_wallet_exposure_limit": 0.55},
                     "strategy": {"ema_anchor": {"base_qty_fraction": 0.012, "offset_fraction": 0.009}},
                 },
-                "global": {"strategy_kind": "ema_anchor"},
+                "portfolio": {"strategy_kind": "ema_anchor"},
             },
         }
 
@@ -3188,7 +3188,7 @@ class TestApplyFineTuneBounds:
                 "short": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.5}}}
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3335,7 +3335,7 @@ class TestApplyFineTuneBounds:
                 "short": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.5}}}
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3378,7 +3378,7 @@ class TestApplyFineTuneBounds:
                         }
                     }
                 },
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
 
@@ -3454,7 +3454,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
         anchors_dir = tmp_path / "anchors"
@@ -3478,7 +3478,7 @@ class TestApplyFineTuneBounds:
                         "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                     },
                     "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                    "global": {"strategy_kind": "trailing_martingale"},
+                    "portfolio": {"strategy_kind": "trailing_martingale"},
                 },
             }))
 
@@ -3528,14 +3528,14 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
         anchors_dir = tmp_path / "anchors"
         anchors_dir.mkdir()
         for idx, strategy_kind in enumerate(("trailing_martingale", "ema_anchor", "trailing_martingale")):
             anchor = deepcopy(config)
-            anchor['bot']['global']['strategy_kind'] = strategy_kind
+            anchor['bot']["portfolio"]['strategy_kind'] = strategy_kind
             anchor["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.1 + idx * 0.1
             (anchors_dir / f'anchor_{idx}.json').write_text(json.dumps(anchor), encoding="utf-8")
         install_anchored_fine_tune_plan(config, ["long.strategy.trailing_martingale.entry.initial_qty_fraction"], str(anchors_dir))
@@ -3572,7 +3572,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -3640,7 +3640,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -3703,7 +3703,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
             ANCHOR_PLAN_KEY: {
                 "anchors": [
@@ -3761,7 +3761,7 @@ class TestApplyFineTuneBounds:
                     "risk": {"max_positions": 1.0, "total_wallet_exposure_limit": 1.0},
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit": 0.0}},
-                "global": {"strategy_kind": "trailing_martingale"},
+                "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
         seed = deepcopy(config)
@@ -3810,8 +3810,8 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["global"]["unstuck"] == template["bot"]["global"]["unstuck"]
-            assert result[0]["bot"]["global"]["loss_gate"] == template["bot"]["global"]["loss_gate"]
+            assert result[0]["bot"]["portfolio"]["unstuck"] == template["bot"]["portfolio"]["unstuck"]
+            assert result[0]["bot"]["portfolio"]["loss_gate"] == template["bot"]["portfolio"]["loss_gate"]
         finally:
             os.unlink(path)
 
@@ -4059,7 +4059,7 @@ class TestResultRecorder:
             overrides_fn=optimize.optimizer_overrides,
             overrides_list=["mirror_short_from_long"],
         )
-        strategy_kind = entry['bot']['global']['strategy_kind']
+        strategy_kind = entry['bot']["portfolio"]['strategy_kind']
 
         assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
         assert entry["bot"]["long"]["forager"] == entry["bot"]["short"]["forager"]
@@ -4114,7 +4114,7 @@ class TestResultRecorder:
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
             assert saved["metrics"]["effective_start_date"] == "2024-01-02T00:00:00Z"
-            strategy_kind = saved['bot']['global']['strategy_kind']
+            strategy_kind = saved['bot']["portfolio"]['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
             assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
@@ -4163,7 +4163,7 @@ class TestResultRecorder:
             pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
-            strategy_kind = saved['bot']['global']['strategy_kind']
+            strategy_kind = saved['bot']["portfolio"]['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
             assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
@@ -5221,7 +5221,7 @@ class TestEvaluator:
                             "live": {},
                             "bot": {
                                 "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
-                                "global": {"hedge_mode": True},
+                                "portfolio": {"hedge_mode": True},
                             },
                         },
                     }
@@ -5258,7 +5258,7 @@ class TestEvaluator:
             "long": ["ETH"],
             "short": ["ETH"],
         }
-        assert scenario_config['bot']['global']['hedge_mode'] is True
+        assert scenario_config['bot']["portfolio"]['hedge_mode'] is True
         assert scenario_config["bot"]["long"]["risk"]["max_positions"] == 7
         assert (
             scenario_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"]
@@ -5753,7 +5753,7 @@ def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path, backe
     config = {
         "live": {},
         "optimize": {"backend": backend},
-        "bot": {"global": {"strategy_kind": "trailing_martingale"}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
 
     assert optimize._restore_gpu_resume_anchor_plan(config, str(checkpoint_path))

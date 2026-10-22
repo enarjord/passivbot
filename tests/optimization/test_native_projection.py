@@ -30,7 +30,7 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
         for side in ("long", "short"):
             config["bot"][side]["risk"]["max_positions"] = max_positions
     config["optimize"]["bounds"] = {
-        "global": {"unstuck": {"memory_ema_span_minutes": [1000.0, 50000.0]}}
+        "portfolio": {"unstuck": {"memory_ema_span_minutes": [1000.0, 50000.0]}}
     }
     for side in ("long", "short"):
         config["optimize"]["bounds"][side] = {"risk": {
@@ -43,14 +43,14 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
     ]
     config["optimize"]["limits"] = []
     if fixed:
-        config["optimize"]["fixed_runtime_overrides"] = {"bot.global.unstuck.memory_ema_span_minutes": 4096.5}
+        config["optimize"]["fixed_runtime_overrides"] = {"bot.portfolio.unstuck.memory_ema_span_minutes": 4096.5}
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     spec = SharedArraySpec("candles", candles.shape, candles.dtype.str)
     base = Evaluator({"binance": spec}, {}, {"binance": markets}, config)
     contexts = [SimpleNamespace(
         label=label, exchanges=["binance"], config=deepcopy(base.config), msss={"binance": markets},
-        overrides={"bot.global.unstuck.memory_ema_span_minutes": 2048.5} if label == "stress" else {},
+        overrides={"bot.portfolio.unstuck.memory_ema_span_minutes": 2048.5} if label == "stress" else {},
     ) for label in ("base", "stress")]
     evaluator = SuiteEvaluator(base, contexts, {"default": "mean"}) if suite else base
     bindings = []
@@ -396,7 +396,7 @@ def test_changed_cleaner_validation_is_not_skipped(change):
     elif change == "retired":
         changed["live"]["hsl_engine"] = "legacy"
     elif change == "portfolio_bounds":
-        changed["optimize"]["bounds"].setdefault("global", {})["hsl"] = []
+        changed["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = []
     elif change == "weights":
         changed["bot"]["long"]["forager"]["score_weights"]["volume"] = -0.1
     else:
@@ -422,8 +422,8 @@ def test_dynamic_side_enablement_still_selects_a_distinct_static_contract(value)
 
 @pytest.mark.parametrize("path,value", [
     ("backtest.starting_balance", 2000.0),
-    ('bot.global.execution.market_orders_allowed', True),
-    ("bot.global.loss_gate.max_drawdown_ratio", 0.5),
+    ('bot.portfolio.execution.market_orders_allowed', True),
+    ("bot.portfolio.loss_gate.max_drawdown_ratio", 0.5),
 ])
 def test_post_construction_static_policies_still_require_a_compatible_dataset(path, value):
     planner, vector = projection_inputs()

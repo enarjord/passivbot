@@ -75,7 +75,7 @@ for the distinction between schema, package version and tags.
 - **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override`.
 - **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override`.
 - **limit_order_fill_buffer_fraction**: Backtest-only fill buffer, expressed as a fraction of the limit price (`0.0001` = 0.01%). A buy fills only when `low < limit_price * (1 - buffer)`; a sell fills only when `high > limit_price * (1 + buffer)`. Equality does not fill. Successful fills retain the original limit price and maker fee. Applies to all limit entries and closes, including protective limit closes, but not market execution. Default `0.0` preserves the original strict-crossing behavior. Must be finite and in `[0, 1)`. CPU and GPU optimization support this fixed simulation setting. GPU screening precomputes buffered fill boundaries without altering raw candles or adding per-candidate kernel work. Higher values may skip losing entries as well as profitable exits, so they do not guarantee worse performance.
-- **market_order_slippage_fraction**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.global.execution.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
+- **market_order_slippage_fraction**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `bot.portfolio.execution.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
   Fill-activity metrics use the `fills_*` prefix, including fill counts, per-day entry/close and long/short rates, no-fill gap durations, per-position-slot activity, active fill day counts/ratio, analysis duration, active symbol count, and top-symbol fill share.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
@@ -158,14 +158,14 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 ### Equity Hard Stop Loss
 
 HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/position_side modes,
-and explicit `bot.global.hsl` for portfolio mode. Supported leaves are `enabled`,
+and explicit `bot.portfolio.hsl` for portfolio mode. Supported leaves are `enabled`,
 `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
 `cooldown_after_red_minutes`, and `panic_close_order_type`. Coin scope also supports
 `scale_budget_with_excess_allowance`.
 HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
 
-`bot.global.hsl.scope` selects `coin` (default), `position_side`, or `portfolio` signal construction.
+`bot.portfolio.hsl.scope` selects `coin` (default), `position_side`, or `portfolio` signal construction.
 
 For parameter definitions, RED handling, cooldown/restart rules, per-coin overrides, and
 backtest behavior, see [Equity Hard Stop Loss](equity_hard_stop_loss.md) and the
@@ -241,7 +241,7 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
 - **strategy.trailing_martingale.entry.initial_qty_fraction**:
   - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_fraction`
   - This is the initial sizing fraction used by min-effective-cost checks when
-    `bot.global.strategy_kind = "trailing_martingale"`.
+    `bot.portfolio.strategy_kind = "trailing_martingale"`.
 
 ### Trailing Martingale Closes
 
@@ -374,7 +374,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       ]
       ```
       The `hsl.*` entries are eligible only when the main config's global
-      `bot.global.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
+      `bot.portfolio.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
     - `config.live`:
     ```
     [live.modes.long, live.modes.short, live.account.leverage]
@@ -394,7 +394,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 ## Shared Bot Policy
 
 Behavior shared by live trading, backtests and optimization belongs in `bot`. Global policy
-lives in `bot.global`; directional policy lives in `bot.long` and `bot.short`. `live` contains
+lives in `bot.portfolio`; shared approval sources and forager hysteresis live in `bot.global`,
+and directional policy lives in `bot.long` and `bot.short`. `live` contains
 operational execution, exchange I/O and startup settings.
 
 ### Universe and selection
@@ -492,9 +493,9 @@ shared source.
 
 ### Strategy, execution and warmup
 
-- **bot.global.strategy_kind**: Selects the active strategy subtree on both sides.
+- **bot.portfolio.strategy_kind**: Selects the active strategy subtree on both sides.
 
-- **bot.global.hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.bot.global.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
+- **bot.portfolio.hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.bot.portfolio.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 
 - **bot.<side>.universe.filter_by_min_effective_cost**: Each side defaults to `true` and disallows flat initial entries where
   `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
@@ -503,20 +504,20 @@ shared source.
   `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow an initial entry on that side. Set only the desired side to `false` to allow exchange-minimum-sized entries. Actual exchange minima and held-position management are unchanged. Selection and one-way arbitration apply each side's effective flag before choosing an entry. The nullable backtest override inherits both independently.
 
-- **bot.global.execution.market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
+- **bot.portfolio.execution.market_orders_allowed**: If `true`, allows Passivbot to place market orders when the order price is very close to the current market price. If `false`, only places limit orders. The current default profile uses `false`. Live market orders execute as taker orders and may fill materially away from the reference price during fast moves or thin liquidity; exchange adapter and CCXT slippage controls apply.
 
-- **bot.global.execution.market_order_near_touch_fraction**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
+- **bot.portfolio.execution.market_order_near_touch_fraction**: Unified threshold used by Rust order orchestration when `market_orders_allowed` is enabled. If an order price is within this fractional distance of the current market price, Rust emits it as a market order. Crossing orders also become market orders (`bid >= market` for buys, `ask <= market` for sells). This execution intent is now shared by both live and backtest. Default is `0.001`. This threshold decides when an order may become market execution; it is not a live slippage cap.
   - Decision rules:
     - non-panic buy with `price >= market_price` => `market`
     - non-panic sell with `price <= market_price` => `market`
     - otherwise, if `abs(order_price_diff) <= market_order_near_touch_fraction` => `market`
     - otherwise => `limit`
     - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
-  - Ownership is `config.bot.global.execution`. Backtests always inherit `bot.global.execution.market_orders_allowed` and `bot.global.execution.market_order_near_touch_fraction`; `config.backtest` does not accept overrides for either field.
+  - Ownership is `config.bot.portfolio.execution`. Backtests always inherit `bot.portfolio.execution.market_orders_allowed` and `bot.portfolio.execution.market_order_near_touch_fraction`; `config.backtest` does not accept overrides for either field.
 
-- **bot.global.warmup.max_minutes**: Cap on span-based historical warm-up for backtests and live warm-ups. Use `null` for no cap, or a positive finite number of minutes. Zero is rejected. Both modes round up only at the whole-minute acquisition boundary: `0.5` allows one minute and `5.5` allows six. Every positive cap, including an integer cap, is a maximum rather than a minimum request: a `3.25`-minute requirement acquires four candles under either a `5.5` or `60` cap. Uncapped background candidate refresh retains its default minimum window. The authored cap and EMA spans remain floats; live ranking readers use those fractional spans directly. Native hourly reads retain whole-hour alignment, and independently required RMS history is unchanged.
+- **bot.portfolio.warmup.max_minutes**: Cap on span-based historical warm-up for backtests and live warm-ups. Use `null` for no cap, or a positive finite number of minutes. Zero is rejected. Both modes round up only at the whole-minute acquisition boundary: `0.5` allows one minute and `5.5` allows six. Every positive cap, including an integer cap, is a maximum rather than a minimum request: a `3.25`-minute requirement acquires four candles under either a `5.5` or `60` cap. Uncapped background candidate refresh retains its default minimum window. The authored cap and EMA spans remain floats; live ranking readers use those fractional spans directly. Native hourly reads retain whole-hour alignment, and independently required RMS history is unchanged.
 
-- **bot.global.warmup.span_multiplier**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + span_multiplier`; backtest warmup and trade activation use the span times `span_multiplier`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.global.warmup.max_minutes` and other history requirements.
+- **bot.portfolio.warmup.span_multiplier**: Controls the span-based warmup terms. Live history acquisition uses the deepest required indicator span times `1 + span_multiplier`; backtest warmup and trade activation use the span times `span_multiplier`. For example, `0.2` adds a 20% acquisition buffer in live mode (120% of the span), while the activation/backtest term is 20% of the span. These terms remain subject to `bot.portfolio.warmup.max_minutes` and other history requirements.
 
 ## Live Trading Settings
 
@@ -589,8 +590,8 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.fills.fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **live.fills.fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
 - Risk memory controls are consumer-owned: `bot.<side>.hsl.memory_ema_span_minutes`
-  (or `bot.global.hsl.memory_ema_span_minutes` in portfolio scope),
-  `bot.global.unstuck.memory_ema_span_minutes`, and `bot.global.loss_gate.memory_ema_span_minutes`.
+  (or `bot.portfolio.hsl.memory_ema_span_minutes` in portfolio scope),
+  `bot.portfolio.unstuck.memory_ema_span_minutes`, and `bot.portfolio.loss_gate.memory_ema_span_minutes`.
   HSL ratio smoothing separately uses `drawdown_ratio_ema_span_minutes`. All are EMA spans,
   not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
   equivalence from an old rolling duration.
@@ -617,7 +618,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **total_exposure_enforcer.policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
 - **total_exposure_enforcer.threshold_ratio**: Fraction of the configured `total_wallet_exposure_limit` used by the unconditional entry cap and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
 - **risk.we_excess_allowance_fraction**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **bot.global.loss_gate.max_drawdown_ratio**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
+- **bot.portfolio.loss_gate.max_drawdown_ratio**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
   - Default: `1.0` (disabled).
   - `0.0`: block all lossy closes; negative or nonfinite values are invalid.
   - `>= 1.0`: disable the gate.
@@ -628,7 +629,7 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **live.startup.warmup_jitter_seconds**: Random startup delay spread applied before warm-up work begins. This helps multiple bots sharing one machine or cache avoid stampeding the same files and APIs at the same second.
 - **live.startup.warmup_concurrency**: Concurrency cap for live warm-up tasks. `"auto"` (default) retains the context/exchange policy; a positive integer sets an explicit cap. Zero, null and booleans are rejected.
 - **live.api.max_concurrent_api_requests**: Optional global live REST concurrency cap. Leave `null` to use exchange/default behavior; set an integer to throttle authenticated and public request fan-out more aggressively.
-- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.global.warmup.span_multiplier`, indicator spans, and `bot.global.warmup.max_minutes`.
+- **warmup_minutes**: Not a config key. This is a derived per-coin warm-up window computed internally from `bot.portfolio.warmup.span_multiplier`, indicator spans, and `bot.portfolio.warmup.max_minutes`.
 - **live.execution.time_in_force**: Default is Good-Till-Cancelled.
 - **live.account.user**: Fetch API key/secret from `api-keys.json`.
 
@@ -732,7 +733,7 @@ In this example:
 
 HSL bounds use `optimize.bounds.<side>.hsl` in coin and position_side modes, with
 `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`, and
-`cooldown_after_red_minutes` leaves. Portfolio HSL uses `optimize.bounds.global.hsl`.
+`cooldown_after_red_minutes` leaves. Portfolio HSL uses `optimize.bounds.portfolio.hsl`.
 Independent slow spans use their canonical consumer-owned bound blocks. There is no
 restart-policy field. Use independent ordinary account-equity definitions for cross-version
 economic comparison; HSL signal metrics are model-dependent and all fitness is recomputed
@@ -749,7 +750,7 @@ after migration.
 - **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
   - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_fraction` > `strategy.trailing_martingale.close.retracement_base_fraction`. This prevents retracement from triggering before reaching the minimum profit threshold.
   - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These retired overrides are rejected.
-  - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.global.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
+  - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.portfolio.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
 - **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
 - **iters**: Number of backtests per optimize session.
@@ -924,7 +925,7 @@ v8 file does not convert its policy. Main configs reject retired fields in root,
 coin/scenario overrides and optimizer policy. There is no engine selector or restart policy.
 
 Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`position_side` modes. `portfolio` requires an
-explicit `bot.global.hsl` block with `enabled`, `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`,
+explicit `bot.portfolio.hsl` block with `enabled`, `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`,
 `memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_after_red_minutes`. Side policy is never silently
 promoted to portfolio authority. `scale_budget_with_excess_allowance` defaults to `false`
 and may vary per coin in coin scope.
@@ -942,9 +943,9 @@ cancel or renew the integer deadline. New actual exposure starts a new episode. 
 cooldown allows immediate restart subject to ordinary gates. There is no `never` option;
 permanent shutdown belongs to the operator or an external supervisor.
 
-Portfolio optimizer bounds use `optimize.bounds.global.hsl`; local HSL bounds use their side
-blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.global.unstuck` and
-`optimize.bounds.global.loss_gate`. Omitted slow-span bounds freeze configured values;
+Portfolio optimizer bounds use `optimize.bounds.portfolio.hsl`; local HSL bounds use their side
+blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.portfolio.unstuck` and
+`optimize.bounds.portfolio.loss_gate`. Omitted slow-span bounds freeze configured values;
 conversion never widens new dimensions implicitly. Per-coin override support does not create
 per-coin optimizer genes. Schema, policies, inputs and implementation participate in saved-fitness
 identity; incompatible checkpoints fail and migrated numeric seeds require fresh evaluation.

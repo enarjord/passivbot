@@ -1002,7 +1002,7 @@ def _configure_real_cli_module_test(monkeypatch, tmp_path: Path) -> None:
                 "5",
                 "--bot.long.universe.filter_by_min_effective_cost",
                 "y",
-                "--bot.global.hedge_mode",
+                "--bot.portfolio.hedge_mode",
                 "n",
                 "--live_account_leverage",
                 "3",

@@ -273,7 +273,7 @@ def _resolve_backtest_hsl(config, coin_policies):
         "engine": "hsl",
         "mode": mode,
         "sides": [native_hsl_policy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
-        "portfolio": native_hsl_policy({key: deepcopy(value) for key, value in config["bot"]["global"]["hsl"].items()
+        "portfolio": native_hsl_policy({key: deepcopy(value) for key, value in config["bot"]["portfolio"]["hsl"].items()
                       if key != "scope"}) if mode == "portfolio" else None,
         "coins": {coin: [native_hsl_policy(policy) for policy in policies]
                   for coin, policies in coin_policies.items()} if mode == "coin" else {},
@@ -283,7 +283,7 @@ def _resolve_backtest_hsl(config, coin_policies):
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
     from config.hsl import native_hsl_mode
 
-    return native_hsl_mode(require_config_value(config, "bot.global.hsl.scope"))
+    return native_hsl_mode(require_config_value(config, "bot.portfolio.hsl.scope"))
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -2637,24 +2637,24 @@ def get_backtest_execution_settings(
     )
     if market_order_slippage_pct < 0.0:
         raise ValueError("backtest.market_order_slippage_fraction must be >= 0.0")
-    market_orders_allowed_raw = get_optional_config_value(config, 'bot.global.execution.market_orders_allowed', False)
+    market_orders_allowed_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_orders_allowed', False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
-        field_name='bot.global.execution.market_orders_allowed',
+        field_name='bot.portfolio.execution.market_orders_allowed',
     )
-    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.global.execution.market_order_near_touch_fraction', 0.001)
+    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_order_near_touch_fraction', 0.001)
     market_order_near_touch_threshold = float(
         market_order_near_touch_threshold_raw or 0.0
     )
     if market_order_near_touch_threshold < 0.0:
-        raise ValueError("bot.global.execution.market_order_near_touch_fraction must be >= 0.0")
+        raise ValueError("bot.portfolio.execution.market_order_near_touch_fraction must be >= 0.0")
     unstuck_memory_span = normalize_memory_ema_span_minutes(
-        require_config_value(config, "bot.global.unstuck.memory_ema_span_minutes"),
-        field="bot.global.unstuck.memory_ema_span_minutes",
+        require_config_value(config, "bot.portfolio.unstuck.memory_ema_span_minutes"),
+        field="bot.portfolio.unstuck.memory_ema_span_minutes",
     )
     loss_gate_memory_span = normalize_memory_ema_span_minutes(
-        require_config_value(config, "bot.global.loss_gate.memory_ema_span_minutes"),
-        field="bot.global.loss_gate.memory_ema_span_minutes",
+        require_config_value(config, "bot.portfolio.loss_gate.memory_ema_span_minutes"),
+        field="bot.portfolio.loss_gate.memory_ema_span_minutes",
     )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
@@ -2673,11 +2673,11 @@ def log_backtest_execution_settings(
         return
     logging.info("[backtest] effective execution settings:")
     logging.info(
-        "[backtest]   market_orders_allowed = %s (bot.global.execution)",
+        "[backtest]   market_orders_allowed = %s (bot.portfolio.execution)",
         execution_settings.market_orders_allowed,
     )
     logging.info(
-        "[backtest]   market_order_near_touch_fraction = %s (bot.global.execution)",
+        "[backtest]   market_order_near_touch_fraction = %s (bot.portfolio.execution)",
         execution_settings.market_order_near_touch_threshold,
     )
     logging.info(
@@ -2689,11 +2689,11 @@ def log_backtest_execution_settings(
         execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
-        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.global.unstuck)",
+        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.portfolio.unstuck)",
         execution_settings.unstuck_memory_ema_span_minutes,
     )
     logging.info(
-        "[backtest]   loss_gate_memory_ema_span_minutes = %s (bot.global.loss_gate)",
+        "[backtest]   loss_gate_memory_ema_span_minutes = %s (bot.portfolio.loss_gate)",
         execution_settings.loss_gate_memory_ema_span_minutes,
     )
 
@@ -2766,7 +2766,7 @@ def prep_backtest_args(
         execution_settings = get_backtest_execution_settings(
             config, is_runtime_compiled=True
         )
-    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.global.strategy_kind'))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     approved_by_side = {
         pside: set(side_coins)
@@ -2943,9 +2943,9 @@ def prep_backtest_args(
             "dynamic_wel_by_tradability": bool(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
-            "hedge_mode": bool(require_config_value(config, 'bot.global.hedge_mode')),
+            "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
             "max_realized_loss_pct": float(
-                require_config_value(config, "bot.global.loss_gate.max_drawdown_ratio")
+                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_ratio")
             ),
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
             "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,

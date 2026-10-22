@@ -165,15 +165,7 @@
     },
     "bot": {
         "global": {
-            "execution": {
-                "market_order_near_touch_fraction": 0.001,
-                "market_orders_allowed": false
-            },
             "forager": {"score_hysteresis_margin": 0.02},
-            "hedge_mode": false,
-            "hsl": {"scope": "coin"},
-            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
-            "strategy_kind": "trailing_martingale",
             "universe": {
                 "approved_coins": [
                     "BTC",
@@ -218,7 +210,17 @@
                     "APT",
                     "INJ"
                 ]
+            }
+        },
+        "portfolio": {
+            "execution": {
+                "market_order_near_touch_fraction": 0.001,
+                "market_orders_allowed": false
             },
+            "hedge_mode": false,
+            "hsl": {"scope": "coin"},
+            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 43200.0},
+            "strategy_kind": "trailing_martingale",
             "unstuck": {"memory_ema_span_minutes": 43200.0},
             "warmup": {"max_minutes": null, "span_multiplier": 0.3}
         },
@@ -496,7 +498,7 @@
     "optimize": {
         "backend": "pymoo",
         "bounds": {
-            "global": {
+            "portfolio": {
                 "loss_gate": {"memory_ema_span_minutes": [43200.0, 43200.0]},
                 "unstuck": {"memory_ema_span_minutes": [43200.0, 43200.0]}
             },

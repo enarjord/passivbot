@@ -41,8 +41,8 @@ def _single_coin_config(coin: str) -> dict:
 def _write(path: Path, config: dict) -> None:
     config = deepcopy(config)
     inner = config.get("config", config)
-    if inner["bot"]["global"]["hsl"]["scope"] == "portfolio":
-        inner["bot"]["global"]["hsl"] = {**deepcopy(inner["bot"]["long"]["hsl"]), **inner["bot"]["global"]["hsl"]}
+    if inner["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
+        inner["bot"]["portfolio"]["hsl"] = {**deepcopy(inner["bot"]["long"]["hsl"]), **inner["bot"]["portfolio"]["hsl"]}
         for side in ("long", "short"):
             inner["optimize"]["bounds"][side].pop("hsl", None)
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -203,27 +203,27 @@ def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Pat
     first = _single_coin_config("BTC")
     second = _single_coin_config("ETH")
     for source in (first, second):
-        source["bot"]["global"]["hsl"]["scope"] = scope
-    first["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 12.5
-    second["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = 25.0
-    first["bot"]["global"]["loss_gate"].update(memory_ema_span_minutes=31.5, max_drawdown_ratio=0.1)
-    second["bot"]["global"]["loss_gate"].update(memory_ema_span_minutes=63.0, max_drawdown_ratio=0.2)
+        source["bot"]["portfolio"]["hsl"]["scope"] = scope
+    first["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 12.5
+    second["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 25.0
+    first["bot"]["portfolio"]["loss_gate"].update(memory_ema_span_minutes=31.5, max_drawdown_ratio=0.1)
+    second["bot"]["portfolio"]["loss_gate"].update(memory_ema_span_minutes=63.0, max_drawdown_ratio=0.2)
     if scope == "portfolio":
-        first["bot"]["global"]["hsl"].update(enabled=True, drawdown_ratio_threshold=0.03)
-        second["bot"]["global"]["hsl"].update(enabled=True, drawdown_ratio_threshold=0.07)
+        first["bot"]["portfolio"]["hsl"].update(enabled=True, drawdown_ratio_threshold=0.03)
+        second["bot"]["portfolio"]["hsl"].update(enabled=True, drawdown_ratio_threshold=0.07)
     _write(tmp_path / "a.json", first)
     _write(tmp_path / "b.json", second)
 
     composed, report = compose_directory(tmp_path)
 
-    assert composed["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] == 12.5
-    assert composed["bot"]["global"]["loss_gate"] == first["bot"]["global"]["loss_gate"]
-    assert "bot.global.unstuck.memory_ema_span_minutes" in report.account_wide_conflicts
-    assert "bot.global.loss_gate.memory_ema_span_minutes" in report.account_wide_conflicts
-    assert "bot.global.loss_gate.max_drawdown_ratio" in report.account_wide_conflicts
+    assert composed["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 12.5
+    assert composed["bot"]["portfolio"]["loss_gate"] == first["bot"]["portfolio"]["loss_gate"]
+    assert "bot.portfolio.unstuck.memory_ema_span_minutes" in report.account_wide_conflicts
+    assert "bot.portfolio.loss_gate.memory_ema_span_minutes" in report.account_wide_conflicts
+    assert "bot.portfolio.loss_gate.max_drawdown_ratio" in report.account_wide_conflicts
     if scope == "portfolio":
-        assert composed["bot"]["global"]["hsl"]["drawdown_ratio_threshold"] == 0.03
-        assert "bot.global.hsl.drawdown_ratio_threshold" in report.account_wide_conflicts
+        assert composed["bot"]["portfolio"]["hsl"]["drawdown_ratio_threshold"] == 0.03
+        assert "bot.portfolio.hsl.drawdown_ratio_threshold" in report.account_wide_conflicts
     for patch in composed["coin_overrides"].values():
         assert "risk" not in patch.get("bot", {})
         assert "unstuck" not in patch.get("bot", {})
@@ -232,12 +232,12 @@ def test_global_risk_policy_conflicts_are_reported_and_keep_master(tmp_path: Pat
 def test_direct_composition_rejects_mixed_global_hsl_scopes(tmp_path: Path):
     first = _single_coin_config("BTC")
     second = _single_coin_config("ETH")
-    second["bot"]["global"]["hsl"]["scope"] = "position_side"
+    second["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
     sources = [
         compose_tool.SingleCoinConfig(path=tmp_path / "a.json", config=first, coin="BTC", approved_sides=frozenset({"long"})),
         compose_tool.SingleCoinConfig(path=tmp_path / "b.json", config=second, coin="ETH", approved_sides=frozenset({"long"})),
     ]
-    with pytest.raises(ValueError, match="same bot.global.hsl.scope"):
+    with pytest.raises(ValueError, match="same bot.portfolio.hsl.scope"):
         compose_tool.compose_configs(sources)
 
 
@@ -369,11 +369,11 @@ def test_external_master_must_match_input_strategy_and_hsl_mode(
     _write(inputs / "b.json", _single_coin_config("ETH"))
     master = _single_coin_config("SOL")
     if key == "hsl_signal_mode":
-        master["bot"]["global"]["hsl"]["scope"] = value
+        master["bot"]["portfolio"]["hsl"]["scope"] = value
     else:
         master["bot"]["global"][key] = value
     _write(tmp_path / "master.json", master)
-    expected_path = "bot.global.hsl.scope" if key == "hsl_signal_mode" else f"bot.global.{key}"
+    expected_path = "bot.portfolio.hsl.scope" if key == "hsl_signal_mode" else f"bot.global.{key}"
     with pytest.raises(ValueError, match=f"same {expected_path}"):
         compose_directory(inputs, master_config=tmp_path / "master.json")
 
@@ -529,7 +529,7 @@ def test_retains_gpu_optimizer_with_coin_overrides(tmp_path: Path, strategy_kind
     master = _single_coin_config("BTC")
     other = _single_coin_config("ETH")
     for config in (master, other):
-        config['bot']['global']['strategy_kind'] = strategy_kind
+        config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     master["optimize"]["backend"] = "gpu"
     master["optimize"]["iters"] = 123
     master["backtest"]["start_date"] = "2021-01-01"
@@ -599,8 +599,8 @@ def test_verbose_overrides_survive_master_edits(
     inputs.mkdir()
     for name, coin in (("a.json", "BTC"), ("b.json", "ETH")):
         config = _single_coin_config(coin)
-        config['bot']['global']['strategy_kind'] = strategy_kind
-        config["bot"]["global"]["hsl"]["scope"] = hsl_signal_mode
+        config['bot']["portfolio"]['strategy_kind'] = strategy_kind
+        config["bot"]["portfolio"]["hsl"]["scope"] = hsl_signal_mode
         config["live"]["account"]["leverage"] = 3
         config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
         config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.123
@@ -810,7 +810,7 @@ def test_custom_params_pin_selection_and_inherit_global_unstuck(
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     master = _single_coin_config("SOL")
-    master['bot']['global']['strategy_kind'] = strategy_kind
+    master['bot']["portfolio"]['strategy_kind'] = strategy_kind
     master["bot"]["long"]["unstuck"].update({"enabled": False, "exposure_trigger_ratio": 0.83})
     master["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 7.0
     master_path = tmp_path / "master.json"
@@ -854,7 +854,7 @@ def test_custom_params_pin_selection_and_inherit_global_unstuck(
     prepared = prepare_config(composed, verbose=False, log_config_transforms=False)
     parsed = parse_overrides(prepared, verbose=False)
     policy = get_allowed_modifications(
-        hsl_signal_mode=prepared["bot"]["global"]["hsl"]["scope"]
+        hsl_signal_mode=prepared["bot"]["portfolio"]["hsl"]["scope"]
     )
     for coin, cooldown in (("BTC", 7.0), ("ETH", 9.0)):
         effective = apply_allowed_modifications(prepared, parsed["coin_overrides"][coin], policy)
@@ -971,7 +971,7 @@ def test_custom_hsl_selection_obeys_signal_mode_and_preserves_inactive_value(
     }
     for coin in ("BTC", "ETH"):
         set_side_universe_sources(config, 'approved_coins', {"long": [coin], "short": [coin]})
-        config["bot"]["global"]["hsl"]["scope"] = "portfolio"
+        config["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
         _write(tmp_path / f"{coin}.json", config)
     with pytest.raises(ValueError, match="matches no overridable input fields"):
         compose_directory(tmp_path, override_params="long.hsl")

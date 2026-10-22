@@ -22,9 +22,9 @@ from config.access import get_optional_config_value
 def _released_path_context(config):
     """Resolve v8 selectors under their released active strategy, without aliases in loading."""
     bot = config.get("bot", {})
-    global_policy = bot.get("global", {})
+    portfolio_policy = bot.get("portfolio", {})
     kind = config.get("live", {}).get("strategy_kind", "trailing_martingale")
-    return {**config, "bot": {**bot, "global": {**global_policy, "strategy_kind": kind}}}
+    return {**config, "bot": {**bot, "portfolio": {**portfolio_policy, "strategy_kind": kind}}}
 
 
 def _audit_authored_patch_conflicts(config, overrides):
@@ -411,7 +411,7 @@ def _optimizer_root_enablement(config, enable_overrides, facts):
     from optimizer_overrides import optimizer_overrides
 
     projection = {
-        "bot": {"global": {"strategy_kind": config.get("live", {}).get("strategy_kind", "trailing_martingale")},
+        "bot": {"portfolio": {"strategy_kind": config.get("live", {}).get("strategy_kind", "trailing_martingale")},
                 **{side: {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}
                    for side in ("long", "short")}},
     }

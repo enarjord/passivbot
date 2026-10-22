@@ -357,15 +357,13 @@ def _build_template_config():
                 "volume_normalization": True,
             },
             "bot": {
-                "global": {
+                "portfolio": {
                     "strategy_kind": "trailing_martingale",
                     "hedge_mode": False,
-                    "universe": {"approved_coins": list(DEFAULT_APPROVED_COINS)},
                     "execution": {
                         "market_orders_allowed": False,
                         "market_order_near_touch_fraction": 0.001,
                     },
-                    "forager": {"score_hysteresis_margin": 0.02},
                     "warmup": {"span_multiplier": 0.3, "max_minutes": None},
                     "hsl": {"scope": "coin"},
                     "loss_gate": {
@@ -373,6 +371,10 @@ def _build_template_config():
                         "memory_ema_span_minutes": 43200.0,
                     },
                     "unstuck": {"memory_ema_span_minutes": 43200.0},
+                },
+                "global": {
+                    "universe": {"approved_coins": list(DEFAULT_APPROVED_COINS)},
+                    "forager": {"score_hysteresis_margin": 0.02},
                 },
                 "long": {
                     **deepcopy(_get_shared_bot_defaults()["long"]),

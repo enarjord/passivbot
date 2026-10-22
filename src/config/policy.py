@@ -47,8 +47,8 @@ def validate_minimum_cost_filters(value, *, path="filter_by_min_effective_cost")
 
 def validate_shared_bot_policy(config):
     for path in (
-        "bot.global.hedge_mode",
-        "bot.global.execution.market_orders_allowed",
+        "bot.portfolio.hedge_mode",
+        "bot.portfolio.execution.market_orders_allowed",
     ):
         if not isinstance(require_config_value(config, path), bool):
             raise TypeError(f"config.{path} must be a boolean")
@@ -58,9 +58,9 @@ def validate_shared_bot_policy(config):
             "config.backtest.filter_by_min_effective_cost must be a boolean or null"
         )
     for path in (
-        "bot.global.execution.market_order_near_touch_fraction",
+        "bot.portfolio.execution.market_order_near_touch_fraction",
         "bot.global.forager.score_hysteresis_margin",
-        "bot.global.warmup.span_multiplier",
+        "bot.portfolio.warmup.span_multiplier",
     ):
         value = require_config_value(config, path)
         if (

@@ -172,12 +172,12 @@ def fixture_inputs(args):
     # This is a backtest fixture, with no optimizer genes/runtime override policy.
     config["optimize"]["bounds"] = {}
     config["optimize"]["fixed_runtime_overrides"] = {}
-    config['bot']['global']['strategy_kind'] = args.fixture
-    config['bot']['global']['hedge_mode'] = args.sides == 'both'
-    config['bot']['global']['warmup']['max_minutes'] = 60
+    config['bot']["portfolio"]['strategy_kind'] = args.fixture
+    config['bot']["portfolio"]['hedge_mode'] = args.sides == 'both'
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 60
     for side in ('long', 'short'):
         config['bot'][side]['universe']['minimum_coin_age_days'] = 0.0
-    config['bot']['global']['execution']['market_orders_allowed'] = args.market_orders
+    config['bot']["portfolio"]['execution']['market_orders_allowed'] = args.market_orders
     set_side_universe_sources(config, 'approved_coins', {side: coins if side in active else [] for side in ('long', 'short')})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config["backtest"].update(
@@ -199,14 +199,14 @@ def fixture_inputs(args):
         bot["unstuck"]["enabled"] = args.unstuck and side in active
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
     if args.hsl == "portfolio":
-        config["bot"]["global"]["hsl"].update(
+        config["bot"]["portfolio"]["hsl"].update(
             enabled=True, drawdown_ratio_threshold=args.hsl_red_threshold,
             drawdown_ratio_ema_span_minutes=args.hsl_drawdown_ratio_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
-    config["bot"]["global"]["unstuck"]["memory_ema_span_minutes"] = args.unstuck_memory_ema_span_minutes
-    config["bot"]["global"]["loss_gate"]["memory_ema_span_minutes"] = args.loss_gate_memory_ema_span_minutes
+    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = args.unstuck_memory_ema_span_minutes
+    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = args.loss_gate_memory_ema_span_minutes
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     # Ordered coins are derived preparation metadata, outside the canonical config.
     config["backtest"]["coins"] = {args.exchange: coins}
@@ -474,7 +474,7 @@ def run_comparison(inputs, exchange, metrics, policies, checks=(), *, diagnostic
     report.update(
         schema_version=1, status=status,
         evaluation_id=identity, bars=int(hlcvs.shape[0]), coins=int(hlcvs.shape[1]),
-        strategy=config['bot']['global']['strategy_kind'],
+        strategy=config['bot']["portfolio"]['strategy_kind'],
         gpu_engine=gpu_engine,
         gpu_replay="shared_account",
         rust_source_fingerprint=runtime["expected_source_fingerprint"],

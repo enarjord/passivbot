@@ -57,7 +57,7 @@ def migrate_unstuck_ema_spans(
     tracker=None,
     explicit_bounds=None,
 ) -> None:
-    kind = normalize_strategy_kind(config.get("bot", {}).get("global", {}).get("strategy_kind"))
+    kind = normalize_strategy_kind(config.get("bot", {}).get("portfolio", {}).get("strategy_kind"))
     defaults = {
         side: _price_spans(value, kind)
         for side, value in get_strategy_defaults(kind).items()
@@ -275,7 +275,7 @@ def migrate_unstuck_ema_spans(
                             defaults[side][key],
                             f"scenario {scenario.get('label', '<unnamed>')!r} overrides.{new_path}",
                         )
-        if "bot.global.strategy_kind" in leaves or any(
+        if "bot.portfolio.strategy_kind" in leaves or any(
             isinstance(v, dict) and "strategy" in str(k) for k, v in overrides.items()
         ):
             logging.warning(

@@ -54,8 +54,8 @@ def risk_memory_spans(config):
     """Return the independent memory spans of enabled factual consumers."""
     bot = config["bot"]
     spans = []
-    scope = bot["global"]["hsl"]["scope"]
-    policies = ([bot["global"]["hsl"]] if scope == "portfolio" else
+    scope = bot["portfolio"]["hsl"]["scope"]
+    policies = ([bot["portfolio"]["hsl"]] if scope == "portfolio" else
                 [bot[side]["hsl"] for side in ("long", "short")])
     spans.extend(policy["memory_ema_span_minutes"] for policy in policies
                  if policy["enabled"])
@@ -75,8 +75,8 @@ def risk_memory_spans(config):
             for patch in config.get("coin_overrides", {}).values()
         )
     if unstuck_enabled:
-        spans.append(bot["global"]["unstuck"]["memory_ema_span_minutes"])
-    gate = bot["global"]["loss_gate"]
+        spans.append(bot["portfolio"]["unstuck"]["memory_ema_span_minutes"])
+    gate = bot["portfolio"]["loss_gate"]
     if gate["max_drawdown_ratio"] < 1.0:
         spans.append(gate["memory_ema_span_minutes"])
     return tuple(sorted(set(spans)))
@@ -95,15 +95,15 @@ def risk_bootstrap_horizon_minutes(config):
 def normalize_risk_memory_config(config):
     live = config["live"]
     bot = config["bot"]
-    for path, block in (("bot.global.unstuck", bot["global"]["unstuck"]),
-                        ("bot.global.loss_gate", bot["global"]["loss_gate"])):
+    for path, block in (("bot.portfolio.unstuck", bot["portfolio"]["unstuck"]),
+                        ("bot.portfolio.loss_gate", bot["portfolio"]["loss_gate"])):
         block["memory_ema_span_minutes"] = normalize_memory_ema_span_minutes(
             block["memory_ema_span_minutes"], field=f"{path}.memory_ema_span_minutes"
         )
-    gate = bot["global"]["loss_gate"]
-    ratio = _finite_number(gate["max_drawdown_ratio"], "bot.global.loss_gate.max_drawdown_ratio")
+    gate = bot["portfolio"]["loss_gate"]
+    ratio = _finite_number(gate["max_drawdown_ratio"], "bot.portfolio.loss_gate.max_drawdown_ratio")
     if ratio < 0:
-        raise ValueError("bot.global.loss_gate.max_drawdown_ratio must be >= 0")
+        raise ValueError("bot.portfolio.loss_gate.max_drawdown_ratio must be >= 0")
     gate["max_drawdown_ratio"] = ratio
     live["startup"]["risk_bootstrap_max_lookback_minutes"] = (
         normalize_risk_bootstrap_max_lookback_minutes(
