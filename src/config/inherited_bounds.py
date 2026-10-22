@@ -28,6 +28,9 @@ class GeneBinding:
     effective_targets: tuple[Path, ...]
     native_ids: tuple[str, ...]
     source: str
+    # An omitted side range is fixed only while its authored value pin exists.
+    # Explicit side ranges own their coordinate regardless of value presence.
+    requires_side_pin: bool = False
 
     @property
     def key(self):
@@ -91,6 +94,10 @@ def _logical_fixed_view(policy):
 def _source_signature(policy, bindings):
     source = policy.source_view(include_defaults=True)
     effective = _logical_fixed_view(policy)
+    required_side_pins = [
+        (binding.authoring_path, _get(source, binding.authoring_path[1:]) is not ABSENT)
+        for binding in bindings if binding.requires_side_pin
+    ]
     for binding in bindings:
         _remove(source, binding.authoring_path[1:])
     return json.dumps({
@@ -104,6 +111,7 @@ def _source_signature(policy, bindings):
             for binding in bindings if binding.source.startswith("omitted_fixed_")
             or binding.source == "fixed_selector"
         ],
+        "required_side_pins": required_side_pins,
     }, sort_keys=True, allow_nan=False)
 
 
@@ -373,7 +381,8 @@ def build_bound_plan(
             if native_id is None:
                 raise ValueError(f"missing native optimizer binding for {target}")
             bindings.append(GeneBinding(target, ("optimize", "bounds", side, *field.suffix),
-                                        bound, (target,), (native_id,), owner))
+                                        bound, (target,), (native_id,), owner,
+                                        requires_side_pin=owner == "omitted_fixed_side_pin"))
         if inherited:
             value = _get(effective["global"], field.suffix)
             if shared_bound is ABSENT and value is None:
