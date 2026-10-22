@@ -2734,6 +2734,12 @@ def _validate_starting_config_selection_args(
 
 
 def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
+    from config.inherited_bounds import get_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        return {binding.key: [binding.bound.low, binding.bound.high,
+                              *([] if binding.bound.step is None else [binding.bound.step])]
+                for binding in plan.bindings}, False
     bounds = config.get("optimize", {}).get("bounds", {})
     strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     flat_bounds = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
@@ -2745,6 +2751,19 @@ def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
 
 
 def _set_optimize_bound(config: dict, bound_key: str, value) -> None:
+    from config.inherited_bounds import get_bound_plan, optimize_bounds_source_view, prepare_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        binding = next((item for item in plan.bindings if bound_key == item.key or bound_key in item.native_ids), None)
+        if binding is None:
+            raise KeyError(f"unknown optimizer binding {bound_key}")
+        raw = optimize_bounds_source_view(config)["optimize"]["bounds"]
+        target = raw
+        for part in binding.bound_path[2:-1]:
+            target = target.setdefault(part, {})
+        target[binding.bound_path[-1]] = deepcopy(value)
+        prepare_bound_plan(config, authored_bounds=raw)
+        return
     bounds = config.get("optimize", {}).get("bounds", {})
     strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     _, use_flat_bounds = _flat_optimize_bounds_for_config(config)
@@ -2874,6 +2893,13 @@ def _format_bound_key_for_log(config: dict, bound_key: str, path=None) -> str:
 def _resolve_bound_selectors_for_config(
     config: dict, selectors, label: str
 ) -> set[str]:
+    from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
+    plan = get_bound_plan(config)
+    if plan is not None:
+        selected = resolve_plan_selectors(config, selectors)
+        for key, path in selected.items():
+            logging.info("%s selector binding: %s (%s)", label, key, ".".join(path))
+        return set(selected)
     flat_bounds, _ = _flat_optimize_bounds_for_config(config)
     resolved: set[str] = set()
     selectors_sorted = sorted(

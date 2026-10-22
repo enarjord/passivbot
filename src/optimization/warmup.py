@@ -7,7 +7,7 @@ from typing import Sequence
 from backtest_universe import backtest_side_enabled
 from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
-from config.param_paths import require_existing_config_path, resolve_dotted_config_path
+from config.param_paths import require_existing_config_path, resolve_dotted_config_path, resolve_optimizer_key_path
 from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side, get_grouped_path
 from optimizer_overrides import (
     optimizer_overrides,
@@ -28,6 +28,10 @@ from warmup_utils import compute_per_coin_warmup_minutes
 def _apply_config_overrides(
     config: dict, overrides: dict, *, preserve_prepared_universe=False
 ) -> None:
+    from config.bot_inheritance import get_bot_policy
+    if get_bot_policy(config) is not None:
+        _apply_inherited_config_overrides(config, overrides, preserve_prepared_universe=preserve_prepared_universe)
+        return
     from config.universe import (
         ResolvedCoinList,
         raw_side_universe_sources,
@@ -90,6 +94,46 @@ def _apply_config_overrides(
     # Public fixed/scenario patches stay canonical until explicit runtime lowering.
 
 
+def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_universe):
+    from config.bot_inheritance import apply_bot_config_patch
+    from config.hsl import validate_override_paths
+    from config.universe import (ResolvedCoinList, materialize_side_universe_sources,
+        raw_side_universe_sources, shared_universe_source, source_inherits_shared)
+
+    prepared = {(field, side): deepcopy(value)
+                for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
+                if preserve_prepared_universe and
+                type(value := config["bot"][side]["universe"].get(field)) is ResolvedCoinList}
+    validate_override_paths(config, overrides)
+    canonical = {".".join(require_existing_config_path(config, selector)): deepcopy(value)
+                 for selector, value in overrides.items()}
+    for selector, value in canonical.items():
+        if not selector.startswith("bot.") and selector != "bot":
+            _set_path(config, selector.split("."), value)
+    apply_bot_config_patch(config, canonical)
+    _restore_matching_optimizer_memberships(config, prepared, require_match=True)
+
+
+def _restore_matching_optimizer_memberships(config, prepared, *, require_match):
+    from config.universe import (materialize_side_universe_sources,
+        raw_side_universe_sources, shared_universe_source, source_inherits_shared)
+
+    for field in ("approved_coins", "ignored_coins"):
+        sources = raw_side_universe_sources(config, field)
+        shared = shared_universe_source(config, field)
+        compatible = {}
+        for (name, side), value in prepared.items():
+            if name != field:
+                continue
+            if (value.source_present == (side in sources) and value.source == sources.get(side)
+                    and (not source_inherits_shared(field, sources, side) or value.shared_source == shared)):
+                compatible[side] = list(value)
+            elif require_match and any(config.get("backtest", {}).get("coins", {}).values()):
+                raise ValueError("optimizer universe source policy changed; prepare its membership before candidate replay")
+        if compatible:
+            materialize_side_universe_sources(config, field, compatible, sources=sources)
+
+
 def apply_optimizer_universe_sources(config: dict) -> None:
     """Install fixed source policy before acquiring an optimizer context's membership."""
     from config.universe import (
@@ -102,6 +146,10 @@ def apply_optimizer_universe_sources(config: dict) -> None:
     overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {})
     if not universe_sources_affected(overrides):
         return
+    from config.bot_inheritance import get_bot_policy
+    if get_bot_policy(config) is not None:
+        _install_inherited_optimizer_sources(config, overrides)
+        return
     effective = deepcopy(config)
     _apply_config_overrides(effective, overrides)
     config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
@@ -110,6 +158,33 @@ def apply_optimizer_universe_sources(config: dict) -> None:
     for field in ("approved_coins", "ignored_coins"):
         set_side_universe_sources(config, field, raw_side_universe_sources(effective, field))
     normalize_universe_source_bindings(config)
+
+
+def _install_inherited_optimizer_sources(config, overrides):
+    """Install only fixed source declarations before their one acquisition owner."""
+    from config.bot_inheritance import get_bot_policy, install_bot_policy, resolve_bot_policy
+    from config.universe import (COIN_SOURCE_FIELDS, ResolvedCoinList,
+        normalize_universe_source_bindings, universe_source_view)
+
+    policy = get_bot_policy(config)
+    prepared = {(field, side): deepcopy(value)
+                for side in ("long", "short") for field in COIN_SOURCE_FIELDS
+                if type(value := config["bot"][side]["universe"].get(field)) is ResolvedCoinList}
+    effective = deepcopy(config)
+    _apply_config_overrides(effective, overrides)
+    source = universe_source_view(config)
+    replacement = universe_source_view(effective)
+    for scope in ("global", "long", "short"):
+        fields = replacement.get("bot", {}).get(scope, {}).get("universe", {})
+        current = source.get("bot", {}).get(scope, {}).get("universe", {})
+        for field in COIN_SOURCE_FIELDS:
+            if field in fields:
+                source["bot"].setdefault(scope, {}).setdefault("universe", {})[field] = deepcopy(fields[field])
+            else:
+                current.pop(field, None)
+    normalize_universe_source_bindings(source)
+    install_bot_policy(config, resolve_bot_policy(source["bot"], policy.catalog))
+    _restore_matching_optimizer_memberships(config, prepared, require_match=False)
 
 
 def _set_path(config: dict, path: Sequence[str], value) -> None:
@@ -209,10 +284,18 @@ def optimizer_dead_param_values(
 
 
 def canonicalize_dead_optimizer_params(config: dict) -> None:
+    from config.bot_inheritance import apply_bot_config_patch, get_bot_policy
+    changes = {}
     for bound_key, value in optimizer_dead_param_values(config).items():
-        path = resolve_optimization_bound_path(config, bound_key)
+        # These are derived effective-side values, not authoring gene writes.
+        path = resolve_optimizer_key_path(config, bound_key)
         if path is not None:
-            _set_path(config, path, value)
+            changes[".".join(path)] = value
+    if get_bot_policy(config) is not None:
+        apply_bot_config_patch(config, changes, channel="derived")
+    else:
+        for selector, value in changes.items():
+            _set_path(config, selector.split("."), value)
 
 
 def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixed_paths=()) -> dict:
@@ -241,6 +324,8 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
     # Runtime transport aliases are produced later by explicit compilation.
     for pside in (side for side in ("long", "short") if side in config.get("bot", {})):
         config = optimizer_overrides(overrides_list or [], config, pside)
+    from config.bot_inheritance import get_bot_policy, install_bot_policy, with_normalized_bot_values
+    normalization_policy = get_bot_policy(config)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         forager_cfg = pside_cfg.get("forager") if isinstance(pside_cfg, dict) else None
@@ -268,12 +353,19 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
             weights,
             path=f"bot.{pside}.forager.score_weights",
         )
+    if normalization_policy is not None:
+        normalized = with_normalized_bot_values(normalization_policy, config["bot"])
+        install_bot_policy(config, normalized, effective_bot=config["bot"])
     canonicalize_dead_optimizer_params(config)
     materialize_coupled_scenario_spans(config)
     from config.hsl import normalize_hsl
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
-    normalize_hsl(config, get_template_config(), verbose=False)
+    normalization_policy = get_bot_policy(config)
+    normalize_hsl(config, get_expanded_config_prototype(), verbose=False)
+    if normalization_policy is not None:
+        normalized = with_normalized_bot_values(normalization_policy, config["bot"])
+        install_bot_policy(config, normalized, effective_bot=config["bot"])
     return config
 
 
@@ -299,14 +391,30 @@ def _build_anchored_optimizer_vector_config(
     config.pop(ANCHOR_PLAN_KEY, None)
     # Carry the selected plan's fixed leaf authority through finalization.
     fixed_paths = set()
+    from config.bot_inheritance import get_bot_policy, install_bot_policy
+    from config.inherited_bounds import get_bound_plan
+    binding_plan = get_bound_plan(config)
+    bindings = ({binding.authoring_path: binding for binding in binding_plan.bindings}
+                if binding_plan is not None else {})
+    values = {}
     for item in anchor.get("fixed_values") or []:
         path = tuple(item.get("path") or ())
         if not path:
             continue
-        _set_path(config, path, deepcopy(item.get("value")))
+        if binding_plan is not None:
+            binding = bindings[path]
+            values[binding.key] = deepcopy(item.get("value"))
+            fixed_paths.update(binding.effective_targets)
+        else:
+            _set_path(config, path, deepcopy(item.get("value")))
         fixed_paths.add(path)
     for value, path in zip(vector[1:], key_paths):
-        _set_path(config, path, value)
+        if binding_plan is not None:
+            values[bindings[path].key] = value
+        else:
+            _set_path(config, path, value)
+    if binding_plan is not None:
+        install_bot_policy(config, binding_plan.apply_values(get_bot_policy(config), values))
     config["_optimizer_anchor"] = {
         "id": anchor_id,
         "source": anchor.get("source"),
@@ -337,8 +445,18 @@ def build_optimizer_vector_config(
     assert len(vector) == len(
         key_paths
     ), f"individual length {len(vector)} does not match optimization key count {len(key_paths)}"
-    for value, (_, path) in zip(vector, key_paths):
-        _set_path(config, path, value)
+    from config.bot_inheritance import get_bot_policy, install_bot_policy
+    from config.inherited_bounds import get_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        declared = {binding.key: binding.authoring_path for binding in plan.bindings}
+        if any(declared.get(key) != tuple(path) for key, path in key_paths):
+            raise ValueError("optimizer key paths do not match the inherited binding plan")
+        updated = plan.apply_values(get_bot_policy(config), {key: value for value, (key, _) in zip(vector, key_paths)})
+        install_bot_policy(config, updated)
+    else:
+        for value, (_, path) in zip(vector, key_paths):
+            _set_path(config, path, value)
     return _finalize_optimizer_vector_config(config, overrides_list=overrides_list)
 
 
