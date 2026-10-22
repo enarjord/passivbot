@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from passivbot import Passivbot
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from backtest import prep_backtest_args
 from fill_events_manager import FillEventsManager
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
@@ -85,7 +85,7 @@ _DEFAULT_RISK_CACHE = object()
 
 
 def _risk_memory_config(span_minutes=3.0):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = span_minutes
     config["bot"]["portfolio"]["loss_gate"].update(
         memory_ema_span_minutes=span_minutes, max_drawdown_ratio=.99,
@@ -1036,7 +1036,7 @@ class TestEntryCooldownDeltaGuardEvents:
 
 class TestPrepBacktestArgsMaxRealizedLossPct:
     def _make_config(self, max_realized_loss_pct=None):
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
                                   btc_collateral_cap=.5)
         set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
@@ -1090,9 +1090,9 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
 class TestPrepBacktestArgsEquityHardStopLoss:
     def _make_config(self, policy=None):
         from config.hsl import generated_template
-        from config.schema import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        config = generated_template(get_template_config())
+        config = generated_template(get_expanded_config_prototype())
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000)
         set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
         config["bot"]["long"]["hsl"].update(enabled=False)

@@ -36,7 +36,11 @@ def test_cli_sizing_reaches_native_evolution(monkeypatch, tmp_path, batch, dispa
                                   "--optimize.gpu.max_dispatch_candidate_bars", dispatch])
         update_config_with_args(base.config, args, allowed_keys=allowed)
         prepared = prepare_config(clean_config(base.config), verbose=False)
-        base.config["optimize"]["gpu"] = prepared["optimize"]["gpu"]
+        # The cleaner omits prepared candle columns from the authored view.
+        prepared["backtest"]["coins"] = base.config["backtest"]["coins"]
+        # Bind the normalized source and bounds together before execution.
+        base = type(base)(base.hlcvs_specs, base.btc_usd_specs, base.msss, prepared,
+                          timestamps=base.timestamps)
         records = []
         execute(base, SimpleNamespace(record=records.append), tmp_path / "checkpoint.pkl")
         assert len(records) == 8

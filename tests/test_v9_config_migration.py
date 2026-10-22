@@ -15,7 +15,7 @@ from config.risk_memory import (
     normalize_risk_bootstrap_max_lookback_minutes,
     risk_bootstrap_horizon_minutes,
 )
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype, get_template_config
 from tools.migrate_config_v9 import main, migrate
 from released_v8_fixtures import released_v8_policy
 
@@ -817,6 +817,7 @@ def test_referenced_null_aliases_preserve_file_then_inline_enablement(
         output = migrate(source, **kwargs).config
         assert "restart_after_red_policy" not in json.dumps(output)
         if location != "root":
+            output = prepare_config(output, verbose=False)
             _set_patch(output, output["backtest"]["scenarios"][0]["overrides"], scenario=True)
         coin_file.unlink()
         output = parse_overrides(prepare_config(
@@ -850,6 +851,7 @@ def test_scenario_inline_null_uses_provenance_after_file_aliases_are_canonicaliz
     output = migrate(source, memory_span_minutes=43200,
                      base_config_path=str(tmp_path / "base.json")).config
     assert "restart_after_red_policy" not in json.dumps(output)
+    output = prepare_config(output, verbose=False)
     _set_patch(output, output["backtest"]["scenarios"][0]["overrides"], scenario=True)
     output = parse_overrides(prepare_config(output, verbose=False), verbose=False)
     assert output["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["enabled"] is False
@@ -1163,7 +1165,7 @@ def test_legacy_coin_flag_files_are_materialized_with_flags_and_authorization(
     if location != "root":
         scenario_patch = output["backtest"]["scenarios"][0]["overrides"]
         assert not any("coin_flags" in key for key in scenario_patch)
-        output = deepcopy(output)
+        output = prepare_config(output, verbose=False)
         _set_patch(output, scenario_patch, scenario=True)
         assert output["bot"]["long"]["universe"]["minimum_coin_age_days"] == 7.0
     patch = output["coin_overrides"]["AAA"]
@@ -1223,6 +1225,7 @@ def _migrate_file_and_inline_cooldown(tmp_path, file_patch, inline_patch, locati
     assert file.read_bytes() == original
     file.unlink()
     if location == "scenario":
+        result = prepare_config(result, verbose=False)
         _set_patch(result, result["backtest"]["scenarios"][0]["overrides"], scenario=True)
     # A relocated result must be self-contained, including its scenario patch.
     result = prepare_config(result, base_config_path=str(tmp_path / "moved.json"), verbose=False)
@@ -1368,7 +1371,7 @@ def test_nonfinite_change_report_fails_before_any_write(tmp_path, monkeypatch):
 def test_live_rejects_cooldown_longer_than_reconstructible_history_cap():
     from config.hsl import require_live_runtime_support
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 1.0
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     cfg["bot"]["long"]["hsl"].update(enabled=True, cooldown_after_red_minutes=200.0)
@@ -1384,7 +1387,7 @@ def test_live_rejects_cooldown_longer_than_reconstructible_history_cap():
 def test_live_history_cap_checks_effective_coin_policy_and_disabled_policies():
     from config.hsl import require_live_runtime_support
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     assert require_live_runtime_support(cfg) == 0.0
     cfg["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": {
@@ -1394,6 +1397,7 @@ def test_live_history_cap_checks_effective_coin_policy_and_disabled_policies():
 
 
 def test_global_slow_span_bounds_survive_loader_cleanup_and_optimizer_shape():
+    from config.bot_inheritance import apply_bot_config_patch
     from config_utils import clean_config
     from optimization.shape import build_optimization_shape
 
@@ -1402,12 +1406,14 @@ def test_global_slow_span_bounds_survive_loader_cleanup_and_optimizer_shape():
     cfg["optimize"]["bounds"].pop("live", None)
     prepared = prepare_config(cfg, verbose=False)
     fixed_shape = build_optimization_shape(prepared)
-    index = [key for key, _ in fixed_shape.key_paths].index("unstuck_memory_ema_span_minutes")
+    index = [key for key, _ in fixed_shape.key_paths].index("bot.portfolio.unstuck.memory_ema_span_minutes")
     assert fixed_shape.bounds[index].low == fixed_shape.bounds[index].high == 4321.5
-    prepared["optimize"]["bounds"]["portfolio"]["unstuck"] = {"memory_ema_span_minutes": [2000.5, 6000.5, 1.0]}
+    apply_bot_config_patch(prepared, {
+        "optimize.bounds.portfolio.unstuck.memory_ema_span_minutes": [2000.5, 6000.5, 1.0],
+    })
     exported = clean_config(prepared)
     shape = build_optimization_shape(prepare_config(exported, verbose=False))
-    index = [key for key, _ in shape.key_paths].index("unstuck_memory_ema_span_minutes")
+    index = [key for key, _ in shape.key_paths].index("bot.portfolio.unstuck.memory_ema_span_minutes")
     assert shape.key_paths[index][1] == ("bot", "portfolio", "unstuck", "memory_ema_span_minutes")
     assert shape.bounds[index].low == 2000.5
     assert shape.bounds[index].high == 6000.5

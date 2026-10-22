@@ -1,9 +1,26 @@
 import numpy as np
+from copy import deepcopy
 from multiprocessing.reduction import ForkingPickler
 from unittest.mock import MagicMock
 
 from optimization.bounds import Bound
 from optimization.problem import PassivbotProblem, PymooAsyncRecordingRunner, PymooEvaluatorAdapter
+
+
+def recording_template():
+    from config.load import prepare_config
+    from config.schema import get_template_config
+    config = get_template_config()
+    config["optimize"]["bounds"] = {"global": {"unstuck": {"close_fraction": [0.0, 1.0]}}}
+    return prepare_config(config, verbose=False)
+
+
+def recording_config(vector, _overrides_fn, _overrides_list, template):
+    from config.bot_inheritance import apply_bot_config_patch
+    config = deepcopy(template)
+    apply_bot_config_patch(config, {"bot.global.unstuck.close_fraction": float(vector[0])}, channel="gene")
+    config["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
+    return config
 
 
 class FakeEvaluator:
@@ -146,12 +163,8 @@ def test_async_recording_runner_records_and_strips_metrics():
         n_obj=2,
         pool=FakeAsyncPool(),
         recorder=recorder,
-        template={"optimize": {"backend": "pymoo"}},
-        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
-            "bot": {"long": {"a": float(vector[0])}},
-            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-            **template,
-        },
+        template=recording_template(),
+        build_config_fn=recording_config,
         overrides_fn=object(),
         overrides_list=["x"],
     )
@@ -173,12 +186,8 @@ def test_async_recording_runner_does_not_reseed_parent_numpy_rng():
         n_obj=2,
         pool=FakeAsyncPool(),
         recorder=recorder,
-        template={"optimize": {"backend": "pymoo"}},
-        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
-            "bot": {"long": {"a": float(vector[0])}},
-            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-            **template,
-        },
+        template=recording_template(),
+        build_config_fn=recording_config,
         overrides_fn=object(),
         overrides_list=["x"],
     )
@@ -202,12 +211,8 @@ def test_async_recording_runner_profiles_record_result_when_enabled(monkeypatch,
         n_obj=2,
         pool=FakeAsyncPool(),
         recorder=recorder,
-        template={"optimize": {"backend": "pymoo"}},
-        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
-            "bot": {"long": {"a": float(vector[0])}},
-            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-            **template,
-        },
+        template=recording_template(),
+        build_config_fn=recording_config,
         overrides_fn=object(),
         overrides_list=["x"],
     )
@@ -230,12 +235,8 @@ def test_async_recording_runner_uses_picklable_worker_target():
         n_obj=2,
         pool=PickleCheckingPool(),
         recorder=recorder,
-        template={"optimize": {"backend": "pymoo"}},
-        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
-            "bot": {"long": {"a": float(vector[0])}},
-            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-            **template,
-        },
+        template=recording_template(),
+        build_config_fn=recording_config,
         overrides_fn=object(),
         overrides_list=["x"],
     )

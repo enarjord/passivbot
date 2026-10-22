@@ -354,9 +354,10 @@ def mock_pbr(monkeypatch):
 
 
 def _dummy_config():
-    from config_utils import get_template_config, format_config
+    from config.schema import get_expanded_config_prototype
+    from config_utils import format_config
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["live"]["account"]["user"] = "test_user"
     for side in ("long", "short"):
         cfg["bot"][side]["enabled"] = True
@@ -3187,7 +3188,6 @@ def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_ord
     assert hints["peek_hints"]["expand_grid_long"] == []
     assert hints["peek_hints"]["expand_close_long"] == []
     assert hints["forager_hysteresis"] == {
-        "score_hysteresis_pct": 0.005,
         "incumbent_long": [0],
         "incumbent_short": [],
     }

@@ -152,12 +152,15 @@ def generated_template(template, mode="coin"):
     """Generate an explicit v9 HSL configuration."""
     config = deepcopy(template)
     config["bot"]["portfolio"]["hsl"]["scope"] = mode
-    config = normalization_template(config, config)
     if mode == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
+        from .schema import get_expanded_config_prototype
+        prototype = get_expanded_config_prototype()
+        config["bot"]["portfolio"]["hsl"].update(deepcopy(prototype["bot"]["global"]["hsl"]))
         config["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = deepcopy(
-            template["optimize"]["bounds"]["long"]["hsl"]
+            prototype["optimize"]["bounds"]["long"]["hsl"]
         )
+        for scope in ("global", "long", "short"):
+            config["optimize"]["bounds"].get(scope, {}).pop("hsl", None)
     return config
 
 
@@ -319,6 +322,16 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
     validate_hsl_paths({**selected, "optimize": {"scoring": overrides}})
 
 
+def validate_portfolio_policy_scope(block, mode):
+    if mode != "portfolio" and set(block) - {"scope"}:
+        raise ValueError("bot.portfolio.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/position_side scope")
+
+
+def validate_budget_scaling_scope(block, mode, path):
+    if mode != "coin" and block["scale_budget_with_excess_allowance"]:
+        raise ValueError(f"{path}.scale_budget_with_excess_allowance requires coin HSL mode")
+
+
 def normalize_hsl(config, template, *, verbose=True):
     """Run before hydration, and again for effective CLI/scenario configurations."""
     engine(config)
@@ -341,8 +354,7 @@ def normalize_hsl(config, template, *, verbose=True):
     normalize_risk_memory_config(config)
     mode = _mode(config)
     bot["portfolio"]["hsl"]["scope"] = mode
-    if mode != "portfolio" and set(bot["portfolio"]["hsl"]) - {"scope"}:
-        raise ValueError("bot.portfolio.hsl policy fields require portfolio scope; use bot.<side>.hsl in coin/position_side scope")
+    validate_portfolio_policy_scope(bot["portfolio"]["hsl"], mode)
     validate_hsl_paths(config)
     enabled = False
     for side in ("long", "short"):
@@ -364,8 +376,7 @@ def normalize_hsl(config, template, *, verbose=True):
             active=mode != "portfolio",
             verbose=verbose,
         )
-        if mode != "coin" and side_cfg["hsl"]["scale_budget_with_excess_allowance"]:
-            raise ValueError(f"bot.{side}.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
+        validate_budget_scaling_scope(side_cfg["hsl"], mode, f"bot.{side}.hsl")
         enabled |= mode != "portfolio" and side_cfg["hsl"]["enabled"]
     if mode == "portfolio":
         normalize_block(
@@ -376,8 +387,7 @@ def normalize_hsl(config, template, *, verbose=True):
             portfolio=True,
             verbose=verbose,
         )
-        if bot["portfolio"]["hsl"]["scale_budget_with_excess_allowance"]:
-            raise ValueError("bot.portfolio.hsl.scale_budget_with_excess_allowance requires coin HSL mode")
+        validate_budget_scaling_scope(bot["portfolio"]["hsl"], mode, "bot.portfolio.hsl")
         enabled |= mode == "portfolio" and bot["portfolio"]["hsl"]["enabled"]
     for coin, patch in config.get("coin_overrides", {}).items():
         for side, values in patch.get("bot", {}).items():

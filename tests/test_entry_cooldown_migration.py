@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config import get_template_config, prepare_config, compile_runtime_config
 from config.overrides import parse_overrides
 from config.optimize_bounds import flatten_optimize_bounds
@@ -17,14 +19,11 @@ from config_utils import (
     update_config_with_args,
 )
 from tools.migrate_config_v9 import migrate as migrate_config_v9
+from released_v8_fixtures import released_v8_policy
 
 
 def legacy_config():
-    config = clean_config(get_template_config())
-    config["config_version"] = "v8.4.0"
-    config["bot"]["global"].pop("enabled")
-    for side in ("long", "short"):
-        config["bot"][side].pop("enabled")
+    config = released_v8_policy()
     for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
                 "realized_loss_gate_lookback_minutes"):
         config["live"].pop(key, None)
@@ -137,7 +136,7 @@ def test_external_and_inline_precedence_survives_mixed_spellings(
 
 
 def test_current_config_rejects_conflicting_retired_cooldown_path():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 9.0
     original = deepcopy(config)
     with pytest.raises(ValueError, match="entry_cooldown_minutes.*unknown configuration field"):

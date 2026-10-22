@@ -12,6 +12,22 @@ position entry price, plus any over-budget remainder, rounded and capped by the 
 Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
 is an absolute normalized-score gap, without an incumbent-relative denominator.
 
+## Inherited Directional Defaults
+
+The paired directional field registry defines inheritability. Resolve schema fallback, authored
+`bot.global`, explicit side leaf pins and permitted coin patches before runtime hydration.
+False, zero, empty lists and equal values retain explicit side authority; approval null inherits
+and ignored null clears. Whole-side omission equals an empty side object. One portfolio strategy
+kind selects the engine; new directional numerical fallbacks deliberately share the former long
+starter profile. Budgets remain per side, not an implicitly divided portfolio allocation.
+
+`bot.portfolio` owns account-wide settings/state, including unstuck realized memory. Typed source,
+normalized execution values, explicit optimizer derivations and frozen source memberships remain
+separate. JSON metadata and hydration cannot create source pins. Reusable exports retain common
+defaults and declared pins; expanded effective inspection is a separate view. Candidate results
+materialize necessary derived leaves for ordinary replay, while resume retains validated source
+and binding authority separately.
+
 ## Explicit Side Activation
 
 `bot.global.enabled` defaults false; side omission inherits it and explicit side booleans
@@ -22,8 +38,8 @@ Held closes, reducers, trailing state, fills and HSL continue under their existi
 and risk gates. Do not infer Manual from zero capacity or fabricate a positive sizing budget.
 Explicit Manual and ordinary TpOnly retain their standing-order ownership at reconciliation.
 
-Prepared activation declarations use an immutable typed source attribute on the exact prepared
-bot mapping. JSON metadata cannot grant that authority. Actual fixed/scenario/CLI patch owners
+Prepared activation declarations share the immutable typed bot-policy authority on the exact
+prepared mapping. JSON metadata cannot grant that authority. Actual fixed/scenario/CLI patch owners
 record equal-value declarations and parent replacement; changed direct effective values survive
 reprepare. Authored projection retains omission; full effective JSON is a resolved policy snapshot.
 Optimizer boolean reachability follows fixed/scenario declarations while numeric ranges remain
@@ -44,7 +60,7 @@ selection, flat initial-entry checks and one-way arbitration apply the correspon
 combining sides. Held positions retain ordinary management; disabling the filter never relaxes
 exchange minimum quantity/notional rules. Evaluation and replay identities include both flags.
 Explicit released-v8 conversion copies a shared policy to both sides and reports the change;
-ordinary v9 loading rejects the retired global path.
+a global default now inherits through the same registered field contract as other directional leaves.
 
 ## Canonical And Legacy Strategy Schemas
 
@@ -101,7 +117,8 @@ Optimizer selector contract:
 Approval source authority:
 
 - `bot.global.universe.approved_coins` is the common source. Side omission/null inherits;
-  an explicit side source replaces it, and `[]` approves nothing. Ignored sources remain side-owned.
+  an explicit side source replaces it, and `[]` approves nothing. Ignored sources also inherit
+  from global on omission; null explicitly clears them. Global approval null is invalid.
 - Source restoration precedes scenario/fixed edits and reloadable export. Explicit equal lists
   remain pins. Provenance metadata never grants membership; live refresh rereads actual sources.
 - Prepared datasets retain source policy for identity/results and a separate immutable per-side
@@ -427,9 +444,13 @@ not request RMS history, allocate CPU trackers, or restrict candle intervals. Op
 dataset preflight checks finalized per-coin eligibility and overrides across reachable
 boundary configs. Entry-ineligible sides do not restrict intervals or RMS activation.
 
-Canonical loading and cleaning expose every omitted independent numeric optimizer dimension as
-a fixed range at its canonically normalized configured value. The complete starting profile has
-explicit recommended domains; sparse authored documents never inherit those ranges.
+Canonical runtime binding plans represent omitted numeric dimensions as fixed effective values;
+reusable exports retain authored domains. A side bound wins, else a side value is fixed, else a
+global bound owns one coordinate fanning out to inheriting targets, else the effective value is
+fixed. Portfolio domains own one coordinate. Source/binding identities distinguish equal-valued
+pins and canonically order prepared source entries. A selector matching an inheriting side fixes
+the shared coordinate; incompatible anchor target values require explicit side bounds. The lean
+starter has no ranges; maintained examples and the explicit recommended preset declare domains.
 A missing maximum-duration bound is hydrated only for a finite ceiling; null remains
 unbounded. Released-v8 conversion materializes its inherited mandatory domains from
 frozen released defaults while retaining previously optional adaptive freezing.

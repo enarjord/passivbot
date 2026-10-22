@@ -3391,6 +3391,7 @@ def _multicoin_exposure_fixture(
             hsl_panic_market=hsl_panic_market,
             recovery_distribution_enabled=recovery_distribution_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
     else:
         values = {
@@ -3461,6 +3462,7 @@ def _multicoin_exposure_fixture(
             recovery_distribution_enabled=recovery_distribution_enabled,
             entry_interval_enabled=entry_interval_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
     if return_context:
         return runner, row, runs[0], data
@@ -3615,6 +3617,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         run, data, pnl_lookback_bars=1440, **kwargs,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     # Include empty and early-finished candidates alongside a full replay. The
     # boundary crosses activation, hours, UTC days, and HSL episodes.
@@ -3633,6 +3636,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         **kwargs,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     for _ in range(2):
         actual = chunked.run(params, profile=True, end_steps=ends)
@@ -3676,6 +3680,7 @@ def test_tm_multicoin_temporal_replay_interrupt_does_not_leak_partial_state():
         interrupt_check=interrupt,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     with pytest.raises(InterruptedError, match="test interruption"):
         chunked.run(matrix)
@@ -3706,6 +3711,7 @@ def test_tm_multicoin_temporal_replay_preserves_unavailable_valuation():
         max_dispatch_candidate_bars=2 * 7,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     for runner in (generic, chunked):
         with pytest.raises(ValueError, match="unavailable held-position valuation"):
@@ -3749,6 +3755,7 @@ def test_tm_multicoin_temporal_replay_stops_on_fatal_marker(
         interrupt_check=inject_failure,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     matrix = np.asarray([row], dtype=np.float64)
     with pytest.raises(error, match=message):
@@ -3875,6 +3882,7 @@ def test_mps_tm_multicoin_entry_intervals_remain_coin_and_side_local(topology):
             entry_interval_enabled=True,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         candidates = np.asarray([row + row], dtype=np.float64)
 
@@ -3917,13 +3925,14 @@ def test_mps_multicoin_retains_synchronized_btc_risk_surface(strategy_kind, topo
             else MpsTrailingMartingaleMulticoinRunner
         )
     if topology == "fused":
-        runner = runner_cls(run, data, pnl_lookback_bars=1440, btc_prices=btc_prices, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+        runner = runner_cls(run, data, pnl_lookback_bars=1440, btc_prices=btc_prices, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
         candidates = np.asarray([row + row], dtype=np.float64)
     else:
         runner = runner_cls(
             run, data, pnl_lookback_bars=1440, side="long", btc_prices=btc_prices,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         candidates = np.asarray([row], dtype=np.float64)
 
@@ -3974,6 +3983,7 @@ def test_mps_multicoin_forced_normal_reserves_active_slots(strategy_kind, topolo
             hedge_mode=True,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         forced_runner = fused_runner_cls(
             run,
@@ -3985,6 +3995,7 @@ def test_mps_multicoin_forced_normal_reserves_active_slots(strategy_kind, topolo
             hedge_mode=True,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         parameters = np.asarray([row + row], dtype=np.float64)
     else:
@@ -4152,7 +4163,7 @@ def test_mps_ema_multicoin_aggregated_interval_fused_smoke(interval_minutes):
         interval_minutes=interval_minutes,
         return_context=True,
     )
-    runner = MpsEmaAnchorMulticoinFusedRunner(run, data, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+    runner = MpsEmaAnchorMulticoinFusedRunner(run, data, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
@@ -4191,7 +4202,7 @@ def test_mps_tm_multicoin_aggregated_interval_fused_smoke(interval_minutes):
         interval_minutes=interval_minutes,
         return_context=True,
     )
-    runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+    runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
@@ -4264,6 +4275,7 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
             short_coin_overrides=overrides,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         short_row = list(row)
         qty_key = (
@@ -4373,7 +4385,7 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
         row[keys.index(key)] = value
 
     if topology == "fused":
-        runner = fused_runner_cls(run, data, pnl_lookback_bars=1440, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+        runner = fused_runner_cls(run, data, pnl_lookback_bars=1440, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
         params = np.asarray([row + row], dtype=np.float64)
     else:
         params = np.asarray([row], dtype=np.float64)
@@ -4460,6 +4472,7 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
         short_coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.asarray([long_row + short_row], dtype=np.float64))
     synchronize()
 
@@ -5137,6 +5150,7 @@ def test_mps_fused_min_cost_admits_funded_coins_with_both_account_modes(
         hedge_mode=hedge_mode,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": True, "short": True},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
@@ -5288,6 +5302,7 @@ def test_mps_fused_one_way_min_cost_rejection_blocks_side_arbitration(strategy_k
         hedge_mode=False,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": True, "short": True},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     output = runner.run(np.asarray([long_row + short_row], dtype=np.float64))
@@ -5875,6 +5890,7 @@ def test_mps_fused_multicoin_fixed_wel_uses_each_configured_denominator(
         dynamic_wel_by_tradability=False,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
@@ -6226,7 +6242,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         data,
         pnl_lookback_bars=1440,
         side=side,
-        forager_score_hysteresis_pct=0.02,
+        forager_score_hysteresis={"long": 0.02, "short": 0.02},
         max_realized_loss_pct=0.1,
         market_orders_allowed=True,
         market_order_near_touch_threshold=0.003,
@@ -6274,7 +6290,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             data,
             pnl_lookback_bars=1440,
             side=side,
-            forager_score_hysteresis_pct=-0.01,
+            forager_score_hysteresis={"long": -0.01, "short": 0.02},
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
         )
@@ -6287,6 +6303,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             max_realized_loss_pct=float("nan"),
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
     with pytest.raises(ValueError, match="market_order_near_touch_threshold"):
         MpsEmaAnchorMulticoinRunner(
@@ -6297,6 +6314,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             market_order_near_touch_threshold=float("nan"),
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
 
 
@@ -6308,6 +6326,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.array([row], dtype=np.float64))
     synchronize()
     assert disabled_output["day_has_fill"].sum().item() == 0
@@ -6335,6 +6354,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.array([row, changed_candidate], dtype=np.float64))
     synchronize()
     assert torch.equal(
@@ -6689,6 +6709,7 @@ def test_mps_tm_fused_coin_overrides_resolve_ema_gates_per_side():
         collect_coin_fill_counts=True,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
@@ -7583,6 +7604,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         market_order_slippage_pct=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     market_runner = MpsEmaAnchorMulticoinFusedRunner(
         run,
@@ -7597,6 +7619,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         market_order_slippage_pct=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     end_steps = np.asarray([count - 2, count - 1], dtype=np.int32)
@@ -7669,6 +7692,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         hedge_mode=hedge_mode,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     market_runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
@@ -7683,6 +7707,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         market_order_slippage_pct=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     resting = resting_runner.run(params)
@@ -7759,6 +7784,7 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
         market_order_near_touch_threshold=0.001,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     output = runner.run(params)
@@ -7842,6 +7868,7 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
         market_order_near_touch_threshold=0.1,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
 
     output = runner.run(params)
@@ -8095,7 +8122,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         pnl_lookback_bars=1440,
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
-        forager_score_hysteresis_pct=0.02,
+        forager_score_hysteresis={"long": 0.02, "short": 0.02},
         max_realized_loss_pct=1.0,
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
@@ -8757,7 +8784,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         pnl_lookback_bars=1440,
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
-        forager_score_hysteresis_pct=0.02,
+        forager_score_hysteresis={"long": 0.02, "short": 0.02},
         max_realized_loss_pct=1.0,
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
@@ -8989,6 +9016,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
             ),
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
     truncated = runner.run(
         np.asarray([rows[0]], dtype=np.float64),
@@ -9165,7 +9193,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         data,
         pnl_lookback_bars=1440,
         side=side,
-        forager_score_hysteresis_pct=0.02,
+        forager_score_hysteresis={"long": 0.02, "short": 0.02},
         max_realized_loss_pct=0.1,
         hsl_raw_drawdown_enabled=True,
         recovery_distribution_enabled=True,
@@ -9201,6 +9229,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.array([row], dtype=np.float64))
     synchronize()
     assert disabled_output["day_has_fill"].sum().item() == 0
@@ -9244,6 +9273,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.array([row, changed_candidate], dtype=np.float64))
     synchronize()
     assert torch.equal(
@@ -9734,6 +9764,7 @@ def _tm_multicoin_off_tick_reducer_case(
         collect_coin_fill_counts=collect_coin_fill_counts,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     return runner, candidate, market
 
@@ -10601,6 +10632,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
             market_order_slippage_pct=0.01,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     else:
@@ -10613,6 +10645,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
             market_order_slippage_pct=0.01,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
         param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
 
@@ -10665,6 +10698,7 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
         market_order_slippage_pct=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     )
     baseline = list(baseline)
     baseline[
@@ -11201,6 +11235,7 @@ def test_mps_tm_multicoin_rejects_held_tails_before_twel_repair(side):
             runs[1], data, pnl_lookback_bars=1440, side=side,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         ).run(np.asarray([baseline, repaired], dtype=np.float64))
 
 
@@ -11257,6 +11292,7 @@ def test_mps_ema_multicoin_rejects_held_tails_before_twel_repair(side):
             runs[1], data, pnl_lookback_bars=1440, side=side,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
+            forager_score_hysteresis={"long": 0.0, "short": 0.0},
         ).run(np.asarray([baseline, repaired], dtype=np.float64))
 
 
@@ -11403,6 +11439,7 @@ def test_mps_tm_multicoin_grid_can_fill_without_off_tick_reducer(side):
         run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.asarray([candidate], dtype=np.float64))
     synchronize()
 
@@ -11460,6 +11497,7 @@ def test_mps_tm_multicoin_small_excess_reducer_crosses_strict_target(side):
         run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.asarray([candidate], dtype=np.float64))
     synchronize()
 
@@ -11517,6 +11555,7 @@ def test_mps_tm_multicoin_short_post_repair_grid_uses_negative_target_tick():
         run, data, pnl_lookback_bars=1440, side="short", coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.asarray([candidate], dtype=np.float64))
     synchronize()
 
@@ -11683,6 +11722,7 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
         run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.asarray([candidate, twel_only], dtype=np.float64))
     synchronize()
 
@@ -11800,6 +11840,7 @@ def test_mps_trailing_martingale_multicoin_drops_subminimum_final_touch_close(
         runs[0], data, pnl_lookback_bars=1440, side=side,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
+        forager_score_hysteresis={"long": 0.0, "short": 0.0},
     ).run(np.array([row], dtype=np.float64))
     synchronize()
 
@@ -11874,7 +11915,7 @@ def test_streamed_gap_moment_matches_distinct_fill_timestamps(
             if strategy_kind == "ema_anchor"
             else MpsTrailingMartingaleMulticoinFusedRunner
         )
-        runner, matrix = cls(run, data, pnl_lookback_bars=0), np.asarray([row + row])
+        runner, matrix = cls(run, data, pnl_lookback_bars=0, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}), np.asarray([row + row])
     fill_timestamps = set()
     for end in range(3, count):
         output = runner.run(matrix, end_steps=np.array([end], dtype=np.int32))

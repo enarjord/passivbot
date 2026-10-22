@@ -9,6 +9,13 @@ from config.schema import get_template_config
 from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
 
 
+def authored_source():
+    source = get_template_config()
+    for side in ("long", "short"):
+        source["bot"][side].setdefault("universe", {})
+    return source
+
+
 def parser_for(command):
     parser = argparse.ArgumentParser()
     keys = add_config_arguments(parser, project_template_config_for_cli(get_template_config(), command), command=command)
@@ -21,7 +28,7 @@ def test_shared_policy_flags_and_directional_sources_apply_to_every_consumer(com
     # Directional authority wins regardless of argv order.
     args = parser.parse_args(["--bot.short.universe.approved_coins", "SOL", "-s", "BTC,ETH",
                               "--bot.portfolio.warmup.span_multiplier", "0.8", "--hedge-mode", "y"])
-    config = get_template_config()
+    config = authored_source()
     update_config_with_args(config, args, allowed_keys=keys)
     assert config["bot"]["long"]["universe"]["approved_coins"] == ["BTC", "ETH"]
     assert config["bot"]["short"]["universe"]["approved_coins"] == ["SOL"]
@@ -32,7 +39,7 @@ def test_shared_policy_flags_and_directional_sources_apply_to_every_consumer(com
 
 
 def test_one_side_cli_source_keeps_the_other_side_file_refreshable(tmp_path):
-    config = get_template_config()
+    config = authored_source()
     config["bot"]["short"]["universe"]["approved_coins"] = "short.json"
     previous_short = deepcopy(config["bot"]["short"]["universe"])
     source = tmp_path / "coins.json"
@@ -57,7 +64,7 @@ def test_retired_live_policy_flags_are_rejected(flag):
 def test_optimizer_policy_projection_keeps_numeric_genes_in_bounds():
     parser, _keys = parser_for("optimize")
     with pytest.raises(SystemExit):
-        parser.parse_args(["--bot.long.strategy.trailing_martingale.entry.ema_span_0", "100"])
+        parser.parse_args(["--bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes", "100"])
 
 
 @pytest.mark.asyncio
@@ -65,7 +72,7 @@ async def test_download_cli_applies_side_sources_before_offline_preparation(monk
     import ohlcv_download
 
     captured = []
-    source = get_template_config()
+    source = authored_source()
     monkeypatch.setattr(ohlcv_download, "load_input_config", lambda _path: (source, "", deepcopy(source)))
     async def prepared_only(config):
         captured.append(config)
@@ -84,7 +91,7 @@ async def test_download_cli_applies_side_sources_before_offline_preparation(monk
 @pytest.mark.parametrize('flag,field', [('--symbols','approved_coins'), ('--ignored-coins','ignored_coins')])
 async def test_download_cli_decodes_directional_convenience_sources(monkeypatch, flag, field):
     import ohlcv_download
-    source = get_template_config()
+    source = authored_source()
     captured = []
     monkeypatch.setattr(ohlcv_download, 'load_input_config', lambda _path: (source, '', deepcopy(source)))
     async def prepared_only(config):
@@ -101,17 +108,14 @@ async def test_download_cli_decodes_directional_convenience_sources(monkeypatch,
     "flag,value",
     [
         ("--symbols", "null"),
-        ("--ignored-coins", "null"),
         ("--bot.global.universe.approved_coins", "null"),
-        ("--symbols", '{long: null, short: ["ETH"]}'),
-        ("--ignored-coins", "{long: [], short: null}"),
     ],
 )
 def test_nonnullable_coin_source_flags_reject_null_before_mutation(
     command, flag, value
 ):
     parser, keys = parser_for(command)
-    config = get_template_config()
+    config = authored_source()
     before = deepcopy(config)
     with pytest.raises(ValueError, match="explicit side.*approved_coins"):
         update_config_with_args(
@@ -120,20 +124,69 @@ def test_nonnullable_coin_source_flags_reject_null_before_mutation(
     assert config == before
 
 
+NULLABLE_SOURCE_CASES = [
+    ("--symbols", '{long: null, short: ["ETH"]}', "approved_coins",
+     {"long": ["BTC"], "short": ["ETH"]}, {"long": None, "short": ["ETH"]}),
+    ("--ignored-coins", "null", "ignored_coins",
+     {"long": [], "short": []}, {"long": None, "short": None}),
+    ("--ignored-coins", "{long: [], short: null}", "ignored_coins",
+     {"long": [], "short": []}, {"long": [], "short": None}),
+]
+
+
+@pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
+@pytest.mark.parametrize("flag,value,field,expected,raw", NULLABLE_SOURCE_CASES)
+def test_nullable_convenience_sources_keep_inheritance_and_explicit_clearing(
+    command, flag, value, field, expected, raw
+):
+    from config.universe import raw_side_universe_sources, resolve_universe_sources
+
+    config = authored_source()
+    config["bot"]["global"]["universe"].update(approved_coins=["BTC"], ignored_coins=["XRP"])
+    parser, keys = parser_for(command)
+    update_config_with_args(config, parser.parse_args([flag, value]), allowed_keys=keys)
+    assert resolve_universe_sources(config, field)[0] == expected
+    assert raw_side_universe_sources(config, field) == raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag,value,field,expected,raw", NULLABLE_SOURCE_CASES)
+async def test_download_nullable_sources_preserve_input_and_source_authority(
+    tmp_path, monkeypatch, flag, value, field, expected, raw
+):
+    import json
+    from config.universe import raw_side_universe_sources, resolve_universe_sources
+    import ohlcv_download
+
+    source = authored_source()
+    source["bot"]["global"]["universe"].update(approved_coins=["BTC"], ignored_coins=["XRP"])
+    path = tmp_path / "source.json"
+    path.write_text(json.dumps(source))
+    before = path.read_bytes()
+    observed = []
+
+    async def inspect(config):
+        observed.append((resolve_universe_sources(config, field)[0], raw_side_universe_sources(config, field)))
+
+    monkeypatch.setattr(ohlcv_download, "warm_ohlcv_caches", inspect)
+    monkeypatch.setattr("sys.argv", ["download", str(path), flag, value])
+    await ohlcv_download.main()
+    assert observed == [(expected, raw)]
+    assert path.read_bytes() == before
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "flag,value",
     [
         ("--symbols", "null"),
-        ("--ignored-coins", "null"),
         ("--bot.global.universe.approved_coins", "null"),
-        ("--symbols", '{long: null, short: ["ETH"]}'),
     ],
 )
 async def test_download_rejects_null_sources_before_mutation(monkeypatch, flag, value):
     import ohlcv_download
 
-    source = get_template_config()
+    source = authored_source()
     before = deepcopy(source)
     monkeypatch.setattr(
         ohlcv_download,
@@ -156,7 +209,7 @@ def test_explicit_side_null_and_empty_convenience_have_distinct_authority(comman
     from config.universe import resolve_universe_sources
 
     parser, keys = parser_for(command)
-    config = get_template_config()
+    config = authored_source()
     config["bot"]["global"]["universe"]["approved_coins"] = ["BTC"]
     for side in ("long", "short"):
         config["bot"][side]["universe"]["approved_coins"] = ["ETH"]
@@ -183,7 +236,7 @@ async def test_download_empty_source_or_explicit_side_null(monkeypatch, side_nul
     from config.universe import resolve_universe_sources
     import ohlcv_download
 
-    source = get_template_config()
+    source = authored_source()
     source["bot"]["global"]["universe"]["approved_coins"] = ["BTC"]
     for side in ("long", "short"):
         source["bot"][side]["universe"]["approved_coins"] = ["ETH"]

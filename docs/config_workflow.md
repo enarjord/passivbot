@@ -39,8 +39,10 @@ passivbot live configs/private/my_config.json
 
 Use `passivbot tool clean-config input.json output.json` to produce a full schema-aligned config,
 or add `--mode live` for a lean live export. Use `--mode compact` for an editable authored view
-that preserves search and override authority, or `--mode resolved` to inline local coin files and
-capture effective defaults. Inspect a setting with `passivbot tool config-explain input.json PATH`.
+that preserves common defaults and explicit side/search/override pins, or `--mode resolved` to
+inline local coin files while retaining that source authority. Expanded effective values and
+origins are available in inspection output. Inspect a setting with
+`passivbot tool config-explain input.json PATH`.
 Formatting only is available with `--mode format`.
 Inputs stay untouched by default; replacement requires `--in-place`. See
 [Config cleanup and formatting](tools.md#config-cleanup-and-formatting) for bulk depth, HJSON,
@@ -66,13 +68,14 @@ live/scenario coin settings still control data preparation.
 
 ## What The Default Profile Is
 
-The default profile mirrored by `configs/examples/default_trailing_martingale_long.json` is:
+The in-code starter keeps both sides disabled. The maintained
+`configs/examples/default_trailing_martingale_long.json` example explicitly enables long
+and disables short. Its shared numerical profile is:
 
 - trailing martingale style configuration
-- long enabled with `bot.long.risk.max_positions = 7`
-- short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
-- `bot.long.risk.total_wallet_exposure_limit = 1.5`
-- HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
+- `bot.global.risk.max_positions = 7`, inherited separately by each side
+- `bot.global.risk.total_wallet_exposure_limit = 1.5`, a per-side budget rather than a shared pool
+- HSL present but disabled with `bot.global.hsl.enabled = false`
 - HSL signal mode set to per-coin slots with `bot.portfolio.hsl.scope = "coin"`
 - approved-coin universe declared once as the current 41-coin shared starter list; sides inherit it
 - optimizer backend defaulting to `pymoo`

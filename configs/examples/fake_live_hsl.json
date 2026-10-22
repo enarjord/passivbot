@@ -165,23 +165,7 @@
     },
     "bot": {
         "global": {
-            "forager": {"score_hysteresis_margin": 0.02},
-            "universe": {"approved_coins": []}
-        },
-        "portfolio": {
-            "execution": {
-                "market_order_near_touch_fraction": 0.001,
-                "market_orders_allowed": true
-            },
-            "hedge_mode": false,
-            "hsl": {"scope": "position_side"},
-            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 1440.0},
-            "strategy_kind": "trailing_martingale",
-            "unstuck": {"memory_ema_span_minutes": 1440.0},
-            "warmup": {"max_minutes": null, "span_multiplier": 0.0}
-        },
-        "long": {
-            "enabled": true,
+            "enabled": false,
             "entry_cooldown": {
                 "base_duration_minutes": 24.1,
                 "max_duration_minutes": null,
@@ -190,12 +174,8 @@
             },
             "forager": {
                 "always_include": [],
-                "score_weights": {
-                    "ema_readiness": 0.0,
-                    "unilateralness": 0.0,
-                    "volatility": 0.0,
-                    "volume": 1.0
-                },
+                "score_hysteresis_margin": 0.02,
+                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "volatility": 0.0, "volume": 1.0},
                 "unilateralness_ema_span_minutes": 60.0,
                 "volatility_ema_span_minutes": 0,
                 "volume_ema_span_minutes": 1
@@ -203,22 +183,18 @@
             "hsl": {
                 "cooldown_after_red_minutes": 1.0,
                 "drawdown_ratio_ema_span_minutes": 1.0,
+                "drawdown_ratio_threshold": 0.05,
                 "enabled": true,
                 "memory_ema_span_minutes": 1440.0,
                 "panic_close_order_type": "market",
-                "drawdown_ratio_threshold": 0.05,
                 "scale_budget_with_excess_allowance": false
             },
             "risk": {
                 "max_positions": 1,
-                "total_wallet_exposure_limit": 5,
-                "we_excess_allowance_fraction": 0,
                 "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
-                "total_exposure_enforcer": {
-                    "enabled": false,
-                    "threshold_ratio": 1.0,
-                    "policy": "reduce_overweight"
-                }
+                "total_exposure_enforcer": {"enabled": false, "policy": "reduce_overweight", "threshold_ratio": 1.0},
+                "total_wallet_exposure_limit": 5,
+                "we_excess_allowance_fraction": 0
             },
             "strategy": {
                 "trailing_martingale": {
@@ -252,7 +228,12 @@
                     "volatility_ema_span_minutes": 60
                 }
             },
-            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
+            "universe": {
+                "approved_coins": [],
+                "filter_by_min_effective_cost": true,
+                "ignored_coins": [],
+                "minimum_coin_age_days": 0.0
+            },
             "unstuck": {
                 "close_fraction": 0.01,
                 "ema_distance_fraction": 0,
@@ -264,90 +245,17 @@
                 "loss_allowance_fraction": 0.1
             }
         },
-        "short": {
-            "enabled": true,
-            "entry_cooldown": {
-                "base_duration_minutes": 0.0,
-                "max_duration_minutes": null,
-                "min_duration_minutes": 0.0,
-                "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0}
-            },
-            "forager": {
-                "always_include": [],
-                "score_weights": {
-                    "ema_readiness": 0.0,
-                    "unilateralness": 0.0,
-                    "volatility": 0.0,
-                    "volume": 1.0
-                },
-                "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 0,
-                "volume_ema_span_minutes": 0
-            },
-            "hsl": {
-                "cooldown_after_red_minutes": 1.0,
-                "drawdown_ratio_ema_span_minutes": 1.0,
-                "enabled": false,
-                "memory_ema_span_minutes": 1440.0,
-                "panic_close_order_type": "limit",
-                "drawdown_ratio_threshold": 0.01,
-                "scale_budget_with_excess_allowance": false
-            },
-            "risk": {
-                "max_positions": 1,
-                "total_wallet_exposure_limit": 0,
-                "we_excess_allowance_fraction": 0.0,
-                "position_exposure_enforcer": {"enabled": true, "threshold_ratio": 0.8},
-                "total_exposure_enforcer": {
-                    "enabled": true,
-                    "threshold_ratio": 0.8,
-                    "policy": "reduce_overweight"
-                }
-            },
-            "strategy": {
-                "trailing_martingale": {
-                    "close": {
-                        "qty_fraction": 1,
-                        "retracement_base_fraction": 0,
-                        "retracement_volatility_1h_weight": 0,
-                        "retracement_volatility_1m_weight": 0,
-                        "threshold_base_fraction": 0.005,
-                        "threshold_volatility_1h_weight": 0,
-                        "threshold_volatility_1m_weight": 0,
-                        "threshold_we_weight": 0
-                    },
-                    "entry": {
-                        "double_down_factor": 0.5,
-                        "ema_gate_mode": "all",
-                        "ema_span_0_minutes": 0,
-                        "ema_span_1_minutes": 0,
-                        "initial_ema_distance_fraction": -0.01,
-                        "initial_qty_fraction": 0.01,
-                        "retracement_base_fraction": 0,
-                        "retracement_volatility_1h_weight": 0,
-                        "retracement_volatility_1m_weight": 0,
-                        "retracement_we_weight": 0,
-                        "threshold_base_fraction": 0.025,
-                        "threshold_volatility_1h_weight": 0,
-                        "threshold_volatility_1m_weight": 0,
-                        "threshold_we_weight": 0
-                    },
-                    "volatility_ema_span_1h_candles": 0,
-                    "volatility_ema_span_minutes": 60
-                }
-            },
-            "universe": {"filter_by_min_effective_cost": true, "minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
-            "unstuck": {
-                "close_fraction": 0.01,
-                "ema_distance_fraction": -0.2,
-                "ema_gating_enabled": true,
-                "ema_span_0_minutes": 60.0,
-                "ema_span_1_minutes": 60.0,
-                "enabled": true,
-                "exposure_trigger_ratio": 0.3,
-                "loss_allowance_fraction": 0.005
-            }
-        }
+        "portfolio": {
+            "execution": {"market_order_near_touch_fraction": 0.001, "market_orders_allowed": true},
+            "hedge_mode": false,
+            "hsl": {"scope": "position_side"},
+            "loss_gate": {"max_drawdown_ratio": 1.0, "memory_ema_span_minutes": 1440.0},
+            "strategy_kind": "trailing_martingale",
+            "unstuck": {"memory_ema_span_minutes": 1440.0},
+            "warmup": {"max_minutes": null, "span_multiplier": 0.0}
+        },
+        "long": {"enabled": true},
+        "short": {"enabled": false}
     },
     "coin_overrides": {},
     "config_version": "v9.0.0",
@@ -446,11 +354,7 @@
     "optimize": {
         "backend": "pymoo",
         "bounds": {
-            "portfolio": {
-                "loss_gate": {"memory_ema_span_minutes": [1440.0, 1440.0]},
-                "unstuck": {"memory_ema_span_minutes": [1440.0, 1440.0]}
-            },
-            "long": {
+            "global": {
                 "entry_cooldown": {
                     "base_duration_minutes": [0, 60, 0.1],
                     "min_duration_minutes": [0.0, 0.0],
@@ -520,75 +424,9 @@
                     "loss_allowance_fraction": [0.005, 0.2, 0.0001]
                 }
             },
-            "short": {
-                "entry_cooldown": {
-                    "base_duration_minutes": [0, 60, 0.1],
-                    "min_duration_minutes": [0.0, 0.0],
-                    "weights_minutes": {"adverse_directionality": [0.0, 0.0], "exposure_ratio": [0.0, 0.0]}
-                },
-                "forager": {
-                    "score_weights": {
-                        "ema_readiness": [0, 1, 0.01],
-                        "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
-                        "volume": [0, 1, 0.01]
-                    },
-                    "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 1440, 1],
-                    "volume_ema_span_minutes": [180, 2880, 1]
-                },
-                "hsl": {
-                    "cooldown_after_red_minutes": [2160, 4320, 10],
-                    "drawdown_ratio_ema_span_minutes": [1, 720, 1],
-                    "memory_ema_span_minutes": [1440.0, 1440.0],
-                    "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
-                },
-                "risk": {
-                    "max_positions": [5, 5, 1],
-                    "total_wallet_exposure_limit": [0, 0],
-                    "we_excess_allowance_fraction": [0, 0.5, 0.01],
-                    "position_exposure_enforcer": {"threshold_ratio": [0.8, 1.01, 0.001]},
-                    "total_exposure_enforcer": {"threshold_ratio": [0.8, 1.01, 0.001]}
-                },
-                "strategy": {
-                    "trailing_martingale": {
-                        "close": {
-                            "qty_fraction": [0.05, 1.0, 0.01],
-                            "retracement_base_fraction": [0.0001, 0.01, 0.0001],
-                            "retracement_volatility_1h_weight": [0.01, 70.0, 0.01],
-                            "retracement_volatility_1m_weight": [0.01, 70.0, 0.01],
-                            "threshold_base_fraction": [-0.05, 0.02, 0.0001],
-                            "threshold_volatility_1h_weight": [0.01, 70.0, 0.01],
-                            "threshold_volatility_1m_weight": [0.01, 70.0, 0.01],
-                            "threshold_we_weight": [-0.1, 0.1, 0.0001]
-                        },
-                        "entry": {
-                            "double_down_factor": [0.2, 2.0, 0.01],
-                            "ema_span_0_minutes": [100.0, 1440.0, 10.0],
-                            "ema_span_1_minutes": [100.0, 1440.0, 10.0],
-                            "initial_ema_distance_fraction": [-0.1, 0.02, 0.0001],
-                            "initial_qty_fraction": [0.005, 0.1, 0.0001],
-                            "retracement_base_fraction": [0.0001, 0.015, 0.0001],
-                            "retracement_volatility_1h_weight": [0.01, 70.0, 0.01],
-                            "retracement_volatility_1m_weight": [0.01, 70.0, 0.01],
-                            "retracement_we_weight": [0.0, 5.0, 0.001],
-                            "threshold_base_fraction": [0.0, 0.04, 0.0001],
-                            "threshold_volatility_1h_weight": [0.01, 70.0, 0.01],
-                            "threshold_volatility_1m_weight": [0.01, 70.0, 0.01],
-                            "threshold_we_weight": [0.0, 5.0, 0.001]
-                        },
-                        "volatility_ema_span_1h_candles": [672.0, 2016.0, 1.0],
-                        "volatility_ema_span_minutes": [5.0, 720.0, 1.0]
-                    }
-                },
-                "unstuck": {
-                    "close_fraction": [0.01, 0.12, 0.001],
-                    "ema_distance_fraction": [-0.2, 0.01, 0.0001],
-                    "ema_span_0_minutes": [60.0, 60.0],
-                    "ema_span_1_minutes": [60.0, 60.0],
-                    "exposure_trigger_ratio": [0.4, 0.9, 0.001],
-                    "loss_allowance_fraction": [0.005, 0.2, 0.0001]
-                }
+            "portfolio": {
+                "loss_gate": {"memory_ema_span_minutes": [1440.0, 1440.0]},
+                "unstuck": {"memory_ema_span_minutes": [1440.0, 1440.0]}
             }
         },
         "compress_results_file": true,

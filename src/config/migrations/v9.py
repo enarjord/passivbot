@@ -294,11 +294,18 @@ def migrate_v8_to_v9(
         remove_result_metadata(result, inferred_changes, wrapped=wrapped,
                                path_prefix="config." if wrapped else "")
     reject_v8_alias_conflicts(result)
+    # Default hydration cannot authorize removing an explicitly null restart
+    # policy: that audit needs the original authored enablement facts.
+    enablement = _hsl_enablement_facts(result)
     if not _coin_patch:
-        from .released_v8 import materialize_released_v8_minimum_cost_defaults
+        from .released_v8 import (
+            materialize_released_v8_minimum_cost_defaults,
+            materialize_released_v8_bot_defaults,
+        )
         from .final_v9 import replace_retired_metrics
 
         materialize_released_v8_minimum_cost_defaults(result, changes=inferred_changes)
+        materialize_released_v8_bot_defaults(result, changes=inferred_changes)
         metric_changes = inferred_changes
         replace_retired_metrics(result, replacements=metric_replacements,
                                 acknowledge=acknowledge_metric_formula_change, changes=metric_changes,
@@ -341,7 +348,6 @@ def migrate_v8_to_v9(
     # Read enablement before the visitor removes authored leaves. Keep duplicate
     # flat/grouped spellings visible: conflicting facts are ambiguous, not a
     # reason to choose whichever dictionary key happened to be visited first.
-    enablement = _hsl_enablement_facts(result)
     # Referenced partial files need root -> file -> inline provenance before
     # filtering/canonicalization merges aliases. Only the tool supplies this
     # private exact-path context; no inherited leaf is added to the output.
@@ -521,6 +527,9 @@ def migrate_v8_to_v9(
                                 acknowledge_search_backend_change=acknowledge_search_backend_change,
                                 sparse=_coin_patch, best_effort=best_effort, base_config_path=base_config_path)
     if not _coin_patch:
+        from .released_v8 import normalize_released_v8_position_counts
+
+        normalize_released_v8_position_counts(result, changes=changes)
         # Released v8 used numeric capacity/search bounds as entry activation.
         # Preserve those values and reachability rather than infer a boolean
         # from a currently dormant side. New v9 documents default to disabled.

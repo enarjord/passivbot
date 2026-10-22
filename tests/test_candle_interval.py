@@ -241,9 +241,9 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
 
 def test_build_backtest_payload_normalizes_integral_float_candle_interval():
     from backtest import build_backtest_payload
-    from config_utils import get_template_config
+    from config.schema import get_expanded_config_prototype
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["candle_interval_minutes"] = 2.0
@@ -294,9 +294,9 @@ def test_build_backtest_payload_normalizes_integral_float_candle_interval():
 
 def test_build_backtest_payload_rejects_fractional_candle_interval():
     from backtest import build_backtest_payload
-    from config_utils import get_template_config
+    from config.schema import get_expanded_config_prototype
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["candle_interval_minutes"] = 2.5

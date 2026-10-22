@@ -7,6 +7,7 @@ import pytest
 from config.load import load_input_config, load_prepared_config, prepare_config
 from config.schema import get_template_config
 from tools.migrate_config_v9 import migrate
+from released_v8_fixtures import released_v8_policy
 
 
 @pytest.mark.parametrize("field", ["hsl_accept_incomplete_history", "hsl_unavailable_grace_seconds", "risk_input_max_attempts"])
@@ -34,11 +35,10 @@ def test_retired_recovery_controls_rejected_without_mutating_source(tmp_path, fi
     assert path.read_text() == original and raw == document
 
     # The offline migration owns removal; ordinary loading cannot grant a waiver.
-    legacy = deepcopy(config)
-    legacy["config_version"] = "v8.6.0"
-    legacy["bot"]["global"].pop("enabled")
-    for side in ("long", "short"):
-        legacy["bot"][side].pop("enabled")
+    legacy = released_v8_policy()
+    legacy["live"][field] = value
+    if shape == "live_only":
+        legacy = {key: legacy[key] for key in ("config_version", "bot", "live")}
     result = migrate(legacy, memory_span_minutes=43200.0).config
     assert field not in result["live"]
     assert field not in prepare_config(result, target="canonical", runtime=None, verbose=False)["live"]

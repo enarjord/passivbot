@@ -116,6 +116,7 @@ def _raw_rust_input(
 ) -> dict:
     global_input = {
         "side_activation": {"long": True, "short": True},
+        "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
         "hedge_mode": True,
         "strategy_kind": "trailing_martingale",
         "auto_unstuck_allowed": True,

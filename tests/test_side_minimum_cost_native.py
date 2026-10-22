@@ -89,7 +89,8 @@ def test_actual_cpu_replay_respects_each_side_and_nullable_override(kind, long, 
         bot["universe"]["filter_by_min_effective_cost"] = flag
         bot["risk"]["max_positions"] = 1
         strategy = bot["strategy"][kind]
-        strategy["ema_span_0_minutes"], strategy["ema_span_1_minutes"] = 2.0, 3.0
+        ema = strategy["entry"] if kind == "trailing_martingale" else strategy
+        ema["ema_span_0_minutes"], ema["ema_span_1_minutes"] = 2.0, 3.0
         if kind == "ema_anchor":
             strategy.update(base_qty_fraction=0.001, offset_fraction=0.0)
         else:

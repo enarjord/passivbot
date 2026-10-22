@@ -14,7 +14,7 @@ from typing import Any, Iterable
 from config.load import load_input_config, prepare_config
 from config.overrides import get_allowed_modifications, parse_overrides
 from config.param_paths import bound_path_matches_selector, resolve_dotted_config_path
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from config_utils import clean_config
 from pure_funcs import sort_dict_keys
 from utils import (
@@ -190,6 +190,10 @@ def _load_config_source(path: Path, *, role: str) -> ConfigSource:
         raw_snapshot=raw_snapshot,
     )
     config = clean_config(prepared)
+    # Composition compares concrete effective policies and deliberately emits
+    # its own fixed master/coin snapshot. Sparse source views lack these leaves.
+    config["bot"] = deepcopy(dict(prepared["bot"]))
+    config["optimize"]["bounds"] = deepcopy(dict(prepared["optimize"]["bounds"]))
     if config.get("coin_overrides"):
         raise ValueError(f"{path}: {role} must not contain coin_overrides")
     return ConfigSource(path=path, config=config)
@@ -437,7 +441,7 @@ def _bound_lower(config: dict, side: str, group: str, key: str) -> float | int:
 
 
 def _canonical_disabled_group(master: dict, side: str, group: str) -> dict:
-    result = deepcopy(get_template_config()["bot"][side][group])
+    result = deepcopy(get_expanded_config_prototype()["bot"][side][group])
     bounds = master["optimize"]["bounds"][side].get(group, {})
     for key in bounds:
         if key in result:
@@ -449,7 +453,7 @@ def _canonical_disabled_group(master: dict, side: str, group: str) -> dict:
 def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
     master = configs[0].config
     actions: list[str] = []
-    schema = get_template_config()
+    schema = get_expanded_config_prototype()
     for side in POSITION_SIDES:
         hsl_disabled = [
             not bool(item.config["bot"][side]["hsl"]["enabled"]) for item in configs

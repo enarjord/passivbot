@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config import get_template_config, prepare_config, compile_runtime_config
 from config.migrations.released_v8 import get_released_v8_defaults
 from config.overrides import parse_overrides
@@ -127,7 +129,7 @@ def test_external_inline_precedence_and_partial_coupling(
 
 
 def test_current_config_rejects_conflicting_retired_ema_path():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     strategy = config["bot"]["long"]["strategy"][KIND]
     strategy["ema_span_0"] = 17.5
     strategy["entry"]["ema_span_0_minutes"] = 123.5
@@ -252,7 +254,7 @@ def test_scenario_strategy_replacement_and_atomic_coin_patch_migrate():
 
 @pytest.mark.parametrize("kind", [KIND, "ema_anchor", "trailing_grid_v7"])
 def test_canonical_wildcard_leaf_selector_preserves_active_strategy_genes(kind):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["strategy_kind"] = kind
     if kind == "trailing_grid_v7":
         with pytest.raises(ValueError, match="unsupported strategy kind"):

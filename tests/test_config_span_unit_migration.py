@@ -86,7 +86,7 @@ def test_released_coin_file_and_inline_span_names_convert_before_their_merge(tmp
     if location == "scenario":
         from tools.migrate_config_v9 import _set_patch
 
-        config = deepcopy(config)
+        config = prepare_config(config, verbose=False)
         _set_patch(config, config["backtest"]["scenarios"][0]["overrides"], scenario=True)
     config = prepare_config(config, base_config_path=str(tmp_path / "relocated.json"), verbose=False)
     target = resolve_optimizer_key_path(config, "long_ema_span_0")

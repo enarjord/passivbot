@@ -48,7 +48,7 @@ def _runner_context(strategy, sides, *, chunked=False,
     params = np.asarray([row] * 3, dtype=np.float64)
     if sides == "both":
         params = np.concatenate((params, params), axis=1)
-    return cls(run, data, **kwargs), params
+    return cls(run, data, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}), params
 
 
 def _base_parameter_values() -> dict[str, float]:

@@ -11,6 +11,8 @@ from config_utils import (
     sanitize_prepared_config_for_dump,
     strip_config_metadata,
 )
+from config import prepare_config
+from config.schema import get_expanded_config_prototype
 
 
 def test_clean_config_removes_internal_sections_and_keeps_user_values():
@@ -39,12 +41,12 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert cleaned["bot"]["long"]["risk"]["max_positions"] == 5
     assert cleaned["bot"]["short"]["risk"]["max_positions"] == 3
     assert (
-        cleaned["bot"]["long"]["forager"]["volume_ema_span_minutes"]
-        == template["bot"]["long"]["forager"]["volume_ema_span_minutes"]
+        cleaned["bot"]["global"]["forager"]["volume_ema_span_minutes"]
+        == template["bot"]["global"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"]
-        == template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        cleaned["bot"]["global"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"]
+        == template["bot"]["global"]["strategy"]["trailing_martingale"]["entry"][
             "ema_span_0_minutes"
         ]
     )
@@ -61,22 +63,15 @@ def test_clean_config_fills_missing_values_from_template():
     cleaned = clean_config(config)
     template = get_template_config()
     assert cleaned['bot']["portfolio"]['strategy_kind'] == template['bot']["portfolio"]['strategy_kind']
-    assert cleaned["bot"]["long"]["strategy"] == {
-        "trailing_martingale": template["bot"]["long"]["strategy"][
-            "trailing_martingale"
-        ]
-    }
-    assert cleaned["bot"]["short"]["strategy"] == {
-        "trailing_martingale": template["bot"]["short"]["strategy"][
-            "trailing_martingale"
-        ]
-    }
+    assert cleaned["bot"]["global"]["strategy"] == template["bot"]["global"]["strategy"]
+    assert cleaned["bot"]["long"] == cleaned["bot"]["short"] == {}
+    assert cleaned["optimize"]["bounds"] == {}
     from config.optimize_bounds import flatten_optimize_bounds
     from config.param_paths import iter_optimizer_key_paths
     from config import prepare_config
 
-    bounds = flatten_optimize_bounds(cleaned["optimize"]["bounds"], strategy_kind="trailing_martingale")
     prepared = prepare_config(cleaned, verbose=False)
+    bounds = flatten_optimize_bounds(prepared["optimize"]["bounds"], strategy_kind="trailing_martingale")
     for key, path in iter_optimizer_key_paths(prepared, bounds):
         effective = prepared
         for part in path:
@@ -100,7 +95,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
 ):
     from config.hsl import generated_template
 
-    source = generated_template(get_template_config(), mode)
+    source = generated_template(get_expanded_config_prototype(), mode)
     source['bot']["portfolio"]['strategy_kind'] = strategy
     set_side_universe_sources(source, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
     source["live"]["startup"]["startup_phase_budgets"] = {"candles": 15.0}
@@ -136,7 +131,7 @@ def test_clean_config_keeps_input_unchanged_and_detaches_all_output_containers(
     assert cleaned["optimize"]["bounds"]["long"]["forager"]["score_weights"][
         "unilateralness"
     ] == [0.0, 0.5]
-    assert set(cleaned["bot"]["long"]["strategy"]) == {strategy}
+    assert cleaned["bot"]["long"]["strategy"] == source["bot"]["long"]["strategy"]
     if sparse and mode == "portfolio":
         assert cleaned["bot"]["portfolio"]["hsl"] == {"scope": "portfolio"}
 
@@ -208,25 +203,19 @@ def test_clean_config_rejects_invalid_inputs_without_mutating_them(path, value, 
     assert source == original
 
 
-def test_clean_config_prunes_inactive_strategy_subtrees_for_selected_kind():
-    template = get_template_config()
+def test_clean_config_retains_declared_inactive_sources_but_runtime_exposes_selected_kind():
+    template = get_expanded_config_prototype()
     config = deepcopy(template)
     config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
 
     cleaned = clean_config(config)
 
-    assert cleaned["bot"]["long"]["strategy"] == {
-        "ema_anchor": template["bot"]["long"]["strategy"]["ema_anchor"]
-    }
-    assert cleaned["bot"]["short"]["strategy"] == {
-        "ema_anchor": template["bot"]["short"]["strategy"]["ema_anchor"]
-    }
-    assert cleaned["optimize"]["bounds"]["long"]["strategy"] == {
-        "ema_anchor": template["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]
-    }
-    assert cleaned["optimize"]["bounds"]["short"]["strategy"] == {
-        "ema_anchor": template["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"]
-    }
+    for side in ("long", "short"):
+        assert cleaned["bot"][side]["strategy"] == template["bot"][side]["strategy"]
+        assert cleaned["optimize"]["bounds"][side]["strategy"] == template["optimize"]["bounds"][side]["strategy"]
+    runtime = prepare_config(cleaned, verbose=False)
+    for side in ("long", "short"):
+        assert set(runtime["bot"][side]["strategy"]) == {"ema_anchor"}
 
 
 def test_strip_config_metadata_removes_known_keys_recursively():
@@ -282,12 +271,9 @@ def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
 def test_dump_config_clean_preserves_explicit_v8_reducer_conversion(tmp_path):
     from config import prepare_config
     from config.migrations.v9 import migrate_v8_to_v9
-    source = get_template_config()
-    source["config_version"] = "v8.6.0"
-    source["bot"]["global"].pop("enabled")
-    for side in ("long", "short"):
-        source["bot"][side].pop("enabled")
-    source["backtest"].pop("reducer")
+    from released_v8_fixtures import released_v8_policy
+    source = released_v8_policy()
+    source["backtest"].pop("reducer", None)
     source["backtest"]["aggregate"] = {"adg_pnl": "max"}
     before = deepcopy(source)
     cfg_path, out_path = tmp_path / "in.json", tmp_path / "out.json"
@@ -331,7 +317,7 @@ def test_clean_config_preserves_sparse_backtest_reducer():
 def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
     from config.hsl import generated_template, REMOVED_FIELDS
 
-    cfg = generated_template(get_template_config(), mode)
+    cfg = generated_template(get_expanded_config_prototype(), mode)
     cfg["bot"]["long"]["hsl"]["enabled"] = True
     if mode == "portfolio":
         cfg["bot"]["portfolio"]["hsl"].update(enabled=True)
@@ -344,8 +330,7 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
         assert cleaned["bot"][side]["hsl"] == cfg["bot"][side]["hsl"]
     if mode == "portfolio":
         assert cleaned["bot"]["portfolio"]["hsl"] == cfg["bot"]["portfolio"]["hsl"]
-        expected_bounds = {**cfg["optimize"]["bounds"]["portfolio"]["hsl"],
-                           "memory_ema_span_minutes": [cfg["bot"]["portfolio"]["hsl"]["memory_ema_span_minutes"]] * 2}
+        expected_bounds = cfg["optimize"]["bounds"]["portfolio"]["hsl"]
         assert cleaned["optimize"]["bounds"]["portfolio"]["hsl"] == expected_bounds
     else:
         assert "hsl" not in cleaned["bot"]
@@ -356,7 +341,7 @@ def test_clean_hsl_config_preserves_engine_policy_and_bounds(mode):
 
 def test_clean_hsl_does_not_author_missing_portfolio_or_restart():
     from config.hsl import generated_template
-    cfg = generated_template(get_template_config(), "portfolio")
+    cfg = generated_template(get_expanded_config_prototype(), "portfolio")
     assert "restart_after_red_policy" not in clean_config(cfg)["bot"]["portfolio"]["hsl"]
     cfg["bot"]["portfolio"]["hsl"] = {"scope": "portfolio"}
     assert clean_config(cfg)["bot"]["portfolio"]["hsl"] == {"scope": "portfolio"}
@@ -368,7 +353,7 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     from optimization.evaluation_contract import CONTRACT_KEY, CONTRACT_VERSION, build_evaluation_contract
     from optimize import _resume_config_mismatches
 
-    cfg = generated_template(get_template_config(), mode)
+    cfg = generated_template(get_expanded_config_prototype(), mode)
     contract = build_evaluation_contract(cfg)
     assert "hsl_engine" not in contract.get("live", {})
     block = (
@@ -401,7 +386,7 @@ def test_hsl_exported_config_can_be_prepared_without_legacy_hydration():
     from config.hsl import generated_template, REMOVED_FIELDS
     from config_utils import format_config
 
-    cfg = generated_template(get_template_config(), "portfolio")
+    cfg = generated_template(get_expanded_config_prototype(), "portfolio")
     cfg["bot"]["portfolio"]["hsl"].update(
         enabled=True,
         drawdown_ratio_ema_span_minutes=12.5,

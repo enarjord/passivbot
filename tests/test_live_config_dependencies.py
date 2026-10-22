@@ -29,11 +29,12 @@ socket.socket.connect = deny_network
 socket.getaddrinfo = deny_network
 
 import passivbot
-from config import get_template_config, prepare_config, compile_runtime_config
+from config import prepare_config, compile_runtime_config
+from config.schema import get_expanded_config_prototype
 from config.overrides import parse_overrides
 
 legacy, with_scenarios = (arg == "True" for arg in sys.argv[1:])
-config = get_template_config()
+config = get_expanded_config_prototype()
 for side in ("long", "short"):
     bot = config["bot"][side]
     bot["entry_cooldown"]["base_duration_minutes"] = 7.5

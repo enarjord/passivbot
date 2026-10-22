@@ -1,3 +1,4 @@
+from config.schema import get_expanded_config_prototype
 from config.universe import require_side_universe_sources
 from config.universe import set_side_universe_sources
 import asyncio
@@ -1176,9 +1177,8 @@ def test_reduce_metrics_applies_one_policy_to_duration_aliases(reducer_name):
 def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, tmp_path):
     import json
     import suite_runner as suite
-    from config_utils import get_template_config
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["exchanges"] = ["binance"]
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})

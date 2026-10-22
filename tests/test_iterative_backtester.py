@@ -1,3 +1,4 @@
+from config.schema import get_expanded_config_prototype
 import asyncio
 from copy import deepcopy
 import json
@@ -45,9 +46,8 @@ def test_dataset_reload_allocates_new_session_without_overwriting_old_runs(
     from copy import deepcopy
     from types import SimpleNamespace
     import numpy as np
-    from config_utils import get_template_config
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["backtest"].update(
         base_dir=str(tmp_path),
         exchanges=["binance"],

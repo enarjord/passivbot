@@ -46,6 +46,7 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
         from optimization.gpu.datasets import PreparedGpuDataset
         from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
         from optimize import Evaluator, config_to_individual
+        from config import prepare_config
         from shared_arrays import SharedArraySpec
         from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
 
@@ -60,8 +61,10 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
         assert int(timestamps[-1]) - int(timestamps[0]) == 127 * 60_000
         assert candles[0, 0, 2] < candles[0, 1, 2] < candles[0, 2, 2]
         quantity = "base_qty_pct" if strategy == "ema_anchor" else "entry_initial_qty_pct"
-        strategy_bounds = {"base_qty_pct": [0.01, 0.05]} if strategy == "ema_anchor" else {
-            "entry": {"initial_qty_pct": [0.01, 0.05]},
+        quantity_path = ("base_qty_fraction" if strategy == "ema_anchor"
+                         else "entry.initial_qty_fraction")
+        strategy_bounds = {"base_qty_fraction": [0.01, 0.05]} if strategy == "ema_anchor" else {
+            "entry": {"initial_qty_fraction": [0.01, 0.05]},
         }
         config["optimize"]["bounds"] = {"long": {"strategy": {strategy: strategy_bounds}}}
         for side in ("long", "short"):
@@ -74,6 +77,9 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
             {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
         ]
         config["optimize"]["limits"] = []
+        columns = config["backtest"].pop("coins")
+        config = prepare_config(config, verbose=False)
+        config["backtest"]["coins"] = columns
         spec = SharedArraySpec("candles", candles.shape, candles.dtype.str)
         dataset = PreparedGpuDataset(
             config=config, markets=markets, exchange="binance", hlcvs=spec,
@@ -88,7 +94,9 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
                                       optimization_shape=evaluator.optimization_shape)
         first = planner.prepare("first", vector)
         changed = list(vector)
-        changed[[name for name, _ in evaluator.key_paths].index(f"long_{quantity}")] = 0.04
+        changed[[name for name, _ in evaluator.key_paths].index(
+            f"bot.long.strategy.{strategy}.{quantity_path}"
+        )] = 0.04
         second = planner.prepare("second", changed)
         assert first.stage == second.stage == "full"
         assert len(first.requests) == len(second.requests) == 1

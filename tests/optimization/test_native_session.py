@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from config.schema import get_template_config
+from config import prepare_config
+from config.schema import get_expanded_config_prototype
 from optimization.gpu.executor import BacktestRequest, BacktestResult, BacktestQueueFull
 from optimization.native_planning import CandidatePlan
 from optimization.native_results import CanonicalResultScorer, ResultSlot
@@ -38,10 +39,10 @@ class Service:
 
 
 def scorer():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
     config["optimize"]["limits"] = []
-    return CanonicalResultScorer(Evaluator({"binance": None, "bybit": None}, {}, {}, config))
+    return CanonicalResultScorer(Evaluator({"binance": None, "bybit": None}, {}, {}, prepare_config(config, verbose=False)))
 
 
 def plan(index, *, key=None):

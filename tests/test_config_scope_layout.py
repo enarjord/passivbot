@@ -46,7 +46,7 @@ def test_development_v9_scope_layouts_are_rejected_without_conversion(retired):
 
 def test_flat_forager_bound_spelling_is_not_public_authoring_authority():
     source = get_template_config()
-    source["optimize"]["bounds"]["long"]["forager"]["score_weights_volume"] = [0.0, 1.0]
+    source["optimize"]["bounds"] = {"long": {"forager": {"score_weights_volume": [0.0, 1.0]}}}
     with pytest.raises(ValueError, match="unknown configuration field"):
         prepare_config(source, verbose=False)
 
@@ -55,7 +55,7 @@ def test_global_loss_memories_remain_independent():
     source = get_template_config()
     source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 37.5
     source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 93.5
-    source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 17.5
+    source["bot"]["long"]["hsl"] = {"memory_ema_span_minutes": 17.5}
     config = prepare_config(source, verbose=False)
     assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 37.5
     assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 93.5

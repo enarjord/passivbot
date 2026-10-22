@@ -120,7 +120,7 @@ def test_fixed_zero_genes_keep_native_behavior_through_actual_writer_and_reload(
     loaded = prepare_config(extract_result_config(json.loads(json.dumps(entry))), verbose=False)
     assert loaded["bot"][target]["forager"]["score_weights"] == FALLBACK_WEIGHTS
     loaded["backtest"]["coins"] = deepcopy(coins)
-    assert loaded["optimize"] == entry["optimize"]
+    assert clean_config(loaded)["optimize"] == entry["optimize"]
     raw_payload = build_backtest_payload(candles, deepcopy(markets), candidate, "binance", btc, timestamps)
     loaded_payload = build_backtest_payload(candles, deepcopy(markets), loaded, "binance", btc, timestamps)
     for field in ("bot_params_list", "strategy_params_list", "exchange_params", "backtest_params"):

@@ -247,7 +247,7 @@ def test_scope_projection_preserves_existing_side_hsl_populations(tmp_path, real
 
 
 def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_rejected(tmp_path, real_runtime):
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
     options = dict(profile="standard", patterns=["ema_anchor/both/forager/hsl_portfolio/*"],
                    candidates=3, bars=128)
@@ -258,7 +258,7 @@ def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_reject
     specs = manifest["entries"][0]["bounds"]
     assert specs == [dict(key="hsl_red_threshold", path=["bot", "portfolio", "hsl", "drawdown_ratio_threshold"],
                           low=0.11, high=0.19, step=0.01)]
-    invalid = get_template_config()["optimize"]["bounds"]
+    invalid = get_expanded_config_prototype()["optimize"]["bounds"]
     original = deepcopy(invalid)
     with pytest.raises(ValueError, match="inactive in portfolio mode"):
         freeze(tmp_path / "invalid", bounds_config=invalid, **options)

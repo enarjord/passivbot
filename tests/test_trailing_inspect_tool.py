@@ -376,9 +376,9 @@ def test_extract_side_context_includes_global_and_risk_paths():
 
 
 def test_extract_side_context_uses_global_portfolio_hsl_and_loss_gate():
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"].update(scope="portfolio", enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = False
     config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.125
@@ -1394,7 +1394,7 @@ def test_overview_describes_effective_cooldown(base, floor, ceiling, weight, exp
     from config import get_template_config, prepare_config
 
     cfg = get_template_config()
-    cfg["bot"]["long"]["entry_cooldown"].update(
+    cfg["bot"]["long"].setdefault("entry_cooldown", {}).update(
         base_duration_minutes=base, min_duration_minutes=floor, max_duration_minutes=ceiling,
         weights_minutes={"exposure_ratio": weight, "adverse_directionality": 0.0},
     )
@@ -1415,7 +1415,7 @@ def test_overview_exports_fractional_ema_horizons_with_explicit_units(tmp_path, 
     from config.schema import get_template_config
 
     source = get_template_config()
-    strategy = source["bot"]["long"]["strategy"]["trailing_martingale"]
+    strategy = source["bot"]["long"].setdefault("strategy", {}).setdefault("trailing_martingale", {})
     strategy["volatility_ema_span_minutes"] = 31.5
     strategy["volatility_ema_span_1h_candles"] = 4.25
     path = tmp_path / "config.json"

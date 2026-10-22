@@ -326,6 +326,7 @@ def make_input(
         "balance_raw": balance,
         "global": {
             "side_activation": {"long": True, "short": True},
+            "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "auto_unstuck_allowed": True,
             # Each independently initialized realized memory starts empty.
@@ -3669,12 +3670,12 @@ def test_json_rejects_invalid_forager_hysteresis_pct():
         ],
     )
     inp["forager_hysteresis"] = {
-        "score_hysteresis_pct": -0.1,
         "incumbent_long": [],
         "incumbent_short": [],
     }
 
-    with pytest.raises(ValueError, match="forager_score_hysteresis_pct"):
+    inp["global"]["forager_score_hysteresis"]["long"] = -0.1
+    with pytest.raises(ValueError, match="forager_score_hysteresis"):
         compute(pbr, inp)
 
 

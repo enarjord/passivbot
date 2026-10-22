@@ -155,6 +155,50 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 
 ## Bot Settings
 
+### Inherited Defaults and Portfolio Policy
+
+`bot.global` supplies defaults for all registered directional settings, including
+`strategy.<strategy_kind>.*`, risk, selection, universe filters and local HSL/unstuck
+parameters. `bot.long` and `bot.short` contain optional overrides. Resolution follows
+schema defaults → authored global defaults → explicit side values → eligible coin overrides.
+Absent and empty side objects are equivalent. One portfolio strategy kind applies to both sides.
+
+Inheritance is per leaf. Explicit `false`, `0`, `[]` and values equal to the current common
+value remain side pins; lists replace rather than merge. Null handling is field-specific:
+side `approved_coins: null` inherits, while `ignored_coins: null` clears the ignore list.
+Unknown fields are rejected. Runtime/scenario object replacements still obey their complete-object
+validation contracts, including normalized score-weight groups.
+
+`bot.portfolio` owns strategy selection, hedge mode, execution, warmup, the loss gate,
+portfolio HSL policy and shared unstuck realized-PnL memory. These settings have no side overrides.
+The unstuck memory remains one account-wide memory; local unstuck parameters can inherit.
+
+For example, this authored config enables long with a common profile:
+
+```json
+{
+  "config_version": "v9.0.0",
+  "bot": {
+    "portfolio": {"strategy_kind": "trailing_martingale", "hedge_mode": true},
+    "global": {
+      "universe": {"approved_coins": ["BTC", "ETH"]},
+      "risk": {"max_positions": 2, "total_wallet_exposure_limit": 1.0},
+      "strategy": {"trailing_martingale": {"entry": {
+        "ema_span_0_minutes": 60.0, "ema_span_1_minutes": 240.0
+      }}}
+    },
+    "long": {"enabled": true},
+    "short": {"enabled": false}
+  }
+}
+```
+
+Setting `short.enabled` to `true` gives it the same profile. Hedge/one-way behavior also depends
+on portfolio policy and venue support. Exposure and position limits remain **per side**: enabling
+both does not divide one account-wide budget. Both side objects may be omitted when
+`bot.global.enabled` supplies the intended common activation policy. New schema defaults use one
+common numerical starter profile, retaining the former long defaults; activation defaults false.
+
 ### Side Activation
 
 `bot.global.enabled` defaults to `false`. An omitted `bot.long.enabled` or
@@ -177,15 +221,16 @@ modes retain their standing-order ownership; the activation flag does not author
 cancelling operator-owned orders. Genuine removal from the approved universe still
 uses `live.modes.disapproved_position`.
 
-Compact exports retain explicit boolean pins and omission. Resolved/full inspection
-exports contain the effective booleans, so reloading those snapshots pins them.
+Compact and resolved-source exports retain explicit pins and omission. Expanded inspection
+shows effective values and their sources separately; it does not turn inherited values into pins.
 Released-v8 migration reports both sides as enabled while preserving frozen old
 parameters, capacities, modes and search ranges. Zero capacity still prevents entries,
 but no longer implicitly suppresses held-position management through manual mode.
 
 ### Equity Hard Stop Loss
 
-HSL settings live under `bot.long.hsl` and `bot.short.hsl` for coin/position_side modes,
+Local HSL settings inherit from `bot.global.hsl`, with optional `bot.long.hsl` and
+`bot.short.hsl` pins for coin/position_side modes,
 and explicit `bot.portfolio.hsl` for portfolio mode. Supported leaves are `enabled`,
 `drawdown_ratio_threshold`, `drawdown_ratio_ema_span_minutes`, `memory_ema_span_minutes`,
 `cooldown_after_red_minutes`, and `panic_close_order_type`. Coin scope also supports
@@ -362,7 +407,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **coin_overrides**:
   - Specify full or partial configs for individual coins, overriding values from the master config.
   - Format: `{"COIN1": overrides1, "COIN2": overrides2}`.
-  - Whole configs may be loaded with `override_config_path`. This may be a full path or a filename for an alternate config file in the same directory as the master config file.
+  - Whole or lean configs may be loaded with `override_config_path`. Only explicitly authored eligible global/side leaves are projected into that coin patch; missing file defaults do not become coin pins. Global defaults in a referenced file do not grant new override permissions. Inline coin patches remain side-scoped. This may be a full path or a filename for an alternate config file in the same directory as the master config file.
   - Specific override parameters take precedence over override parameters loaded from an external config.
   - Only a subset of config parameters are eligible for overriding master config:
     - `config.bot.long/short.strategy.trailing_martingale`:
@@ -421,10 +466,10 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 
 ## Shared Bot Policy
 
-Behavior shared by live trading, backtests and optimization belongs in `bot`. Global policy
-lives in `bot.portfolio`; shared approval sources and forager hysteresis live in `bot.global`,
-and directional policy lives in `bot.long` and `bot.short`. `live` contains
-operational execution, exchange I/O and startup settings.
+Behavior shared by live trading, backtests and optimization belongs in `bot`.
+`bot.global` supplies inherited directional defaults; `bot.portfolio` owns account-wide policy;
+`bot.long` and `bot.short` optionally pin individual fields. `live` contains operational
+execution, exchange I/O and startup settings.
 
 ### Universe and selection
 
@@ -436,13 +481,15 @@ operational execution, exchange I/O and startup settings.
 - **bot.<side>.universe.approved_coins**: Omission or `null` inherits the shared source. An
   explicit list, `"all"`, or file replaces it completely; `[]` approves no entries. Lists are
   never merged. An explicit list stays pinned even if it equals the shared list today.
-  Shared omission in any sparse authored config means `[]`; the no-config starter instead declares
-  its approved universe explicitly. Omitting an entire side still disables it by exposure policy.
+  Shared omission means `[]`; global `null` is invalid. An omitted side inherits activation
+  as well as parameters, with false as the schema activation default.
   Refresh rereads files and blocks affected new-entry eligibility when a source is unavailable;
   independent pinned sides and protective position management retain their existing policies.
 
-- **bot.<side>.universe.ignored_coins**: A coin list or external coin-list file. The side's
-  tradable universe is its approved coins minus ignored coins, subject to age/market checks.
+- **bot.global.universe.ignored_coins**: A common coin list or external coin-list file.
+  Side omission inherits it; a side list/file replaces it, and side `null` or `[]` clears it.
+  Global `null` also clears to an empty list. The side's tradable universe is its approved
+  coins minus ignored coins, subject to age/market checks.
 - **bot.<side>.forager.always_include**: Ordered, deduplicated coin/market identifiers that
   remain selected by Forager. They must still pass approval, ignored-coin, minimum-age,
   market-availability, risk, HSL and operational mode checks. This list does not add coins to
@@ -517,7 +564,7 @@ shared source.
   A zero-age context may still reuse a sufficient cache with unknown inception without refreshing
   that unused fact; it does not force a rebuild merely because a new fact is available.
 
-- **bot.global.forager.score_hysteresis_margin**: Absolute normalized-score margin for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
+- **bot.global.forager.score_hysteresis_margin**: Inherited absolute normalized-score margin for forager incumbent selection; either side may override it. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 
 ### Strategy, execution and warmup
 
@@ -667,19 +714,28 @@ Operational controls use eight groups. Shared strategy and selection policy live
 
 When optimizing, parameter values are constrained within the lower and upper bounds. Bounds support an optional third element specifying a discrete step size for grid-based optimization.
 
-Bounds mirror the corresponding bot path exactly: `bot.long.forager.score_weights.volume`
-has its bound at `optimize.bounds.long.forager.score_weights.volume`. Both trees use the
-scopes `global`, `long`, and `short`; flattened optimizer identifiers are internal adapters.
+Bounds mirror bot paths under `optimize.bounds`, with scopes `global`, `portfolio`, `long`
+and `short`. A global numeric bound owns **one coordinate** whose value feeds its inheriting
+sides. An explicit side bound, including a fixed range, takes precedence. Otherwise an authored
+side value stays fixed even when equal to the common value. Without a side pin, a global bound
+applies; without either bound, the effective value stays fixed. Portfolio bounds own one
+account-wide coordinate. Boolean activation and other fixed-policy fields are not genes.
+
+For example, `optimize.bounds.global.strategy.trailing_martingale.entry.ema_span_0_minutes`
+searches one common span. Adding a short side value pins short; adding a short side bound gives
+short a separate coordinate. A fixed/fine-tune selector matching either inheriting side matches
+the whole shared coordinate. Use explicit side bounds when independent variation is intended.
 
 Only explicitly listed v9 bounds authorize independent search dimensions. An omitted parameter,
 side, `bounds`, or `optimize` section fixes every omitted numeric optimizer gene at its configured
-value after canonical normalization. Resolved exports show these as `[value, value]`; a null cooldown ceiling remains outside
-the numeric genome unless a finite bound is explicitly provided. Sorting, cleaning, and reloading
+value after canonical normalization. Expanded inspection can show fixed runtime ranges;
+reusable source exports retain authored domains. A null cooldown ceiling remains outside the
+numeric genome unless a finite bound is explicitly provided. Sorting, cleaning and reloading
 must not add recommended search ranges.
 
-The complete schema template and the no-config optimizer command are explicit starting profiles:
-their visible bounds contain recommended ranges. To replace a config's search space with that
-profile deliberately, write a separate file:
+The lean authored schema starter has no search ranges. Maintained examples declare their own
+visible ranges. To deliberately replace a config's search space with recommended domains,
+write a separate file:
 
 ```bash
 passivbot tool optimizer-bounds input.json search.json --preset recommended
@@ -779,7 +835,7 @@ after migration.
   - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_fraction` > `strategy.trailing_martingale.close.retracement_base_fraction`. This prevents retracement from triggering before reaching the minimum profit threshold.
   - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These retired overrides are rejected.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.portfolio.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
-- **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
+- **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. A selector matching one effective target of a shared coordinate freezes that entire coordinate; independent side variation requires explicit side bounds. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
 - **iters**: Number of backtests per optimize session.
 - **n_cpus**: Number of CPU cores utilized in parallel.

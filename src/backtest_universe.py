@@ -96,6 +96,7 @@ def reconcile_backtest_coin_identifiers(
     exchanges: Sequence[str],
     *,
     coin_exchanges: dict[str, str] | None = None,
+    prepared_aliases=None,
 ) -> list[str]:
     """Match exact/alias identifiers to prepared coin keys without file I/O."""
     from utils import (
@@ -103,6 +104,7 @@ def reconcile_backtest_coin_identifiers(
         to_standard_exchange_name,
     )
     reconciled = []
+    resolve = prepared_aliases.resolve_identifier if prepared_aliases is not None else coin_to_symbol
     for identifier in identifiers:
         raw = str(identifier)
         if raw in available_coins:
@@ -111,7 +113,7 @@ def reconcile_backtest_coin_identifiers(
         matches = set()
         for exchange in exchanges:
             try:
-                target_symbol = coin_to_symbol(raw, exchange, verbose=False)
+                target_symbol = resolve(raw, exchange) if prepared_aliases is not None else resolve(raw, exchange, verbose=False)
             except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 continue
             for available_coin in available_coins:
@@ -120,7 +122,7 @@ def reconcile_backtest_coin_identifiers(
                     continue
                 try:
                     if (
-                        coin_to_symbol(available_coin, exchange, verbose=False)
+                        (resolve(available_coin, exchange) if prepared_aliases is not None else resolve(available_coin, exchange, verbose=False))
                         == target_symbol
                     ):
                         matches.add(available_coin)

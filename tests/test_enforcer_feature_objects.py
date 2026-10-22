@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config import prepare_config, get_template_config
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_optimizer_key_path
@@ -31,7 +33,7 @@ def test_exposure_enforcer_bounds_mirror_the_bot_feature_objects(side):
     "total_exposure_enforcer_policy",
 ])
 def test_old_development_enforcer_leaves_are_not_loading_aliases(field):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["risk"][field] = False
     with pytest.raises(ValueError, match="unknown configuration field"):
         prepare_config(config, verbose=False)
@@ -85,7 +87,7 @@ def test_released_fixed_selector_suffixes_keep_their_gene_authority(owner, nativ
 def test_released_file_inline_enforcer_authority_is_converted_before_merging(
     tmp_path, location, file_old, inline_old,
 ):
-    from tools.migrate_config_v9 import _set_patch
+    from suite_runner import apply_scenario_overrides
 
     def risk(old, enabled, threshold):
         return ({"position_exposure_enforcer_enabled": enabled,
@@ -108,10 +110,9 @@ def test_released_file_inline_enforcer_authority_is_converted_before_merging(
     assert source == before
     assert file.read_bytes() == original_file
     file.unlink()
-    result = migration.config
+    result = prepare_config(migration.config, base_config_path=str(tmp_path / "moved.json"), verbose=False)
     if location == "scenario":
-        _set_patch(result, result["backtest"]["scenarios"][0]["overrides"], scenario=True)
-    result = prepare_config(result, base_config_path=str(tmp_path / "moved.json"), verbose=False)
+        apply_scenario_overrides(result, result["backtest"]["scenarios"][0]["overrides"])
     values = result["coin_overrides"]["TEST"]["bot"]["long"]["risk"]
     assert values == {"position_exposure_enforcer": {"enabled": False, 'threshold_ratio': 0.8}}
     if inline_old:

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from config import prepare_config
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from live import reconciler
 from passivbot import Passivbot
 from test_side_activation_native import activation_snapshot
@@ -22,7 +22,7 @@ def test_refresh_and_repeated_plans_keep_approved_held_policy_when_disabled(
 ):
     import passivbot_rust as native
     symbol = 'BTC/USDT:USDT'
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config['bot']['portfolio']['strategy_kind'] = kind
     config['bot']['global']['universe']['approved_coins'] = ['BTC']
     for direction in ('long', 'short'):

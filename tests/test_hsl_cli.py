@@ -7,23 +7,17 @@ import json
 import pytest
 
 from config import prepare_config
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
+from released_v8_fixtures import released_v8_policy
 from config_utils import add_config_arguments, project_template_config_for_cli
 from passivbot_cli.main import main as cli_main
 from tools.migrate_config_v9 import migrate as migrate_config_v9
 
 
 def _v8_config():
-    config = get_template_config()
+    config = released_v8_policy()
     config["config_version"] = "v8.5.0"
-    config["bot"]["global"].pop("enabled")
-    for side in ("long", "short"):
-        config["bot"][side].pop("enabled")
-    for key in ("lookback_ema_span_minutes", "risk_bootstrap_max_lookback_minutes",
-                "realized_loss_gate_lookback_minutes"):
-        config["live"].pop(key, None)
     config["live"]["pnls_max_lookback_days"] = 30.0
-    config["optimize"]["bounds"].pop("live", None)
     for side in ("long", "short"):
         config["bot"][side]["hsl"]["restart_after_red_policy"] = "always"
     return config
@@ -59,7 +53,7 @@ def test_absent_engine_selector_uses_the_sole_engine():
     "selector", [None, "revised", "hsl", "legacy", "unknown", True, 0]
 )
 def test_explicit_engine_selectors_require_migration_when_enabled(selector):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["live"]["hsl_engine"] = selector
     config["bot"]["long"]["hsl"]["enabled"] = True
     with pytest.raises(ValueError, match="migrate-config-v9"):
@@ -67,7 +61,7 @@ def test_explicit_engine_selectors_require_migration_when_enabled(selector):
 
 
 def test_removed_engine_requires_explicit_migration():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["live"]["hsl_engine"] = "legacy"
     config["bot"]["long"]["hsl"]["enabled"] = True
     with pytest.raises(ValueError, match="migrate-config-v9"):
@@ -80,7 +74,7 @@ def test_runtime_schema_override_is_rejected_before_any_config_mutation(command,
     from config.hsl import generated_template
     from config_utils import update_config_with_args
 
-    config = generated_template(get_template_config())
+    config = generated_template(get_expanded_config_prototype())
     config["config_version"] = version
     config["bot"]["long"]["hsl"]["enabled"] = True
     original = deepcopy(config)

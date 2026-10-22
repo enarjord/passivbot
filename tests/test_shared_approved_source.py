@@ -37,7 +37,7 @@ def test_side_replacement_and_inheritance(long, expected):
 
 
 @pytest.mark.parametrize("sections", [{}, {"live": {}}, {"bot": {}}, {"bot": {"long": {}}}])
-def test_sparse_and_starter_are_distinct(sections):
+def test_sparse_and_no_config_defaults_require_declared_approval(sections):
     raw = {"config_version": "v9.0.0", **deepcopy(sections)}
     sparse = prepare_config(raw, verbose=False)
     assert sparse["bot"]["global"]["universe"]["approved_coins"] == []
@@ -46,10 +46,14 @@ def test_sparse_and_starter_are_distinct(sections):
     for export in (compact_config(raw), resolved_config(raw), cleanup_config(raw, _allow_sparse=True)):
         effective = prepare_config(export, verbose=False)
         assert get_side_universe_sources(effective, 'approved_coins') == {'long': [], 'short': []}
-    assert load_input_config(None, log_info=False)[0]['bot']['global']['universe']['approved_coins']
+    assert load_input_config(None, log_info=False)[0]['bot']['global']['universe']['approved_coins'] == []
     starter = prepare_config(get_template_config(), verbose=False)
-    assert starter["bot"]["global"]["universe"]["approved_coins"]
-    assert universe_source_view(starter)["bot"]["long"]["universe"]["approved_coins"] is None
+    assert starter["bot"]["global"]["universe"]["approved_coins"] == []
+    assert "approved_coins" not in universe_source_view(starter)["bot"].get("long", {}).get("universe", {})
+    from config.schema import DEFAULT_EXAMPLE_CONFIG_PATH
+    example = Path(__file__).resolve().parents[1] / DEFAULT_EXAMPLE_CONFIG_PATH
+    declared = load_input_config(str(example), log_info=False)[0]
+    assert declared['bot']['global']['universe']['approved_coins']
 
 
 def test_input_metadata_cannot_grant_approval():

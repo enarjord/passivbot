@@ -131,7 +131,13 @@ def effective_setup_config(config, *, optimize=False) -> dict:
     from config.policy import effective_minimum_cost_filters
     from optimization.fine_tune_anchors import get_anchor_plan
 
+    # Source export intentionally makes directional policy sparse. Resolve the
+    # simulation inheritance from the prepared execution view before projecting.
     effective = clean_config(config)
+    from config.bot_inheritance import get_bot_policy, get_side_field_catalog, resolve_bot_policy
+    runtime = (config if get_bot_policy(config) is not None else
+               {**effective, "bot": resolve_bot_policy(effective["bot"], get_side_field_catalog()).effective_view()})
+    filters = effective_minimum_cost_filters(runtime)
     backtest = deepcopy(effective["backtest"])
     for key in (
         "base_dir",
@@ -147,7 +153,7 @@ def effective_setup_config(config, *, optimize=False) -> dict:
         "compress_cache",
     ):
         backtest.pop(key, None)
-    backtest["filter_by_min_effective_cost"] = effective_minimum_cost_filters(effective)
+    backtest["filter_by_min_effective_cost"] = filters
     result = {
         "bot": effective["bot"],
         "backtest": backtest,

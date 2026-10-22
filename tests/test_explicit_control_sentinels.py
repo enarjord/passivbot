@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config import prepare_config
 from config.authoring import explain_config
 from config.json_schema import generate_schema
@@ -141,7 +143,7 @@ def test_optimizer_and_suite_apply_explicit_controls_before_actual_consumers():
 
 
 def test_uncapped_and_positive_warmup_round_up_at_acquisition():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     uncapped = compute_backtest_warmup_minutes(source, include_rms=False)
     assert uncapped > 1
     assert live_warmup_cap_minutes(source) == 0
@@ -325,7 +327,7 @@ def test_released_v8_sentinels_convert_at_every_layer_and_report(tmp_path):
 
 
 def test_legitimate_zeros_and_backtest_null_inheritance_remain_authored():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
     source["bot"]["long"]["forager"]["score_weights"] = dict.fromkeys(
         source["bot"]["long"]["forager"]["score_weights"], 0.0,

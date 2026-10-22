@@ -18,7 +18,7 @@ from .shared_bot import (
     get_grouped_bot_value,
     inject_flattened_shared_bot_side,
 )
-from .schema import get_template_config
+from .schema import get_expanded_config_prototype
 from .access import require_config_dict
 from .tree_ops import add_missing_keys_recursively
 
@@ -498,7 +498,7 @@ def normalize_cliff_edge_thresholds(
 
 
 def ensure_required_bot_params_present(result: dict) -> None:
-    template = normalization_template(get_template_config(), result)["bot"]
+    template = normalization_template(get_expanded_config_prototype(), result)["bot"]
     for pside in BOT_POSITION_SIDES:
         bot_cfg = result["bot"][pside]
         flat_bot_cfg = flatten_shared_bot_side(bot_cfg)
@@ -525,7 +525,7 @@ def ensure_required_bot_params_present(result: dict) -> None:
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
 ) -> None:
-    template_bot = normalization_template(get_template_config(), result)["bot"]
+    template_bot = normalization_template(get_expanded_config_prototype(), result)["bot"]
     for pside in BOT_POSITION_SIDES:
         canonicalize_shared_bot_side(
             result["bot"][pside],
@@ -619,10 +619,27 @@ def normalize_bot_forager_config(
     verbose: bool = True,
     tracker: Optional[object] = None,
 ) -> None:
+    from dataclasses import replace
+    from .bot_inheritance import (
+        get_bot_policy, install_bot_policy, reconciled_bot_policy, with_normalized_bot_values,
+    )
+
+    policy = get_bot_policy(result)
+    if policy is not None:
+        # Retain this owner's diagnostics before validating direct typed edits.
+        for side in BOT_POSITION_SIDES:
+            normalize_forager_score_weights(
+                get_bot_group(result["bot"][side], "forager")["score_weights"],
+                path=f"bot.{side}.forager.score_weights",
+            )
+        policy = reconciled_bot_policy(result)
+    logical = replace(policy, _normalized=()).effective_view() if policy is not None else None
+    aliases = result["bot"]._runtime_aliases if policy is not None else frozenset()
     required_weight_keys = {"volume", "ema_readiness", "volatility", "unilateralness"}
     for pside in BOT_POSITION_SIDES:
         forager_cfg = get_bot_group(result["bot"][pside], "forager")
-        weights = forager_cfg["score_weights"]
+        weights = (deepcopy(logical[pside]["forager"]["score_weights"])
+                   if logical is not None else forager_cfg["score_weights"])
         if isinstance(weights, dict):
             weights.setdefault("unilateralness", 0.0)
         risk_cfg = get_bot_group(result["bot"][pside], "risk")
@@ -665,6 +682,22 @@ def normalize_bot_forager_config(
                     ["bot", pside, "forager", "score_weights"], weights, normalized
                 )
         forager_cfg["score_weights"] = normalized
+    if policy is not None:
+        install_bot_policy(
+            result, with_normalized_bot_values(policy, result["bot"]),
+            effective_bot=result["bot"], runtime_aliases=aliases,
+        )
+
+
+def normalize_position_count(value, *, path):
+    """Canonical count adapter shared by hydration and gene lowering."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric") from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{path} must be finite and >= 0")
+    return int(round(number))
 
 
 def normalize_position_counts(
@@ -681,13 +714,7 @@ def normalize_position_counts(
         current = risk_cfg.get("max_positions")
         if current is None:
             continue
-        try:
-            current_value = float(current)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"bot.{pside}.risk.max_positions must be numeric") from exc
-        if not math.isfinite(current_value) or current_value < 0.0:
-            raise ValueError(f"bot.{pside}.risk.max_positions must be finite and >= 0")
-        rounded = int(round(current_value))
+        rounded = normalize_position_count(current, path=f"bot.{pside}.risk.max_positions")
         if tracker is not None and current != rounded:
             tracker.update(["bot", pside, "risk", "max_positions"], current, rounded)
         risk_cfg["max_positions"] = rounded
@@ -852,7 +879,7 @@ def format_bot_config(
 ) -> dict:
     if not isinstance(bot_cfg, dict):
         raise TypeError(f"config.bot must be a dict; got {type(bot_cfg).__name__}")
-    template = normalization_template(get_template_config(), {"bot": bot_cfg})
+    template = normalization_template(get_expanded_config_prototype(), {"bot": bot_cfg})
     result = {
         "bot": deepcopy(bot_cfg),
         "live": (

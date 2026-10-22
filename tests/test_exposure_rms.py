@@ -5,6 +5,8 @@ import math
 import numpy as np
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config.metrics import EXPOSURE_RMS_METRICS, canonicalize_metric_name
 from config.scoring import default_objective_goal, extract_objective_specs
 from config.schema import get_template_config
@@ -28,9 +30,9 @@ def fixture_inputs(strategy="trailing_martingale", sides="both", scenario="ordin
     config, candles, markets, _, _ = inputs
     if scenario == "budgets":
         for side in ("long", "short"):
-            config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.5
+            config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.5
         config["coin_overrides"] = {"COIN00": {"bot": {
-            side: {"risk": {"wallet_exposure_limit": 0.2}}
+            side: {"wallet_exposure_limit": 0.2}
             for side in ("long", "short")
         }}}
         # A later listing changes runtime allocation.
@@ -165,7 +167,7 @@ def test_native_scalar_transport_preserves_current_tail_and_optional_columns(fus
 def test_utilization_objectives_and_absolute_limits_use_canonical_scorer():
     from optimize import Evaluator
     from optimization.native_results import CanonicalResultScorer
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     metric, limit = NAMES[3], NAMES[2]
     config["optimize"]["scoring"] = [{"metric": metric, "goal": "min"}]
     config["optimize"]["limits"] = [{"metric": limit, "penalize_if": "greater_than", "value": 0.5}]

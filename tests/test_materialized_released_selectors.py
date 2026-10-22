@@ -66,7 +66,7 @@ def test_materialized_enforcer_override_keeps_policy_value_and_scope(
         source, memory_span_minutes=123.5,
         base_config_path=str(tmp_path / "input.json"),
     )
-    config = deepcopy(migration.config)
+    config = prepare_config(migration.config, verbose=False)
     fixed = config["optimize"]["fixed_runtime_overrides"]
     _apply_config_overrides(config, fixed)
     if layer == "fixed":

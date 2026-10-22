@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 
 from .bot import (
     ensure_optimize_bounds_for_bot,
@@ -17,7 +18,7 @@ from .gpu import resolve_gpu_screening
 from .prefilter import resolve_prefilter
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
-from .schema import get_template_config
+from .schema import get_expanded_config_prototype
 from .hsl import normalization_template, normalize_hsl, require_current_hsl_schema
 from .strategy import (
     prune_inactive_strategy_subtrees,
@@ -38,10 +39,14 @@ def normalize_config(
     verbose: bool = True,
     record_step: bool = True,
 ) -> dict:
-    from .activation import activation_source_view, get_activation_source, resolve_side_activation
-
-    activation_source = get_activation_source(config)
-    config = activation_source_view(config)
+    from .activation import activation_source_view
+    from .bot_inheritance import (
+        reconciled_bot_policy, bot_policy_source_view, get_side_field_catalog,
+        resolve_bot_policy, install_bot_policy, with_normalized_bot_values,
+        with_prepared_bot_sources, apply_bot_policy_patch,
+    )
+    policy = reconciled_bot_policy(config)
+    config = bot_policy_source_view(config) if policy is not None else activation_source_view(config)
     raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
     existing_log = config.get("_transform_log")
     if isinstance(existing_log, list):
@@ -56,9 +61,24 @@ def normalize_config(
     restore_universe_sources(config)
     config.pop("_coins_sources", None)  # Input metadata never grants eligibility.
     require_v9_runtime_config(config)
-    validate_authored_config(config, get_template_config())
-    if "bot" in config:
-        config["bot"].setdefault("global", {}).setdefault("universe", {}).setdefault("approved_coins", [])
+    validate_authored_config(config, get_expanded_config_prototype())
+    from .universe import normalize_universe_source_bindings
+    normalized_sources = {}
+
+    def retain_root_binding(path, _previous, bound):
+        if (len(path) == 4 and path[0] == "bot" and path[1] in {"global", "long", "short"}
+                and path[2] == "universe" and path[3] in {"approved_coins", "ignored_coins"}):
+            normalized_sources[".".join(path)] = deepcopy(bound)
+
+    normalize_universe_source_bindings(config, base_config_path=base_config_path,
+                                       on_change=retain_root_binding)
+    if policy is None:
+        policy = resolve_bot_policy(config.get("bot", {}), get_side_field_catalog())
+    elif normalized_sources:
+        # The binding owner canonicalized authored source leaves, not hydrated
+        # parameters. Retain unrelated acquired facts and numeric provenance.
+        normalized = apply_bot_policy_patch(policy, normalized_sources)
+        policy = replace(normalized, _derived=policy._derived, _normalized=policy._normalized)
     flavor = "canonical"
     source_payload = config
     require_current_hsl_schema(source_payload, base_config_path=base_config_path)
@@ -76,10 +96,11 @@ def normalize_config(
         source_payload.get("backtest", {}).get("coin_sources")
     )
     live_coin_sources_input = {}
-    template = normalization_template(get_template_config(), source_payload)
+    template = normalization_template(get_expanded_config_prototype(), source_payload)
     if "bot" not in config:
         template["bot"]["global"]["universe"]["approved_coins"] = []
     result = deepcopy(config)
+    result["bot"] = policy.effective_view()
     source_sections = set(config)
     for section, defaults in template.items():
         if section not in result:
@@ -107,7 +128,7 @@ def normalize_config(
         if value is not None:
             live_coin_sources_input[key] = deepcopy(value)
     seed_missing_default_sections(template, result, tracker=tracker)
-    resolve_side_activation(result, activation_source, tracker=tracker)
+    install_bot_policy(result, policy, effective_bot=result["bot"])
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
     reject_legacy_flat_strategy_fields(result)
@@ -118,14 +139,12 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
-    resolve_side_activation(result, activation_source)
+    policy = with_normalized_bot_values(policy, result["bot"])
+    install_bot_policy(result, policy, effective_bot=result["bot"])
     sync_canonical_strategy_config(result, tracker=tracker)
-    ensure_optimize_bounds_for_bot(
-        result,
-        verbose=verbose,
-        tracker=tracker,
-        source_bounds=raw_optimize_snapshot.get("bounds", {}),
-    )
+    prune_inactive_strategy_subtrees(result, tracker=tracker)
+    from .inherited_bounds import prepare_bound_plan
+    prepare_bound_plan(result, authored_bounds=raw_optimize_snapshot.get("bounds", {}))
     # All missing numeric dimensions were fixed from effective bot values above;
     # later default hydration must not reopen the profile's recommended ranges.
     template["optimize"]["bounds"] = deepcopy(result["optimize"]["bounds"])
@@ -145,15 +164,16 @@ def normalize_config(
     normalize_scoring_config(result, verbose=verbose, tracker=tracker)
     validate_config(
         result,
-        raw_optimize=raw_optimize_snapshot,
+        raw_optimize={**raw_optimize_snapshot, "bounds": deepcopy(result["optimize"]["bounds"])},
         verbose=verbose,
         tracker=tracker,
     )
 
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
-    from .universe import normalize_universe_source_bindings
     normalize_universe_source_bindings(result)
+    policy = with_normalized_bot_values(policy, result["bot"])
+    install_bot_policy(result, policy, effective_bot=result["bot"])
     preserve_coin_sources(result, live_sources_input=live_coin_sources_input)
 
     if not live_only:
@@ -179,5 +199,8 @@ def normalize_config(
             }
         )
         record_transform(result, "normalize_config", details)
-    resolve_side_activation(result, activation_source)
+    policy = with_prepared_bot_sources(policy, result["bot"])
+    policy = with_normalized_bot_values(policy, result["bot"])
+    install_bot_policy(result, policy, effective_bot=result["bot"])
+    prepare_bound_plan(result, authored_bounds=raw_optimize_snapshot.get("bounds", {}))
     return result

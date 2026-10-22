@@ -1,3 +1,4 @@
+from config.schema import get_expanded_config_prototype
 from config.universe import require_side_universe_sources
 from config.universe import set_side_universe_sources
 import json
@@ -218,7 +219,7 @@ def test_hlcvs_dataset_override_preserves_sliced_valid_window_metadata(tmp_path)
 
 
 def test_backtest_payload_prefers_effective_override_requested_start():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     config["backtest"]["start_date"] = "2025-01-02"
     config["backtest"]["end_date"] = "2025-01-03"

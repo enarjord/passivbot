@@ -1,7 +1,7 @@
 """Offline integration of the staged hsl owner with the real bot and Rust."""
 from config.universe import require_side_universe_sources
 
-from hsl_fixture import set_risk_memory_spans
+from hsl_fixture import set_risk_memory_spans, mutable_runtime_fixture
 
 import argparse
 import json
@@ -47,7 +47,7 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     if side == "short":
         from copy import deepcopy
 
@@ -434,7 +434,7 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
@@ -541,7 +541,7 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, "coin")
+    cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
     cfg["bot"]["long"]["hsl"].update(
         enabled=True,
         drawdown_ratio_ema_span_minutes=1.0,
@@ -794,7 +794,7 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
     cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 1.0
     for side in ("long", "short"):
@@ -988,7 +988,7 @@ async def test_hsl_startup_services_new_red_during_stalled_warmup(
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
@@ -2174,7 +2174,7 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
@@ -2499,7 +2499,7 @@ async def test_flat_unselected_order_only_panic_is_retired_by_protective_executo
     symbol = "BTC/USDT:USDT"
     user = f"fake_hsl_order_only_{tmp_path.name}"
     _cleanup_fake_user_state(user)
-    cfg = generated_template(load_fake_hsl_config())
+    cfg = generated_template(mutable_runtime_fixture(load_fake_hsl_config()))
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False

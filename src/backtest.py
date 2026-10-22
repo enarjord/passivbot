@@ -2751,7 +2751,7 @@ def prep_backtest_args(
     from config.hsl import engine
     from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
     from config.policy import effective_minimum_cost_filters
-    from config.universe import always_include_matches
+    from config.universe import always_include_matches, approval_allows_coin, require_side_universe_sources
 
     ew_half_life_days = validate_ew_half_life_days(
         config.get("backtest", {}).get("ew_half_life_days")
@@ -2774,6 +2774,7 @@ def prep_backtest_args(
             config
         ).items()
     }
+    prepared_approvals = require_side_universe_sources(config, "approved_coins")
     candle_interval = int(
         config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
     )
@@ -2812,15 +2813,12 @@ def prep_backtest_args(
                 market_symbol=mss.get(coin, {}).get("symbol"),
             )
         coin_key = normalize_backtest_coin(coin)
-        coin_canonical = heuristic_symbol_to_coin(coin_key)
         for pside in POSITION_SIDES:
             approved_exact = approved_by_side[pside]
-            approved_by_alias = any(
-                not looks_like_exact_market_identifier(identifier)
-                and heuristic_symbol_to_coin(identifier) == coin_canonical
-                for identifier in approved_exact
-            )
-            if coin_key not in approved_exact and not approved_by_alias:
+            approved = approval_allows_coin(prepared_approvals[pside], coin_key,
+                exchange=mss.get(coin, {}).get("exchange") or exchange,
+                market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
+            if not approved:
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
             elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
@@ -2887,13 +2885,17 @@ def prep_backtest_args(
             }
             for coin in coins
         ]
+    from config.forager_hysteresis import forager_score_hysteresis, validate_forager_score_hysteresis
     from config.activation import side_activation, validate_side_activation
     activation = side_activation(config)
+    hysteresis = forager_score_hysteresis(config)
     age_days = [minimum_coin_age_days(config, side) for side in POSITION_SIDES]
     inception_facts = [inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) for coin in coins]
     if backtest_params is not None:
         if validate_side_activation(backtest_params.get("side_activation")) != activation:
             raise ValueError("cached side activation differs from the effective config")
+        if validate_forager_score_hysteresis(backtest_params.get("forager_score_hysteresis")) != hysteresis:
+            raise ValueError("cached Forager hysteresis differs from the effective config")
         if backtest_params.get("minimum_coin_age_days") != age_days or backtest_params.get("inception_timestamps_ms") != inception_facts:
             raise ValueError("cached age admission inputs differ from the effective config or market facts")
         if backtest_params.get("ew_half_life_days") != ew_half_life_days:
@@ -2959,10 +2961,7 @@ def prep_backtest_args(
             "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,
             "market_orders_allowed": execution_settings.market_orders_allowed,
             "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
-            "forager_score_hysteresis_pct": float(
-                get_optional_config_value(config, 'bot.global.forager.score_hysteresis_margin', 0.02)
-                or 0.0
-            ),
+            "forager_score_hysteresis": hysteresis,
             "liquidation_threshold": liquidation_threshold,
         }
     if backtest_params["equity_hard_stop_loss"].get("engine") == "hsl":

@@ -12,7 +12,7 @@ from utils import looks_like_exact_market_identifier, symbol_to_coin
 
 from .load import load_input_config, prepare_config
 from .log_output import log_config_message
-from .schema import get_template_config
+from .schema import get_expanded_config_prototype
 from .coerce import normalize_hsl_signal_mode
 from .field_policies import (
     CONDITIONAL_HSL_OVERRIDE_PATHS,
@@ -406,7 +406,7 @@ def _get_nested_value(config: dict, path: tuple[str, ...], *, default=None):
 def _validate_patch_leaf_types(
     config: dict, patch: dict, *, coin: str, origin: str
 ) -> None:
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     for path, value in _iter_patch_leaves(patch):
         display_path = f"{_format_override_path(coin, path)} ({origin})"
         from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
@@ -510,7 +510,7 @@ def _validate_effective_coin_config(
     from .hsl import normalization_template, validate_override_paths
 
     validate_override_paths(effective, patch)
-    validation_input = normalization_template(get_template_config(), effective)
+    validation_input = normalization_template(get_expanded_config_prototype(), effective)
     nested_update(validation_input, effective)
     effective = validation_input
     canonical_base = deepcopy(effective)
@@ -532,6 +532,16 @@ def _validate_effective_coin_config(
         if len(path) >= 4 and path[0] == "bot" and path[2] == "entry_cooldown"
     }
     if pinned_cooldown_paths:
+        from .param_paths import require_existing_config_path
+
+        # This copy validates one coin after its final precedence. A coin's
+        # explicit leaf shadows the same fixed runtime leaf as well as its
+        # search dimension; the parent keeps its original fixed policy.
+        effective["optimize"]["fixed_runtime_overrides"] = {
+            key: value
+            for key, value in effective["optimize"]["fixed_runtime_overrides"].items()
+            if require_existing_config_path(effective, key) not in pinned_cooldown_paths
+        }
         bounds = flatten_optimize_bounds(
             effective["optimize"]["bounds"],
             strategy_kind=get_optional_config_value(effective, 'bot.portfolio.strategy_kind'),
@@ -627,7 +637,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
             }
     _validate_patch_leaf_types(config, wallet_patch, coin=coin, origin=source)
     validation.setdefault("config_version", config["config_version"])
-    validate_authored_config(validation, get_template_config(), policy_context=config)
+    validate_authored_config(validation, get_expanded_config_prototype(), policy_context=config)
     validation.setdefault("bot", {}).setdefault("portfolio", {}).setdefault("strategy_kind", strategy_kind)
 
     with _override_file_validation(resolved_path):
@@ -636,11 +646,35 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
         prepare_config(validation, base_config_path=resolved_path, verbose=False,
                        log_config_transforms=False)
         patch = _extract_allowed_patch(
-            raw, coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
+            _project_declared_file_defaults(raw, strategy_kind=strategy_kind),
+            coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
             hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")),
         )
         _validate_patch_leaf_types(config, patch, coin=coin, origin=source)
         return _validate_effective_coin_config(config, patch, coin=coin, origin=source)
+
+
+def _project_declared_file_defaults(document, *, strategy_kind):
+    """Project only declared, coin-eligible common file values onto each side.
+
+    A referenced config is validated as a config first. Its global defaults may
+    supply coin parameter leaves, but neither hydration nor this projection can
+    authorize portfolio, activation or universe changes. Inline patches keep
+    their stricter, side-only permission boundary.
+    """
+    result = deepcopy(document)
+    bot = result.get("bot", {})
+    common = bot.get("global", {}) if isinstance(bot, dict) else {}
+    if not isinstance(common, dict):
+        return result  # The authored validator reports malformed config trees.
+    for side in ("long", "short"):
+        allowed = deepcopy(get_allowed_modifications(hsl_signal_mode="coin")["bot"][side])
+        allowed["strategy"] = {strategy_kind: allowed["strategy"][strategy_kind]}
+        inherited = apply_allowed_modifications({}, common, allowed, return_full=False)
+        if inherited:
+            explicit = bot.get(side, {})
+            bot[side] = nested_update(inherited, deepcopy(explicit))
+    return result
 
 
 def _resolve_override_config_path(config, coin):

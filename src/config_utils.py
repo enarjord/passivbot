@@ -768,6 +768,7 @@ def clean_config(config: dict) -> dict:
     with dictionaries sorted recursively.
     """
     from config.hsl import FIELDS, normalization_template
+    from config.schema import get_expanded_config_prototype
     # Source validation and template preparation are read-only. The projection
     # below copies retained values, so a full input copy would be redundant.
     from config.universe import universe_source_view
@@ -779,7 +780,7 @@ def clean_config(config: dict) -> dict:
         require_v9_runtime_config(source)
     else:
         reject_retired_v9_fields(source)
-    template = normalization_template(get_template_config(), source)
+    template = normalization_template(get_expanded_config_prototype(), source)
     portfolio = source.get("bot", {}).get("portfolio", {}).get("hsl", {})
     if not isinstance(portfolio, dict):
         raise TypeError("bot.portfolio.hsl must be a mapping")
@@ -822,6 +823,16 @@ def clean_config(config: dict) -> dict:
     )
     prune_inactive_strategy_subtrees(cleaned)
     prune_inactive_optimize_strategy_bounds(cleaned)
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy
+    # A reusable source export has complete common defaults and only declared
+    # side pins. Hydrating an expanded side tree would silently freeze future
+    # common edits, including equal-valued explicit pins.
+    cleaned["bot"] = resolve_bot_policy(
+        _clean_dynamic_node(source.get("bot", {})), get_side_field_catalog()
+    ).source_view(include_defaults=True)
+    for side in ("long", "short"):
+        cleaned["bot"].setdefault(side, {})
+    cleaned["optimize"]["bounds"] = deepcopy(source.get("optimize", {}).get("bounds", {}))
     return sort_dict_keys(cleaned)
 
 
@@ -2026,9 +2037,16 @@ def classify_config_argument(
 def project_template_config_for_cli(config: dict, command: Optional[str]) -> dict:
     result = deepcopy(config)
     omitted = object()
+    fixed_bot_fields = set()
+    if command == "optimize":
+        from config.field_registry import get_field_registry
+        fixed_bot_fields = {".".join(field.path) for field in get_field_registry()
+                            if field.path[:1] == ("bot",) and not field.optimizable}
 
     def fixed_policy(node, prefix):
-        if field_cli_exposed_on(prefix, command):
+        # New inherited fixed policy remains configurable; numeric genes keep
+        # their bounds owner. Build this registry projection once per command.
+        if prefix in fixed_bot_fields or field_cli_exposed_on(prefix, command):
             return deepcopy(node)
         if isinstance(node, dict):
             retained = {
@@ -2104,7 +2122,10 @@ def add_reserved_arguments(
                 type=spec["type"],
                 dest=config_key,
                 required=False,
-                default=argparse.SUPPRESS if config_key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} else None,
+                default=argparse.SUPPRESS if config_key in {
+                    f"bot.{side}.universe.{field}" for side in ("long", "short")
+                    for field in ("approved_coins", "ignored_coins")
+                } else None,
                 metavar=spec["metavar"],
                 help=help_text,
             )
@@ -2148,6 +2169,28 @@ def add_config_arguments(
         parser: argparse.ArgumentParser
         config: Config dict (typically from get_template_config())
     """
+    if isinstance(config, dict) and "config_version" in config and "bot" in config:
+        from config.schema import get_expanded_config_prototype
+        discovery = get_expanded_config_prototype()
+        def overlay(target, source):
+            for key, value in source.items():
+                if isinstance(value, dict) and isinstance(target.get(key), dict):
+                    overlay(target[key], value)
+                else:
+                    target[key] = deepcopy(value)
+        overlay(discovery, config)
+        from config.field_registry import get_field_registry
+        for field in get_field_registry():
+            if field.path[:2] != ("bot", "global") or not field.optimizable:
+                continue
+            node = discovery.setdefault("optimize", {}).setdefault("bounds", {}).setdefault("global", {})
+            for part in field.path[2:-1]:
+                node = node.setdefault(part, {})
+            # Discovery alone never authors a range; parsed flags default None.
+            node.setdefault(field.path[-1], [])
+        # Expansion is discovery only; apply command ownership afterwards so
+        # optimize exposes numeric genes through bounds, not runtime bot flags.
+        config = project_template_config_for_cli(discovery, command)
     reserved_acronyms, reserved_keys = add_reserved_arguments(
         parser, command=command, help_all=help_all, group_map=group_map
     )
@@ -2256,11 +2299,14 @@ def add_arguments_recursively(
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
             nullable_float_override = full_name in {
-                *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
+                *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("global", "long", "short")),
                 "backtest.ew_half_life_days",
                 "bot.portfolio.warmup.max_minutes",
             }
-            nullable_coin_override = full_name in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}
+            nullable_coin_override = full_name in {
+                *(f"bot.{side}.universe.approved_coins" for side in ("long", "short")),
+                *(f"bot.{side}.universe.ignored_coins" for side in ("global", "long", "short")),
+            }
             nullable_mode_override = full_name in {"live.modes.long", "live.modes.short"}
             type_ = type(value)
             if "bounds" in full_name:
@@ -2445,12 +2491,16 @@ def update_config_with_args(
 ):
     transform_root = config
     config = effective_config_payload(config)
+    from config.bot_inheritance import get_bot_policy
+    policy_source = get_bot_policy(config)
+    bounds_source = config.get("optimize", {}).get("bounds")
     from config.hsl import validate_override_paths
     nullable_overrides = {
-        *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")),
+        *(f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("global", "long", "short")),
         "backtest.ew_half_life_days",
         "bot.portfolio.warmup.max_minutes", "live.modes.long", "live.modes.short",
         *(f"bot.{side}.universe.approved_coins" for side in ("long", "short")),
+        *(f"bot.{side}.universe.ignored_coins" for side in ("global", "long", "short")),
     }
     supplied = {key: value for key, value in vars(args).items()
                 if (value is not None or key in nullable_overrides)
@@ -2461,12 +2511,13 @@ def update_config_with_args(
     def null_source(value):
         candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
         return candidate is None or isinstance(candidate, str) and candidate.strip().lower() == "null"
-    for key in ("approved_coins", "ignored_coins", "bot.global.universe.approved_coins"):
+    for key in ("approved_coins", "bot.global.universe.approved_coins"):
         if key not in supplied:
             continue
         value = supplied[key]
-        sources = value.values() if isinstance(value, dict) else (value,)
-        if any(null_source(item) for item in sources):
+        # A decoded directional object names explicit side sources. Its null
+        # approvals inherit; only an undirected/common null has no parent.
+        if not isinstance(value, dict) and null_source(value):
             raise ValueError(
                 "null inheritance requires an explicit side approved_coins flag "
                 "(--bot.long.universe.approved_coins or --bot.short.universe.approved_coins); "
@@ -2503,7 +2554,7 @@ def update_config_with_args(
             f"bot.{side}.universe.{field}": (side, field)
             for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
         }
-        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths or key == "bot.global.universe.approved_coins":
+        if key in {"approved_coins", "ignored_coins"} or key in side_source_paths or key in {"bot.global.universe.approved_coins", "bot.global.universe.ignored_coins"}:
             from config.universe import restore_universe_sources
             restore_universe_sources(config)
             targets = ([f"bot.{pside}.universe.{key}" for pside in ("long", "short")]
@@ -2512,11 +2563,13 @@ def update_config_with_args(
                 raw = value
                 if key in {"approved_coins", "ignored_coins"} and isinstance(value, dict):
                     raw = value.get(path.split(".")[1], [])
-                if key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} and null_source(raw):
+                if null_source(raw) and (path.endswith(".ignored_coins")
+                                         or path in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")}):
                     raw = None
                 from config.universe import bind_universe_source
                 raw = bind_universe_source(raw, field=path.split(".")[-1],
                     base_config_path=config.get("live", {}).get("base_config_path", ""))
+                expanded[path] = deepcopy(raw)
                 change = recursive_config_update(config, path, deepcopy(raw), verbose=verbose)
                 if change:
                     changed_keys.append(path)
@@ -2532,7 +2585,7 @@ def update_config_with_args(
     # CLI presence is authored authority even when the new boolean equals the
     # currently inherited value. Record declarations before another prepare.
     from config.activation import apply_activation_patch
-    apply_activation_patch(config, expanded)
+    apply_activation_patch(config, expanded, policy_source=policy_source, bounds_source=bounds_source)
     if changed_keys:
         details = {"keys": changed_keys}
         if diffs:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from backtest import build_backtest_payload, execute_backtest
+from config.inherited_bounds import prepare_bound_plan
 from config.universe import (
     materialize_side_universe_sources,
     raw_side_universe_sources,
@@ -101,6 +102,9 @@ async def test_actual_main_prepares_fixed_policy_before_single_evaluator_replay(
     )
     acquired = []
 
+    async def metadata(*_args, **_kwargs):
+        return deepcopy(markets)
+
     async def acquire(current, *args, **kwargs):
         assert current["_raw"]["optimize"]["bounds"] == config["optimize"]["bounds"]
         assert current["_raw_effective"]["optimize"]["limits"] == []
@@ -181,11 +185,13 @@ async def test_actual_main_prepares_fixed_policy_before_single_evaluator_replay(
                 require_side_universe_sources(candidate, "approved_coins"),
                 sources=raw_side_universe_sources(current, "approved_coins"),
             )
+            prepare_bound_plan(current)
             with pytest.raises(ValueError, match="dataset-owned execution inputs"):
                 registry.planner.prepare("new-source", vector)
         observed.append(actual)
         return {"pool": None, "pool_terminated": False}
 
+    monkeypatch.setattr(optimize, "load_markets", metadata)
     monkeypatch.setattr(optimize, "format_approved_ignored_coins", acquire)
     monkeypatch.setattr(optimize, "prepare_hlcvs_mss", prepare)
     monkeypatch.setattr(optimize, "get_backend_runner", lambda _: backend)

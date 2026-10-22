@@ -118,7 +118,7 @@ def test_screening_keeps_seed_bootstrap_fully_evaluated(monkeypatch, tmp_path):
         base, suite = suite_inputs(manager)
         vector = optimize.config_to_individual(base.config, base.bounds, optimization_shape=base.optimization_shape)
         starts = [list(vector) for _ in range(6)]
-        index = [key for key, _path in base.key_paths].index("long_entry_initial_qty_pct")
+        index = [key for key, _path in base.key_paths].index("bot.long.strategy.trailing_martingale.entry.initial_qty_fraction")
         for count, row in enumerate(starts):
             row[index] = 0.01 + count * 0.004
         records, path = [], tmp_path / "checkpoint.pkl"

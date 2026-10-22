@@ -1,11 +1,15 @@
 from copy import deepcopy
+import math
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from config_utils import clean_config, get_template_config
+from config_utils import clean_config
+from config.schema import get_expanded_config_prototype
 from config.load import prepare_config
+from config.inherited_bounds import prepare_bound_plan
+from config import compile_runtime_config
 from config.overrides import parse_overrides
 from optimization.config_adapter import get_optimization_key_paths
 from optimization.warmup import (
@@ -18,10 +22,18 @@ from optimizer_overrides import apply_coupled_unstuck_ema_spans
 
 
 def config_for(kind="trailing_martingale"):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     for side in ("long", "short"):
         config["bot"][side]["enabled"] = True
     config['bot']["portfolio"]['strategy_kind'] = kind
+    # Declare the horizons this fixture searches instead of inheriting an
+    # unrelated recommended profile whose span minima exclude these values.
+    spans = {"ema_span_0_minutes": [1.0, 10_000.0],
+             "ema_span_1_minutes": [1.0, 10_000.0]}
+    config["optimize"]["bounds"] = {side: {
+        "strategy": {kind: {"entry": deepcopy(spans)} if kind == "trailing_martingale" else deepcopy(spans)},
+        "unstuck": deepcopy(spans),
+    } for side in ("long", "short")}
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     config = parse_overrides(prepare_config(config, verbose=False), verbose=False)
     for side in ("long", "short"):
@@ -31,6 +43,7 @@ def config_for(kind="trailing_martingale"):
             else config["bot"][side]["strategy"][kind]
         ).update(ema_span_0_minutes=17.25, ema_span_1_minutes=211.75)
         config["bot"][side]["unstuck"].update(ema_span_0_minutes=9999.5, ema_span_1_minutes=8888.5)
+    prepare_bound_plan(config)
     return config
 
 
@@ -60,13 +73,16 @@ def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_
     }
     original = deepcopy(config)
     paths = get_optimization_key_paths(config)
-    assert not any("unstuck_ema_span" in key for key, _ in paths)
+    assert not any(path[2:3] == ("unstuck",) and path[-1].startswith("ema_span_")
+                   for _, path in paths)
     vector = []
     for key, path in paths:
         value = config
         for part in path:
             value = value[part]
-        vector.append(101.25 if key == "long_ema_span_1" else value)
+        target = ("bot", "long", "strategy", kind,
+                  *(("entry",) if kind == "trailing_martingale" else ()), "ema_span_1_minutes")
+        vector.append(101.25 if path == target else value)
     candidate = build_optimizer_vector_config(vector, config, key_paths=paths)
     assert config == original
     assert candidate["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 101.25
@@ -87,8 +103,10 @@ def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_
 def test_independent_default_and_mirror_fixed_override_order():
     config = config_for()
     config["optimize"]["enable_overrides"] = []
+    prepare_bound_plan(config)
     assert any(
-        "unstuck_ema_span" in key for key, _ in get_optimization_key_paths(config)
+        path[2:3] == ("unstuck",) and path[-1].startswith("ema_span_")
+        for _, path in get_optimization_key_paths(config)
     )
     independent = _finalize_optimizer_vector_config(deepcopy(config))
     assert independent["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 9999.5
@@ -332,9 +350,8 @@ def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 900_000.5}}}}
     }
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "ema_span_0_minutes"
-    ] = [17.25, 80_000.5]
+    _apply_config_overrides(config, {
+        "optimize.bounds.long.strategy.trailing_martingale.entry.ema_span_0_minutes": [17.25, 80_000.5]})
     coupled = compute_optimizer_per_coin_warmup_minutes(config)
     assert coupled["BTC"] >= 80_001
     assert coupled["BTC"] < 900_000
@@ -345,9 +362,8 @@ def test_anchored_search_derives_spans_from_selected_anchor_and_tunable_strategy
     from optimization.shape import build_optimization_shape
 
     config = config_for()
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "ema_span_0_minutes"
-    ] = [1.0, 1000.0]
+    _apply_config_overrides(config, {
+        "optimize.bounds.long.strategy.trailing_martingale.entry.ema_span_0_minutes": [1.0, 1000.0]})
     config["optimize"]["round_to_n_significant_digits"] = 6
     anchors = [deepcopy(config), deepcopy(config)]
     anchors[0]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
@@ -361,7 +377,8 @@ def test_anchored_search_derives_spans_from_selected_anchor_and_tunable_strategy
         "<memory>", starting_configs_override=anchors
     )
     shape = build_optimization_shape(config)
-    assert [key for key, _ in shape.key_paths] == ["__anchor_id__", "long_ema_span_1"]
+    assert [key for key, _ in shape.key_paths] == [
+        "__anchor_id__", "bot.long.strategy.trailing_martingale.entry.ema_span_1_minutes"]
     candidate = build_optimizer_vector_config([1.0, 311.5], config)
     assert candidate["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 401.75
     assert candidate["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 311.5
@@ -401,9 +418,9 @@ def test_coupling_fails_explicitly_for_invalid_strategy_spans(bad):
     config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_span_0_minutes"
     ] = bad
-    with pytest.raises(
-        ValueError, match="couple_unstuck_ema_spans requires positive finite"
-    ):
+    expected = ("couple_unstuck_ema_spans requires positive finite" if math.isfinite(bad)
+                else r"bot\.long\.strategy.*ema_span_0_minutes must be finite")
+    with pytest.raises(ValueError, match=expected):
         _finalize_optimizer_vector_config(config)
 
 
@@ -572,13 +589,15 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
     config["optimize"]["enable_overrides"] = [
         "mirror_short_from_long", "couple_unstuck_ema_spans",
     ]
-    config["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.1, 0.5, 0.01]
+    _apply_config_overrides(config, {
+        "optimize.bounds.long.hsl.drawdown_ratio_threshold": [0.1, 0.5, 0.01]})
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.hsl.cooldown_after_red_minutes": 1.0,
     }
     config["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 1.0, "ema_readiness": 3.0, "volatility": 0.0, "unilateralness": 0.0,
     }
+    prepare_bound_plan(config)
     vector = [0.35]
     if anchored:
         install_anchored_fine_tune_plan(
@@ -586,18 +605,14 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
             starting_configs_override=[deepcopy(config)],
         )
         vector = [0.0, *vector]
-    # Derived aliases can survive in internal templates after authored ingestion.
-    for side in ("long", "short"):
-        config["bot"][side]["hsl_red_threshold"] = 0.15
-        config["bot"][side]["hsl_cooldown_minutes_after_red"] = 0.3
-        config["bot"][side]["forager_score_weights"] = {
-            "volume": 0.9, "ema_readiness": 0.05, "volatility": 0.05,
-        }
+    # The compiler owns transport aliases. Candidate genes and fixed policy
+    # supersede these captured values without treating them as authored pins.
+    config = compile_runtime_config(config, runtime="backtest", record_step=False)
     before = deepcopy(config)
 
     candidate = build_optimizer_vector_config(
         vector, config,
-        key_paths=[("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_ratio_threshold"))],
+        key_paths=[("bot.long.hsl.drawdown_ratio_threshold", ("bot", "long", "hsl", "drawdown_ratio_threshold"))],
     )
 
     assert config == before

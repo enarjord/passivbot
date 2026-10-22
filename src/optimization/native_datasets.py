@@ -112,12 +112,11 @@ class NativeDatasetRegistry:
         # Anchors and side enablement have finite choices. All other transported
         # numeric genes stay request-owned; arbitrary static changes still fail.
         dimensions = []
-        topology_keys = {f"{side}_{name}" for side in ("long", "short")
-                         for name in ("n_positions", "total_wallet_exposure_limit")}
-        for index, ((key, _path), bound) in enumerate(zip(base.key_paths, base.bounds, strict=True)):
+        for index, ((key, path), bound) in enumerate(zip(base.key_paths, base.bounds, strict=True)):
             if key == ANCHOR_GENE_KEY:
                 dimensions.append((index, range(int(bound.low), int(bound.high) + 1)))
-            elif key in topology_keys and bound.low < bound.high:
+            elif (tuple(path[-2:]) in {("risk", "max_positions"), ("risk", "total_wallet_exposure_limit")}
+                  and bound.low < bound.high):
                 # Canonical endpoint preparation handles position rounding,
                 # stepped bounds and fixed/mirrored policies. Raw zero crossing
                 # is insufficient; equivalent endpoint contracts deduplicate below.

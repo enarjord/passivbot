@@ -4,7 +4,8 @@ import pytest
 import config.strategy_spec as strategy_spec
 from config.strategy_paths import native_strategy_path_to_public
 from config import prepare_config
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
+from config.param_paths import resolve_optimizer_key_path
 from config.strategy_spec import get_supported_strategy_kinds
 from optimization.bounds import Bound
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
@@ -21,7 +22,7 @@ def _get_path(mapping, path):
 
 
 def _canonical_config_with_bounds(bounds, *, strategy_kind="trailing_martingale"):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config["optimize"]["bounds"] = bounds
     for side in ("long", "short"):
@@ -36,7 +37,7 @@ class TestConfigAdapter:
     def test_existing_bot_does_not_construct_a_fallback_template(self, monkeypatch):
         import optimization.config_adapter as adapter
 
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         expected = get_optimization_key_paths(config)
 
         def unexpected_template():
@@ -129,7 +130,7 @@ class TestConfigAdapter:
 
     def test_get_strategy_spec_exposes_trailing_martingale_metadata(self):
         spec = get_strategy_spec("trailing_martingale")
-        template = get_template_config()
+        template = get_expanded_config_prototype()
         bot_template = template["bot"]
 
         assert spec["strategy_kind"] == "trailing_martingale"
@@ -245,7 +246,8 @@ class TestConfigAdapter:
                 *native_strategy_path_to_public(strategy_kind, config_path[2:]),
             )
 
-            resolved = resolve_optimization_bound_path(prepared, optimize_key)
+            # Native ABI paths remain directional; genetic owners may be shared.
+            resolved = resolve_optimizer_key_path(prepared, optimize_key)
 
             assert resolved == expected
             value = _get_path(prepared, resolved)

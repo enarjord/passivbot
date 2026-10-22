@@ -228,6 +228,7 @@ from warmup_utils import (
 )
 from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.activation import side_activation
+from config.forager_hysteresis import forager_score_hysteresis
 from config.control_sentinels import FORCED_MODE_PATHS
 from strategy_warmup import (
     STRATEGY_WARMUP_1M_PROBE_KEYS,
@@ -4485,7 +4486,12 @@ class Passivbot:
                     self._override_hits_logged.add(log_key)
                 return d
 
-        # fallback to global config
+        # Prepared membership can replace the compiled flat aliases. Resolve
+        # side parameters through the canonical owner after coin precedence.
+        if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
+            return self.bot_value(path[1], path[2])
+
+        # fallback to root config
         d = self.config
         for p in path:
             if isinstance(d, dict) and p in d:
@@ -7636,9 +7642,6 @@ class Passivbot:
                 else:
                     incumbent_short.add(idx)
 
-        score_hysteresis_pct = float(
-            require_config_value(self.config, 'bot.global.forager.score_hysteresis_margin') or 0.0
-        )
         return {
             "peek_hints": {
                 "expand_grid_long": sorted(expand_grid_long),
@@ -7647,7 +7650,6 @@ class Passivbot:
                 "expand_close_short": sorted(expand_close_short),
             },
             "forager_hysteresis": {
-                "score_hysteresis_pct": score_hysteresis_pct,
                 "incumbent_long": sorted(incumbent_long),
                 "incumbent_short": sorted(incumbent_short),
             },
@@ -10355,6 +10357,10 @@ class Passivbot:
 
     def set_wallet_exposure_limits(self):
         """Recalculate wallet exposure limits for both sides and per-symbol overrides."""
+        from config.bot_inheritance import reconciled_bot_policy, install_bot_policy
+
+        policy = reconciled_bot_policy(self.config)
+        aliases = self.config["bot"]._runtime_aliases if policy is not None else frozenset()
         for pside in ["long", "short"]:
             self.config["bot"][pside]["wallet_exposure_limit"] = (
                 self.get_wallet_exposure_limit(pside)
@@ -10365,6 +10371,12 @@ class Passivbot:
                     self.coin_overrides[symbol]["bot"][pside][
                         "wallet_exposure_limit"
                     ] = self.get_wallet_exposure_limit(pside, symbol)
+        if policy is not None:
+            # These calculated allocation values serve live consumers, never
+            # public policy. Rebaseline only at their actual trusted writer.
+            aliases |= frozenset((side, "wallet_exposure_limit") for side in ("long", "short"))
+            install_bot_policy(self.config, policy, effective_bot=self.config["bot"],
+                               runtime_aliases=aliases)
 
     def get_wallet_exposure_limit(self, pside, symbol=None):
         """Return side WEL from fixed config denominator, honoring per-symbol overrides."""
@@ -17944,6 +17956,7 @@ class Passivbot:
             # value is a simulation knob, not a live slippage cap.
             "global": {
                 "side_activation": side_activation(self.config),
+                "forager_score_hysteresis": forager_score_hysteresis(self.config),
                 "filter_by_min_effective_cost": {
                     side: minimum_cost_filter(self.config, side) for side in ("long", "short")
                 },

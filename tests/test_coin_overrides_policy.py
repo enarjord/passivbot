@@ -11,7 +11,7 @@ from config.overrides import (
     allowed_flat_bot_side_modification_keys,
     parse_overrides,
 )
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype, get_template_config
 
 
 def _parse(overrides, *, loaded=None):
@@ -149,7 +149,7 @@ def test_new_policy_fields_use_effective_config_and_type_validation():
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("source", ["inline", "file"])
 def test_unilateralness_forager_weight_is_not_a_coin_pin(side, source):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     cfg["optimize"]["bounds"][side]["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     cfg = prepare_config(cfg, verbose=False)
@@ -158,7 +158,7 @@ def test_unilateralness_forager_weight_is_not_a_coin_pin(side, source):
         with pytest.raises(ValueError, match="forager.*(not|unsupported|allow)|not.*forager"):
             parse_overrides(cfg, verbose=False)
     else:
-        loaded = get_template_config()
+        loaded = get_expanded_config_prototype()
         loaded["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0.0
         cfg["coin_overrides"] = {"BTC": {"override_config_path": "example.json"}}
         parsed = parse_overrides(cfg, verbose=False, override_loader=lambda config, coin: loaded)

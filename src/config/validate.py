@@ -121,9 +121,9 @@ def validate_config(
         raise ValueError("enabled config prefilters currently require trailing_martingale")
 
     from .hsl import normalize_hsl
-    from .schema import get_template_config
+    from .schema import get_expanded_config_prototype
 
-    normalize_hsl(config, get_template_config(), verbose=verbose)
+    normalize_hsl(config, get_expanded_config_prototype(), verbose=verbose)
     if not isinstance(config["backtest"]["hsl_detailed_report"], bool):
         raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
@@ -147,8 +147,14 @@ def validate_config(
         and isinstance(raw_optimize.get("bounds"), dict)
         else config.get("optimize", {}).get("bounds", {})
     )
-    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     validate_bot_config(config)
+    from .entry_cooldown import validate_entry_cooldown
+
+    for pside in BOT_POSITION_SIDES:
+        validate_entry_cooldown(
+            config["bot"][pside]["entry_cooldown"], path=f"bot.{pside}.entry_cooldown"
+        )
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
@@ -162,9 +168,6 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.forager.unilateralness_ema_span_minutes must be between 1 and 100000"
             )
-        from .entry_cooldown import validate_entry_cooldown
-
-        validate_entry_cooldown(bot_side["entry_cooldown"], path=f"bot.{pside}.entry_cooldown")
         from .optimize_bounds import flatten_optimize_bounds
         from optimization.bounds import Bound
 

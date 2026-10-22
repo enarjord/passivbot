@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from config import prepare_config
+from config_utils import clean_config
 from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
 from optimize import Evaluator, SuiteEvaluator, config_to_individual
@@ -22,7 +24,7 @@ def inputs(*, suite=False, fixed=False, mirror=False):
                 key: [config["bot"][side]["risk"][key]] * 2
                 for key in ("max_positions", "total_wallet_exposure_limit")
             },
-            "strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": [0.01, 0.05]}}},
+            "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": [0.01, 0.05]}}},
         }
         for side in ("long", "short")
     }
@@ -37,6 +39,9 @@ def inputs(*, suite=False, fixed=False, mirror=False):
         }
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    coins = deepcopy(config["backtest"]["coins"])
+    config = prepare_config(clean_config(config), verbose=False)
+    config["backtest"]["coins"] = coins
     spec = SharedArraySpec("candles", candles.shape, candles.dtype.str)
     base = Evaluator({"binance": spec}, {}, {"binance": markets}, config)
     contexts = [SimpleNamespace(label=label, exchanges=["binance"], config=deepcopy(config), msss={"binance": markets},
@@ -60,7 +65,9 @@ def inputs(*, suite=False, fixed=False, mirror=False):
 
 def set_value(planner, vector, key, value):
     values = list(vector)
-    values[[name for name, _path in planner.base.key_paths].index(key)] = value
+    from optimization.config_adapter import resolve_optimization_bound_path
+    path = resolve_optimization_bound_path(planner.base.config, key)
+    values[[tuple(target) for _name, target in planner.base.key_paths].index(path)] = value
     return values
 
 
@@ -78,10 +85,10 @@ def global_span_inputs(memory_key, *, suite=False, fixed=False, scenario_pin=Fal
     previous, _ = inputs(suite=suite)
     config = deepcopy(previous.base.config)
     override_path, bound_path = MEMORY_PATHS[memory_key]
-    bounds = config["optimize"]["bounds"]
-    for part in bound_path[:-1]:
-        bounds = bounds.setdefault(part, {})
-    bounds[bound_path[-1]] = [1000.0, 50000.0]
+    from optimization.warmup import _apply_config_overrides
+    _apply_config_overrides(config, {
+        ".".join(("optimize", "bounds", *bound_path)): [1000.0, 50000.0],
+    })
     if fixed:
         config["optimize"]["fixed_runtime_overrides"] = {override_path: 4096.5}
     base = Evaluator(previous.base.hlcvs_specs, previous.base.btc_usd_specs,
@@ -94,7 +101,23 @@ def global_span_inputs(memory_key, *, suite=False, fixed=False, scenario_pin=Fal
             if scenario_pin and context.label == "stress":
                 context.overrides[override_path] = 2048.5
         evaluator = SuiteEvaluator(base, contexts, {"default": "mean"})
-    planner = NativeCandidatePlanner(evaluator, previous.bindings)
+    bindings = []
+    for binding in previous.bindings:
+        original = binding.dataset
+        effective = (evaluator.build_scenario_candidate_config(
+            config, next(context for context in contexts if context.label == binding.scenario)
+        ) if suite else config)
+        dataset = PreparedGpuDataset(
+            config=effective, markets=json.loads(original.markets_json), exchange=original.exchange,
+            hlcvs=original.hlcvs, btc=original.btc, timestamps=original.timestamps,
+            candle_coins=original.candle_coins, coin_indices=original.coin_indices,
+            time_range=original.time_range, metrics=original.metrics,
+        )
+        assert dataset.hlcvs == original.hlcvs and dataset.btc == original.btc
+        assert dataset.timestamps == original.timestamps
+        bindings.append(replace(binding, dataset=dataset))
+    assert [binding.dataset_id for binding in bindings] == [binding.dataset_id for binding in previous.bindings]
+    planner = NativeCandidatePlanner(evaluator, bindings)
     vector = config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
     return planner, vector
 
@@ -181,10 +204,14 @@ def test_fixed_runtime_policy_and_exact_last_scenario_override_are_materialized_
         first.requests[0].parameters["long_entry_initial_qty_pct"] = 1
 
 
-def test_mirrored_shadow_genes_deduplicate_effectively():
+def test_mirrored_runtime_pins_deduplicate_effectively():
     planner, vector = inputs(mirror=True)
-    first = planner.prepare("first", set_value(planner, vector, "short_entry_initial_qty_pct", 0.01))
-    second = planner.prepare("second", set_value(planner, vector, "short_entry_initial_qty_pct", 0.05))
+    short_path = "bot.short.strategy.trailing_martingale.entry.initial_qty_fraction"
+    assert short_path not in {key for key, _ in planner.base.key_paths}
+    planner.base.config["optimize"]["fixed_runtime_overrides"] = {short_path: 0.01}
+    first = planner.prepare("first", vector)
+    planner.base.config["optimize"]["fixed_runtime_overrides"] = {short_path: 0.05}
+    second = planner.prepare("second", vector)
     assert first.effective_key == second.effective_key
     row = first.requests[0].parameters
     assert row["long_entry_initial_qty_pct"] == row["short_entry_initial_qty_pct"]

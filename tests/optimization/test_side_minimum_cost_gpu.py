@@ -29,13 +29,15 @@ def test_directional_and_fused_settings_keep_both_side_flags(monkeypatch, kind, 
     flags = {"long": long, "short": short}
     directional = getattr(kernel, f"Mps{kind}MulticoinRunner")
     for side in ("long", "short"):
-        runner = directional(run, data, side=side, filter_by_min_effective_cost=flags)
+        runner = directional(run, data, side=side, filter_by_min_effective_cost=flags, side_activation={"long": True, "short": True}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
         assert runner.settings[11].item() == flags[side]
-        assert len(runner.settings) == 15
-    fused = getattr(kernel, f"Mps{kind}MulticoinFusedRunner")(run, data, filter_by_min_effective_cost=flags)
-    assert len(fused.settings) == 18
+        assert len(runner.settings) == 16
+    fused = getattr(kernel, f"Mps{kind}MulticoinFusedRunner")(run, data, filter_by_min_effective_cost=flags, side_activation={"long": True, "short": True}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
+    assert len(fused.settings) == 21
     assert fused.settings[13].item() == long
     assert fused.settings[17].item() == short
+    assert fused.settings[18:20].tolist() == [1.0, 1.0]
+    assert fused.settings[20].item() == 0.0
     assert fused.settings[14:16].tolist() == [0.0, 0.0]
     # Mutating factual capacity/control must not overwrite either policy flag.
     fused.settings[14], fused.settings[15] = 7, 1
@@ -47,7 +49,7 @@ def test_directional_and_fused_settings_keep_both_side_flags(monkeypatch, kind, 
 def test_runner_rejects_malformed_policy_pair(monkeypatch, kind, invalid):
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(TypeError):
-        getattr(kernel, f"Mps{kind}MulticoinFusedRunner")(run, data, filter_by_min_effective_cost=invalid)
+        getattr(kernel, f"Mps{kind}MulticoinFusedRunner")(run, data, filter_by_min_effective_cost=invalid, side_activation={"long": True, "short": True}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
 
 def test_both_shader_and_cuda_translation_keep_independent_arbitration_inputs():

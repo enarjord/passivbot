@@ -131,6 +131,7 @@ from utils import (
     utc_ms,
     make_get_filepath,
     format_approved_ignored_coins,
+    load_markets,
 )
 from logging_setup import configure_logging, resolve_log_level
 from materialized_cache import release_materialized_payload
@@ -235,6 +236,7 @@ from optimization.warmup import (
     stamp_warmup_metadata,
     validate_optimizer_effective_configs,
     validate_optimizer_dataset_intervals,
+    refresh_optimizer_source_bindings,
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
@@ -242,6 +244,11 @@ from multiprocessing_utils import ignore_sigint_in_worker
 
 
 def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    from config.bot_inheritance import get_bot_policy
+    if get_bot_policy(config) is not None:
+        from optimization.warmup import _apply_config_overrides as apply_owned_overrides
+        apply_owned_overrides(config, overrides)
+        return
     from config.universe import restore_universe_sources, universe_sources_affected
     if universe_sources_affected(overrides):
         restore_universe_sources(config)
@@ -469,10 +476,8 @@ def _propagate_prepared_optimizer_universe(config: dict, data_config: dict) -> N
     """Carry prepared source policy/membership without copying widened numeric gates."""
     if config.get("_hlcvs_dataset_override_meta"):
         return  # The verified dataset manifest already supplied its replay membership.
-    from config.universe import materialize_side_universe_sources, raw_side_universe_sources
-    config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
-        data_config["bot"]["global"]["universe"]["approved_coins"]
-    )
+    from config.universe import materialize_side_universe_sources, raw_side_universe_sources, copy_universe_source_policy
+    copy_universe_source_policy(config, data_config)
     for field in ("approved_coins", "ignored_coins"):
         materialize_side_universe_sources(
             config, field, require_side_universe_sources(data_config, field),
@@ -780,7 +785,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     )
     anchor_meta = config.get("_optimizer_anchor")
     from config.universe import anchored_universe_source_view
-    entry = clean_config(strip_config_metadata(anchored_universe_source_view(config)))
+    entry = clean_config(strip_config_metadata(anchored_universe_source_view(config, candidate=True)))
     # Prepared dataset membership is result provenance, not user configuration.
     # Cleaning strips it, but single-run resume compares the exact membership.
     if "coins" in config.get("backtest", {}):
@@ -805,6 +810,10 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
 
 
 def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
+    from config.inherited_bounds import optimize_bounds_source_view
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy, reconciled_bot_policy
+    old_source = optimize_bounds_source_view(entry)
+    new_source = optimize_bounds_source_view(config)
     old_bt = deepcopy(entry.get("backtest") or {})
     new_bt = deepcopy(config.get("backtest") or {})
     for section, path in ((old_bt, "resume.backtest"), (new_bt, "config.backtest")):
@@ -816,8 +825,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     new_bt.setdefault("limit_order_fill_buffer_fraction", 0.0)
     old_bt.setdefault("ew_half_life_days", None)
     new_bt.setdefault("ew_half_life_days", None)
-    old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
-    new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
+    old_opt = _canonicalize_resume_optimize(old_source.get("optimize") or {})
+    new_opt = _canonicalize_resume_optimize(new_source.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
     new_bot = config.get("bot", config) or {}
 
@@ -901,9 +910,19 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         mismatches, "optimize", old_opt_compare, new_opt_compare
     )
 
+    # Sparse inherited flags are permissions, not legacy truthy omissions.
+    def activation_view(value, bot):
+        if value.get("config_version") != "v9.0.0":
+            return bot
+        policy = reconciled_bot_policy(value)
+        if policy is None:
+            policy = resolve_bot_policy(bot, get_side_field_catalog())
+        return policy.effective_view()
+    old_activation = activation_view(entry, old_bot)
+    new_activation = activation_view(config, new_bot)
     for side in ["long", "short"]:
-        old_en = old_bot.get(side, {}).get("enabled", True)
-        new_en = new_bot.get(side, {}).get("enabled", True)
+        old_en = old_activation.get(side, {}).get("enabled", True)
+        new_en = new_activation.get(side, {}).get("enabled", True)
         if old_en != new_en:
             mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
 
@@ -1314,13 +1333,14 @@ def config_to_individual(
             key_paths = optimization_shape.key_paths
     values = []
     key_paths = key_paths or get_optimization_key_paths(config)
-    for _, path in key_paths:
+    binding_targets = optimization_shape.binding_targets if optimization_shape is not None else ()
+    for index, (_, path) in enumerate(key_paths):
         if path == (ANCHOR_GENE_KEY,) or path == [ANCHOR_GENE_KEY]:
             values.append(0 if anchor_id is None else int(anchor_id))
             continue
-        target = config
-        for part in path:
-            target = target[part]
+        target = _optimizer_binding_seed_value(
+            config, path, binding_targets[index] if binding_targets else (),
+        )
         values.append(target)
     enforced = enforce_bounds(
         [
@@ -1355,6 +1375,17 @@ def config_to_individual(
     return enforced
 
 
+def _optimizer_binding_seed_value(config, path, targets=()):
+    """A shared coordinate can represent only one effective anchor/seed value."""
+    values = [_get_path_value(config, target) for target in targets] if targets else [_get_path_value(config, path)]
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError(
+            f"starting config has different effective values for shared coordinate {'.'.join(path)}; "
+            "declare explicit side bounds to tune those values independently"
+        )
+    return values[0]
+
+
 def _optimizer_anchor_id(config: dict) -> int | None:
     anchor_meta = config.get("_optimizer_anchor")
     if not isinstance(anchor_meta, dict):
@@ -1375,6 +1406,17 @@ def _canonicalize_optimizer_individual(
     key_paths,
     overrides_list,
 ):
+    # Repair finite excursions before the strict binding write. Leave valid
+    # raw values unsnapped until the existing post-transform canonicalization;
+    # the anchor selector is not a numeric strategy coordinate.
+    offset = 1 if get_anchor_plan(template) is not None else 0
+    for index in range(offset, min(len(individual), len(bounds))):
+        value = individual[index]
+        if (not isinstance(value, bool) and isinstance(value, (int, float))
+                and math.isfinite(value)):
+            bound = bounds[index]
+            if value < bound.low or value > bound.high:
+                individual[index] = max(bound.low, min(bound.high, value))
     config = individual_to_config(
         individual,
         optimizer_overrides,
@@ -2081,10 +2123,8 @@ class SuiteEvaluator:
         scenario_config["backtest"] = backtest_cfg
 
         scenario_config["bot"] = deepcopy(config["bot"])
-        from config.universe import raw_side_universe_sources
-        scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(ctx.config["bot"]["global"]["universe"]["approved_coins"])
-        for field in ("approved_coins", "ignored_coins"):
-            set_side_universe_sources(scenario_config, field, raw_side_universe_sources(ctx.config, field))
+        from config.universe import copy_universe_source_policy
+        copy_universe_source_policy(scenario_config, ctx.config)
         scenario_config["disable_plotting"] = True
 
         if ctx.overrides:
@@ -2104,6 +2144,14 @@ class SuiteEvaluator:
 
         if unstuck_ema_spans_coupled(scenario_config):
             scenario_config = apply_coupled_unstuck_ema_spans(deepcopy(scenario_config))
+        from config.bot_inheritance import get_bot_policy
+        if get_bot_policy(scenario_config) is not None:
+            from config.inherited_bounds import prepare_bound_plan
+            # The scenario now owns its final source and frozen membership.
+            # Bind that exact context before registry deduplication, without
+            # changing the candidate's shared optimizer container.
+            scenario_config["optimize"] = dict(scenario_config["optimize"])
+            prepare_bound_plan(scenario_config)
         from config.hsl import validate_optimizer_metrics
 
         validate_optimizer_metrics(
@@ -2734,6 +2782,12 @@ def _validate_starting_config_selection_args(
 
 
 def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
+    from config.inherited_bounds import get_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        return {binding.key: [binding.bound.low, binding.bound.high,
+                              *([] if binding.bound.step is None else [binding.bound.step])]
+                for binding in plan.bindings}, False
     bounds = config.get("optimize", {}).get("bounds", {})
     strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     flat_bounds = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
@@ -2745,6 +2799,19 @@ def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
 
 
 def _set_optimize_bound(config: dict, bound_key: str, value) -> None:
+    from config.inherited_bounds import get_bound_plan, optimize_bounds_source_view, prepare_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        binding = next((item for item in plan.bindings if bound_key == item.key or bound_key in item.native_ids), None)
+        if binding is None:
+            raise KeyError(f"unknown optimizer binding {bound_key}")
+        raw = optimize_bounds_source_view(config)["optimize"]["bounds"]
+        target = raw
+        for part in binding.bound_path[2:-1]:
+            target = target.setdefault(part, {})
+        target[binding.bound_path[-1]] = deepcopy(value)
+        prepare_bound_plan(config, authored_bounds=raw)
+        return
     bounds = config.get("optimize", {}).get("bounds", {})
     strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     _, use_flat_bounds = _flat_optimize_bounds_for_config(config)
@@ -2874,6 +2941,13 @@ def _format_bound_key_for_log(config: dict, bound_key: str, path=None) -> str:
 def _resolve_bound_selectors_for_config(
     config: dict, selectors, label: str
 ) -> set[str]:
+    from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
+    plan = get_bound_plan(config)
+    if plan is not None:
+        selected = resolve_plan_selectors(config, selectors)
+        for key, path in selected.items():
+            logging.info("%s selector binding: %s (%s)", label, key, ".".join(path))
+        return set(selected)
     flat_bounds, _ = _flat_optimize_bounds_for_config(config)
     resolved: set[str] = set()
     selectors_sorted = sorted(
@@ -3057,6 +3131,9 @@ def install_anchored_fine_tune_plan(
             base_key_paths, extract_bounds_tuple_list_from_config(config)
         )
     }
+    from config.inherited_bounds import get_bound_plan
+    binding_plan = get_bound_plan(config)
+    binding_by_key = {binding.key: binding for binding in binding_plan.bindings} if binding_plan is not None else {}
     sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
     clamp_collector = {}
     starting_configs = (
@@ -3087,7 +3164,10 @@ def install_anchored_fine_tune_plan(
                 if path is None or bound is None:
                     continue
                 anchor_path = resolve_optimization_bound_path(anchor_cfg, key) or path
-                original = _get_path_value(anchor_cfg, anchor_path)
+                original = _optimizer_binding_seed_value(
+                    anchor_cfg, anchor_path,
+                    binding_by_key[key].effective_targets if key in binding_by_key else (),
+                )
                 adjusted = _clamp_seed_value(original, bound, sig_digits)
                 _record_seed_bounds_adjustment(
                     source=source,
@@ -3189,9 +3269,12 @@ def _format_starting_seed_bot(bot, live=None):
     seed enablement and old fitness are never runtime authority.
     """
     from config.authored import validate_authored_config
+    from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy
     from config.migrations.v9 import reject_retired_v9_fields
+    from config.schema import get_expanded_config_prototype
 
     bot = deepcopy(bot)
+    source_bot = deepcopy(bot)
     live = deepcopy(live) if isinstance(live, dict) else {}
     template = get_template_config()
     try:
@@ -3204,7 +3287,7 @@ def _format_starting_seed_bot(bot, live=None):
     # runtime policy first, or replace an invalid suggestion with a default.
     for field in _starting_live_numeric_seed(live):
         live[field] = deepcopy(template["live"][field])
-    defaults = template["bot"]["long"]["hsl"]
+    defaults = get_expanded_config_prototype()["bot"]["long"]["hsl"]
     numeric_fields = (
         "drawdown_ratio_threshold", "memory_ema_span_minutes",
         "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes",
@@ -3225,6 +3308,7 @@ def _format_starting_seed_bot(bot, live=None):
             numeric_seeds[(*path, key)] = number
 
     for scope, path in (
+        ("global", ("global", "hsl")),
         ("long", ("long", "hsl")),
         ("short", ("short", "hsl")),
         ("portfolio", ("portfolio", "hsl")),
@@ -3251,12 +3335,17 @@ def _format_starting_seed_bot(bot, live=None):
         remember(block, ("memory_ema_span_minutes",), path)
         if "memory_ema_span_minutes" in block:
             block["memory_ema_span_minutes"] = default["memory_ema_span_minutes"]
-    formatted = format_bot_config(bot, live_cfg=live, verbose=False, warn_deprecations=False)
+    effective = resolve_bot_policy(bot, get_side_field_catalog()).effective_view()
+    formatted = format_bot_config(effective, live_cfg=live, verbose=False, warn_deprecations=False)
     for path, value in numeric_seeds.items():
         block = formatted
         for key in path[:-1]:
             block = block[key]
         block[path[-1]] = value
+        if path[0] == "global":
+            for side in ("long", "short"):
+                if path[-1] not in source_bot.get(side, {}).get(path[1], {}):
+                    formatted[side][path[1]][path[-1]] = value
     return formatted
 
 
@@ -3340,7 +3429,9 @@ def _build_starting_seed_config(cfg):
         extracted = {**cfg, "bot": _format_starting_seed_bot(cfg["bot"], cfg.get("live"))}
     else:
         extracted = _extract_starting_config(cfg)
-    seed = get_template_config()
+    from config.schema import get_expanded_config_prototype
+
+    seed = get_expanded_config_prototype()
     seed["bot"] = deep_updated(seed["bot"], deepcopy(extracted["bot"]))
     if isinstance(extracted.get("live"), dict):
         seed["live"] = deep_updated(seed["live"], deepcopy(extracted["live"]))
@@ -3585,6 +3676,18 @@ def configs_to_individuals_streaming(
     for anchor_idx, cfg in enumerate(cfgs):
         raw_count += 1
         try:
+            seed_shape = optimization_shape
+            if seed_shape is None and key_paths is None:
+                from config.inherited_bounds import get_bound_plan
+
+                if get_bound_plan(cfg) is not None:
+                    prepared_shape = build_optimization_shape(cfg)
+                    if len(prepared_shape.bounds) != len(bounds):
+                        raise ValueError("seed bounds do not match its prepared binding plan")
+                    seed_shape = OptimizationShape(
+                        bounds=tuple(bounds), key_paths=prepared_shape.key_paths,
+                        sig_digits=sig_digits, binding_targets=prepared_shape.binding_targets,
+                    )
             fcfg = _build_starting_seed_config(cfg)
             resolved_anchor_id = None
             if anchored_shape:
@@ -3607,7 +3710,7 @@ def configs_to_individuals_streaming(
                 bounds,
                 sig_digits,
                 key_paths=key_paths,
-                optimization_shape=optimization_shape,
+                optimization_shape=seed_shape,
                 anchor_id=resolved_anchor_id,
                 clamp_context="starting config",
                 source=(
@@ -3785,11 +3888,8 @@ async def main():
         # Only source policy crosses staging. Hydrated numeric values, bounds
         # and limits must not acquire authored authority in normal preparation.
         source_config = deepcopy(source_config)
-        source_config.setdefault("bot", {}).setdefault("global", {}).setdefault("universe", {})["approved_coins"] = deepcopy(
-            staged["bot"]["global"]["universe"]["approved_coins"]
-        )
-        for field in ("approved_coins", "ignored_coins"):
-            set_side_universe_sources(source_config, field, raw_side_universe_sources(staged, field))
+        from config.universe import copy_universe_source_policy
+        copy_universe_source_policy(source_config, staged)
         for selector in fixed_sources:
             if universe_sources_affected({selector: fixed_sources[selector]}):
                 source_config["optimize"]["fixed_runtime_overrides"][selector] = deepcopy(
@@ -3915,9 +4015,18 @@ async def main():
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     validate_optimizer_effective_configs(config)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    # Freeze routing facts only after required metadata is available, including
+    # cached-data runs. Resume must not depend on a previously warmed alias map.
+    identity_exchanges = dict.fromkeys([
+        *backtest_exchanges, *(config["backtest"].get("coin_sources") or {}).values(),
+    ])
+    for exchange in identity_exchanges:
+        if str(exchange).lower() != "fake":
+            await load_markets(exchange, offline=config["backtest"].get("offline", False))
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
+    refresh_optimizer_source_bindings(config)
     if config["backtest"].get("organillo_csv") is not None:
         from organillo import freeze_config
         freeze_config(config)
@@ -4078,6 +4187,7 @@ async def main():
                     candle_coins_dict[exchange] = tuple(source_coins)
         if not suite_enabled:
             _propagate_prepared_optimizer_universe(config, data_config)
+        refresh_optimizer_source_bindings(config)
         config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
             config=config,
             hlcvs_specs=hlcvs_specs,

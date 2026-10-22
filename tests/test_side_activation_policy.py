@@ -7,7 +7,7 @@ import pytest
 
 from config.activation import side_activation, side_enabled, validate_side_activation
 from config.load import prepare_config
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 
 
 def prepare(source, **kwargs):
@@ -70,7 +70,10 @@ def test_numeric_capacity_never_rewrites_explicit_activation(side, flag, capacit
 def test_activation_defaults_are_false_fixed_policy_and_not_coin_overridable():
     from config.field_registry import describe_field
 
-    defaults = get_template_config()
+    source = get_template_config()
+    assert "enabled" not in source["bot"]["long"]
+    assert "enabled" not in source["bot"]["short"]
+    defaults = prepare(source, live_only=True, verbose=False)
     for owner in ("global", "long", "short"):
         assert defaults["bot"][owner]["enabled"] is False
         record = describe_field(f"bot.{owner}.enabled")
@@ -138,7 +141,7 @@ def test_authored_projection_json_retains_omission_but_effective_json_is_snapsho
                      live_only=True, verbose=False)
     authored = json.loads(json.dumps(activation_source_view(config)))
     inspected = json.loads(json.dumps(config))
-    assert "enabled" not in authored["bot"]["long"]
+    assert "enabled" not in authored["bot"].get("long", {})
     assert inspected["bot"]["long"]["enabled"] is True
     authored["bot"]["global"]["enabled"] = False
     inspected["bot"]["global"]["enabled"] = False
@@ -171,7 +174,7 @@ def test_compact_retains_explicit_false_and_omits_derived_inheritance():
     result = compact_config(effective)
     assert result["bot"]["global"]["enabled"] is True
     assert result["bot"]["short"]["enabled"] is False
-    assert "enabled" not in result["bot"]["long"]
+    assert "enabled" not in result["bot"].get("long", {})
 
 
 @pytest.mark.parametrize("base,fixed,scenarios,expected", [
@@ -222,7 +225,7 @@ def test_numeric_search_never_grants_activation_but_fixed_scenario_permission_re
     config = prepare(source, live_only=True, verbose=False)
     pairs = dict(zip((key for key, _ in get_optimization_key_paths(config)),
                      extract_bounds_tuple_list_from_config(config)))
-    bound = pairs["long_unstuck_close_pct"]
+    bound = pairs["bot.long.unstuck.close_fraction"]
     assert bound.low == 0.01
     assert bound.high == (0.12 if flag else 0.01)
     assert side_activation(config) == dict.fromkeys(("long", "short"), flag if channel == "base" else False)
@@ -234,7 +237,8 @@ def test_evaluation_identity_applies_global_fixed_permission_without_pinning_inh
     source = {"bot": {}, "optimize": {"fixed_runtime_overrides": {"bot.global.enabled": True}}}
     effective = prepare(source, live_only=True, verbose=False)
     contract = build_evaluation_contract(effective)
-    assert {side: contract["bot"][side]["enabled"] for side in ("long", "short")} == {"long": True, "short": True}
+    assert "enabled" not in contract["bot"].get("long", {})
+    assert side_activation(prepare({"bot": contract["bot"]}, live_only=True, verbose=False)) == {"long": True, "short": True}
     effective["bot"]["short"]["enabled"] = True
     from optimization.warmup import _apply_config_overrides
     _apply_config_overrides(effective, {"bot.short.enabled": False})
@@ -247,7 +251,7 @@ def test_canonical_cli_activation_flags_and_equal_false_pin(command):
     from config_utils import add_arguments_recursively, update_config_with_args
 
     parser = argparse.ArgumentParser()
-    add_arguments_recursively(parser, get_template_config(), command=command)
+    add_arguments_recursively(parser, get_expanded_config_prototype(), command=command)
     args = parser.parse_args(["--bot.global.enabled", "y", "--bot.short.enabled", "n"])
     config = prepare({"bot": {}}, live_only=True, verbose=False)
     update_config_with_args(config, args)
@@ -261,7 +265,7 @@ def test_explanation_reports_global_inheritance_and_explicit_false_pin():
     long = explain_config(source, "bot.long.enabled")
     short = explain_config(source, "bot.short.enabled")
     assert long["value"] is True
-    assert long["sources"][-1] == {"kind": "inherited", "path": "bot.global.enabled", "value": True}
+    assert long["sources"][-1] == {"kind": "inherited", "path": "bot.global.enabled", "target": "bot.long.enabled", "value": True}
     assert short["value"] is False
     assert short["sources"][-1]["kind"] == "authored"
 
@@ -283,7 +287,7 @@ def test_released_v8_materializes_true_both_and_preserves_zero_capacity_search(k
     assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
     bounds = dict(zip((key for key, _ in get_optimization_key_paths(config)),
                       extract_bounds_tuple_list_from_config(config)))
-    assert bounds["short_total_wallet_exposure_limit"].high > 0
+    assert bounds["bot.short.risk.total_wallet_exposure_limit"].high > 0
     for side in ("long", "short"):
         records = [item for item in converted.changes if item["path"] == f"bot.{side}.enabled"]
         assert len(records) == 1 and records[0]["new"] is True

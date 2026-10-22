@@ -6,6 +6,23 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Resolve every directional bot setting from common `bot.global` defaults and sparse
+  `bot.long`/`bot.short` leaf overrides. Explicit equal values, false, zero and empty lists
+  remain pins; ignored null clears while side approval null inherits. Both sides share the
+  deliberately retained long starter profile, with activation still disabled by default and
+  exposure budgets remaining per side. Authored exports retain inheritance and source bindings;
+  optimizer results additionally retain derived values needed for ordinary replay.
+  A global optimizer range owns one coordinate feeding its inheriting sides; explicit side
+  ranges are independent, and omitted ranges stay fixed. Resume and execution identities retain
+  this binding authority, including equal-valued side pin ownership. Prepared approvals retain
+  acquisition and routing facts before ignored-coin filtering; ignore-only patches recompute
+  eligibility within prepared venue and column limits without rereading source files during replay.
+  Forager hysteresis now honors each resolved side policy in live,
+  native backtests and supported GPU replay, with directional margins validated during config
+  loading. Preflight and config diffs resolve inherited side policy, validate directional HSL in
+  every scope and retain explicit declaration changes. Direct released-v8 migration materializes its
+  historical directional profiles and search ranges rather than adopting the common profile.
+
 - Add explicit side activation: `bot.global.enabled` defaults false, omitted directional flags
   inherit it, and explicit side booleans pin permission. Disabled sides cannot open or increase
   exposure; numeric capacities, operational modes and held-position close/protection policy remain

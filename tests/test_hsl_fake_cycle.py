@@ -1,6 +1,6 @@
 """The standard offline fake runner exercises the production hsl owner."""
 
-from hsl_fixture import set_risk_memory_spans
+from hsl_fixture import set_risk_memory_spans, mutable_runtime_fixture
 
 import argparse
 import json
@@ -29,7 +29,7 @@ async def test_standard_fake_runner_hsl_execution_and_trace(
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False

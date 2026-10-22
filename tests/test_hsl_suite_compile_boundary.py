@@ -8,13 +8,13 @@ import pytest
 from config.hsl import generated_template
 from config.migrations.v9 import require_v9_runtime_config
 from config.runtime_compile import compile_runtime_config
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 from optimize import SuiteEvaluator, _apply_config_overrides
 
 
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_scenario_override_stays_canonical_and_lowers_effective_policy_once(mode):
-    config = generated_template(get_template_config(), mode)
+    config = generated_template(get_expanded_config_prototype(), mode)
     scope = ("bot", "portfolio", "hsl") if mode == "portfolio" else ("bot", "long", "hsl")
     policy = config
     for key in scope:
@@ -47,7 +47,7 @@ def test_scenario_override_stays_canonical_and_lowers_effective_policy_once(mode
 
 
 def test_fixed_override_does_not_inject_runtime_aliases_into_authored_config():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     _apply_config_overrides(config, {"bot.long.risk.max_positions": 3.0})
     require_v9_runtime_config(config)
     assert config["bot"]["long"]["risk"]["max_positions"] == 3.0
