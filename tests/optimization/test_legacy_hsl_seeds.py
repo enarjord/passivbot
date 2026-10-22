@@ -6,7 +6,7 @@ import pytest
 
 from config import prepare_config
 from config.hsl import generated_template
-from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
+from config.schema import CONFIG_SCHEMA_VERSION, get_template_config, get_expanded_config_prototype
 from optimization.bounds import Bound
 from optimize import (
     StartingConfigSchemaError, _build_starting_seed_config,
@@ -91,11 +91,13 @@ def test_bot_only_old_policy_cannot_bypass_migration():
 
 def test_current_numeric_seed_clamps_under_the_main_finite_policy(tmp_path):
     from optimize import individual_to_config
-    base=prepare_config(generated_template(get_template_config()),verbose=False)
-    base['bot']['long']['hsl'].update(enabled=True,cooldown_after_red_minutes=12.5)
+    raw = generated_template(get_expanded_config_prototype())
+    raw['bot']['long']['hsl'].update(enabled=True, cooldown_after_red_minutes=12.5)
+    raw['optimize']['bounds'] = {'long': {'hsl': {'drawdown_ratio_threshold': [0.1, 0.4]}}}
+    base = prepare_config(raw, verbose=False)
     cfg=deepcopy(base);cfg['bot']['long']['hsl'].update(enabled=False,drawdown_ratio_threshold=2.0)
     seeds=extract_configs(str(save(tmp_path,cfg,'json')))
-    keys=[('long_hsl_red_threshold',('bot','long','hsl','drawdown_ratio_threshold'))]
+    keys=[('bot.long.hsl.drawdown_ratio_threshold',('bot','long','hsl','drawdown_ratio_threshold'))]
     values,count=configs_to_individuals_streaming(seeds,[Bound.from_config(keys[0][0],[0.1,0.4])],sig_digits=6,key_paths=keys)
     assert count==1 and values==[(0.4,)]
     result=individual_to_config(values[0],{},[],base,key_paths=keys)
@@ -108,7 +110,7 @@ def test_current_numeric_seed_clamps_under_the_main_finite_policy(tmp_path):
 @pytest.mark.parametrize('value',[float('nan'),float('inf'),float('-inf'),'NaN'])
 @pytest.mark.parametrize('artifact',['json','pareto'])
 def test_nonfinite_current_numeric_seed_is_skipped(field,value,artifact,tmp_path,caplog):
-    cfg=get_template_config()
+    cfg=get_expanded_config_prototype()
     cfg['bot']['long']['hsl'][field]=str(value) if artifact=='json' else value
     assert extract_configs(str(save(tmp_path,cfg,artifact)))==[]
     assert 'risk optimizer seed value' in caplog.text
@@ -190,7 +192,7 @@ RISK_SPAN_PATHS = [
 
 def span_seed_config(path, value):
     mode = "portfolio" if path[1:3] == ("portfolio", "hsl") else "coin"
-    config = generated_template(get_template_config(), mode)
+    config = generated_template(get_expanded_config_prototype(), mode)
     node = config
     for key in path[:-1]:
         node = node[key]
@@ -221,7 +223,7 @@ def test_invalid_independent_risk_span_seed_is_skipped_without_default_substitut
 
 
 def test_seed_unknown_bot_field_is_rejected_before_formatting_can_drop_it(tmp_path):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["hsl"]["red_thresold"] = 0.2
     with pytest.raises(StartingConfigSchemaError, match="red_thresold.*unknown"):
         extract_configs(str(save(tmp_path, config, "json")))
@@ -241,7 +243,7 @@ def test_direct_in_memory_seed_cannot_bypass_risk_numeric_validation(path, value
 
 
 def test_direct_in_memory_seed_cannot_bypass_unknown_field_validation():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["hsl"]["red_thresold"] = 0.2
     with pytest.raises(StartingConfigSchemaError, match="red_thresold.*unknown"):
         _build_starting_seed_config(config)
