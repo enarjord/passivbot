@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import passivbot as live
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 FIRST = 1_704_067_200_000
@@ -15,7 +15,7 @@ SIDES = ("long", "short")
 
 def _bot(*, ages=(2.5, 0.0), enabled=(True, True), exchange="binance"):
     bot = object.__new__(live.Passivbot)
-    bot.config = get_template_config()
+    bot.config = get_expanded_config_prototype()
     for side, days, active in zip(SIDES, ages, enabled):
         bot.config["bot"][side]["enabled"] = active
         bot.config["bot"][side]["universe"]["minimum_coin_age_days"] = days

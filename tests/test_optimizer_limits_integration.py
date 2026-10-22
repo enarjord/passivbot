@@ -4,15 +4,16 @@ import pytest
 
 from backtest import expand_analysis
 from config_utils import get_template_config
+from config import prepare_config
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
 from optimize import Evaluator
 
 
 def _make_config(limits, scoring=None):
     cfg = deepcopy(get_template_config())
-    cfg["optimize"]["scoring"] = scoring or ["adg"]
+    cfg["optimize"]["scoring"] = scoring or ["adg_usd"]
     cfg["optimize"]["limits"] = limits
-    return cfg
+    return prepare_config(cfg, verbose=False)
 
 
 @pytest.mark.parametrize("ratio", [0.1, 0.2, 0.3, 0.5, 1.5, -0.5])
@@ -24,7 +25,7 @@ def test_profit_ratio_alias_matches_canonical_limit_fitness(ratio):
         )
         evaluator = Evaluator({}, {}, {}, cfg)
         results.append(
-            evaluator.calc_fitness({"adg_mean": 0.001, "pnl_ratio_long_short_mean": ratio})
+            evaluator.calc_fitness({"adg_usd_mean": 0.001, "pnl_ratio_long_short_mean": ratio})
         )
     assert results[0] == results[1]
     assert (results[0][1] > 0.0) == (ratio <= 0.2)
@@ -32,20 +33,20 @@ def test_profit_ratio_alias_matches_canonical_limit_fitness(ratio):
 
 def test_evaluator_applies_limit_penalties():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
-        {"metric": "adg", "penalize_if": "less_than", "value": 0.001, "stat": "min"},
+        {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.4, "reducer": "max"},
+        {"metric": "adg_usd", "penalize_if": "less_than", "value": 0.001, "reducer": "min"},
         {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.2, 0.5]},
-        {"metric": "omega_ratio", "penalize_if": "inside_range", "range": [1.0, 1.5]},
+        {"metric": "omega_ratio_usd", "penalize_if": "inside_range", "range": [1.0, 1.5]},
     ]
     cfg = _make_config(limits)
     evaluator = Evaluator({}, {}, {}, cfg)
 
     stats = {
-        "drawdown_worst_max": 0.45,
-        "adg_mean": 0.001,
-        "adg_min": 0.0008,
+        "drawdown_worst_usd_max": 0.45,
+        "adg_usd_mean": 0.001,
+        "adg_usd_min": 0.0008,
         "loss_profit_ratio_mean": 0.55,
-        "omega_ratio_mean": 1.2,
+        "omega_ratio_usd_mean": 1.2,
     }
     expected_modifier = (
         (0.45 - 0.4) * 1e6 + (0.001 - 0.0008) * 1e6 + (0.55 - 0.5) * 1e6 + min(0.2, 0.3) * 1e6
@@ -58,19 +59,19 @@ def test_evaluator_applies_limit_penalties():
 
 def test_evaluator_returns_weighted_metric_when_within_limits():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
-        {"metric": "adg", "penalize_if": "less_than", "value": 0.001},
+        {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.4, "reducer": "max"},
+        {"metric": "adg_usd", "penalize_if": "less_than", "value": 0.001},
         {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.2, 0.5]},
-        {"metric": "omega_ratio", "penalize_if": "inside_range", "range": [1.0, 1.5]},
+        {"metric": "omega_ratio_usd", "penalize_if": "inside_range", "range": [1.0, 1.5]},
     ]
     cfg = _make_config(limits)
     evaluator = Evaluator({}, {}, {}, cfg)
 
     stats = {
-        "drawdown_worst_max": 0.2,
-        "adg_mean": 0.002,
+        "drawdown_worst_usd_max": 0.2,
+        "adg_usd_mean": 0.002,
         "loss_profit_ratio_mean": 0.3,
-        "omega_ratio_mean": 1.8,
+        "omega_ratio_usd_mean": 1.8,
     }
 
     scores, penalty = evaluator.calc_fitness(stats)
@@ -80,13 +81,13 @@ def test_evaluator_returns_weighted_metric_when_within_limits():
 
 def test_evaluator_can_score_one_metric_source_and_limit_another():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
+        {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.4, "reducer": "max"},
     ]
-    cfg = _make_config(limits, scoring=["adg"])
+    cfg = _make_config(limits, scoring=["adg_usd"])
     evaluator = Evaluator({}, {}, {}, cfg)
 
-    objective_stats = {"adg_mean": 0.002}
-    suite_limit_stats = {"drawdown_worst_max": 0.45}
+    objective_stats = {"adg_usd_mean": 0.002}
+    suite_limit_stats = {"drawdown_worst_usd_max": 0.45}
     scores, penalty = evaluator.calc_fitness(
         objective_stats,
         limit_metrics=suite_limit_stats,
@@ -103,14 +104,14 @@ def test_limit_penalty_applies_only_to_matching_objective():
             "metric": "loss_profit_ratio",
             "penalize_if": "greater_than",
             "value": 0.5,
-            "stat": "mean",
+            "reducer": "mean",
         },
     ]
-    cfg = _make_config(limits, scoring=["adg", "loss_profit_ratio"])
+    cfg = _make_config(limits, scoring=["adg_usd", "loss_profit_ratio"])
     evaluator = Evaluator({}, {}, {}, cfg)
 
     stats = {
-        "adg_mean": 0.0015,
+        "adg_usd_mean": 0.0015,
         "loss_profit_ratio_mean": 0.6,
     }
     scores, penalty = evaluator.calc_fitness(stats)
@@ -121,14 +122,14 @@ def test_limit_penalty_applies_only_to_matching_objective():
 
 def test_limit_penalty_remains_global_for_non_scoring_metric():
     limits = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
+        {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.4, "reducer": "max"},
     ]
-    cfg = _make_config(limits, scoring=["adg", "loss_profit_ratio"])
+    cfg = _make_config(limits, scoring=["adg_usd", "loss_profit_ratio"])
     evaluator = Evaluator({}, {}, {}, cfg)
     stats = {
-        "adg_mean": 0.001,
+        "adg_usd_mean": 0.001,
         "loss_profit_ratio_mean": 0.3,
-        "drawdown_worst_max": 0.6,
+        "drawdown_worst_usd_max": 0.6,
     }
     expected_penalty = (0.6 - 0.4) * 1e6
     scores, penalty = evaluator.calc_fitness(stats)
@@ -162,14 +163,14 @@ def test_missing_limit_metric_raises_instead_of_passing():
     limits = [
         {"metric": "fills_gap_p99_hours", "penalize_if": "greater_than", "value": 72.0},
     ]
-    cfg = _make_config(limits, scoring=["adg"])
+    cfg = _make_config(limits, scoring=["adg_usd"])
     evaluator = Evaluator({}, {}, {}, cfg)
 
     with pytest.raises(
         ValueError,
         match="missing optimizer limit metric 'fills_gap_p99_hours_mean'",
     ):
-        evaluator.calc_fitness({"adg_mean": 0.001})
+        evaluator.calc_fitness({"adg_usd_mean": 0.001})
 
 
 def test_missing_scoring_metric_raises_instead_of_zeroing():
@@ -180,7 +181,7 @@ def test_missing_scoring_metric_raises_instead_of_zeroing():
         ValueError,
         match="missing optimizer scoring metric 'fills_gap_p99_hours'",
     ):
-        evaluator.calc_fitness({"adg_mean": 0.001})
+        evaluator.calc_fitness({"adg_usd_mean": 0.001})
 
 
 def test_fill_gap_limit_uses_aggregate_default_stat():
@@ -191,10 +192,10 @@ def test_fill_gap_limit_uses_aggregate_default_stat():
             "value": 72.0,
         },
     ]
-    cfg = _make_config(limits, scoring=["adg"])
+    cfg = _make_config(limits, scoring=["adg_usd"])
     evaluator = Evaluator({}, {}, {}, cfg)
     stats = {
-        "adg_mean": 0.001,
+        "adg_usd_mean": 0.001,
         "fills_gap_p99_hours_mean": 73.0,
     }
 
@@ -210,13 +211,13 @@ def test_fill_gap_limit_honors_explicit_max_stat():
             "metric": "fills_gap_p99_hours",
             "penalize_if": "greater_than_or_equal",
             "value": 72.0,
-            "stat": "max",
+            "reducer": "max",
         },
     ]
-    cfg = _make_config(limits, scoring=["adg"])
+    cfg = _make_config(limits, scoring=["adg_usd"])
     evaluator = Evaluator({}, {}, {}, cfg)
     stats = {
-        "adg_mean": 0.001,
+        "adg_usd_mean": 0.001,
         "fills_gap_p99_hours_mean": 10.0,
         "fills_gap_p99_hours_max": 73.0,
     }
@@ -233,16 +234,16 @@ def test_limit_can_use_median_stat_emitted_by_metric_schema():
             "metric": "fills_gap_p99_hours",
             "penalize_if": "greater_than",
             "value": 4.0,
-            "stat": "median",
+            "reducer": "median",
         },
     ]
-    cfg = _make_config(limits, scoring=["adg"])
+    cfg = _make_config(limits, scoring=["adg_usd"])
     flat_stats = flatten_metric_stats(
         build_scenario_metrics(
             {
-                "binance": {"adg": 0.001, "fills_gap_p99_hours": 1.0},
-                "bybit": {"adg": 0.001, "fills_gap_p99_hours": 5.0},
-                "kucoin": {"adg": 0.001, "fills_gap_p99_hours": 100.0},
+                "binance": {"adg_usd": 0.001, "fills_gap_p99_hours": 1.0},
+                "bybit": {"adg_usd": 0.001, "fills_gap_p99_hours": 5.0},
+                "kucoin": {"adg_usd": 0.001, "fills_gap_p99_hours": 100.0},
             }
         )["stats"]
     )
@@ -265,7 +266,7 @@ def test_evaluator_combines_scenario_specific_and_suite_stat_limit_penalties():
         {
             "metric": "drawdown_worst_strategy_eq",
             "penalize_if": "greater_than",
-            "stat": "max",
+            "reducer": "max",
             "value": 0.7,
         },
     ]
@@ -300,7 +301,7 @@ def test_scenario_specific_limit_requires_suite_metrics():
     with pytest.raises(ValueError, match="requires suite mode"):
         evaluator.calc_fitness(
             {
-                "adg_mean": 0.001,
+                "adg_usd_mean": 0.001,
                 "drawdown_worst_strategy_eq_mean": 0.6,
             }
         )

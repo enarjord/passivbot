@@ -47,7 +47,8 @@ def test_unused_backtest_cap_never_overrides_or_supplies_the_shared_live_cap(
         source["live"]["max_warmup_minutes"] = live_cap
     original = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5, best_effort=best_effort)
-    assert result.config["bot"]["portfolio"]["warmup"]["max_minutes"] == (
+    effective = prepare_config(result.config, verbose=False)
+    assert effective["bot"]["portfolio"]["warmup"]["max_minutes"] == (
         live_cap if live_cap else None
     )
     assert "max_warmup_minutes" not in result.config["backtest"]

@@ -40,6 +40,7 @@ from passivbot import Passivbot, _parse_balance_override
 import passivbot as passivbot_module
 import fill_events_manager as fem
 from config import get_template_config, prepare_config
+from config.schema import get_expanded_config_prototype
 from freshness_ledger import ACCOUNT_SURFACES, FreshnessLedger
 from logging_setup import DEFAULT_DATEFMT, DEFAULT_FORMAT_WITH_PREFIX
 from market_snapshot import MarketSnapshot
@@ -59,7 +60,7 @@ from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 
 def _unit_config(patch):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
 
     def merge(target, values):
         for key, value in values.items():
@@ -135,7 +136,7 @@ def test_parse_balance_override_accepts_disabled_and_positive_values(
 
 
 def test_passivbot_init_rejects_boolean_balance_override_before_coercion(monkeypatch):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["live"]["account"]["user"] = "test_user"
     config["live"]["account"]["balance_override"] = True
     monkeypatch.setattr(
