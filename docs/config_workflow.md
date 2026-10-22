@@ -39,8 +39,10 @@ passivbot live configs/private/my_config.json
 
 Use `passivbot tool clean-config input.json output.json` to produce a full schema-aligned config,
 or add `--mode live` for a lean live export. Use `--mode compact` for an editable authored view
-that preserves search and override authority, or `--mode resolved` to inline local coin files and
-capture effective defaults. Inspect a setting with `passivbot tool config-explain input.json PATH`.
+that preserves common defaults and explicit side/search/override pins, or `--mode resolved` to
+inline local coin files while retaining that source authority. Expanded effective values and
+origins are available in inspection output. Inspect a setting with
+`passivbot tool config-explain input.json PATH`.
 Formatting only is available with `--mode format`.
 Inputs stay untouched by default; replacement requires `--in-place`. See
 [Config cleanup and formatting](tools.md#config-cleanup-and-formatting) for bulk depth, HJSON,
