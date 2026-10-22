@@ -12,7 +12,7 @@ from utils import looks_like_exact_market_identifier, symbol_to_coin
 
 from .load import load_input_config, prepare_config
 from .log_output import log_config_message
-from .schema import get_template_config
+from .schema import get_expanded_config_prototype
 from .coerce import normalize_hsl_signal_mode
 from .field_policies import (
     CONDITIONAL_HSL_OVERRIDE_PATHS,
@@ -406,7 +406,7 @@ def _get_nested_value(config: dict, path: tuple[str, ...], *, default=None):
 def _validate_patch_leaf_types(
     config: dict, patch: dict, *, coin: str, origin: str
 ) -> None:
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     for path, value in _iter_patch_leaves(patch):
         display_path = f"{_format_override_path(coin, path)} ({origin})"
         from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
@@ -510,7 +510,7 @@ def _validate_effective_coin_config(
     from .hsl import normalization_template, validate_override_paths
 
     validate_override_paths(effective, patch)
-    validation_input = normalization_template(get_template_config(), effective)
+    validation_input = normalization_template(get_expanded_config_prototype(), effective)
     nested_update(validation_input, effective)
     effective = validation_input
     canonical_base = deepcopy(effective)
@@ -627,7 +627,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
             }
     _validate_patch_leaf_types(config, wallet_patch, coin=coin, origin=source)
     validation.setdefault("config_version", config["config_version"])
-    validate_authored_config(validation, get_template_config(), policy_context=config)
+    validate_authored_config(validation, get_expanded_config_prototype(), policy_context=config)
     validation.setdefault("bot", {}).setdefault("portfolio", {}).setdefault("strategy_kind", strategy_kind)
 
     with _override_file_validation(resolved_path):

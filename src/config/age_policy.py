@@ -5,7 +5,7 @@ import math
 from .access import require_config_value
 
 
-AGE_PATHS = frozenset(("bot", side, "universe", "minimum_coin_age_days") for side in ("long", "short"))
+AGE_PATHS = frozenset(("bot", side, "universe", "minimum_coin_age_days") for side in ("global", "long", "short"))
 
 
 def validate_age_value(value, *, path):

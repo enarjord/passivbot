@@ -263,7 +263,7 @@ _SHARED_SIDE_FIELDS = {
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
         forager.score_weights.volatility forager.score_weights.volume
         forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
-        forager.volume_ema_span_minutes hsl.memory_ema_span_minutes
+        forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
         hsl.cooldown_after_red_minutes hsl.drawdown_ratio_ema_span_minutes hsl.drawdown_ratio_threshold
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
@@ -294,10 +294,10 @@ def _template_value(template, path):
 
 def get_field_registry() -> FieldRegistry:
     """Return a fresh registry; returned defaults never mutate schema defaults."""
-    from .schema import get_template_config
+    from .schema import get_expanded_config_prototype
     from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     fields = []
 
     def add(path, types, *, nullable=False, source="python", unit=None,
@@ -382,7 +382,6 @@ def get_field_registry() -> FieldRegistry:
         (FieldType.INTEGER, FieldType.STRING))
     for name in ("mutation_prob", "mutation_prob_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
-    add("bot.global.universe.approved_coins", (FieldType.ARRAY, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
         for side in ("long", "short"):
             add(f"bot.{side}.universe.{name}", (FieldType.ARRAY, FieldType.STRING), nullable=True)
@@ -427,4 +426,23 @@ def get_field_registry() -> FieldRegistry:
             unit="milliseconds", domain=FieldDomain(minimum=0))
     from .field_metadata import enrich_fields
 
-    return FieldRegistry(enrich_fields(fields))
+    enriched = enrich_fields(fields)
+    from dataclasses import replace
+    # The exact paired directional registry is the inheritability catalog.
+    # A common field has no independent native parameter ID: its binding owns
+    # the already registered directional target IDs.
+    common = []
+    existing = {field.path for field in enriched}
+    for field in enriched:
+        if field.path[:2] != ("bot", "long"):
+            continue
+        path = ("bot", "global", *field.path[2:])
+        if path in existing:
+            continue
+        common.append(replace(
+            field, path=path, default=_template_value(template, path), scope="global",
+            nullable=field.nullable and path[-1] != "approved_coins",
+            optimize_key=None, coin_override=CoinOverridePolicy.FORBIDDEN,
+            order=len(enriched) + len(common),
+        ))
+    return FieldRegistry([*enriched, *common])

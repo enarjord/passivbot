@@ -43,8 +43,8 @@ def catalog():
 
 def real_catalog():
     from config.field_registry import get_field_registry
-    from config.schema import get_template_config
-    defaults = deepcopy(get_template_config()["bot"]["long"])
+    from config.bot_defaults import get_common_bot_defaults
+    defaults = get_common_bot_defaults()
     # An explicit test profile, not an implicit selection made by the resolver.
     defaults["universe"]["approved_coins"] = ["AAA"]
     return SideFieldCatalog.from_registry(get_field_registry(), common_defaults=defaults)

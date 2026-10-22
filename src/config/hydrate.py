@@ -222,14 +222,23 @@ def apply_non_live_adjustments(
     raw_optimize_limits_present: Optional[bool] = None,
 ) -> None:
     from .universe import resolve_universe_sources, materialize_side_universe_sources
+    from .universe import ResolvedCoinList
     for key in ("approved_coins", "ignored_coins"):
-        values, _ = resolve_universe_sources(result, key)
+        current = require_side_universe_sources(result, key)
+        # Numeric re-preparation retains trusted dataset membership. Explicit
+        # source declarations invalidate that typed view before reaching here.
+        values = {side: list(value) for side, value in current.items()
+                  if type(value) is ResolvedCoinList}
+        pending = tuple(side for side in ("long", "short") if side not in values)
+        if pending:
+            resolved, _ = resolve_universe_sources(result, key, position_sides=pending)
+            values.update(resolved)
         materialize_side_universe_sources(result, key, values)
     for pside in require_side_universe_sources(result, 'approved_coins'):
         from .universe import ResolvedCoinList
         current = result['bot'][pside]['universe']['approved_coins']
         result['bot'][pside]['universe']['approved_coins'] = ResolvedCoinList(
-            [coin for coin in current if coin not in result['bot'][pside]['universe']['ignored_coins']], current.source, current.shared_source
+            [coin for coin in current if coin not in result['bot'][pside]['universe']['ignored_coins']], current.source, current.shared_source, source_present=current.source_present
         )
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     result["backtest"]["coin_sources"] = normalize_backtest_coin_sources(

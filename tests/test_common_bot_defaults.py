@@ -6,7 +6,7 @@ import pytest
 
 from config.bot_defaults import get_common_bot_defaults
 from config.migrations.released_v8 import get_released_v8_defaults
-from config.schema import _get_shared_bot_defaults
+from config.schema import get_expanded_config_prototype
 from config.strategy_spec import (
     get_common_strategy_defaults,
     get_strategy_defaults,
@@ -32,10 +32,8 @@ def test_native_metadata_declares_one_common_profile_with_directional_ids(kind):
 
 def test_common_shared_profile_retains_former_long_values_and_separate_permission():
     common = get_common_bot_defaults()
-    former = _get_shared_bot_defaults()["long"]
-    for group, values in former.items():
-        for name, value in values.items():
-            assert common[group][name] == value
+    prototype = get_expanded_config_prototype()["bot"]
+    assert prototype["long"] == prototype["short"] == prototype["global"] == common
     assert common["enabled"] is False
     assert common["universe"]["approved_coins"] == []
     assert common["risk"]["total_wallet_exposure_limit"] == 1.5
