@@ -124,7 +124,7 @@ def test_coin_file_operational_values_keep_inline_precedence_after_grouping(tmp_
         "modes": {"long": "manual"},
         "account": {"leverage": 7},
     }
-    assert result.config["bot"]["long"]["forager"]["always_include"] == []
+    assert prepare_config(result.config, verbose=False)["bot"]["long"]["forager"]["always_include"] == []
 
 
 def test_cli_projection_keeps_nested_simulation_fee_settings():

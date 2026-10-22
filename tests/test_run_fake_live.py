@@ -13,7 +13,8 @@ import pytest
 import tools.run_fake_live as run_fake_live_module
 from fill_events_manager import FillEvent, FillEventCache
 from config_utils import load_config
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
+from hsl_fixture import mutable_runtime_fixture
 from exchanges.fake import FakeCCXTClient
 from live.event_bus import EventTypes, LiveEvent
 from passivbot import setup_bot
@@ -397,7 +398,7 @@ def test_extract_hsl_trace_returns_serializable_state():
 @pytest.mark.parametrize("gate_fraction,horizon_ms", [(0.0, 900_000), (0.5, 900_000), (1.0, 300_000)])
 @pytest.mark.parametrize("now_ms", [60_000, 2_000_000])
 def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fraction, horizon_ms, now_ms):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 15.0
     config["bot"]["portfolio"]["loss_gate"].update(
         memory_ema_span_minutes=3.0, max_drawdown_ratio=gate_fraction
@@ -855,6 +856,8 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             encoding="utf-8"
         )
     )
+    from config import prepare_config
+    base_config = mutable_runtime_fixture(prepare_config(base_config, verbose=False))
     global_threshold = base_config["bot"]["long"]["strategy"]["trailing_martingale"][
         "entry"
     ]["threshold_base_fraction"]

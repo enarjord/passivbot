@@ -12,7 +12,7 @@ import pytest
 import hlcv_preparation as hp
 import procedures
 import utils
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_store import OhlcvStore
 from simulation_data import (
@@ -201,7 +201,7 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     from utils import ts_to_date
     metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["binance"],
                               start_date=ts_to_date(START), end_date=ts_to_date(START + 9*60000),
@@ -486,7 +486,7 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
         data = json.loads(path.read_text())
         data["ETH"] = value
         path.write_text(json.dumps(data))
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
@@ -592,7 +592,8 @@ async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeyp
     from utils import ts_to_date
 
     monkeypatch.chdir(tmp_path)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(
         exchanges=["bybit", "hyperliquid"], start_date=ts_to_date(START),
         end_date=ts_to_date(START + 9 * 60000), compress_cache=False,
