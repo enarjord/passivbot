@@ -1034,6 +1034,71 @@ def resolve_released_v8_defaults(source):
     return result
 
 
+def materialize_released_v8_bot_defaults(config, *, changes):
+    """Pin root omissions to historical policy before current v9 consumers run.
+
+    Alias conflicts are audited by the caller first. Canonical leaf presence
+    prevents a frozen default from competing with an explicitly authored alias.
+    On present sides, missing unstuck spans remain owned by the coupled-span
+    migration, which reads these historical strategy horizons before freezing
+    new dimensions. Fully omitted sides retain the complete released profile.
+    Sparse coin files and replacement patches must never use this root stage.
+    """
+    from .final_v9 import canonical_released_v8_path
+
+    bot = config["bot"]
+    if not isinstance(bot, dict):
+        raise TypeError("bot must be a mapping")
+    omitted_sides = {side for side in ("long", "short") if side not in bot}
+    kind = (config.get("live", {}).get("strategy_kind")
+            or _RELEASED_V8_DEFAULTS["live"]["strategy_kind"])
+    defaults = resolve_released_v8_defaults(
+        {
+            "config_version": RELEASED_V8_SCHEMA_VERSION,
+            "bot": {side: {} for side in ("long", "short") if side in bot},
+            "live": {"strategy_kind": kind},
+        }
+    )["bot"]
+    present = set()
+
+    def remember(node, path):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                remember(value, (*path, *key.split(".")))
+        else:
+            present.add(canonical_released_v8_path(path))
+
+    for side in ("long", "short"):
+        if side in bot:
+            if not isinstance(bot[side], dict):
+                raise TypeError(f"bot.{side} must be a mapping")
+            remember(bot[side], ("bot", side))
+
+    def fill(target, frozen, path):
+        for key, value in frozen.items():
+            selected = (*path, key)
+            canonical = canonical_released_v8_path(selected)
+            if path[1] not in omitted_sides and canonical[-2:] in {
+                ("unstuck", "ema_span_0_minutes"), ("unstuck", "ema_span_1_minutes"),
+            }:
+                continue
+            if any(canonical[: len(authored)] == authored for authored in present):
+                continue
+            if isinstance(value, dict):
+                child = target.setdefault(key, {})
+                if isinstance(child, dict):
+                    fill(child, value, selected)
+                continue
+            target[key] = deepcopy(value)
+            changes.append(dict(
+                path=".".join(selected), old=None, new=deepcopy(value),
+                reason="materialized frozen released-v8 root bot default before v9 inheritance",
+            ))
+
+    for side in ("long", "short"):
+        fill(bot.setdefault(side, {}), defaults[side], ("bot", side))
+
+
 def materialize_released_v8_optimizer_bounds(config, *, changes):
     """Preserve released implicit search ranges after explicit structural conversion.
 

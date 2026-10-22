@@ -239,9 +239,8 @@ def reject_retired_gpu_selector(selector, value=None, *, context):
             reject_retired_gpu_selector(f"{selector}.{key}", child, context=context)
 
 
-def reject_v8_alias_conflicts(source):
-    """Reject two authored spellings of one value before precedence can erase it."""
-    from config.authored import _METADATA_KEYS
+def canonical_released_v8_path(parts):
+    """Identify one released authored leaf before aliases or defaults can erase it."""
     from config.optimize_bounds import SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
     from .renames import (
@@ -256,54 +255,61 @@ def reject_v8_alias_conflicts(source):
         ("live", "ohlcvs_1m_update_after_minutes"): "inactive_coin_candle_ttl_minutes",
         ("backtest", "panic_market_slippage_pct"): "market_order_slippage_pct",
     }
-    seen = {}
 
-    def canonical_path(parts):
-        # The audit is separate from transformation: aliases in one authored
-        # layer must agree, while a later file/inline layer may replace them.
-        parts = list(parts)
-        for marker in ("overrides", "fixed_runtime_overrides"):
-            if marker in parts:
-                start = len(parts) - 1 - parts[::-1].index(marker) + 1
-                if start < len(parts) and parts[start] in {"long", "short"}:
-                    parts.insert(start, "bot")
-        while parts[-1] in aliases:
-            parts[-1] = aliases[parts[-1]]
-        if tuple(parts[-2:]) in section_aliases:
-            parts[-1] = section_aliases[tuple(parts[-2:])]
-        if parts[-2:] == ["live", "memory_snapshot_interval_minutes"]:
-            parts[-2] = "logging"
-        if parts[-2:] == ["backtest", "exchange"]:
-            parts[-1] = "exchanges"
-        for index in range(len(parts) - 2):
-            if parts[index] == "bot" and parts[index + 1] in {"long", "short"}:
-                if parts[index + 2] in FLAT_BOT_KEY_TO_GROUP_PATH:
-                    parts[index + 2:index + 3] = FLAT_BOT_KEY_TO_GROUP_PATH[parts[index + 2]]
-                break
-        if len(parts) >= 3 and parts[-3:-1] == ["optimize", "bounds"]:
-            side, separator, flat = parts[-1].partition("_")
-            if separator and side in {"long", "short"}:
-                for group, mapping in SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY.items():
-                    if flat in mapping:
-                        local = mapping[flat]
-                        local_parts = (["weights_minutes", local.removeprefix("weights_minutes_")]
-                                       if local.startswith("weights_minutes_") else [local])
-                        parts[-1:] = [side, group, *local_parts]
-                        break
-        if parts[-2:] == ["risk", "entry_cooldown_minutes"]:
-            parts[-2:] = ["entry_cooldown", "base_duration_minutes"]
-        for group, old, new in (
-            ("risk", "n_positions", "max_positions"),
-            ("unstuck", "threshold", "exposure_trigger_ratio"),
-            ("unstuck", "ema_dist", "ema_distance_fraction"),
-            ("hsl", "red_threshold", "drawdown_ratio_threshold"),
-            ("hsl", "ema_span_minutes", "drawdown_ratio_ema_span_minutes"),
-        ):
-            if parts[-2:] == [group, old]:
-                parts[-1] = new
-        if parts[-2:-1] == ["trailing_martingale"] and parts[-1] in {"ema_span_0", "ema_span_1"}:
-            parts.insert(len(parts) - 1, "entry")
-        return tuple(parts)
+    # The audit is separate from transformation: aliases in one authored
+    # layer must agree, while a later file/inline layer may replace them.
+    parts = list(parts)
+    for marker in ("overrides", "fixed_runtime_overrides"):
+        if marker in parts:
+            start = len(parts) - 1 - parts[::-1].index(marker) + 1
+            if start < len(parts) and parts[start] in {"long", "short"}:
+                parts.insert(start, "bot")
+    while parts[-1] in aliases:
+        parts[-1] = aliases[parts[-1]]
+    if tuple(parts[-2:]) in section_aliases:
+        parts[-1] = section_aliases[tuple(parts[-2:])]
+    if parts[-2:] == ["live", "memory_snapshot_interval_minutes"]:
+        parts[-2] = "logging"
+    if parts[-2:] == ["backtest", "exchange"]:
+        parts[-1] = "exchanges"
+    for index in range(len(parts) - 2):
+        if parts[index] == "bot" and parts[index + 1] in {"long", "short"}:
+            if parts[index + 2] in FLAT_BOT_KEY_TO_GROUP_PATH:
+                parts[index + 2:index + 3] = FLAT_BOT_KEY_TO_GROUP_PATH[parts[index + 2]]
+            break
+    if len(parts) >= 3 and parts[-3:-1] == ["optimize", "bounds"]:
+        side, separator, flat = parts[-1].partition("_")
+        if separator and side in {"long", "short"}:
+            for group, mapping in SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY.items():
+                if flat in mapping:
+                    local = mapping[flat]
+                    local_parts = (["weights_minutes", local.removeprefix("weights_minutes_")]
+                                   if local.startswith("weights_minutes_") else [local])
+                    parts[-1:] = [side, group, *local_parts]
+                    break
+    if parts[-2:] == ["risk", "entry_cooldown_minutes"]:
+        parts[-2:] = ["entry_cooldown", "base_duration_minutes"]
+    for group, old, new in (
+        ("risk", "n_positions", "max_positions"),
+        ("unstuck", "threshold", "exposure_trigger_ratio"),
+        ("unstuck", "ema_dist", "ema_distance_fraction"),
+        ("hsl", "red_threshold", "drawdown_ratio_threshold"),
+        ("hsl", "ema_span_minutes", "drawdown_ratio_ema_span_minutes"),
+    ):
+        if parts[-2:] == [group, old]:
+            parts[-1] = new
+    if parts[-2:-1] == ["trailing_martingale"] and parts[-1] in {"ema_span_0", "ema_span_1"}:
+        parts.insert(len(parts) - 1, "entry")
+    from config.public_names import released_public_path
+
+    return released_public_path(parts)
+
+
+def reject_v8_alias_conflicts(source):
+    """Reject two authored spellings of one value before precedence can erase it."""
+    from config.authored import _METADATA_KEYS
+
+    seen = {}
 
     def visit(node, parts=()):
         if isinstance(node, dict):
@@ -317,7 +323,7 @@ def reject_v8_alias_conflicts(source):
             for index, child in enumerate(node):
                 visit(child, (*parts, str(index)))
         else:
-            path = canonical_path(parts)
+            path = canonical_released_v8_path(parts)
             value = [node] if parts[-2:] == ("backtest", "exchange") and isinstance(node, str) else node
             previous = seen.get(path)
             if previous is not None and previous[1] != value:
