@@ -92,7 +92,7 @@ fn equity_shared_references_match_current_producers() {
         market_order_near_touch_threshold: 0.001,
         market_order_slippage_pct: 0.0,
         limit_order_fill_buffer_pct: 0.0,
-        forager_score_hysteresis_pct: 0.0,
+        forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
         equity_hard_stop_loss: hs,
         candle_interval_minutes: 1,
     };

@@ -22,7 +22,6 @@ pub struct EntryPeekHints {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForagerHysteresisState {
-    pub score_hysteresis_pct: f64,
     pub incumbent_long: HashSet<usize>,
     pub incumbent_short: HashSet<usize>,
 }
@@ -336,6 +335,7 @@ mod core {
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorGlobal {
         pub side_activation: crate::types::SideActivation,
+        pub forager_score_hysteresis: crate::types::ForagerScoreHysteresis,
         pub filter_by_min_effective_cost: crate::types::MinimumCostFilter,
         #[serde(default)]
         pub market_orders_allowed: bool,
@@ -498,6 +498,23 @@ mod core {
     }
 
     fn validate_account_risk_inputs(input: &OrchestratorInput) -> Result<(), OrchestratorError> {
+        for (margin, field) in [
+            (
+                input.global.forager_score_hysteresis.long,
+                "global.forager_score_hysteresis.long",
+            ),
+            (
+                input.global.forager_score_hysteresis.short,
+                "global.forager_score_hysteresis.short",
+            ),
+        ] {
+            if !margin.is_finite() || margin < 0.0 {
+                return Err(OrchestratorError::NonFiniteInput {
+                    field,
+                    symbol_idx: None,
+                });
+            }
+        }
         if !(input.balance.is_finite() && input.balance > 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "balance",
@@ -3654,11 +3671,7 @@ mod core {
                         .clone(),
                     require_forager: remaining_candidate_count > slots_to_fill,
                     position_side: ForagerPositionSide::Long,
-                    score_hysteresis_pct: input
-                        .forager_hysteresis
-                        .as_ref()
-                        .map(|h| h.score_hysteresis_pct)
-                        .unwrap_or(0.0),
+                    score_hysteresis_pct: input.global.forager_score_hysteresis.long,
                     incumbent_indices: input
                         .forager_hysteresis
                         .as_ref()
@@ -3751,11 +3764,7 @@ mod core {
                         .clone(),
                     require_forager: remaining_candidate_count > slots_to_fill,
                     position_side: ForagerPositionSide::Short,
-                    score_hysteresis_pct: input
-                        .forager_hysteresis
-                        .as_ref()
-                        .map(|h| h.score_hysteresis_pct)
-                        .unwrap_or(0.0),
+                    score_hysteresis_pct: input.global.forager_score_hysteresis.short,
                     incumbent_indices: input
                         .forager_hysteresis
                         .as_ref()
@@ -3999,7 +4008,8 @@ mod core {
                     &s.long,
                 )?;
 
-                let allow_initial = enabled_long && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
+                let allow_initial = enabled_long
+                    && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
@@ -4091,18 +4101,18 @@ mod core {
                     &s.short,
                 )?;
 
-                let allow_initial =
-                    enabled_short && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
-                        && actives_short[s.symbol_idx]
-                        && !workspace.one_way_block_initial_short[s.symbol_idx]
-                        && effective_min_cost_is_low_enough(
-                            input.balance,
-                            input.global.filter_by_min_effective_cost.short,
-                            s.effective_min_cost,
-                            &s.short.bot_params,
-                            &workspace.runtime_budget_short[s.symbol_idx],
-                            strategy_initial_qty_pct(&strategy_params_for_min_cost),
-                        );
+                let allow_initial = enabled_short
+                    && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
+                    && actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost.short,
+                        s.effective_min_cost,
+                        &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
+                    );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
                 let mut closes: Vec<IdealOrder> = Vec::new();
@@ -4749,21 +4759,21 @@ mod core {
                     .as_ref()
                     .map(|state| state.mode)
                     .unwrap_or_else(|| effective_mode(s.short.mode, s.short.position.size != 0.0));
-                let long_allow_initial =
-                    enabled_long && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
-                        && workspace.actives_long[s.symbol_idx]
-                        && !workspace.one_way_block_initial_long[s.symbol_idx]
-                        && effective_min_cost_is_low_enough(
-                            input.balance,
-                            input.global.filter_by_min_effective_cost.long,
-                            s.effective_min_cost,
-                            &s.long.bot_params,
-                            &workspace.runtime_budget_long[s.symbol_idx],
-                            workspace.derived_long[s.symbol_idx]
-                                .strategy_params
-                                .map(|params| strategy_initial_qty_pct(&params))
-                                .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
-                        );
+                let long_allow_initial = enabled_long
+                    && symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
+                    && workspace.actives_long[s.symbol_idx]
+                    && !workspace.one_way_block_initial_long[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost.long,
+                        s.effective_min_cost,
+                        &s.long.bot_params,
+                        &workspace.runtime_budget_long[s.symbol_idx],
+                        workspace.derived_long[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
+                    );
                 if symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && workspace.actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
@@ -4785,21 +4795,21 @@ mod core {
                             .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 }
-                let short_allow_initial =
-                    enabled_short && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
-                        && workspace.actives_short[s.symbol_idx]
-                        && !workspace.one_way_block_initial_short[s.symbol_idx]
-                        && effective_min_cost_is_low_enough(
-                            input.balance,
-                            input.global.filter_by_min_effective_cost.short,
-                            s.effective_min_cost,
-                            &s.short.bot_params,
-                            &workspace.runtime_budget_short[s.symbol_idx],
-                            workspace.derived_short[s.symbol_idx]
-                                .strategy_params
-                                .map(|params| strategy_initial_qty_pct(&params))
-                                .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
-                        );
+                let short_allow_initial = enabled_short
+                    && symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
+                    && workspace.actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
+                    && effective_min_cost_is_low_enough(
+                        input.balance,
+                        input.global.filter_by_min_effective_cost.short,
+                        s.effective_min_cost,
+                        &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        workspace.derived_short[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
+                    );
                 if symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                     && workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
@@ -5114,6 +5124,7 @@ mod core {
         fn make_basic_global() -> OrchestratorGlobal {
             OrchestratorGlobal {
                 side_activation: crate::types::SideActivation::uniform(true),
+                forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                 filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
@@ -5590,6 +5601,7 @@ mod core {
                 balance_raw: 51.154957,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(true),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6058,6 +6070,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6391,6 +6404,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6447,6 +6461,8 @@ mod core {
                             timestamp_ms: 11 * DAY,
                             global: OrchestratorGlobal {
                                 side_activation: crate::types::SideActivation::uniform(true),
+                                forager_score_hysteresis:
+                                    crate::types::ForagerScoreHysteresis::uniform(0.0),
                                 filter_by_min_effective_cost:
                                     crate::types::MinimumCostFilter::uniform(false),
                                 market_orders_allowed: false,
@@ -6521,6 +6537,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6571,6 +6588,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6631,6 +6649,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6688,6 +6707,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6745,6 +6765,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6796,6 +6817,7 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -6848,6 +6870,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -7067,6 +7090,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -7137,6 +7161,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -7191,6 +7216,7 @@ mod core {
                 balance_raw: 1_000_000.0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -7647,6 +7673,7 @@ mod core {
             };
             let global = OrchestratorGlobal {
                 side_activation: crate::types::SideActivation::uniform(true),
+                forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                 filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 market_orders_allowed: true,
                 market_order_near_touch_threshold: 0.001,
@@ -8251,6 +8278,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -8344,6 +8372,7 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -8409,6 +8438,7 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -8502,6 +8532,7 @@ mod core {
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -8965,6 +8996,9 @@ mod core {
                     timestamp_ms: 0,
                     global: OrchestratorGlobal {
                         side_activation: crate::types::SideActivation::uniform(true),
+                        forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(
+                            0.0,
+                        ),
                         filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(
                             false,
                         ),
@@ -9060,6 +9094,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -9133,6 +9168,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -9213,6 +9249,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -9275,6 +9312,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -9348,6 +9386,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
@@ -9400,6 +9439,7 @@ mod core {
                 timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     side_activation: crate::types::SideActivation::uniform(true),
+                    forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
                     filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
