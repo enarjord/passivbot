@@ -27,6 +27,25 @@ def source(kind="trailing_martingale"):
         "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit": [1.0, 3.0]}}}}}
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_resume_compares_authored_bounds_and_resolved_activation_not_hydrated_domains(enabled):
+    from optimize import _resume_config_mismatches
+    from optimization.evaluation_contract import CONTRACT_KEY
+    raw = source()
+    raw["bot"]["global"]["enabled"] = enabled
+    current = load(raw)
+    saved = clean_config(current)
+    saved["backtest"]["coins"] = deepcopy(current["backtest"]["coins"])
+    saved[CONTRACT_KEY] = build_evaluation_contract(current)
+    assert "long" not in raw["bot"]
+    assert set(saved["optimize"]["bounds"]) == {"global"}
+    assert set(current["optimize"]["bounds"]) != {"global"}
+    assert _resume_config_mismatches(saved, current) == []
+    changed = deepcopy(saved)
+    changed["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit"] = [1.0, 4.0]
+    assert any("optimize.bounds" in item for item in _resume_config_mismatches(changed, current))
+
+
 def load(raw):
     result = prepare_config(raw, verbose=False)
     result["backtest"]["coins"] = {"binance": ["AAA"]}

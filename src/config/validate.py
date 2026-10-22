@@ -147,8 +147,8 @@ def validate_config(
         and isinstance(raw_optimize.get("bounds"), dict)
         else config.get("optimize", {}).get("bounds", {})
     )
-    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     validate_bot_config(config)
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")

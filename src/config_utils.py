@@ -2113,7 +2113,10 @@ def add_reserved_arguments(
                 type=spec["type"],
                 dest=config_key,
                 required=False,
-                default=argparse.SUPPRESS if config_key in {f"bot.{side}.universe.approved_coins" for side in ("long", "short")} else None,
+                default=argparse.SUPPRESS if config_key in {
+                    f"bot.{side}.universe.{field}" for side in ("long", "short")
+                    for field in ("approved_coins", "ignored_coins")
+                } else None,
                 metavar=spec["metavar"],
                 help=help_text,
             )
@@ -2167,6 +2170,15 @@ def add_config_arguments(
                 else:
                     target[key] = deepcopy(value)
         overlay(discovery, config)
+        from config.field_registry import get_field_registry
+        for field in get_field_registry():
+            if field.path[:2] != ("bot", "global") or not field.optimizable:
+                continue
+            node = discovery.setdefault("optimize", {}).setdefault("bounds", {}).setdefault("global", {})
+            for part in field.path[2:-1]:
+                node = node.setdefault(part, {})
+            # Discovery alone never authors a range; parsed flags default None.
+            node.setdefault(field.path[-1], [])
         config = discovery  # CLI discovery never creates authored side pins.
     reserved_acronyms, reserved_keys = add_reserved_arguments(
         parser, command=command, help_all=help_all, group_map=group_map

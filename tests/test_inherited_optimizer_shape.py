@@ -93,6 +93,49 @@ def test_fixed_same_file_replay_keeps_frozen_membership_without_rereading(tmp_pa
         _apply_config_overrides(config, {f"bot.global.universe.{field}": source + ".new"}, preserve_prepared_universe=True)
 
 
+def test_runtime_patch_owner_retains_unrelated_direct_edits_and_authored_bound_replacements():
+    from config.inherited_bounds import optimize_bounds_source_view
+    from config.universe import universe_source_view
+    from optimization.warmup import _apply_config_overrides
+    config = real_prepared()
+    config["bot"]["global"]["risk"]["total_wallet_exposure_limit"] = 2.3
+    bounds = {"short": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
+    _apply_config_overrides(config, {"optimize.bounds": bounds,
+                                   "bot.global.unstuck.close_fraction": 0.05})
+    assert optimize_bounds_source_view(config)["optimize"]["bounds"] == bounds
+    assert universe_source_view(config)["bot"]["global"]["risk"]["total_wallet_exposure_limit"] == 2.3
+    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.3
+    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 2.3
+
+
+def test_runtime_patch_owner_leaves_plain_preflight_ranges_to_their_existing_owner():
+    from config.inherited_bounds import get_bound_plan
+    from optimization.warmup import _apply_config_overrides
+    config = real_prepared()
+    config["optimize"]["bounds"] = {}
+    raw = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
+    _apply_config_overrides(config, {"optimize.bounds": raw})
+    assert config["optimize"]["bounds"] == raw
+    assert get_bound_plan(config) is None
+
+
+@pytest.mark.parametrize("owner", ["prepare", "declared_patch"])
+def test_explicit_plan_rebuild_installs_reconciled_public_values_before_candidate_replay(owner):
+    from config.inherited_bounds import apply_inherited_bounds_patch
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+    config = real_prepared()
+    config["bot"]["global"]["risk"]["total_wallet_exposure_limit"] = 2.3
+    if owner == "prepare":
+        prepare_bound_plan(config)
+    else:
+        apply_inherited_bounds_patch(config, {"optimize.bounds": {}})
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
+    assert candidate["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.3
+    assert candidate["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 2.3
+
+
 def test_fine_tune_effective_target_freezes_common_domain_without_a_side_copy():
     from config.inherited_bounds import optimize_bounds_source_view
     from optimize import apply_fine_tune_bounds
@@ -180,6 +223,23 @@ def test_global_complete_runtime_weight_pin_freezes_the_inherited_group():
         }.items()
     }
     validate_forager_weight_search(config)
+
+
+def test_global_fixed_zero_weights_retain_raw_values_through_candidate_finalization():
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+    config = real_prepared()
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    prepare_bound_plan(config, authored_bounds={"global": {"forager": {
+        "score_weights": {name: [0.0, 1.0] for name in names},
+    }}})
+    config["optimize"]["fixed_runtime_overrides"] = {
+        f"bot.global.forager.score_weights.{name}": 0.0 for name in names
+    }
+    shape = build_optimization_shape(config)
+    candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
+    for side in ("long", "short"):
+        assert candidate["bot"][side]["forager"]["score_weights"] == dict.fromkeys(names, 0.0)
 
 
 def test_global_runtime_pin_cannot_freeze_an_independently_owned_side_weight_domain():
@@ -273,3 +333,42 @@ def test_seed_stream_retains_an_existing_prepared_binding_plan_when_shape_is_omi
     values = dict(zip((key for key, _ in shape.key_paths), vectors[0]))
     assert values["bot.global.unstuck.close_fraction"] == 0.041
     assert values["bot.short.unstuck.close_fraction"] == 0.041
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_actual_loader_shape_candidate_and_reload_keep_shared_gene_authority(kind):
+    from config import prepare_config
+    from config.inherited_bounds import get_bound_plan, optimize_bounds_source_view
+    from config.schema import get_template_config
+    from config.universe import universe_source_view
+    from config_utils import clean_config
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+
+    source = get_template_config()
+    source["bot"]["portfolio"]["strategy_kind"] = kind
+    source["bot"]["global"]["enabled"] = True
+    source["bot"]["global"]["universe"]["approved_coins"] = []
+    source["bot"]["short"] = {"unstuck": {"close_fraction": 0.041}}
+    raw_bounds = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]},
+                              "risk": {"max_positions": [0.0, 8.0]}}}
+    source["optimize"]["bounds"] = deepcopy(raw_bounds)
+    original = deepcopy(source)
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    shape = build_optimization_shape(prepared)
+    vector = [0.055 if key == "bot.global.unstuck.close_fraction" else
+              4.5 if key == "bot.global.risk.max_positions" else bound.low
+              for (key, _), bound in zip(shape.key_paths, shape.bounds)]
+    candidate = build_optimizer_vector_config(vector, prepared, key_paths=shape.key_paths)
+    loaded = prepare_config(clean_config(candidate), verbose=False, target="canonical", runtime=None)
+    for result in (candidate, loaded):
+        assert result["bot"]["long"]["unstuck"]["close_fraction"] == 0.055
+        assert result["bot"]["short"]["unstuck"]["close_fraction"] == 0.041
+        assert result["bot"]["long"]["risk"]["max_positions"] == 4
+        assert result["bot"]["short"]["risk"]["max_positions"] == 4
+        assert optimize_bounds_source_view(result)["optimize"]["bounds"] == raw_bounds
+        raw = universe_source_view(result)["bot"]
+        assert raw["short"] == {"unstuck": {"close_fraction": 0.041}}
+        assert not raw.get("long")
+    assert get_bound_plan(loaded).identity() == get_bound_plan(prepared).identity()
+    assert source == original

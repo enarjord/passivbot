@@ -153,17 +153,20 @@ def _scenario_universe_recipe(base_config, scenario):
     for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
         if value is not None:
             set_side_universe_sources(source, field, value)
+    from config.bot_inheritance import resolve_bot_policy, get_side_field_catalog, install_bot_policy
+    install_bot_policy(source, resolve_bot_policy(source["bot"], get_side_field_catalog()))
     apply_scenario_overrides(source, scenario.overrides)
     paths = [("bot", side, "universe", field) for side in ("long", "short")
              for field in ("approved_coins", "ignored_coins")]
-    paths.append(("bot", "global", "universe", "approved_coins"))
+    paths.extend(("bot", "global", "universe", field) for field in ("approved_coins", "ignored_coins"))
     declared = set()
     for selector in scenario.overrides or ():
         selected = tuple(selector.split("."))
         declared.update(path for path in paths if selected[:len(path)] == path or path[:len(selected)] == selected)
     return json.dumps({
-        "base": base_sources,
+        "base": {**base_sources, "shared_ignored": universe_source_view(base_config).get("bot", {}).get("global", {}).get("universe", {}).get("ignored_coins", [])},
         "effective": {"shared": source["bot"].get("global", {}).get("universe", {}).get("approved_coins", []),
+                      "shared_ignored": universe_source_view(source).get("bot", {}).get("global", {}).get("universe", {}).get("ignored_coins", []),
                       **{field: raw_side_universe_sources(source, field) for field in ("approved_coins", "ignored_coins")}},
         "label": scenario.label, "coins": scenario.coins, "ignored": scenario.ignored_coins,
         "exchanges": scenario.exchanges, "coin_sources": scenario.coin_sources,
@@ -1306,7 +1309,7 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     from config.bot_inheritance import get_bot_policy
     policy_source = get_bot_policy(config)
     bounds_source = config.get("optimize", {}).get("bounds")
-    if universe_sources_affected(overrides):
+    if universe_sources_affected(overrides) and policy_source is None:
         restore_universe_sources(config)
     if tracker is None:
         tracker = ConfigTransformTracker()
@@ -1346,6 +1349,8 @@ def _materialize_scenario_universe(
         materialize_side_universe_sources,
         raw_side_universe_sources,
         resolve_universe_sources,
+        shared_universe_source,
+        source_inherits_shared,
     )
 
     def replaced(path):
@@ -1354,41 +1359,43 @@ def _materialize_scenario_universe(
             for selected in replacement_paths
         )
 
-    shared = config.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
-    base_shared = (
-        prepared_base.get("bot", {}).get("global", {}).get("universe", {}).get("approved_coins", [])
-    )
-    if shared != base_shared:
-        config["bot"]["global"]["universe"]["approved_coins"] = bind_universe_source(
-            shared,
-            field="approved_coins",
-            base_config_path=config.get("live", {}).get("base_config_path", ""),
-        )
-        shared = config["bot"]["global"]["universe"]["approved_coins"]
     for field in ("approved_coins", "ignored_coins"):
+        shared = shared_universe_source(config, field)
+        base_shared = shared_universe_source(prepared_base, field)
+        bound_shared = bind_universe_source(shared, field=field,
+            base_config_path=config.get("live", {}).get("base_config_path", ""))
+        if bound_shared != shared:
+            from config.bot_inheritance import apply_bot_config_patch
+            patch = {f"bot.global.universe.{field}": bound_shared}
+            if not apply_bot_config_patch(config, patch):
+                config["bot"].setdefault("global", {}).setdefault("universe", {})[field] = bound_shared
+            shared = bound_shared
         sources = raw_side_universe_sources(config, field)
         old_sources = raw_side_universe_sources(prepared_base, field)
         base_values = require_side_universe_sources(prepared_base, field)
         values, unresolved = {}, []
         for side in ("long", "short"):
-            default = None if field == "approved_coins" else []
-            source = sources.get(side, default)
-            same = source == old_sources.get(side, default) and not replaced(
+            source = sources.get(side)
+            same = ((side in sources) == (side in old_sources)
+                    and source == old_sources.get(side)) and not replaced(
                 ("bot", side, "universe", field)
             )
-            if field == "approved_coins" and source is None:
+            if source_inherits_shared(field, sources, side):
                 same = same and shared == base_shared and not replaced(
-                    ("bot", "global", "universe", "approved_coins")
+                    ("bot", "global", "universe", field)
                 )
             previous = base_values.get(side)
             if same and type(previous) is ResolvedCoinList:
                 values[side] = list(previous)
             else:
-                config["bot"][side]["universe"][field] = bind_universe_source(
-                    source,
-                    field=field,
-                    base_config_path=config.get("live", {}).get("base_config_path", ""),
-                )
+                if side in sources:
+                    bound = bind_universe_source(source, field=field,
+                        base_config_path=config.get("live", {}).get("base_config_path", ""))
+                    if bound != source:
+                        from config.bot_inheritance import apply_bot_config_patch
+                        patch = {f"bot.{side}.universe.{field}": bound}
+                        if not apply_bot_config_patch(config, patch):
+                            config["bot"][side]["universe"][field] = bound
                 unresolved.append(side)
         if unresolved:
             resolved, _ = resolve_universe_sources(config, field, position_sides=unresolved)

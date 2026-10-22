@@ -155,7 +155,7 @@ def _fixture_candles(args):
 def fixture_inputs(args):
     import numpy as np
     from config import prepare_config
-    from config.schema import get_template_config
+    from config.schema import get_expanded_config_prototype
     from config.hsl import generated_template
 
     args = resolve_fixture_args(args)
@@ -167,7 +167,7 @@ def fixture_inputs(args):
     timestamps = timestamps - ((int(timestamps[-1]) + 60_000) % 86_400_000)
     active = ("long", "short") if args.sides == "both" else (args.sides,)
     config = generated_template(
-        get_template_config(), "coin" if args.hsl == "disabled" else args.hsl
+        get_expanded_config_prototype(), "coin" if args.hsl == "disabled" else args.hsl
     )
     # This is a backtest fixture, with no optimizer genes/runtime override policy.
     config["optimize"]["bounds"] = {}
