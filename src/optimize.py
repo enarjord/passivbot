@@ -242,6 +242,11 @@ from multiprocessing_utils import ignore_sigint_in_worker
 
 
 def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    from config.bot_inheritance import get_bot_policy
+    if get_bot_policy(config) is not None:
+        from optimization.warmup import _apply_config_overrides as apply_owned_overrides
+        apply_owned_overrides(config, overrides)
+        return
     from config.universe import restore_universe_sources, universe_sources_affected
     if universe_sources_affected(overrides):
         restore_universe_sources(config)
@@ -1399,6 +1404,17 @@ def _canonicalize_optimizer_individual(
     key_paths,
     overrides_list,
 ):
+    # Repair finite excursions before the strict binding write. Leave valid
+    # raw values unsnapped until the existing post-transform canonicalization;
+    # the anchor selector is not a numeric strategy coordinate.
+    offset = 1 if get_anchor_plan(template) is not None else 0
+    for index in range(offset, min(len(individual), len(bounds))):
+        value = individual[index]
+        if (not isinstance(value, bool) and isinstance(value, (int, float))
+                and math.isfinite(value)):
+            bound = bounds[index]
+            if value < bound.low or value > bound.high:
+                individual[index] = max(bound.low, min(bound.high, value))
     config = individual_to_config(
         individual,
         optimizer_overrides,

@@ -77,7 +77,7 @@ from optimization.warmup import build_optimizer_max_config
 from optimize_suite import ScenarioEvalContext
 from config import load_prepared_config, prepare_config
 from config.parse import load_raw_config
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 def _bounds_from_flat(values, strategy_kind="trailing_martingale"):
@@ -101,6 +101,26 @@ def _flat_bounds(config):
 
 def _toy_optimize_bounds(*keys):
     return {"bounds": _bounds_from_flat({key: [0.0, 1000.0] for key in keys})}
+
+
+def _independent_close_fixture():
+    from config_utils import clean_config
+    config = load_prepared_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
+    source = clean_config(config)
+    common = source["optimize"]["bounds"]["global"]["strategy"]["trailing_martingale"].pop("close")
+    for side in ("long", "short"):
+        source["bot"][side].setdefault("strategy", {}).setdefault("trailing_martingale", {})["close"] = deepcopy(config["bot"][side]["strategy"]["trailing_martingale"]["close"])
+        source["optimize"]["bounds"].setdefault(side, {}).setdefault("strategy", {}).setdefault("trailing_martingale", {})["close"] = deepcopy(common)
+    return source
+
+
+def _shape_indices_with_native_ids(config, shape):
+    from config.inherited_bounds import get_bound_plan
+    result = {key: index for index, (key, _path) in enumerate(shape.key_paths)}
+    for binding in get_bound_plan(config).bindings:
+        if binding.key in result:
+            result.update({native: result[binding.key] for native in binding.native_ids})
+    return result
 
 
 def test_worker_initializer_is_pickleable_for_spawn():
@@ -166,7 +186,7 @@ def test_missing_suite_config_does_not_imply_suite_mode():
 
 def test_suite_config_activation_enables_extracted_suite_config():
     args = argparse.Namespace(suite_config="suite.json", suite=None)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     suite_override = {"scenarios": [{"label": "stress"}]}
 
     if _suite_config_implies_suite_mode(args):
@@ -292,7 +312,7 @@ class TestApplyConfigOverrides:
             _apply_config_overrides(config, {"bot.long.value": 3.0})
 
     def test_bot_shared_paths_update_canonical_values(self):
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         _apply_config_overrides(config, {
             "bot.long.hsl.cooldown_after_red_minutes": 1.0,
             "bot.long.entry_cooldown.base_duration_minutes": 2.5,
@@ -304,7 +324,7 @@ class TestApplyConfigOverrides:
             _apply_config_overrides(config, {"bot.long.risk.entry_cooldown_minutes": 9.0})
 
     def test_strategy_override_uses_canonical_active_strategy_path(self):
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         config['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
         with pytest.raises(KeyError, match="missing"):
             _apply_config_overrides(config, {"bot.long.entry_threshold_base_pct": 0.25})
@@ -316,7 +336,7 @@ class TestApplyConfigOverrides:
         ] == pytest.approx(0.25)
 
     def test_typo_override_path_raises_without_creating_key(self):
-        config = get_template_config()
+        config = get_expanded_config_prototype()
 
         with pytest.raises(KeyError, match="n_positons"):
             _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
@@ -326,9 +346,9 @@ class TestApplyConfigOverrides:
 
 class TestLiquidationHelpers:
     def test_analysis_indicates_liquidation_uses_explicit_flag(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         assert _analysis_indicates_liquidation({"liquidated": True}, config) is True
         assert _analysis_indicates_liquidation({"liquidated": False}, config) is False
         assert (
@@ -432,7 +452,7 @@ class TestNormalizeOptionalBoolFlag:
 async def test_optimizer_cli_applies_special_limits_before_preparation(
     tmp_path, monkeypatch, wrapped, flags, expected
 ):
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
         {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.3}
     ]
@@ -652,7 +672,7 @@ class TestStartingConfigSelectionArgs:
 
 
 def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["scoring"] = [
         {"metric": "adg_strategy_eq", "goal": "max"},
         {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
@@ -712,7 +732,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
 
 
 def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"]["reducer"] = {"default": "max"}
     config["optimize"]["scoring"] = [
         {"metric": "adg_strategy_eq", "goal": "max"},
@@ -805,7 +825,7 @@ def test_active_suite_scenario_labels_use_canonical_fallbacks():
 
 @pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 def test_materialize_suite_run_contract_persists_external_and_filtered_suite(backend):
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = backend
     config["backtest"]["suite_enabled"] = False
     suite_cfg = {
@@ -828,7 +848,7 @@ def test_materialize_suite_run_contract_persists_external_and_filtered_suite(bac
 
 
 def test_materialize_suite_run_contract_updates_cpu_config():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "pymoo"
     optimize._materialize_suite_run_contract(
         config,
@@ -847,7 +867,7 @@ def test_materialize_suite_run_contract_updates_cpu_config():
 
 
 def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "pymoo"
     config['bot']["portfolio"]['strategy_kind'] = "trailing_grid_v7"
     config["backtest"]["btc_collateral_cap"] = 1.0
@@ -871,7 +891,7 @@ def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
 
 
 def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["optimize"]["fixed_runtime_overrides"] = {
         "backtest.starting_balance": 1500.0,
@@ -907,7 +927,7 @@ def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
 
 
 def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["optimize"]["fixed_runtime_overrides"] = {
         "backtest.btc_collateral_cap": 0.5,
@@ -921,7 +941,7 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
 
 
 def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     source_strategy = config['bot']["portfolio"]['strategy_kind']
     target_strategy = (
@@ -940,7 +960,7 @@ def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
 
 @pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 def test_materialize_resolved_suite_dates_replaces_dynamic_tokens(backend):
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = backend
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [
@@ -976,7 +996,7 @@ def test_materialize_resolved_suite_dates_replaces_dynamic_tokens(backend):
 
 
 def test_materialize_resolved_suite_dates_rejects_inconsistent_prepared_dates():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "rolling"}]
@@ -1006,7 +1026,7 @@ def test_materialize_resolved_suite_dates_rejects_inconsistent_prepared_dates():
 
 @pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 def test_materialized_suite_dates_make_rollover_resume_incompatible(backend):
-    previous = optimize.get_template_config()
+    previous = get_expanded_config_prototype()
     previous["optimize"]["backend"] = backend
     previous["backtest"]["suite_enabled"] = True
     previous["backtest"]["scenarios"] = [
@@ -1041,7 +1061,7 @@ def test_materialized_suite_dates_make_rollover_resume_incompatible(backend):
 
 
 def test_materialize_resolved_suite_dates_rejects_context_count_mismatch():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "base"}]
@@ -1051,7 +1071,7 @@ def test_materialize_resolved_suite_dates_rejects_context_count_mismatch():
 
 
 def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
         {
             "metric": "drawdown_worst_strategy_eq",
@@ -1081,7 +1101,7 @@ def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
 
 
 def test_validate_optimizer_limit_suite_mode_rejects_unknown_scenario_early():
-    config = optimize.get_template_config()
+    config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
         {
             "metric": "drawdown_worst_strategy_eq",
@@ -1109,7 +1129,7 @@ def test_optimize_parser_accepts_short_limit_alias():
         usage="%(prog)s [config_path] [options]",
         epilog="",
     )
-    template_config = optimize.get_template_config()
+    template_config = get_expanded_config_prototype()
     del template_config["bot"]
     keep_live_keys = {"approved_coins", "minimum_coin_age_days"}
     for key in sorted(template_config["live"]):
@@ -1174,7 +1194,7 @@ def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
         usage="%(prog)s [config_path] [options]",
         epilog="",
     )
-    template_config = optimize.get_template_config()
+    template_config = get_expanded_config_prototype()
     del template_config["bot"]
     keep_live_keys = {"approved_coins", "minimum_coin_age_days"}
     for key in sorted(template_config["live"]):
@@ -1235,7 +1255,7 @@ def test_optimize_parser_candle_interval_short_flag_parses_as_int():
         usage="%(prog)s [config_path] [options]",
         epilog="",
     )
-    template_config = optimize.get_template_config()
+    template_config = get_expanded_config_prototype()
     del template_config["bot"]
     keep_live_keys = {"approved_coins", "minimum_coin_age_days"}
     for key in sorted(template_config["live"]):
@@ -1637,7 +1657,7 @@ class TestIndividualToConfig:
 
         for side in ("long", "short"):
             template["bot"][side]["hsl"] = {
-                **get_template_config()["bot"][side]["hsl"],
+                **get_expanded_config_prototype()["bot"][side]["hsl"],
                 **template["bot"][side]["hsl"],
             }
         result = individual_to_config(
@@ -1748,7 +1768,7 @@ class TestIndividualToConfig:
         self, strategy_kind, bound_key, expected_path, new_value
     ):
         template = {
-            "config_version": optimize.get_template_config()["config_version"],
+            "config_version": get_expanded_config_prototype()["config_version"],
             "live": {},
             "bot": {
                 "long": {
@@ -1769,9 +1789,7 @@ class TestIndividualToConfig:
             template, verbose=False, target="canonical", runtime=None
         )
         key_paths = get_optimization_key_paths(prepared)
-        target_idx = next(
-            idx for idx, (key, _) in enumerate(key_paths) if key == bound_key
-        )
+        target_idx = next(idx for idx, (_, path) in enumerate(key_paths) if path == expected_path)
         individual = []
         for _, path in key_paths:
             target = prepared
@@ -1815,7 +1833,7 @@ class TestIndividualToConfig:
 
     @pytest.mark.parametrize("override", ["forward_tp_grid", "backward_tp_grid"])
     def test_removed_v7_optimizer_overrides_are_rejected(self, override):
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         with pytest.raises(ValueError, match="Unknown optimize.enable_overrides value"):
             optimize.optimizer_overrides([override], config, "long")
 
@@ -1857,16 +1875,14 @@ class TestIndividualToConfig:
         assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_we_weight"] == 40.0
 
     def test_canonicalizes_disabled_close_retracement_params_in_config(self):
-        template = load_prepared_config(
-            "configs/examples/default_trailing_martingale_long.json",
-            verbose=False,
-        )
+        template = _independent_close_fixture()
         template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][
             "close"
         ]["retracement_base_fraction"] = [-0.001, 0.01, 0.00001]
+        template = prepare_config(template, verbose=False)
         shape = build_optimization_shape(template)
         vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
-        key_to_idx = {key: idx for idx, (key, _path) in enumerate(shape.key_paths)}
+        key_to_idx = _shape_indices_with_native_ids(template, shape)
 
         vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
         vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
@@ -1888,16 +1904,17 @@ class TestIndividualToConfig:
         assert close["threshold_volatility_1h_weight"] == pytest.approx(39.0)
 
     def test_canonicalizes_disabled_close_retracement_params_in_vector_for_dedupe(self):
-        template = load_prepared_config(
-            "configs/examples/default_trailing_martingale_long.json",
-            verbose=False,
-        )
+        template = _independent_close_fixture()
         template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][
             "close"
         ]["retracement_base_fraction"] = [-0.001, 0.01, 0.00001]
-        template["bot"]["short"]["risk"]["max_positions"] = 1.0
+        template["bot"]["short"].setdefault("risk", {})["max_positions"] = 1.0
         template["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
-        template["optimize"]["bounds"]["short"]["risk"]["max_positions"] = [1.0, 1.0]
+        template["bot"]["short"]["enabled"] = True
+        template["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
+            "close"
+        ]["retracement_volatility_1h_weight"] = [0.01, 70.0, 0.01]
+        template["optimize"]["bounds"]["short"].setdefault("risk", {})["max_positions"] = [1.0, 1.0]
         template["optimize"]["bounds"]["short"]["risk"][
             "total_wallet_exposure_limit"
         ] = [
@@ -1905,9 +1922,10 @@ class TestIndividualToConfig:
             3.0,
             0.01,
         ]
+        template = prepare_config(template, verbose=False)
         shape = build_optimization_shape(template)
         vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
-        key_to_idx = {key: idx for idx, (key, _path) in enumerate(shape.key_paths)}
+        key_to_idx = _shape_indices_with_native_ids(template, shape)
 
         vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
         vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
@@ -3432,7 +3450,7 @@ class TestApplyFineTuneBounds:
 
     def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path, caplog):
         config = {
-            "config_version": optimize.get_template_config()["config_version"],
+            "config_version": get_expanded_config_prototype()["config_version"],
             "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
@@ -3512,7 +3530,7 @@ class TestApplyFineTuneBounds:
 
     def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
         config = {
-            "config_version": optimize.get_template_config()["config_version"],
+            "config_version": get_expanded_config_prototype()["config_version"],
             "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
@@ -3815,11 +3833,11 @@ class TestExtractConfigs:
         assert result == []
 
     def test_json_file_loaded(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             # Write a minimal valid config
-            template = get_template_config()
+            template = get_expanded_config_prototype()
             import json
 
             f.write(json.dumps(template))
@@ -3834,10 +3852,10 @@ class TestExtractConfigs:
             os.unlink(path)
 
     def test_json_file_with_malformed_optimize_limits_still_loads_bot(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            template = get_template_config()
+            template = get_expanded_config_prototype()
             import json
 
             template["optimize"]["limits"] = [
@@ -3868,13 +3886,13 @@ class TestExtractConfigs:
             os.unlink(path)
 
     def test_pareto_txt_file(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
         import json
 
         with tempfile.NamedTemporaryFile(
             mode="w", suffix="_pareto.txt", delete=False
         ) as f:
-            template = get_template_config()
+            template = get_expanded_config_prototype()
             f.write(json.dumps(template) + "\n")
             f.write(json.dumps(template) + "\n")
             path = f.name
@@ -3893,11 +3911,11 @@ class TestGetStartingConfigs:
         assert result == []
 
     def test_single_file(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
         import json
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            template = get_template_config()
+            template = get_expanded_config_prototype()
             f.write(json.dumps(template))
             path = f.name
         try:
@@ -3908,12 +3926,12 @@ class TestGetStartingConfigs:
             os.unlink(path)
 
     def test_directory(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
         import json
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create two JSON files
-            template = get_template_config()
+            template = get_expanded_config_prototype()
             with open(os.path.join(tmpdir, "config1.json"), "w") as f:
                 f.write(json.dumps(template))
             with open(os.path.join(tmpdir, "config2.json"), "w") as f:
@@ -3923,11 +3941,11 @@ class TestGetStartingConfigs:
             assert len(result) == 2
 
     def test_iter_directory(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
         import json
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            template = get_template_config()
+            template = get_expanded_config_prototype()
             with open(os.path.join(tmpdir, "config1.json"), "w") as f:
                 f.write(json.dumps(template))
             with open(os.path.join(tmpdir, "config2.json"), "w") as f:
@@ -3945,9 +3963,9 @@ class TestConfigsToIndividuals:
         assert result == []
 
     def test_single_config(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         # Use actual bounds from the template
         from optimization.config_adapter import extract_bounds_tuple_list_from_config
 
@@ -3960,9 +3978,9 @@ class TestConfigsToIndividuals:
         assert len(result[0]) == len(bounds)
 
     def test_streaming_matches_eager(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         bounds = extract_bounds_tuple_list_from_config(config)
 
         eager = configs_to_individuals([config, config], bounds, 6)
@@ -3974,9 +3992,9 @@ class TestConfigsToIndividuals:
         assert sorted(map(tuple, streamed)) == sorted(map(tuple, eager))
 
     def test_bot_only_config(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         from optimization.config_adapter import extract_bounds_tuple_list_from_config
 
         bounds = extract_bounds_tuple_list_from_config(config)
@@ -3986,9 +4004,9 @@ class TestConfigsToIndividuals:
         assert len(result[0]) == len(bounds)
 
     def test_deduplicates_quantized_seed_individuals(self):
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        config = get_template_config()
+        config = get_expanded_config_prototype()
         from optimization.config_adapter import extract_bounds_tuple_list_from_config
 
         bounds = extract_bounds_tuple_list_from_config(config)
@@ -4080,7 +4098,8 @@ class TestResultRecorder:
         strategy_kind = entry['bot']["portfolio"]['strategy_kind']
 
         assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
-        assert entry["bot"]["long"]["forager"] == entry["bot"]["short"]["forager"]
+        replay = prepare_config(optimize.clean_config(entry), verbose=False)
+        assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
         assert entry["bot"]["long"]["hsl"] == entry["bot"]["short"]["hsl"]
         assert entry["bot"]["long"]["unstuck"] == entry["bot"]["short"]["unstuck"]
         assert (
@@ -4135,7 +4154,8 @@ class TestResultRecorder:
             strategy_kind = saved['bot']["portfolio"]['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
-            assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
+            replay = prepare_config(optimize.clean_config(saved), verbose=False)
+            assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
             assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
             assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
             assert (
@@ -4184,7 +4204,8 @@ class TestResultRecorder:
             strategy_kind = saved['bot']["portfolio"]['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
-            assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
+            replay = prepare_config(optimize.clean_config(saved), verbose=False)
+            assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
             assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
             assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
             assert (
@@ -4342,10 +4363,10 @@ class TestEvaluator:
     def test_perturb_step_digits(self):
         """Test perturbation with different change probabilities."""
         from optimize import Evaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         # Create minimal evaluator for testing perturbation methods
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         # Make sure limits is a list, not a string
         mock_config["optimize"]["limits"] = []
 
@@ -4366,9 +4387,9 @@ class TestEvaluator:
     def test_perturb_x_pct(self):
         """Test percentage-based perturbation."""
         from optimize import Evaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         # Make sure limits is a list, not a string
         mock_config["optimize"]["limits"] = []
 
@@ -4387,9 +4408,9 @@ class TestEvaluator:
     def test_perturb_random_subset(self):
         """Test random subset perturbation."""
         from optimize import Evaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         # Make sure limits is a list, not a string
         mock_config["optimize"]["limits"] = []
 
@@ -4408,9 +4429,9 @@ class TestEvaluator:
     def test_build_limit_checks(self):
         """Test limit checks building."""
         from optimize import Evaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
                 "metric": "drawdown_worst_usd",
@@ -4432,9 +4453,9 @@ class TestEvaluator:
 
     def test_optimizer_can_skip_btc_analysis_when_no_btc_metrics_are_needed(self):
         from optimize import Evaluator, _optimizer_can_skip_btc_analysis
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["backtest"]["btc_collateral_cap"] = 0.0
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "fills_gap_p95_hours"]
         mock_config["optimize"]["limits"] = [
@@ -4460,9 +4481,9 @@ class TestEvaluator:
 
     def test_optimizer_keeps_btc_analysis_for_btc_scoring_limits_or_collateral(self):
         from optimize import Evaluator, _optimizer_can_skip_btc_analysis
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["backtest"]["btc_collateral_cap"] = 0.0
         mock_config["optimize"]["scoring"] = ["adg_btc"]
         mock_config["optimize"]["limits"] = []
@@ -4505,9 +4526,9 @@ class TestEvaluator:
 
     def test_build_limit_checks_uses_suite_aggregate_defaults(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
                 "metric": "adg_strategy_pnl_rebased",
@@ -4543,9 +4564,9 @@ class TestEvaluator:
 
     def test_suite_limit_checks_keep_explicit_stat_override(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
                 "metric": "adg_strategy_pnl_rebased",
@@ -4577,9 +4598,9 @@ class TestEvaluator:
 
     def test_suite_objective_scenario_must_match_context_label(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["objective_scenario"] = "base"
         base = Evaluator(
             hlcvs_specs={},
@@ -4596,9 +4617,9 @@ class TestEvaluator:
 
     def test_suite_limit_scenario_must_match_context_label(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
                 "metric": "drawdown_worst_strategy_eq",
@@ -4622,12 +4643,12 @@ class TestEvaluator:
 
     def test_suite_scoring_resolves_mixed_scenario_and_aggregate_bases(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class DummyIndividual(list):
             pass
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["objective_scenario"] = "base"
         mock_config["optimize"]["scoring"] = [
@@ -4738,7 +4759,7 @@ class TestEvaluator:
 
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class PanicException(Exception):
             pass
@@ -4746,7 +4767,7 @@ class TestEvaluator:
         class DummyIndividual(list):
             pass
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "drawdown_worst_usd"]
 
@@ -4785,12 +4806,12 @@ class TestEvaluator:
 
     def test_evaluate_converts_recoverable_backtest_value_error_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class DummyIndividual(list):
             pass
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "drawdown_worst_usd"]
 
@@ -4831,12 +4852,12 @@ class TestEvaluator:
 
     def test_evaluate_keeps_unrelated_value_errors_fatal(self):
         from optimize import Evaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class DummyIndividual(list):
             pass
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
 
@@ -4865,7 +4886,7 @@ class TestEvaluator:
         self,
     ):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
         from optimization.problem import PymooAsyncRecordingRunner
 
         class FakeAsyncResult:
@@ -4888,7 +4909,7 @@ class TestEvaluator:
                 except BaseException as exc:
                     return FakeAsyncResult(exc=exc)
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "drawdown_worst_usd"]
 
@@ -4908,13 +4929,9 @@ class TestEvaluator:
             n_obj=2,
             pool=FakeAsyncPool(),
             recorder=recorder,
-            template={"optimize": {"backend": "pymoo"}},
-            build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
-                "bot": {"long": {"a": float(vector[0])}},
-                "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
-                **template,
-            },
-            overrides_fn=object(),
+            template=mock_config,
+            build_config_fn=individual_to_config,
+            overrides_fn=optimize.optimizer_overrides,
         )
         individual = np.asarray(
             config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits),
@@ -4948,7 +4965,7 @@ class TestEvaluator:
             SuiteEvaluator,
             INVALID_BACKTEST_CANDIDATE_PENALTY,
         )
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class PanicException(Exception):
             pass
@@ -4956,7 +4973,7 @@ class TestEvaluator:
         class DummyIndividual(list):
             pass
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
 
@@ -5007,12 +5024,12 @@ class TestEvaluator:
 
     def test_suite_evaluate_reuses_compiled_runtime_config_per_scenario(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class DummyIndividual(list):
             pass
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
         mock_config["backtest"]["start_date"] = "2023-01-01"
@@ -5095,13 +5112,13 @@ class TestEvaluator:
 
     def test_suite_evaluate_profile_payload_when_enabled(self, monkeypatch, caplog):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
         class DummyIndividual(list):
             pass
 
         monkeypatch.setenv("PASSIVBOT_OPTIMIZE_PROFILE", "1")
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
         mock_config["backtest"]["start_date"] = "2023-01-01"
@@ -5172,9 +5189,9 @@ class TestEvaluator:
 
     def test_suite_scenario_config_overrides_are_isolated_from_candidate_config(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        mock_config = get_template_config()
+        mock_config = get_expanded_config_prototype()
         mock_config["bot"]["long"]["risk"]["max_positions"] = 2
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
@@ -5223,10 +5240,10 @@ class TestEvaluator:
 
     def test_suite_scenario_nested_overrides_preserve_candidate_config_sections(self):
         from optimize import Evaluator, SuiteEvaluator
-        from config_utils import get_template_config
+        from config.schema import get_expanded_config_prototype
         from suite_runner import build_scenarios
 
-        candidate_config = get_template_config()
+        candidate_config = get_expanded_config_prototype()
         candidate_config["bot"]["long"]["risk"]["max_positions"] = 7
         set_side_universe_sources(candidate_config, 'approved_coins', {"long": ["ETH"], "short": ["ETH"]})
         set_side_universe_sources(candidate_config, 'ignored_coins', {"long": [], "short": []})
@@ -5347,6 +5364,7 @@ def test_build_pymoo_record_entry_strips_metadata():
 
 def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
     entry = {
+        "config_version": "v9.0.0",
         "backtest": {
             "start_date": "2024-01-01",
             "end_date": "2024-01-10",
@@ -5367,6 +5385,9 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
         "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
+    metrics = entry.pop("suite_metrics")
+    entry = prepare_config(entry, verbose=False)
+    entry["suite_metrics"] = metrics
     entry[optimize.CONTRACT_KEY] = optimize.build_evaluation_contract(entry)
     config = deepcopy(entry)
     config["backtest"]["coins"] = {"binance": ["XMR"]}
@@ -5376,6 +5397,7 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
 
 def test_resume_config_mismatches_treats_reducer_aliases_as_equivalent():
     entry = _resume_validation_entry()
+    entry["backtest"].pop("reducer", None)
     entry["backtest"]["aggregate"] = {"default": "max"}
     entry["optimize"]["scoring"] = [
         {
@@ -5448,11 +5470,11 @@ def test_resume_config_mismatches_plain_result_still_rejects_coin_change():
 
 def _resume_validation_entry():
     entry = {
+        "config_version": "v9.0.0",
         "backtest": {
             "start_date": "2024-01-01",
             "end_date": "2024-01-10",
             "exchanges": ["binance"],
-            "coins": {"binance": ["XMR"]},
         },
         "bot": {
             "long": {
@@ -5474,21 +5496,24 @@ def _resume_validation_entry():
         },
     }
 
+    entry = prepare_config(entry, verbose=False)
+    entry["backtest"]["coins"] = {"binance": ["XMR"]}
     entry[optimize.CONTRACT_KEY] = optimize.build_evaluation_contract(entry)
     return entry
 
 
 def _write_msgpack_entries(path: Path, entries: list[dict]) -> None:
+    from config_utils import strip_config_metadata
     packer = optimize.msgpack.Packer(use_bin_type=True)
     with open(path, "wb") as f:
         for entry in entries:
-            f.write(packer.pack(entry))
+            f.write(packer.pack(strip_config_metadata(entry) if isinstance(entry, dict) else entry))
 
 
 def test_resume_config_mismatches_rejects_changed_optimize_bounds():
     entry = _resume_validation_entry()
     config = deepcopy(entry)
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = [0.002, 0.02]
+    _apply_config_overrides(config, {"optimize.bounds.long.strategy.trailing_martingale.entry.initial_qty_fraction": [0.002, 0.02]})
 
     mismatches = optimize._resume_config_mismatches(entry, config)
 
@@ -5655,7 +5680,9 @@ def test_validate_resume_results_rejects_non_config_first_entry(tmp_path: Path):
 def test_validate_resume_results_rejects_non_dict_second_entry(tmp_path: Path):
     entry = _resume_validation_entry()
     packer = optimize.msgpack.Packer(use_bin_type=True)
-    (tmp_path / "all_results.bin").write_bytes(packer.pack(entry) + packer.pack(1))
+    (tmp_path / "all_results.bin").write_bytes(
+        packer.pack(optimize.strip_config_metadata(entry)) + packer.pack(1)
+    )
 
     with pytest.raises(ValueError, match="entry 2 is not a result object"):
         optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
@@ -5664,7 +5691,7 @@ def test_validate_resume_results_rejects_non_dict_second_entry(tmp_path: Path):
 def test_validate_resume_results_rejects_truncated_trailing_msgpack(tmp_path: Path):
     entry = _resume_validation_entry()
     packer = optimize.msgpack.Packer(use_bin_type=True)
-    (tmp_path / "all_results.bin").write_bytes(packer.pack(entry) + b"\x81\xa1x")
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(optimize.strip_config_metadata(entry)) + b"\x81\xa1x")
 
     with pytest.raises(ValueError, match="truncated msgpack data"):
         optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
@@ -5673,7 +5700,7 @@ def test_validate_resume_results_rejects_truncated_trailing_msgpack(tmp_path: Pa
 def test_validate_resume_results_rejects_changed_search_domain(tmp_path: Path):
     entry = _resume_validation_entry()
     config = deepcopy(entry)
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = [0.002, 0.02]
+    _apply_config_overrides(config, {"optimize.bounds.long.strategy.trailing_martingale.entry.initial_qty_fraction": [0.002, 0.02]})
     _write_msgpack_entries(tmp_path / "all_results.bin", [entry])
 
     with pytest.raises(ValueError, match="critical parameters have changed"):

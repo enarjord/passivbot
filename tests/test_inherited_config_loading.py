@@ -30,6 +30,14 @@ def test_invalid_authored_bot_value_reports_its_path_before_synthesized_fixed_bo
         prepare_config(raw, verbose=False)
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_invalid_cooldown_reports_its_canonical_path_before_synthesized_fixed_bounds(side):
+    raw = source()
+    raw["bot"].setdefault(side, {})["entry_cooldown"] = {"base_duration_minutes": -0.1}
+    with pytest.raises(ValueError, match=rf"bot\.{side}\.entry_cooldown\.base_duration_minutes"):
+        prepare_config(raw, verbose=False)
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_nonfinite_policy_reports_an_explicit_canonical_finite_requirement(value):
     raw = source()

@@ -214,6 +214,88 @@ def test_normalization_retains_effective_numeric_types_without_rewriting_source_
     assert type(retained["risk"]["max_positions"]) is float
 
 
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_actual_optimizer_patch_owner_records_equal_side_declarations(kind):
+    from optimize import _apply_config_overrides
+
+    config = load(source(kind))
+    _apply_config_overrides(config, {"bot.short.risk.total_wallet_exposure_limit": 1.5})
+    raw = bot_policy_source_view(config)["bot"]
+    assert raw["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+    _apply_config_overrides(config, {"bot.global.risk.total_wallet_exposure_limit": 2.75})
+    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 2.75
+    assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+def test_actual_optimizer_patch_owner_rebuilds_declared_bound_authority(kind):
+    from config.inherited_bounds import optimize_bounds_source_view
+    from optimize import _apply_config_overrides
+
+    config = load(source(kind))
+    before = get_bound_plan(config).identity()
+    _apply_config_overrides(config, {
+        "optimize.bounds.global.risk.total_wallet_exposure_limit": [1.0, 4.0]})
+    assert get_bound_plan(config).identity() != before
+    assert optimize_bounds_source_view(config)["optimize"]["bounds"] == {
+        "global": {"risk": {"total_wallet_exposure_limit": [1.0, 4.0]}}}
+
+
+@pytest.mark.parametrize("value", [None, [], 0, "invalid"])
+def test_bound_capability_lookup_rejects_a_malformed_optimize_section(value):
+    with pytest.raises(TypeError, match="config.optimize"):
+        get_bound_plan({"optimize": value})
+
+
+def test_actual_optimizer_bound_patch_rejects_unknown_fields_without_changing_authority():
+    from optimize import _apply_config_overrides
+    from config.inherited_bounds import optimize_bounds_source_view
+    config = load(source())
+    before = optimize_bounds_source_view(config)
+    with pytest.raises(ValueError, match="unknown optimizer field"):
+        _apply_config_overrides(config, {"optimize.bounds.global.risk.invented": [1.0, 4.0]})
+    assert optimize_bounds_source_view(config) == before
+
+
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("sample,expected", [(71.0, 70.0), (0.5, 1.0), (1.26, 1.5)])
+def test_actual_canonicalizer_repairs_only_outside_endpoints_before_transform(monkeypatch, kind, sample, expected):
+    import optimize
+    from optimization.shape import build_optimization_shape
+    raw = source(kind)
+    raw["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit"] = [1.0, 70.0, 0.5]
+    config = load(raw)
+    shape = build_optimization_shape(config)
+    vector = optimize.config_to_individual(config, shape.bounds, shape.sig_digits, optimization_shape=shape)
+    index = [key for key, _ in shape.key_paths].index("bot.global.risk.total_wallet_exposure_limit")
+    vector[index] = sample
+    observed = []
+    original = optimize.individual_to_config
+    def observe(values, *args, **kwargs):
+        observed.append(float(values[index]))
+        return original(values, *args, **kwargs)
+    monkeypatch.setattr(optimize, "individual_to_config", observe)
+    result = optimize._canonicalize_optimizer_individual(
+        vector, config, shape.bounds, shape.sig_digits, shape.key_paths, [])
+    assert observed[0] == max(1.0, min(70.0, sample))
+    assert vector[index] == expected
+    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == expected
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_actual_canonicalizer_never_repairs_nonfinite_genes(value):
+    import optimize
+    from optimization.shape import build_optimization_shape
+    config = load(source())
+    shape = build_optimization_shape(config)
+    vector = optimize.config_to_individual(config, shape.bounds, shape.sig_digits, optimization_shape=shape)
+    index = [key for key, _ in shape.key_paths].index("bot.global.risk.total_wallet_exposure_limit")
+    vector[index] = value
+    with pytest.raises(TypeError, match="finite numeric"):
+        optimize._canonicalize_optimizer_individual(
+            vector, config, shape.bounds, shape.sig_digits, shape.key_paths, [])
+
+
 @pytest.mark.parametrize("value,expected", [(0.0, 0), (0.5, 0), (1.5, 2), (4.5, 4), (5.5, 6)])
 def test_continuous_count_gene_uses_existing_canonical_count_adapter(value, expected):
     from config.bot_inheritance import apply_bot_policy_patch
