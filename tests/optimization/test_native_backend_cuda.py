@@ -27,6 +27,8 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     import backtest
     import optimize
     import optimize_suite
+    from config.param_paths import resolve_optimizer_key_path
+    from config_utils import clean_config
     from optimization.evaluation_contract import CONTRACT_KEY
     from suite_runner import ExchangeDataset
     from tools.gpu_parity import build_parser, fixture_inputs
@@ -35,8 +37,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         "--fixture", strategy_kind, "--sides", sides, "--coins", "1" if prefilter else "3", "--bars",
         "3000" if additional_equity or raw_equity else "512",
     ]))
+    columns = config["backtest"]["coins"]
+    config = clean_config(config)
+    config["backtest"]["coins"] = columns
     if suite and sides != "both":
-        # Suites share eligibility across sides; zero exposure disables trading.
+        # Suites share membership; explicit activation keeps the unused side disabled.
         coins = list(config["backtest"]["coins"]["binance"])
         set_side_universe_sources(config, 'approved_coins', {side: list(coins) for side in ("long", "short")})
     config["optimize"].update(backend="gpu", population_size=4, iters=8, seed=12)
@@ -90,17 +95,26 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     if screening:
         config["optimize"]["gpu"]["screening"] = dict(scenarios=["base"], min_survivors=1, survival_fraction=0.5)
     config["optimize"]["bounds"] = {}
+    def set_bound(native_key, values):
+        path = resolve_optimizer_key_path(config, native_key)
+        assert path is not None
+        node = config["optimize"]["bounds"]
+        for part in path[1:-1]:
+            node = node.setdefault(part, {})
+        node[path[-1]] = values
+
     quantity_key = "base_qty_pct" if strategy_kind == "ema_anchor" else "entry_initial_qty_pct"
     for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit"):
-            value = config["bot"][side]["risk"][key]
-            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
-        config["optimize"]["bounds"][f"{side}_{quantity_key}"] = [0.01, 0.05]
+        for key, field in (("n_positions", "max_positions"),
+                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
+            value = config["bot"][side]["risk"][field]
+            set_bound(f"{side}_{key}", [value, value])
+        set_bound(f"{side}_{quantity_key}", [0.01, 0.05])
     if anchors:
-        config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0, 1]
+        set_bound("short_total_wallet_exposure_limit", [0, 1])
     if coupled:
         config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
-        config["optimize"]["bounds"]["long_ema_span_0"] = [2.0, 20.0]
+        set_bound("long_ema_span_0", [2.0, 20.0])
         for side in ("long", "short"):
             config["bot"][side]["unstuck"].update(enabled=True, ema_gating_enabled=True)
         config["coin_overrides"] = {
@@ -114,7 +128,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             config["bot"][side]["hsl"].update(
                 enabled=True, scale_budget_with_excess_allowance=True,
             )
-            config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.44
+            config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.44
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {
                 "wallet_exposure_limit": 0.2, "risk": {"we_excess_allowance_fraction": 0.1},
@@ -123,21 +137,21 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     config["backtest"].update(suite_enabled=suite, scenarios=[{"label": "base"},
         {"label": "window", "coins": ["COIN00"] if prefilter else ["COIN00", "COIN02"]}] if suite else [])
     config_path = tmp_path / "input.json"
-    config_path.write_text(json.dumps(config))
+    config_path.write_text(json.dumps(clean_config(config)))
     seeds_path = tmp_path / "seeds"
     seeds_path.mkdir()
     seed_side = "short" if sides == "short" else "long"
     for index, value in enumerate((0.012, 0.03)):
         seed_config = deepcopy(config)
         if strategy_kind == "ema_anchor":
-            seed_config["bot"][seed_side]["strategy"]["ema_anchor"]["base_qty_pct"] = value
+            seed_config["bot"][seed_side]["strategy"]["ema_anchor"]["base_qty_fraction"] = value
         else:
-            seed_config["bot"][seed_side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = value
+            seed_config["bot"][seed_side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = value
         if anchors:
             seed_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0 if index == 0 else 1
         if coupled:
             seed_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] = 2 if index == 0 else 20
-        (seeds_path / f"{index}.json").write_text(json.dumps(seed_config))
+        (seeds_path / f"{index}.json").write_text(json.dumps(clean_config(seed_config)))
     def forbidden(*_args, **_kwargs):
         pytest.fail("native optimizer CLI must never call a CPU simulation or create a CPU worker pool")
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
@@ -210,7 +224,9 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     monkeypatch.chdir(tmp_path)
     command = ["passivbot optimize", str(config_path), "--offline", "y", "--start", str(seeds_path)]
     if anchors:
-        command += ["--fine-tune-params", "long.strategy.entry.initial_qty_pct"]
+        quantity_path = ("base_qty_fraction" if strategy_kind == "ema_anchor"
+                         else "entry.initial_qty_fraction")
+        command += ["--fine-tune-params", f"long.strategy.{strategy_kind}.{quantity_path}"]
     monkeypatch.setattr(optimize.sys, "argv", command)
     with pytest.raises(SystemExit) as first:
         await optimize.main()
