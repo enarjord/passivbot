@@ -1306,8 +1306,8 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     Mutates config, matching apply_scenario's existing configuration stage.
     """
     from config.universe import restore_universe_sources, universe_sources_affected
-    from config.bot_inheritance import get_bot_policy
-    policy_source = get_bot_policy(config)
+    from config.bot_inheritance import get_bot_policy, reconciled_bot_policy
+    policy_source = reconciled_bot_policy(config)
     bounds_source = config.get("optimize", {}).get("bounds")
     if universe_sources_affected(overrides) and policy_source is None:
         restore_universe_sources(config)
@@ -1320,12 +1320,28 @@ def apply_scenario_overrides(config, overrides, tracker=None):
         reject_ew_scenario_overrides(overrides)
 
         validate_override_paths(config, overrides)
+        canonical = {}
         for dotted_path, value in overrides.items():
             if not isinstance(dotted_path, str):
                 raise ValueError("Scenario override keys must be dotted strings")
-            _apply_override(config, dotted_path, deepcopy(value), tracker)
+            from config.param_paths import resolve_dotted_config_path
+            path = resolve_dotted_config_path(config, dotted_path)
+            if policy_source is not None and path and path[0] == "bot":
+                # Registered inactive strategy declarations remain valid source
+                # pins even though execution intentionally omits their runtime
+                # subtree. The typed source owner validates these selectors and
+                # atomic objects; untyped/non-bot paths keep strict existence.
+                canonical[".".join(path)] = deepcopy(value)
+                previous = config
+                for part in path:
+                    previous = previous.get(part) if isinstance(previous, dict) else None
+                if previous != value:
+                    tracker.update(list(path), deepcopy(previous), deepcopy(value))
+            else:
+                _apply_override(config, dotted_path, deepcopy(value), tracker)
+                canonical[dotted_path] = deepcopy(value)
         from config.activation import apply_activation_patch
-        apply_activation_patch(config, overrides, policy_source=policy_source, bounds_source=bounds_source)
+        apply_activation_patch(config, canonical, policy_source=policy_source, bounds_source=bounds_source)
 
     from config.hsl import normalize_hsl
     from config.schema import get_expanded_config_prototype
