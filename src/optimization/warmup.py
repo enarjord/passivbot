@@ -146,8 +146,9 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
             resolved = require_existing_config_path(config, selector)
         canonical[".".join(resolved)] = deepcopy(value)
     for selector, value in canonical.items():
+        is_bound_patch = selector == "optimize.bounds" or selector.startswith("optimize.bounds.")
         if (not selector.startswith("bot.") and selector != "bot"
-                and selector != "optimize.bounds" and not selector.startswith("optimize.bounds.")):
+                and not (bounds_source is not None and is_bound_patch)):
             _set_path(config, selector.split("."), value)
     apply_bot_config_patch(config, canonical, policy_source=policy_source, bounds_source=bounds_source)
     _restore_matching_optimizer_memberships(config, prepared, require_match=True)
