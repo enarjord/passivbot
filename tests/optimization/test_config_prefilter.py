@@ -111,6 +111,47 @@ def test_scalar_is_pure_graded_and_uses_effective_capacity(
     assert config_prefilter(config(), policy(max=0.2)) == 0
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_entry_threshold_has_inclusive_bounds_and_graded_penalties(
+    require_real_passivbot_rust_module, side
+):
+    candidate = config()
+    candidate["bot"][side] = deepcopy(candidate["bot"]["long"])
+    candidate["live"]["approved_coins"] = {"long": [], "short": []}
+    candidate["live"]["approved_coins"][side] = ["TEST"]
+    strategy = candidate["bot"][side]["strategy"]["trailing_martingale"]
+    entry = strategy["entry"]
+    entry["threshold_base_pct"] = 0.04
+    params = policy("entry_threshold", max=0.2, scale=0.01)
+    params["checks"][0]["sides"] = [side]
+    assert config_prefilter(candidate, params) == 0
+    # A close threshold cannot substitute for the entry-only distance.
+    strategy["close"]["threshold_base_pct"] = 0.5
+    assert config_prefilter(candidate, params) == 0
+    entry["threshold_base_pct"] = 0.042
+    value, findings = inspect_config_prefilter(candidate, params)
+    assert value == pytest.approx(1e6)
+    assert findings[0]["metric"] == "entry_threshold"
+    assert findings[0]["value"] == pytest.approx(0.21)
+    assert findings[0]["exposure_ratio"] == 0.8
+    entry["threshold_base_pct"] = 0.044
+    assert config_prefilter(candidate, params) == pytest.approx(2e6)
+
+
+def test_entry_threshold_uses_worst_exposure_without_multiplying_penalties(
+    require_real_passivbot_rust_module,
+):
+    candidate = config()
+    params = policy("entry_threshold", max=0.15)
+    # Exactly .15 at 80% utilization; .1725 at 95%.
+    assert config_prefilter(candidate, params) == 0
+    params["exposure_ratios"] = [0.8, 0.95, 0.95]
+    value, findings = inspect_config_prefilter(candidate, params)
+    assert value == pytest.approx(22500)
+    assert len(findings) == 1
+    assert findings[0]["exposure_ratio"] == 0.95
+
+
 def test_independent_retracement_and_cooldown_checks(
     require_real_passivbot_rust_module,
 ):
@@ -149,8 +190,9 @@ def test_grid_span_checks_both_bounds_and_incomplete_ladders(
     assert value > 0 and findings[0]["grid_incomplete"]
 
 
+@pytest.mark.parametrize("metric", ["entry_close_span", "entry_threshold"])
 def test_coin_and_unscreened_scenario_overrides_are_checked(
-    require_real_passivbot_rust_module,
+    require_real_passivbot_rust_module, metric,
 ):
     candidate = config()
     candidate["coin_overrides"] = {
@@ -166,7 +208,7 @@ def test_coin_and_unscreened_scenario_overrides_are_checked(
             }
         }
     }
-    params = policy(max=0.1)
+    params = policy(metric, max=0.1)
     assert config_prefilter(candidate, params) == 0
     stress = config()
     value, findings = prefilter_candidate(
@@ -334,8 +376,9 @@ def test_single_coin_dynamic_wel_matches_capacity_and_exposure_cooldown(
     assert config_prefilter(candidate, params) == pytest.approx(3e6)
 
 
+@pytest.mark.parametrize("metric", ["entry_close_span", "entry_threshold"])
 def test_ambiguous_dynamic_multicoin_wel_fails_instead_of_guessing(
-    require_real_passivbot_rust_module,
+    require_real_passivbot_rust_module, metric,
 ):
     candidate = config()
     candidate["bot"]["long"]["risk"]["n_positions"] = 4
@@ -343,22 +386,23 @@ def test_ambiguous_dynamic_multicoin_wel_fails_instead_of_guessing(
     candidate["live"]["approved_coins"]["long"].append("OTHER")
     assert config_prefilter(candidate, None) == 0
     with pytest.raises(ValueError, match="data-dependent dynamic WEL"):
-        config_prefilter(candidate, policy(max=0.2))
+        config_prefilter(candidate, policy(metric, max=0.2))
     candidate["bot"]["long"]["risk"]["n_positions"] = 1
-    assert config_prefilter(candidate, policy(max=0.2)) == 0
+    assert config_prefilter(candidate, policy(metric, max=0.2)) == 0
     candidate["bot"]["long"]["risk"]["n_positions"] = 4
     # Explicit allocations do not depend on the grow-only tradability count.
     candidate["coin_overrides"] = {
         coin: {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
         for coin in ("TEST", "OTHER")
     }
-    assert config_prefilter(candidate, policy(max=0.2)) == 0
+    assert config_prefilter(candidate, policy(metric, max=0.2)) == 0
 
 
-def test_defaults_and_clean_roundtrip_keep_explicit_policy():
+@pytest.mark.parametrize("metric", ["grid_span", "entry_threshold"])
+def test_defaults_and_clean_roundtrip_keep_explicit_policy(metric):
     candidate = config()
     assert candidate["optimize"]["prefilter"]["checks"] == []
-    candidate["optimize"]["prefilter"] = policy("grid_span", min=0.1, max=0.35)
+    candidate["optimize"]["prefilter"] = policy(metric, min=0.1, max=0.35)
     assert (
         clean_config(candidate)["optimize"]["prefilter"]
         == candidate["optimize"]["prefilter"]

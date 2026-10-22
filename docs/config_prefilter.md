@@ -36,6 +36,7 @@ currently require `live.strategy_kind = "trailing_martingale"`.
 | Metric | Measurement |
 |---|---|
 | `entry_close_span` | Entry-to-close landmark distance divided by average position price at each exposure probe. Includes the normalized EMA entry gate; handles partial initial entries and immediate trailing closes separately. |
+| `entry_threshold` | Effective entry activation distance divided by average position price at each exposure probe, including the normalized EMA entry gate and partial initial-entry branch. Excludes close geometry and the subsequent retracement confirmation. |
 | `entry_retracement` | Effective rebound/pullback required to confirm a trailing reentry. Zero for passive or partial initial entries. |
 | `close_retracement` | Effective reversal required to confirm a trailing close. |
 | `entry_cooldown_minutes` | Effective cooldown, including exposure/adverse weights and floor/ceiling. |
@@ -44,6 +45,36 @@ currently require `live.strategy_kind = "trailing_martingale"`.
 Percentage measurements use fractions: `0.10` means 10%. Entry/close landmark
 span uses average position price as denominator, not the entry landmark. These
 measurements identify configured geometry; they do not forecast time to a fill.
+
+For an entry-only ceiling, choose `entry_threshold` rather than the combined
+`entry_close_span`. This illustrative policy penalizes activation distances above
+20% at 80% and 95% of effective per-position capacity:
+
+```json
+{
+  "optimize": {
+    "prefilter": {
+      "exposure_ratios": [0.8, 0.95],
+      "checks": [
+        {
+          "metric": "entry_threshold",
+          "enabled": true,
+          "max": 0.20,
+          "scale": 0.01,
+          "sides": ["long"]
+        }
+      ]
+    }
+  }
+}
+```
+
+A 20% long activation distance from position price 100 gives a threshold at 80;
+a trailing entry still needs its configured retracement confirmation and other
+entry conditions. Equality passes. Each percentage point above the ceiling adds
+one violation unit with this scale. Volatility inputs remain explicit: omitted
+values are zero, not an estimate of normal market volatility. Existing dynamic-WEL
+restrictions below also apply to this check.
 
 ## Explicit probe assumptions
 
@@ -117,7 +148,9 @@ and the violated measurements. They are optimizer penalty evaluations, not measu
 performance. The same F/G values reach ordinary CPU and native GPU evolutionary
 selection, even during scenario screening. Rejections consume candidate evaluation
 budget but submit no simulator work. Filter policy and definition version are part
-of saved-fitness identity; changing enabled policy requires a fresh run.
+of saved-fitness identity; changing enabled policy requires a fresh run. Definition
+version 2 adds `entry_threshold`; checkpoints made with an enabled version 1 policy
+require a fresh run under version 2.
 
 Malformed settings, unsupported strategies and non-finite results raise errors;
 they are not silently converted into passing candidates. Coin membership and

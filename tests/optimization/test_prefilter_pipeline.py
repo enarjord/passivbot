@@ -12,11 +12,11 @@ from test_native_backend import FakeService, execute, guard_cpu, inputs, managed
 from test_native_screening import suite_inputs
 
 
-def rejecting_policy():
+def rejecting_policy(metric="entry_retracement"):
     return {
         "checks": [
             {
-                "metric": "entry_retracement",
+                "metric": metric,
                 "enabled": True,
                 "min": 100,
                 "sides": ["long"],
@@ -31,14 +31,15 @@ def vector(base):
     )
 
 
+@pytest.mark.parametrize("metric", ["entry_retracement", "entry_threshold"])
 @pytest.mark.parametrize("suite_mode", [False, True])
 def test_cpu_prefilter_skips_payload_and_replay_and_activates_constraints(
-    monkeypatch, suite_mode
+    monkeypatch, suite_mode, metric
 ):
     with managed_arrays() as manager:
         base, suite = suite_inputs(manager) if suite_mode else (inputs(manager), None)
         base.config["optimize"]["limits"] = []
-        base.config["optimize"]["prefilter"] = rejecting_policy()
+        base.config["optimize"]["prefilter"] = rejecting_policy(metric)
         base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.build_limit_checks()
         base.use_duplicate_guard = False
@@ -103,9 +104,10 @@ def test_duplicate_rejection_keeps_its_non_replay_provenance(monkeypatch):
         assert reused["metrics"]["backtest_performed"] is False
 
 
+@pytest.mark.parametrize("metric", ["entry_retracement", "entry_threshold"])
 @pytest.mark.parametrize("screening", [False, True])
 def test_all_rejected_gpu_cohorts_reach_evolution_and_resume_without_replay(
-    monkeypatch, tmp_path, screening
+    monkeypatch, tmp_path, screening, metric
 ):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
@@ -115,7 +117,7 @@ def test_all_rejected_gpu_cohorts_reach_evolution_and_resume_without_replay(
             else (inputs(manager), None)
         )
         base.config["optimize"]["limits"] = []
-        base.config["optimize"]["prefilter"] = rejecting_policy()
+        base.config["optimize"]["prefilter"] = rejecting_policy(metric)
         base.config["backtest"]["dynamic_wel_by_tradability"] = False
         base.build_limit_checks()
         records, path = [], tmp_path / "checkpoint.pkl"
