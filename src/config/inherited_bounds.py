@@ -55,7 +55,9 @@ def _source_signature(policy, bindings):
         _remove(source, binding.authoring_path[1:])
     return json.dumps({
         "policy": _without_empty_objects(source),
-        "prepared_membership": [(entry.path, entry.members) for entry in policy._prepared],
+        "prepared_membership": [
+            (entry.path, entry.members, entry.source_present) for entry in policy._prepared
+        ],
         "omitted_fixed_values": [
             (binding.authoring_path, _get(effective, binding.authoring_path[1:]))
             for binding in bindings if binding.source.startswith("omitted_fixed_")

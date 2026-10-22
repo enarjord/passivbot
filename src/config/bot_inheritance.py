@@ -265,7 +265,10 @@ class BotPolicy:
                     authored = _get(source, (side, *field.suffix))
                     expected = _thaw(prepared.source) if prepared.source_present else ABSENT
                     if authored == expected and (not inherited or shared == _thaw(prepared.shared_source)):
-                        value = ResolvedCoinList(prepared.members, _thaw(prepared.source), _thaw(prepared.shared_source))
+                        value = ResolvedCoinList(
+                            prepared.members, _thaw(prepared.source), _thaw(prepared.shared_source),
+                            source_present=prepared.source_present,
+                        )
                 _set(result[side], field.suffix, value)
                 origins.append(LeafOrigin(path, owner, "gene" if owner in self._genes else kind, declaration))
         for derived in self._derived:
@@ -304,8 +307,18 @@ def resolve_bot_policy(source: Mapping, catalog: SideFieldCatalog) -> BotPolicy:
             if type(value) is ResolvedCoinList:
                 if scope == "global":
                     raise TypeError("prepared source membership belongs to a side")
-                prepared.append(_PreparedSource(("bot", scope, *suffix), tuple(value), _freeze(value.source), _freeze(value.shared_source)))
-                _set(values, suffix, deepcopy(value.source))
+                if type(value.source_present) is not bool:
+                    raise TypeError("prepared source presence must be an exact boolean")
+                if not value.source_present and value.source is not None:
+                    raise ValueError("an omitted prepared source cannot carry an authored value")
+                prepared.append(_PreparedSource(
+                    ("bot", scope, *suffix), tuple(value), _freeze(value.source),
+                    _freeze(value.shared_source), value.source_present,
+                ))
+                if value.source_present:
+                    _set(values, suffix, deepcopy(value.source))
+                else:
+                    values[suffix[0]].pop(suffix[1])
     return BotPolicy(catalog, _freeze(source), tuple(prepared))
 
 
@@ -381,7 +394,9 @@ def reconciled_bot_policy(config: Mapping) -> BotPolicy | None:
                 frozen = _get(expected, path)
                 if (type(frozen) is not ResolvedCoinList or current != previous
                         or current.source != frozen.source
-                        or current.shared_source != frozen.shared_source):
+                        or current.shared_source != frozen.shared_source
+                        or type(current.source_present) is not bool
+                        or current.source_present != frozen.source_present):
                     raise ValueError("prepared membership edits must pass through the universe source owner")
             elif current != previous:
                 patches[".".join(("bot", *path))] = deepcopy(current)
@@ -419,7 +434,8 @@ def with_prepared_bot_sources(policy: BotPolicy, prepared_bot: Mapping) -> BotPo
             shared = _get(source, ("global", *suffix), field.default_value())
             if suffix[-1] == "ignored_coins" and shared is None:
                 shared = []
-            if value.source != expected_source or inherited and value.shared_source != shared:
+            if (type(value.source_present) is not bool or value.source_present != present
+                    or value.source != expected_source or inherited and value.shared_source != shared):
                 raise ValueError(f"prepared membership does not match {'.'.join(('bot', side, *suffix))} source")
             prepared[path] = _PreparedSource(
                 path, tuple(value), _freeze(expected_source), _freeze(shared), present,

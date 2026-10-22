@@ -322,7 +322,9 @@ def test_direct_prepared_membership_mutation_cannot_become_source_authority():
 
     policy = resolve_bot_policy({}, catalog())
     effective = policy.effective_view()
-    effective["long"]["universe"]["approved_coins"] = ResolvedCoinList(["AAA"], None, ["AAA"])
+    effective["long"]["universe"]["approved_coins"] = ResolvedCoinList(
+        ["AAA"], None, ["AAA"], source_present=False,
+    )
     policy = with_prepared_bot_sources(policy, effective)
     config = {}
     install_bot_policy(config, policy)
@@ -341,7 +343,9 @@ def test_field_specific_prepared_sources_keep_ignored_omission_distinct_from_nul
         "short": {"universe": {"ignored_coins": None}},
     }, catalog())
     effective = policy.effective_view()
-    effective["long"]["universe"]["ignored_coins"] = ResolvedCoinList(["BBB"], None, source)
+    effective["long"]["universe"]["ignored_coins"] = ResolvedCoinList(
+        ["BBB"], None, source, source_present=False,
+    )
     # A legacy prepared ignored view carried the APPROVED shared source. Its
     # irrelevant attribute must not discard an explicit null clear.
     effective["short"]["universe"]["ignored_coins"] = ResolvedCoinList([], None, ["AAA"])
@@ -352,6 +356,7 @@ def test_field_specific_prepared_sources_keep_ignored_omission_distinct_from_nul
     changed = apply_bot_policy_patch(frozen, {"bot.global.risk.capacity": 3.0})
     assert type(changed.effective_view()["long"]["universe"]["ignored_coins"]) is ResolvedCoinList
     assert changed.effective_view()["long"]["universe"]["ignored_coins"] == ["BBB"]
+    assert changed.effective_view()["long"]["universe"]["ignored_coins"].source_present is False
     assert changed.effective_view()["short"]["universe"]["ignored_coins"] == []
     redeclared = apply_bot_policy_patch(changed, {"bot.global.universe.ignored_coins": source})
     assert type(redeclared.effective_view()["long"]["universe"]["ignored_coins"]) is str
@@ -363,6 +368,33 @@ def test_prepared_source_capture_rejects_a_different_shared_recipe():
 
     policy = resolve_bot_policy({"global": {"universe": {"ignored_coins": "./ignored.json"}}}, catalog())
     effective = policy.effective_view()
-    effective["long"]["universe"]["ignored_coins"] = ResolvedCoinList(["BBB"], None, "./approved.json")
+    effective["long"]["universe"]["ignored_coins"] = ResolvedCoinList(
+        ["BBB"], None, "./approved.json", source_present=False,
+    )
+    with pytest.raises(ValueError, match="does not match .* source"):
+        with_prepared_bot_sources(policy, effective)
+
+
+def test_exact_prepared_source_input_keeps_absence_instead_of_creating_null_clear():
+    source = "./ignored.json"
+    policy = resolve_bot_policy({
+        "global": {"universe": {"ignored_coins": source}},
+        "long": {"universe": {"ignored_coins": ResolvedCoinList(
+            ["BBB"], None, source, source_present=False,
+        )}},
+        "short": {"universe": {"ignored_coins": ResolvedCoinList([], None)}},
+    }, catalog())
+    assert "ignored_coins" not in policy.source_view()["long"]["universe"]
+    assert policy.source_view()["short"]["universe"]["ignored_coins"] is None
+    assert policy.effective_view()["long"]["universe"]["ignored_coins"] == ["BBB"]
+    assert policy.effective_view()["short"]["universe"]["ignored_coins"] == []
+
+
+def test_prepared_capture_requires_presence_to_match_the_original_source():
+    from config.bot_inheritance import with_prepared_bot_sources
+
+    policy = resolve_bot_policy({}, catalog())
+    effective = policy.effective_view()
+    effective["long"]["universe"]["approved_coins"] = ResolvedCoinList(["AAA"], None, ["AAA"])
     with pytest.raises(ValueError, match="does not match .* source"):
         with_prepared_bot_sources(policy, effective)
