@@ -224,7 +224,15 @@ def test_exclusive_end_lookahead_preserves_disabled_results(tmp_path, strategy, 
             candles, markets, ones, "binance", btc, stamps), ones)
         np.testing.assert_array_equal(baseline[0], enabled[0])
         np.testing.assert_array_equal(baseline[1], enabled[1])
-        assert baseline[2] == enabled[2]
+        baseline_metrics, enabled_metrics = dict(baseline[2]), dict(enabled[2])
+        assert baseline_metrics.keys() == enabled_metrics.keys()
+        # Open-position tails enter this floating aggregate in unordered iteration.
+        # Keep all other metrics exact while tolerating only its rounding noise.
+        held_hours = "position_held_time_weighted_mean_hours"
+        assert baseline_metrics.pop(held_hours) == pytest.approx(
+            enabled_metrics.pop(held_hours), rel=0.0, abs=1e-14
+        )
+        assert baseline_metrics == enabled_metrics
         assert enabled[2]["backtest_completion_ratio"] == 1.0
     else:
         from contextlib import ExitStack
