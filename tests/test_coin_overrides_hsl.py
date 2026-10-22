@@ -7,7 +7,7 @@ import pytest
 
 from config.load import prepare_config
 from config.overrides import CONDITIONAL_HSL_OVERRIDE_PATHS, parse_overrides
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype, get_template_config
 from config.hsl import generated_template
 
 
@@ -140,7 +140,7 @@ def test_full_file_hsl_patch_is_ignored_outside_coin_mode(caplog):
 def test_override_file_cannot_author_global_signal_scope(
     global_mode, file_mode, caplog
 ):
-    loaded = generated_template(get_template_config(), file_mode)
+    loaded = generated_template(get_expanded_config_prototype(), file_mode)
     loaded["bot"]["short"]["hsl"]["panic_close_order_type"] = "market"
     parsed = _parse(
         {"BTC": {"override_config_path": "unused-by-test.json"}},

@@ -16,7 +16,7 @@ import pytest
 from config.hsl import generated_template
 from config.load import prepare_config
 from config.project import project_config
-from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
+from config.schema import CONFIG_SCHEMA_VERSION, get_expanded_config_prototype, get_template_config
 from config_utils import sanitize_prepared_config_for_dump
 from json_utils import json_dumps_streamlined, reformat_json_text
 from passivbot_cli.main import main as cli_main
@@ -70,7 +70,7 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     set_side_universe_sources(cfg, 'ignored_coins', "missing-ignored-list.json")
     cfg["backtest"]["end_date"] = "now"
     cfg["backtest"]["filter_by_min_effective_cost"] = None
-    cfg["bot"]["long"]["risk"]["max_positions"] = 3.5
+    cfg["bot"]["long"]["risk"] = {"max_positions": 4.0}
     cfg["metrics"] = {"adg_strategy_eq": 1.0}
     cfg["suite_metrics"] = {"base": {"adg_strategy_eq": 1.0}}
     cfg["optimizer_anchor"] = {"seed": 7}
@@ -105,11 +105,12 @@ def test_full_cleanup_normalizes_result_envelope_and_preserves_authored_sources(
     assert "metrics" not in result["backtest"]
     assert "coins" not in result["backtest"]
     assert "base_config_path" not in result["live"]
-    assert set(result["bot"]["long"]["strategy"]) == {"trailing_martingale"}
+    assert set(result["bot"]["global"]["strategy"]) == {"trailing_martingale"}
+    assert "strategy" not in result["bot"]["long"]
     assert result["coin_overrides"]["BTC"] == {"live": {"account": {"leverage": 3.0}}}
     assert (
-        result["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
-        == cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+        result["bot"]["global"]["risk"]["total_wallet_exposure_limit"]
+        == cfg["bot"]["global"]["risk"]["total_wallet_exposure_limit"]
     )
     assert (
         result["optimize"]["fixed_runtime_overrides"]
@@ -218,7 +219,7 @@ def test_cleanup_preserves_only_declared_nullable_coin_patch_leaves():
 def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_inline):
     outputs = []
     for number in (int, float):
-        cfg = get_template_config()
+        cfg = get_expanded_config_prototype()
         close = {"retracement_volatility_1h_weight": number(0)}
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["close"].update(close)
         cfg["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = number(60)
@@ -444,7 +445,7 @@ def test_cleanup_normalizes_numeric_limit_lists(mode, max_inline, reverse):
 def test_cleanup_resolves_shared_optimizer_bound_numeric_types(mode, side, field):
     outputs = []
     for number in (int, float):
-        cfg = get_template_config()
+        cfg = get_expanded_config_prototype()
         cfg["optimize"]["bounds"][side]["forager"]["score_weights"][field] = [number(0), number(1), 0.01]
         output = render_source(json.dumps(cfg), source=Path("input.json"), mode=mode)
         bound = json.loads(output)["optimize"]["bounds"][side]["forager"]["score_weights"][field]
@@ -504,7 +505,7 @@ def test_varied_configs_match_canonical_pipeline_and_roundtrip(
     mode, hsl_mode, strategy
 ):
     rng = random.Random(711)
-    cfg = generated_template(get_template_config(), hsl_mode)
+    cfg = generated_template(get_expanded_config_prototype(), hsl_mode)
     cfg['bot']["portfolio"]['strategy_kind'] = strategy
     set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC", "ETH"], "short": []})
     cfg["backtest"]["scenarios"] = [{"label": "base"}]
@@ -582,8 +583,10 @@ def test_live_projection_keeps_omitted_side_disabled():
     del cfg["bot"]["long"]
     result = cleanup_config(cfg, mode="live")
     assert "backtest" not in result and "optimize" not in result
-    assert result["bot"]["long"]["enabled"] is False
-    assert result["bot"]["long"]["risk"] == get_template_config()["bot"]["long"]["risk"]
+    assert result["bot"]["long"] == {}
+    prepared = prepare_config(result, live_only=True, verbose=False)
+    assert prepared["bot"]["long"]["enabled"] is False
+    assert prepared["bot"]["long"]["risk"] == get_template_config()["bot"]["global"]["risk"]
 
 
 @pytest.mark.parametrize(
@@ -606,7 +609,7 @@ def test_non_configs_fail_instead_of_becoming_defaults(source):
 def test_legacy_schema_requires_explicit_migration_even_when_hsl_disabled(enabled):
     cfg = get_template_config()
     cfg["config_version"] = "v8.5.0"
-    cfg["bot"]["long"]["hsl"]["enabled"] = enabled
+    cfg["bot"]["long"]["hsl"] = {"enabled": enabled}
     original = deepcopy(cfg)
     with pytest.raises(ValueError, match="migrate-config-v9"):
         cleanup_config(cfg)
