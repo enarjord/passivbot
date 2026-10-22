@@ -6,7 +6,7 @@ import pytest
 import utils
 
 import backtest as backtest_module
-from config_utils import get_template_config
+from config.schema import get_expanded_config_prototype
 from backtest import (
     build_backtest_payload,
     get_backtest_execution_settings,
@@ -16,10 +16,13 @@ from backtest import (
 
 
 def _base_config():
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     for side in ("long", "short"):
         cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
+    set_side_universe_sources(cfg, 'approved_coins', {
+        "long": ["BTC", "ETH"], "short": ["BTC", "ETH"],
+    })
     cfg["backtest"]["maker_fee_override"] = None
     cfg["backtest"]["taker_fee_override"] = None
     return cfg

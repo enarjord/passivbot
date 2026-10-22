@@ -21,13 +21,13 @@ from backtest import (
     _validate_hlcvs_valid_windows,
     build_backtest_payload,
 )
-from config_utils import get_template_config
+from config.schema import get_expanded_config_prototype
 from ohlcv_utils import aggregate_hlcvs
 import utils
 
 
 def _base_config(candle_interval_minutes: int = 1) -> dict:
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["backtest"]["exchanges"] = ["binance"]
     cfg["backtest"]["coins"] = {"binance": ["BTC"]}
     cfg["backtest"]["candle_interval_minutes"] = candle_interval_minutes
