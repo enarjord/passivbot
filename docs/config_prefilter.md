@@ -128,6 +128,8 @@ For every enabled check, the normalized violation is:
 max(0, min_bound - measurement, measurement - max_bound) / scale
 ```
 
+Bound comparisons ignore up to four ULPs (representable floating-point steps)
+of arithmetic roundoff at equality; larger excesses are still penalized.
 Omitted bounds contribute nothing. `scale` and `weight` are positive and default
 to 1. Each check uses its worst violation across applicable coin/side/exposure
 probes. The candidate constraint is `penalty_weight * sum(weight * violation)`.
@@ -149,7 +151,9 @@ performance. The same F/G values reach ordinary CPU and native GPU evolutionary
 selection, even during scenario screening. Rejections consume candidate evaluation
 budget but submit no simulator work. Filter policy and definition version are part
 of saved-fitness identity; changing enabled policy requires a fresh run. Definition
-version 2 adds `entry_threshold`; checkpoints made with an enabled version 1 policy
+version 2 adds `entry_threshold`, resolves reentry-only EMA gates independently
+of initial-entry gates, and preserves inclusive bounds under floating-point
+roundoff. Checkpoints made with an enabled version 1 policy
 require a fresh run under version 2.
 
 Malformed settings, unsupported strategies and non-finite results raise errors;

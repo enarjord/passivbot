@@ -234,7 +234,7 @@ fn calc_initial_entry_price_ask(
     }
 }
 
-fn gate_reentry_price_bid(
+pub(crate) fn gate_reentry_price_bid(
     price: f64,
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
@@ -252,7 +252,7 @@ fn gate_reentry_price_bid(
     }
 }
 
-fn gate_reentry_price_ask(
+pub(crate) fn gate_reentry_price_ask(
     price: f64,
     exchange_params: &ExchangeParams,
     state_params: &StateParams,

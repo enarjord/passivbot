@@ -138,6 +138,52 @@ def test_entry_threshold_has_inclusive_bounds_and_graded_penalties(
     assert config_prefilter(candidate, params) == pytest.approx(2e6)
 
 
+@pytest.mark.parametrize("bound", ["min", "max"])
+def test_entry_threshold_decimal_equality_and_real_excess(
+    require_real_passivbot_rust_module, bound
+):
+    candidate = config()
+    entry = candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]
+    entry.update(threshold_base_pct=0.04, threshold_we_weight=3.5)
+    params = policy("entry_threshold", **{bound: 0.152})
+    # Binary arithmetic yields .15200000000000002 for the decimal equality.
+    assert config_prefilter(candidate, params) == 0
+    entry["threshold_we_weight"] += 1e-8 if bound == "max" else -1e-8
+    assert config_prefilter(candidate, params) > 0
+
+
+def test_bound_roundoff_allowance_is_limited_to_a_few_ulps():
+    import math
+    from optimization.prefilter import _bound_excess
+
+    bound = 0.152
+    assert _bound_excess(math.nextafter(bound, math.inf), bound, lower=False) == 0
+    assert _bound_excess(math.nextafter(bound, -math.inf), bound, lower=True) == 0
+    for lower, direction in [(False, math.inf), (True, -math.inf)]:
+        value = math.nextafter(bound, direction, steps=8)
+        assert _bound_excess(value, bound, lower=lower) > 0
+    # No fixed epsilon may erase a genuine violation near zero.
+    assert _bound_excess(1e-20, 0.0, lower=False) > 0
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("mode", ["all", "reentry"])
+def test_entry_threshold_applies_reentry_ema_gate_independently_of_initial_mode(
+    require_real_passivbot_rust_module, side, mode
+):
+    candidate = config()
+    candidate["bot"][side] = deepcopy(candidate["bot"]["long"])
+    candidate["live"]["approved_coins"] = {"long": [], "short": []}
+    candidate["live"]["approved_coins"][side] = ["TEST"]
+    entry = candidate["bot"][side]["strategy"]["trailing_martingale"]["entry"]
+    entry.update(initial_qty_pct=0.01, initial_ema_dist=0.6, ema_gate_mode=mode)
+    params = policy("entry_threshold", max=0.2)
+    params["checks"][0]["sides"] = [side]
+    constraint, findings = inspect_config_prefilter(candidate, params)
+    assert constraint == pytest.approx(400000)
+    assert findings[0]["value"] == pytest.approx(0.6)
+
+
 def test_entry_threshold_uses_worst_exposure_without_multiplying_penalties(
     require_real_passivbot_rust_module,
 ):

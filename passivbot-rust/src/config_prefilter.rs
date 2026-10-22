@@ -2,7 +2,8 @@
 use crate::closes::{calc_close_retracement_multiplier, calc_close_threshold_pct};
 use crate::entries::{
     calc_entry_distance_multiplier, calc_entry_retracement_multiplier, calc_next_entry_long,
-    calc_next_entry_short, wallet_exposure_limit_with_allowance,
+    calc_next_entry_short, gate_reentry_price_ask, gate_reentry_price_bid,
+    wallet_exposure_limit_with_allowance,
 };
 use crate::strategies::TrailingMartingaleParams;
 use crate::types::{
@@ -304,6 +305,14 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             &TrailingPriceBundle::default(),
         )
     };
+    // Reentry-only gates do not affect the flat initial order above. Ask the
+    // runtime gate directly so every EMA mode measures its actual entry branch.
+    let reentry_gate_price = if p.side == "long" {
+        gate_reentry_price_bid(1.0, &exchange, &normalized_state, &p.strategy.entry)
+    } else {
+        gate_reentry_price_ask(1.0, &exchange, &normalized_state, &p.strategy.entry)
+    };
+    let reentry_distance = (reentry_gate_price - 1.0).abs();
     let mut observations = Vec::new();
     for &ratio in &p.exposure_ratios {
         let (mut distance, mut retracement) = distances(p, ratio * allowed, allowed);
@@ -316,7 +325,7 @@ fn measure(p: &Probe) -> Result<Measurements, String> {
             distance = initial_distance;
             retracement = 0.0;
         } else if p.strategy.entry.ema_gate_mode.gates_reentry() {
-            distance = distance.max(initial_distance);
+            distance = distance.max(reentry_distance);
         }
         let state = StateParams {
             balance: 1.0,
@@ -459,6 +468,71 @@ mod tests {
             assert!(
                 changed.observations[1].entry_close_span > result.observations[1].entry_close_span
             );
+        }
+    }
+
+    #[test]
+    fn entry_threshold_matches_runtime_order_for_every_ema_mode() {
+        use crate::strategies::EmaGateMode;
+        for side in ["long", "short"] {
+            for mode in [
+                EmaGateMode::Disabled,
+                EmaGateMode::Initial,
+                EmaGateMode::Reentry,
+                EmaGateMode::All,
+            ] {
+                let mut p = probe();
+                p.side = side.into();
+                p.calculate_grid = false;
+                p.strategy.entry.ema_gate_mode = mode;
+                p.strategy.entry.initial_qty_pct = 0.01;
+                p.strategy.entry.initial_ema_dist = 0.6;
+                p.strategy.entry.threshold_base_pct = 0.03;
+                p.strategy.entry.threshold_we_weight = 0.0;
+                p.strategy.entry.retracement_base_pct = 0.0;
+                let exchange = ExchangeParams {
+                    qty_step: 1e-12,
+                    price_step: 1e-12,
+                    min_qty: 1e-12,
+                    min_cost: 0.0,
+                    c_mult: 1.0,
+                    ..Default::default()
+                };
+                let state = StateParams {
+                    balance: 1.0,
+                    order_book: OrderBook { bid: 1.0, ask: 1.0 },
+                    ema_bands: EMABands {
+                        lower: 1.0,
+                        upper: 1.0,
+                    },
+                    ..Default::default()
+                };
+                let runtime = RuntimeOrderContext {
+                    effective_wallet_exposure_limit: 1.0,
+                };
+                let position = Position {
+                    size: if side == "long" { 0.8 } else { -0.8 },
+                    price: 1.0,
+                };
+                let entry_fn = if side == "long" {
+                    calc_next_entry_long
+                } else {
+                    calc_next_entry_short
+                };
+                let order = entry_fn(
+                    &exchange,
+                    &state,
+                    &bot(&p),
+                    &runtime,
+                    &p.strategy.entry,
+                    &position,
+                    &TrailingPriceBundle::default(),
+                );
+                assert!(order.qty.abs() > 0.0);
+                let threshold = measure(&p).unwrap().observations[0].entry_threshold;
+                assert!((threshold - (order.price - 1.0).abs()).abs() < 1e-12);
+                assert!((threshold - if mode.gates_reentry() { 0.6 } else { 0.03 }).abs() < 1e-12);
+            }
         }
     }
 
