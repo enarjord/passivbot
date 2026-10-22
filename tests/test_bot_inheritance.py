@@ -263,3 +263,58 @@ def test_catalog_requires_explicit_compatible_common_defaults():
     from config.field_registry import get_field_registry
     with pytest.raises(ValueError, match="missing explicit common default"):
         SideFieldCatalog.from_registry(get_field_registry(), common_defaults={})
+
+
+def test_prepared_envelope_retains_one_typed_source_and_exports_sparse_pins():
+    import json
+    from config.bot_inheritance import (
+        bot_policy_source_view, get_bot_policy, install_bot_policy,
+    )
+
+    policy = resolve_bot_policy({"short": {"risk": {"capacity": 1.0}}}, catalog())
+    config = {"config_version": "v9.0.0"}
+    install_bot_policy(config, policy)
+    assert get_bot_policy(config) is policy
+    exported = bot_policy_source_view(config, include_defaults=True)
+    assert exported["bot"]["short"] == {"risk": {"capacity": 1.0}}
+    assert "long" not in exported["bot"]
+    assert get_bot_policy(json.loads(json.dumps(config))) is None
+    exported["bot"]["short"]["risk"]["capacity"] = 9.0
+    assert policy.source_view()["short"]["risk"]["capacity"] == 1.0
+
+
+def test_field_specific_prepared_sources_keep_ignored_omission_distinct_from_null(monkeypatch):
+    from pathlib import Path
+    from config.bot_inheritance import with_prepared_bot_sources
+
+    source = "./ignored.json"
+    policy = resolve_bot_policy({
+        "global": {"universe": {"ignored_coins": source}},
+        "short": {"universe": {"ignored_coins": None}},
+    }, catalog())
+    effective = policy.effective_view()
+    effective["long"]["universe"]["ignored_coins"] = ResolvedCoinList(["BBB"], None, source)
+    # A legacy prepared ignored view carried the APPROVED shared source. Its
+    # irrelevant attribute must not discard an explicit null clear.
+    effective["short"]["universe"]["ignored_coins"] = ResolvedCoinList([], None, ["AAA"])
+    monkeypatch.setattr(Path, "open", lambda *_a, **_k: pytest.fail("unexpected source read"))
+    frozen = with_prepared_bot_sources(policy, effective)
+    assert "universe" not in frozen.source_view().get("long", {})
+    assert frozen.source_view()["short"]["universe"]["ignored_coins"] is None
+    changed = apply_bot_policy_patch(frozen, {"bot.global.risk.capacity": 3.0})
+    assert type(changed.effective_view()["long"]["universe"]["ignored_coins"]) is ResolvedCoinList
+    assert changed.effective_view()["long"]["universe"]["ignored_coins"] == ["BBB"]
+    assert changed.effective_view()["short"]["universe"]["ignored_coins"] == []
+    redeclared = apply_bot_policy_patch(changed, {"bot.global.universe.ignored_coins": source})
+    assert type(redeclared.effective_view()["long"]["universe"]["ignored_coins"]) is str
+    assert redeclared.effective_view()["short"]["universe"]["ignored_coins"] == []
+
+
+def test_prepared_source_capture_rejects_a_different_shared_recipe():
+    from config.bot_inheritance import with_prepared_bot_sources
+
+    policy = resolve_bot_policy({"global": {"universe": {"ignored_coins": "./ignored.json"}}}, catalog())
+    effective = policy.effective_view()
+    effective["long"]["universe"]["ignored_coins"] = ResolvedCoinList(["BBB"], None, "./approved.json")
+    with pytest.raises(ValueError, match="does not match .* source"):
+        with_prepared_bot_sources(policy, effective)

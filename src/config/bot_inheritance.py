@@ -197,6 +197,7 @@ class _PreparedSource:
     members: tuple[str, ...]
     source: Any
     shared_source: Any
+    source_present: bool = True
 
 
 @dataclass(frozen=True)
@@ -262,7 +263,8 @@ class BotPolicy:
                     if prepared.path != path:
                         continue
                     authored = _get(source, (side, *field.suffix))
-                    if authored == _thaw(prepared.source) and (not inherited or shared == _thaw(prepared.shared_source)):
+                    expected = _thaw(prepared.source) if prepared.source_present else ABSENT
+                    if authored == expected and (not inherited or shared == _thaw(prepared.shared_source)):
                         value = ResolvedCoinList(prepared.members, _thaw(prepared.source), _thaw(prepared.shared_source))
                 _set(result[side], field.suffix, value)
                 origins.append(LeafOrigin(path, owner, "gene" if owner in self._genes else kind, declaration))
@@ -305,6 +307,83 @@ def resolve_bot_policy(source: Mapping, catalog: SideFieldCatalog) -> BotPolicy:
                 prepared.append(_PreparedSource(("bot", scope, *suffix), tuple(value), _freeze(value.source), _freeze(value.shared_source)))
                 _set(values, suffix, deepcopy(value.source))
     return BotPolicy(catalog, _freeze(source), tuple(prepared))
+
+
+class PreparedBotPolicy(dict):
+    """Runtime bot view carrying one non-JSON, typed source authority."""
+
+    def __init__(self, values: Mapping, policy: BotPolicy):
+        if type(policy) is not BotPolicy:
+            raise TypeError("a typed BotPolicy is required")
+        super().__init__(deepcopy(values))
+        self._bot_policy = policy
+
+
+def get_bot_policy(config: Mapping) -> BotPolicy | None:
+    bot = config.get("bot")
+    if type(bot) is not PreparedBotPolicy:
+        return None
+    policy = getattr(bot, "_bot_policy", None)
+    if type(policy) is not BotPolicy:
+        raise TypeError("prepared bot policy has invalid source authority")
+    return policy
+
+
+def install_bot_policy(config: dict, policy: BotPolicy, *, effective_bot=None) -> None:
+    """Install a defensive runtime projection after its owning preparation."""
+    if type(policy) is not BotPolicy:
+        raise TypeError("a typed BotPolicy is required")
+    config["bot"] = PreparedBotPolicy(
+        policy.effective_view() if effective_bot is None else effective_bot, policy,
+    )
+
+
+def bot_policy_source_view(config: Mapping, *, include_defaults=False, candidate=False):
+    """Project trusted source, or the explicitly materialized candidate output.
+
+    Callers apply declared changes through ``apply_bot_policy_patch`` before
+    exporting. Plain JSON fields never become a retained internal snapshot.
+    """
+    result = deepcopy(dict(config))
+    policy = get_bot_policy(config)
+    if policy is not None:
+        result["bot"] = (policy.candidate_view() if candidate else
+                         policy.source_view(include_defaults=include_defaults))
+    return result
+
+
+def with_prepared_bot_sources(policy: BotPolicy, prepared_bot: Mapping) -> BotPolicy:
+    """Capture only exact prepared source objects, preserving raw omission.
+
+    The universe owner resolves each field's shared binding before this call.
+    In particular an inherited ignored list uses the ignored shared source,
+    rather than the approved source. No file or metadata value is consulted.
+    """
+    if type(policy) is not BotPolicy:
+        raise TypeError("a typed BotPolicy is required")
+    source = policy.source_view()
+    prepared = {entry.path: entry for entry in policy._prepared}
+    for side in SIDES:
+        for suffix in SOURCE_FIELDS:
+            path = ("bot", side, *suffix)
+            prepared.pop(path, None)
+            value = _get(prepared_bot, (side, *suffix))
+            if type(value) is not ResolvedCoinList:
+                continue
+            raw = _get(source, (side, *suffix))
+            present = raw is not ABSENT
+            inherited = not present or suffix[-1] == "approved_coins" and raw is None
+            expected_source = raw if present else None
+            field = policy.catalog.find(suffix)
+            shared = _get(source, ("global", *suffix), field.default_value())
+            if suffix[-1] == "ignored_coins" and shared is None:
+                shared = []
+            if value.source != expected_source or inherited and value.shared_source != shared:
+                raise ValueError(f"prepared membership does not match {'.'.join(('bot', side, *suffix))} source")
+            prepared[path] = _PreparedSource(
+                path, tuple(value), _freeze(expected_source), _freeze(shared), present,
+            )
+    return replace(policy, _prepared=tuple(prepared.values()))
 
 
 def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *, channel="authored") -> BotPolicy:
