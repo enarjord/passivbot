@@ -8,7 +8,7 @@ import json
 import numpy as np
 import pytest
 
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 BASE = 1_704_067_200_000
@@ -26,7 +26,7 @@ async def test_live_unknown_inception_retries_then_admits_without_losing_known_f
 
     bot = object.__new__(live.Passivbot)
     coin, symbol, known = "AAA", "AAA/USDT:USDT", "BBB/USDT:USDT"
-    bot.config = get_template_config()
+    bot.config = get_expanded_config_prototype()
     bot.config["bot"]["long"]["enabled"] = True
     bot.exchange = exchange
     bot.first_timestamps = {coin: unknown, symbol: unknown, known: BASE}
@@ -59,7 +59,7 @@ async def test_live_resolved_alias_repairs_unknown_symbol_without_refetch(monkey
     import passivbot as live
     coin, symbol = "AAA", "AAA/USDT:USDT"
     bot = object.__new__(live.Passivbot)
-    bot.config = get_template_config()
+    bot.config = get_expanded_config_prototype()
     bot.config["bot"]["long"]["enabled"] = True
     bot.exchange = "binance"
     bot.first_timestamps = {coin: BASE, symbol: unknown}
@@ -76,7 +76,7 @@ async def test_live_resolved_alias_repairs_unknown_symbol_without_refetch(monkey
 
 
 def _cache_config(tmp_path, ages):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"].update(
         base_dir=str(tmp_path / "results"), compress_cache=False,
         start_date="2024-01-01", end_date="2024-01-02", exchanges=["binance"],

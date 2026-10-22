@@ -712,8 +712,8 @@ def test_post_process_disable_plotting_skips_all_figure_generation(
         "disable_plotting": True,
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 0.0},
+            "long": {"risk": {"total_wallet_exposure_limit": 1.0}},
+            "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
         },
         "live": {},
     }
@@ -787,11 +787,11 @@ def test_post_process_writes_original_config_for_dataset_override(
         },
         "bot": {
             "long": {
-                "total_wallet_exposure_limit": 1.0,
+                "risk": {"total_wallet_exposure_limit": 1.0},
                 "universe": {"approved_coins": ["BTC"]},
             },
             "short": {
-                "total_wallet_exposure_limit": 0.0,
+                "risk": {"total_wallet_exposure_limit": 0.0},
                 "universe": {"approved_coins": []},
             },
         },
@@ -891,8 +891,8 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         "disable_plotting": "coin_fills",
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 0.0},
+            "long": {"risk": {"total_wallet_exposure_limit": 1.0}},
+            "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
         },
         "live": {},
     }
@@ -959,8 +959,8 @@ def test_post_process_visible_metrics_filters_logged_output_only(
             "visible_metrics": None,
         },
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 0.0},
+            "long": {"risk": {"total_wallet_exposure_limit": 1.0}},
+            "short": {"risk": {"total_wallet_exposure_limit": 0.0}},
         },
         "live": {},
         "optimize": {
