@@ -74,6 +74,15 @@ def validate_authored_config(config, template, *, policy_context=None):
     from .schema import get_expanded_config_prototype
 
     schema = get_expanded_config_prototype()
+    # A referenced coin document has one existing standalone allocation leaf.
+    # Preserve that explicit code-owned validation extension without accepting
+    # arbitrary caller-template fields as canonical bot policy.
+    from .field_policies import OVERRIDABLE_STANDALONE_BOT_KEYS
+    for side in ("long", "short"):
+        declared = template.get("bot", {}).get(side, {})
+        for key in OVERRIDABLE_STANDALONE_BOT_KEYS:
+            if key in declared:
+                schema["bot"][side][key] = deepcopy(declared[key])
     policy_context = config if policy_context is None else policy_context
     # Added by the loader for relative file resolution, rather than user policy.
     schema["live"]["base_config_path"] = ""

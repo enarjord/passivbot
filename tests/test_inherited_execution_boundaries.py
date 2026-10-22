@@ -164,6 +164,38 @@ def test_saved_derived_snapshot_reloads_as_ordinary_policy_without_changing_auth
     assert get_bot_policy(config)._derived
 
 
+@pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("scenario_span", [None, 71.25])
+def test_scenario_coupling_preserves_transformed_candidate_before_explicit_overrides(kind, scenario_span):
+    from config.bot_inheritance import apply_bot_policy_patch
+    from optimization.warmup import _finalize_optimizer_vector_config
+
+    raw = source(kind)
+    spans = {"ema_span_0_minutes": 17.25, "ema_span_1_minutes": 211.75}
+    strategy = {"entry": spans} if kind == "trailing_martingale" else spans
+    raw["bot"]["long"] = {"strategy": {kind: deepcopy(strategy)}}
+    raw["bot"]["short"]["strategy"] = {kind: deepcopy(strategy)}
+    suffix = f"strategy.{kind}" + (".entry" if kind == "trailing_martingale" else "")
+    raw["optimize"]["enable_overrides"] = ["mirror_short_from_long", "couple_unstuck_ema_spans"]
+    overrides = {} if scenario_span is None else {f"bot.short.{suffix}.ema_span_0_minutes": scenario_span}
+    raw["backtest"] = {"scenarios": [{"label": "candidate", "overrides": overrides}]}
+    config = load(raw)
+    policy = apply_bot_policy_patch(get_bot_policy(config),
+        {f"bot.long.{suffix}.ema_span_0_minutes": 17.2}, channel="gene")
+    install_bot_policy(config, policy)
+    candidate = _finalize_optimizer_vector_config(config)
+    source_before_repeat = bot_policy_source_view(candidate)["bot"]
+    saved = candidate["backtest"]["scenarios"][0]["overrides"]
+    assert saved["bot.short.unstuck.ema_span_0_minutes"] == (17.2 if scenario_span is None else scenario_span)
+    effective_strategy = candidate["bot"]["short"]["strategy"][kind]
+    if kind == "trailing_martingale":
+        effective_strategy = effective_strategy["entry"]
+    assert effective_strategy["ema_span_0_minutes"] == 17.2
+    repeated = _finalize_optimizer_vector_config(deepcopy(candidate))
+    assert repeated == candidate
+    assert bot_policy_source_view(repeated)["bot"] == source_before_repeat
+
+
 def test_normalization_retains_effective_numeric_types_without_rewriting_source_types():
     raw = source()
     raw["bot"]["global"].update({

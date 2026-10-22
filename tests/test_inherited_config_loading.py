@@ -38,6 +38,20 @@ def test_nonfinite_policy_reports_an_explicit_canonical_finite_requirement(value
         prepare_config(raw, verbose=False)
 
 
+def test_only_explicit_coin_file_template_extension_accepts_standalone_allocation():
+    from config.authored import validate_authored_config
+    raw = {"config_version": "v9.0.0", "bot": {"long": {"wallet_exposure_limit": 0.2}}}
+    with pytest.raises(ValueError, match="wallet_exposure_limit.*unknown"):
+        validate_authored_config(raw, get_expanded_config_prototype())
+    file_schema = get_template_config()
+    file_schema["bot"]["long"]["wallet_exposure_limit"] = None
+    validate_authored_config(raw, file_schema)
+    file_schema["bot"]["long"]["invented_policy"] = None
+    raw["bot"]["long"]["invented_policy"] = 0.3
+    with pytest.raises(ValueError, match="invented_policy.*unknown"):
+        validate_authored_config(raw, file_schema)
+
+
 def test_lean_template_has_common_profile_and_no_side_permission_pins():
     raw = get_template_config()
     assert raw["bot"]["long"] == raw["bot"]["short"] == {}
