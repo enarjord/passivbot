@@ -202,6 +202,7 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
     config = get_template_config()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["binance"],
                               start_date=ts_to_date(START), end_date=ts_to_date(START + 9*60000),
                               compress_cache=False, gap_tolerance_ohlcvs_minutes=0)
@@ -486,6 +487,7 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
         data["ETH"] = value
         path.write_text(json.dumps(data))
     config = get_template_config()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
     set_side_universe_sources(config, 'approved_coins', {'long': ['ETH', 'UNLISTED'], 'short': []})

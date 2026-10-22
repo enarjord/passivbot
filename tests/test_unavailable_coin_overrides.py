@@ -13,6 +13,9 @@ def make_bot(overrides):
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
     bot.config = {
+        "bot": {"long": {"enabled": True, "risk": {
+            "max_positions": 1, "total_wallet_exposure_limit": 1.0,
+        }}, "short": {"enabled": False}},
         "coin_overrides": overrides,
         "live": {"modes": {"long": None, "short": None}},
     }
