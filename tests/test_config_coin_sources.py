@@ -23,6 +23,7 @@ def _base_config():
         },
         "bot": {
             "long": {
+                "enabled": True,
                 "risk": {
                     "max_positions": 4,
                     "total_wallet_exposure_limit": 1.0
@@ -33,6 +34,7 @@ def _base_config():
                 }
             },
             "short": {
+                "enabled": False,
                 "risk": {
                     "max_positions": 0,
                     "total_wallet_exposure_limit": 0.0

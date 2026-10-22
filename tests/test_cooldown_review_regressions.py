@@ -215,6 +215,7 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    cfg["bot"][side]["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
@@ -253,6 +254,7 @@ def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    cfg["bot"]['long']["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"]["long"]
@@ -270,6 +272,7 @@ def test_active_rms_consumer_uses_larger_span_bound_and_zero_consumers_need_no_r
     from warmup_utils import compute_backtest_warmup_minutes
 
     cfg = get_template_config()
+    cfg["bot"]['long']["enabled"] = True
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_minutes"] = [60.0, 240.5]
     cfg = prepare_config(cfg, verbose=False)
@@ -284,6 +287,7 @@ def test_unbounded_seed_ceiling_projects_to_finite_search_upper_bound():
     from optimize import config_to_individual
 
     cfg = get_template_config()
+    cfg["bot"]['long']["enabled"] = True
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["max_duration_minutes"] = [10.0, 30.0]
     cfg = prepare_config(cfg, verbose=False)
     shape = build_optimization_shape(cfg)
@@ -315,6 +319,7 @@ def test_joint_ceiling_and_modifier_search_from_null_default(side, modifier):
 @pytest.mark.parametrize("positive_bound", [False, True])
 def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side, consumer, positive_bound):
     cfg = get_template_config()
+    cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
@@ -380,6 +385,7 @@ def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch
 @pytest.mark.parametrize("reactivates", [False, True])
 def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consumer, reactivates):
     cfg = get_template_config()
+    cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
     cfg["bot"][side]["risk"][gate] = 0
@@ -554,6 +560,7 @@ def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, elig
     from test_backtest_directional_eligibility import _synthetic_inputs
 
     cfg = get_template_config()
+    cfg["bot"][side]["enabled"] = True
     cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
     bounds = cfg["optimize"]["bounds"][side]
     bounds["risk"].update(max_positions=slots, total_wallet_exposure_limit=[1.0, 1.0])
@@ -586,6 +593,7 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
     from test_backtest_directional_eligibility import _synthetic_inputs
 
     cfg = get_template_config()
+    cfg["bot"][side]["enabled"] = True
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"].update(
         base_duration_minutes=base_bounds[1], min_duration_minutes=floor_bounds[1],

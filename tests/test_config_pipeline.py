@@ -16,6 +16,7 @@ from config import (
     prepare_config,
     project_config,
 )
+from config.schema import get_expanded_config_prototype
 from config.optimize_bounds import flatten_optimize_bounds, get_optimize_bounds_defaults
 from config.overrides import parse_overrides
 from config.strategy import build_runtime_strategy_side
@@ -224,7 +225,7 @@ def test_authored_coin_path_pins_reject_aliases_and_global_policy(path, location
 def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
     from config.hsl import require_live_balance_support
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
     override = 100.0 if location == "runtime" else None
     if location == "config":
@@ -239,7 +240,7 @@ def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
 def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     from config.hsl import validate_optimizer_metrics
 
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
         validate_optimizer_metrics(config, ["hard_stop_restarts"])
@@ -329,7 +330,7 @@ def test_rust_strategy_spec_matches_generated_strategy_optimize_bounds(strategy_
 
 
 def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_gate_mode"
     ] = "REENTRY"
@@ -355,7 +356,7 @@ def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound()
 
 
 def test_prepare_config_rejects_invalid_trailing_martingale_ema_gate_mode():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_gate_mode"
     ] = "re_entry"
@@ -445,7 +446,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
     assert (
         _strategy_side(prepared, "long")["entry"]["ema_span_0_minutes"]
-        == _strategy_side(get_template_config(), "long", "trailing_martingale")[
+        == _strategy_side(get_template_config(), "global", "trailing_martingale")[
             "entry"
         ]["ema_span_0_minutes"]
     )
@@ -588,7 +589,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
 
 
 def test_prepare_config_preserves_nested_strategy_namespace():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_span_0_minutes"
     ] = 321.0
@@ -609,7 +610,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 
 
 def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.5
     source["bot"]["long"]["strategy"]["ema_anchor"] = {
@@ -666,7 +667,7 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
 
 
 def test_prepare_config_rejects_negative_entry_cooldown_minutes():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = -0.1
 
     with pytest.raises(ValueError, match="bot.long.entry_cooldown.base_duration_minutes"):
@@ -674,7 +675,7 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
 
 
 def test_prepare_config_rejects_positive_twel_with_zero_positions():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     risk = source["bot"]["long"]["risk"]
     risk["total_wallet_exposure_limit"] = 1.0
     risk["max_positions"] = 0
@@ -692,17 +693,17 @@ def test_prepare_config_rejects_positive_twel_with_zero_positions():
 
 @pytest.mark.parametrize("n_positions", [-1, -0.1])
 def test_prepare_config_rejects_negative_positions_even_when_side_disabled(n_positions):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     risk = source["bot"]["short"]["risk"]
     risk["total_wallet_exposure_limit"] = 0.0
     risk["max_positions"] = n_positions
 
-    with pytest.raises(ValueError, match=r"bot\.short\.risk\.max_positions"):
+    with pytest.raises((TypeError, ValueError), match=r"bot\.short\.risk\.max_positions"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_rejects_retired_bounded_selector():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "BOUNDED"
     with pytest.raises(ValueError, match="we_excess_allowance_mode.*unknown configuration field"):
         prepare_config(source, verbose=False)
@@ -723,7 +724,7 @@ def test_parse_overrides_rejects_retired_raw_coin_override():
 
 
 def test_prepare_config_rejects_invalid_we_excess_allowance_mode():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "raw"
 
     with pytest.raises(ValueError, match="bot.long.risk.we_excess_allowance_mode"):
@@ -794,11 +795,11 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
     )
     assert (
         prepared["bot"]["long"]["filter_volume_ema_span_1m"]
-        == template["bot"]["long"]["forager"]["volume_ema_span_minutes"]
+        == template["bot"]["global"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
         _strategy_side(prepared, "long")["entry"]["ema_span_0_minutes"]
-        == _strategy_side(template, "long", "trailing_martingale")["entry"][
+        == _strategy_side(template, "global", "trailing_martingale")["entry"][
             "ema_span_0_minutes"
         ]
     )
@@ -813,7 +814,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
 def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifact(
     tmp_path,
 ):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     rounded = {
         "volume": 0.323,
@@ -969,7 +970,7 @@ def test_prepare_config_rejects_malformed_config_version():
 
 
 def test_prepare_config_preserves_independent_memory_spans():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 30.5
     source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
     source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 90.5
@@ -1150,7 +1151,7 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
 
 
 def test_prepare_config_preserves_fractional_hsl_ema_span():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1.25
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1159,7 +1160,7 @@ def test_prepare_config_preserves_fractional_hsl_ema_span():
 
 
 def test_prepare_config_rejects_retired_hsl_terminal_threshold():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.20
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
@@ -1200,7 +1201,7 @@ def test_prepare_config_rejects_retired_hsl_terminal_threshold():
 def test_prepare_config_rejects_invalid_hsl_risk_unstuck_numerics(
     group, field, value, match
 ):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"][group][field] = value
 
     with pytest.raises((TypeError, ValueError), match=match):
@@ -1298,8 +1299,8 @@ def test_prepare_config_rejects_retired_entry_grid_inflation(enabled, location):
 
 def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
     source = get_template_config()
-    trailing_martingale = source["bot"]["long"]["strategy"]["trailing_martingale"]
-    risk = source["bot"]["long"]["risk"]
+    trailing_martingale = source["bot"]["global"]["strategy"]["trailing_martingale"]
+    risk = source["bot"]["global"]["risk"]
     trailing_martingale.pop("volatility_ema_span_1h_candles")
     trailing_martingale.pop("volatility_ema_span_minutes")
     for key in (
@@ -1320,8 +1321,8 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
 
     long_strategy = _strategy_side(prepared, "long")
     long_risk = prepared["bot"]["long"]["risk"]
-    template_strategy = _strategy_side(get_template_config(), "long")
-    template_risk = get_template_config()["bot"]["long"]["risk"]
+    template_strategy = _strategy_side(get_template_config(), "global")
+    template_risk = get_template_config()["bot"]["global"]["risk"]
     assert long_strategy["volatility_ema_span_1h_candles"] == pytest.approx(
         template_strategy["volatility_ema_span_1h_candles"]
     )
@@ -1351,7 +1352,7 @@ def test_prepare_config_sparse_canonical_bot_omissions_hydrate_defaults(caplog):
 
 
 def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source['bot']['long']['risk']['total_exposure_enforcer']['policy'] = "REDUCE_PORTFOLIO"
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1366,7 +1367,7 @@ def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():
 
 
 def test_prepare_config_rejects_invalid_twel_policy():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source['bot']['long']['risk']['total_exposure_enforcer']['policy'] = "least_stuck"
 
     with pytest.raises(
@@ -1389,10 +1390,11 @@ def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
 
     prepared = prepare_config(load_fake_hsl_config(), verbose=False, target="live")
 
-    assert prepared["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
-    assert _strategy_side(prepared, "short")["entry"][
-        "double_down_factor"
-    ] == pytest.approx(0.5)
+    assert prepared["bot"]["long"]["enabled"] is True
+    assert prepared["bot"]["short"]["enabled"] is False
+    # Turning a side off retains the common profile for later activation.
+    assert prepared["bot"]["short"]["risk"] == prepared["bot"]["long"]["risk"]
+    assert _strategy_side(prepared, "short") == _strategy_side(prepared, "long")
 
 
 
@@ -1402,7 +1404,7 @@ def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
 
 
 def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readiness_only():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 0.0,
         "ema_readiness": 0.0,
@@ -1424,7 +1426,7 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
 
 
 def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
     source["bot"]["short"]["risk"]["max_positions"] = 1
     source["bot"]["short"]["forager"]["score_weights"] = {

@@ -7,7 +7,7 @@ import pytest
 from config.field_registry import get_field_registry
 from config.field_spec import CoinOverridePolicy, FieldDomain, FieldRegistry, FieldSpec, FieldType, NO_DEFAULT
 from config.hsl import FIELDS as HSL_FIELDS, generated_template
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from config.strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 from tools.clean_config import normalize_export_numbers
 from tools.generate_config_field_reference import DEFAULT_OUTPUT, main, render_reference
@@ -30,7 +30,7 @@ def _settings(value, path=()):
 
 def test_every_template_setting_has_an_explicit_descriptor():
     registry = get_field_registry()
-    missing = [".".join(map(str, path)) for path, _ in _settings(get_template_config())
+    missing = [".".join(map(str, path)) for path, _ in _settings(get_expanded_config_prototype())
                if registry.find(path) is None]
     assert missing == []
 
@@ -44,10 +44,10 @@ def test_only_documented_optional_authority_lacks_exact_path_defaults():
 def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
     import config.schema
 
-    template = get_template_config()
+    template = get_expanded_config_prototype()
     template["bot"]["long"]["risk"]["max_positions"] = 7.0
     template["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 60
-    monkeypatch.setattr(config.schema, "get_template_config", lambda: deepcopy(template))
+    monkeypatch.setattr(config.schema, "get_expanded_config_prototype", lambda: deepcopy(template))
     registry = get_field_registry()
     assert registry.find(("bot", "long", "risk", "max_positions")).numeric_type is int
     assert registry.find(("bot", "long", "unstuck", "ema_span_0_minutes")).numeric_type is float

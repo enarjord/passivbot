@@ -30,6 +30,14 @@ def test_invalid_authored_bot_value_reports_its_path_before_synthesized_fixed_bo
         prepare_config(raw, verbose=False)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_policy_reports_an_explicit_canonical_finite_requirement(value):
+    raw = source()
+    raw["bot"]["long"] = {"risk": {"total_wallet_exposure_limit": value}}
+    with pytest.raises(ValueError, match=r"bot\.long\.risk\.total_wallet_exposure_limit must be finite"):
+        prepare_config(raw, verbose=False)
+
+
 def test_lean_template_has_common_profile_and_no_side_permission_pins():
     raw = get_template_config()
     assert raw["bot"]["long"] == raw["bot"]["short"] == {}

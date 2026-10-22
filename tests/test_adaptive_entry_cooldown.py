@@ -241,6 +241,7 @@ def test_zero_base_adaptive_fill_horizon_uses_ceiling():
     from passivbot import Passivbot
 
     cfg = prepare_config(get_template_config(), verbose=False)
+    cfg["bot"]['long']["enabled"] = True
     ec = cfg["bot"]["long"]["entry_cooldown"]
     ec.update(base_duration_minutes=0.0, max_duration_minutes=45.0)
     ec["weights_minutes"]["adverse_directionality"] = 20.0
@@ -257,6 +258,7 @@ def test_optimizer_paths_and_warmup_follow_enabled_bounds():
     from optimization.warmup import compute_optimizer_per_coin_warmup_minutes
 
     cfg = get_template_config()
+    cfg["bot"]['long']["enabled"] = True
     cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["weights_minutes"] = {
@@ -643,6 +645,8 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
 
     bot = Passivbot.__new__(Passivbot)
     bot.config = prepare_config(get_template_config(), verbose=False)
+    bot.config["bot"]['long']["enabled"] = True
+    bot.config["bot"]['short']["enabled"] = True
     other = "short" if side == "long" else "long"
     for pside in (side, other):
         bot.config["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
@@ -1161,6 +1165,7 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
 
     bot = Passivbot.__new__(Passivbot)
     cfg = prepare_config(get_template_config(), verbose=False)
+    cfg["bot"][side]["enabled"] = True
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 5.0
@@ -1442,6 +1447,7 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
 
     bot = Passivbot.__new__(Passivbot)
     cfg = prepare_config(get_template_config(), verbose=False)
+    cfg["bot"][side]["enabled"] = True
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=float(pside == side))
     set_side_universe_sources(cfg, 'approved_coins', {pside: ["BTC", "ETH"] for pside in ("long", "short")})
@@ -1491,6 +1497,8 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
     other = "short" if side == "long" else "long"
     bot = Passivbot.__new__(Passivbot)
     cfg = prepare_config(get_template_config(), verbose=False)
+    cfg["bot"]['long']["enabled"] = True
+    cfg["bot"]['short']["enabled"] = True
     for pside in ("long", "short"):
         cfg["bot"][pside]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
         cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = (

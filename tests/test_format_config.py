@@ -90,7 +90,8 @@ def test_format_config_missing_long_side_stays_disabled():
     out = format_config(current, verbose=False)
 
     assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.7
-    assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert out["bot"]["long"]["enabled"] is False
+    assert out["bot"]["long"]["risk"] == _template()["bot"]["long"]["risk"]
 
 
 def test_format_config_current_roundtrip_basic():

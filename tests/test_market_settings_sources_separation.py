@@ -239,6 +239,8 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         },
         "live": {},
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
 
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -326,6 +328,8 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         },
         "live": {},
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
     om_dict = {"binanceusdm": DummyOM(), "bybit": DummyOM()}
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -412,6 +416,8 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
         },
         "live": {},
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
     om_dict = {
         "binanceusdm": DummyOM("binanceusdm"),
         "bybit": DummyOM("bybit"),

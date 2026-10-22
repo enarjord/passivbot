@@ -1632,6 +1632,8 @@ class TestIndividualToConfig:
                 },
             },
         }
+        template["bot"]["long"]["enabled"] = True
+        template["bot"]["short"]["enabled"] = True
 
         for side in ("long", "short"):
             template["bot"][side]["hsl"] = {
@@ -2164,6 +2166,8 @@ class TestIndividualToConfig:
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
+        template["bot"]["long"]["enabled"] = True
+        template["bot"]["short"]["enabled"] = True
 
         result = build_optimizer_max_config(template)
 
@@ -2365,6 +2369,8 @@ class TestConfigToIndividual:
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         shape = build_optimization_shape(config)
 
         result = config_to_individual(
@@ -3457,6 +3463,8 @@ class TestApplyFineTuneBounds:
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         anchors_dir = tmp_path / "anchors"
         anchors_dir.mkdir()
         for idx, values in enumerate(((0.11, 8.0, 0.33), (0.44, 9.0, 0.66))):
@@ -3531,6 +3539,8 @@ class TestApplyFineTuneBounds:
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         anchors_dir = tmp_path / "anchors"
         anchors_dir.mkdir()
         for idx, strategy_kind in enumerate(("trailing_martingale", "ema_anchor", "trailing_martingale")):
@@ -3594,6 +3604,8 @@ class TestApplyFineTuneBounds:
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         shape = build_optimization_shape(config)
 
         streamed, raw_count = configs_to_individuals_streaming(
@@ -3661,6 +3673,8 @@ class TestApplyFineTuneBounds:
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         shape = build_optimization_shape(config)
         durable_result = deepcopy(config)
         durable_result.pop(ANCHOR_PLAN_KEY)
@@ -3724,6 +3738,8 @@ class TestApplyFineTuneBounds:
                 "tunable_keys": ["long_entry_initial_qty_pct"],
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         shape = build_optimization_shape(config)
         durable_result = deepcopy(config)
         durable_result.pop(ANCHOR_PLAN_KEY)
@@ -3764,6 +3780,8 @@ class TestApplyFineTuneBounds:
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
         }
+        config["bot"]["long"]["enabled"] = True
+        config["bot"]["short"]["enabled"] = True
         seed = deepcopy(config)
         seed["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 4.2
         seed["_starting_config_source"] = "seed.json"

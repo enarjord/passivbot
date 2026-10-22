@@ -469,10 +469,8 @@ def _propagate_prepared_optimizer_universe(config: dict, data_config: dict) -> N
     """Carry prepared source policy/membership without copying widened numeric gates."""
     if config.get("_hlcvs_dataset_override_meta"):
         return  # The verified dataset manifest already supplied its replay membership.
-    from config.universe import materialize_side_universe_sources, raw_side_universe_sources
-    config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
-        data_config["bot"]["global"]["universe"]["approved_coins"]
-    )
+    from config.universe import materialize_side_universe_sources, raw_side_universe_sources, copy_universe_source_policy
+    copy_universe_source_policy(config, data_config)
     for field in ("approved_coins", "ignored_coins"):
         materialize_side_universe_sources(
             config, field, require_side_universe_sources(data_config, field),
@@ -2107,10 +2105,8 @@ class SuiteEvaluator:
         scenario_config["backtest"] = backtest_cfg
 
         scenario_config["bot"] = deepcopy(config["bot"])
-        from config.universe import raw_side_universe_sources
-        scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(ctx.config["bot"]["global"]["universe"]["approved_coins"])
-        for field in ("approved_coins", "ignored_coins"):
-            set_side_universe_sources(scenario_config, field, raw_side_universe_sources(ctx.config, field))
+        from config.universe import copy_universe_source_policy
+        copy_universe_source_policy(scenario_config, ctx.config)
         scenario_config["disable_plotting"] = True
 
         if ctx.overrides:
@@ -3866,11 +3862,8 @@ async def main():
         # Only source policy crosses staging. Hydrated numeric values, bounds
         # and limits must not acquire authored authority in normal preparation.
         source_config = deepcopy(source_config)
-        source_config.setdefault("bot", {}).setdefault("global", {}).setdefault("universe", {})["approved_coins"] = deepcopy(
-            staged["bot"]["global"]["universe"]["approved_coins"]
-        )
-        for field in ("approved_coins", "ignored_coins"):
-            set_side_universe_sources(source_config, field, raw_side_universe_sources(staged, field))
+        from config.universe import copy_universe_source_policy
+        copy_universe_source_policy(source_config, staged)
         for selector in fixed_sources:
             if universe_sources_affected({selector: fixed_sources[selector]}):
                 source_config["optimize"]["fixed_runtime_overrides"][selector] = deepcopy(

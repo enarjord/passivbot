@@ -161,6 +161,9 @@ class SideFieldCatalog:
 
 def _validate_value(field, value, path, *, shared=False):
     name = ".".join(path)
+    if (type(value) in (int, float) and not math.isfinite(value)
+            and any(kind in field.types for kind in (FieldType.FLOAT, FieldType.INTEGER))):
+        raise ValueError(f"{name} must be finite")
     if value is None:
         if not field.nullable or shared and field.suffix == ("universe", "approved_coins"):
             raise TypeError(f"{name} does not accept null")
@@ -244,6 +247,7 @@ class BotPolicy:
             # Complete defaults describe the selected engine. Explicit inactive
             # declarations remain source pins rather than being erased for size.
             selected = portfolio.get("strategy_kind")
+            selected = selected.strip().lower() if isinstance(selected, str) else selected
             declared = authored.get("strategy", {})
             for kind in tuple(common.get("strategy", {})):
                 if kind != selected and kind not in declared:

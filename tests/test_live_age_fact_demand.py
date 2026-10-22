@@ -17,6 +17,7 @@ def _bot(*, ages=(2.5, 0.0), enabled=(True, True), exchange="binance"):
     bot = object.__new__(live.Passivbot)
     bot.config = get_template_config()
     for side, days, active in zip(SIDES, ages, enabled):
+        bot.config["bot"][side]["enabled"] = active
         bot.config["bot"][side]["universe"]["minimum_coin_age_days"] = days
         bot.config["bot"][side]["risk"]["total_wallet_exposure_limit"] = 1.0 if active else 0.0
         bot.config["bot"][side]["risk"]["max_positions"] = 1

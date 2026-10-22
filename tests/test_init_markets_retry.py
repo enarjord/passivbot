@@ -608,6 +608,9 @@ async def test_init_markets_with_unavailable_overrides_completes_mode_lookup(
     bot = Bot(update_exchange_config)
     bot.config = {
         "live": {"modes": {"long": None, "short": None}},
+        "bot": {"long": {"enabled": True, "risk": {
+            "max_positions": 1, "total_wallet_exposure_limit": 1.0,
+        }}, "short": {"enabled": False}},
         "coin_overrides": {"AAA": {}, "UNLISTED": {}},
     }
     bot.positions = {}
