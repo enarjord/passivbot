@@ -1,12 +1,16 @@
 # Bot Configuration Deep Dive
 
 Account-wide strategy selection, hedge mode, execution, warmup, HSL scope and portfolio policy,
-loss-gate policy, and unstuck realized memory live under `bot.portfolio`. Shared approval sources
-and forager hysteresis remain under `bot.global`; each position side owns its strategy and local
-risk controls. HSL, unstuck, and loss-gate memories remain independent. Portfolio HSL policy is
+loss-gate policy, and unstuck realized memory live under `bot.portfolio`. `bot.global` supplies
+defaults for every registered directional leaf, including the active strategy, local risk,
+universe, forager, HSL and unstuck parameters. Sparse `bot.long`/`bot.short` objects override
+individual leaves; omission inherits and explicit equal values remain pins. HSL, unstuck, and
+loss-gate memories remain independent. Portfolio HSL policy is
 explicit and is never inferred from directional policies.
-Optimizer bounds use the same path after `optimize.bounds` as the corresponding parameter
-after `bot`, for example `long.forager.score_weights.volume`.
+Optimizer bounds mirror these scopes. A global bound is one coordinate for inheriting sides;
+a side bound creates its own coordinate, while an explicit side value without a side bound
+stays fixed. Omitted domains never open recommended ranges. Exposure limits remain per side,
+including when both sides use one common value.
 
 Side activation is explicit: `bot.global.enabled` defaults false, omitted side flags inherit,
 and explicit `bot.long.enabled`/`bot.short.enabled` booleans pin permission. Disabled sides cannot
@@ -64,12 +68,11 @@ and `entry.ema_span_1_minutes`. They govern entry gating, forager entry readines
 entry tie-break. Ordinary closes do not consume this band. The shared
 `volatility_ema_span_minutes` and `volatility_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
 
-Schema v8.4.0 moves the old strategy-root spans into `entry`, including optimizer bounds
-and coin/scenario overrides. Values and floating-point precision are preserved. Within one
-source, explicit new paths win over conflicting old paths with a warning; normal file/inline
-coin precedence is preserved. Old CLI paths and dotted optimizer selectors still work.
-Selecting `long.strategy.entry` now includes the entry EMA horizons. Other strategies retain
-their existing schema. `couple_unstuck_ema_spans` continues to derive unstuck horizons from
+The explicit released-v8 converter moves old strategy-root spans into canonical `entry`
+paths across values, bounds and overrides, preserving floating-point precision and rejecting
+conflicting aliases. Normal v9 loading accepts the final paths only. Selecting
+`long.strategy.entry` includes the entry EMA horizons. `couple_unstuck_ema_spans` continues
+to derive unstuck horizons from
 each coin's effective entry spans during optimization.
 
 ```text
