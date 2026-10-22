@@ -95,11 +95,15 @@ def _apply_config_overrides(
 
 
 def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_universe):
-    from config.bot_inheritance import apply_bot_config_patch
+    from config.bot_inheritance import apply_bot_config_patch, reconciled_bot_policy
+    from config.inherited_bounds import PreparedOptimizationBounds
     from config.hsl import validate_override_paths
-    from config.universe import (ResolvedCoinList, materialize_side_universe_sources,
-        raw_side_universe_sources, shared_universe_source, source_inherits_shared)
+    from config.universe import ResolvedCoinList
 
+    policy_source = reconciled_bot_policy(config)
+    bounds_source = config.get("optimize", {}).get("bounds")
+    if type(bounds_source) is not PreparedOptimizationBounds:
+        bounds_source = None
     prepared = {(field, side): deepcopy(value)
                 for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
                 if preserve_prepared_universe and
@@ -110,7 +114,7 @@ def _apply_inherited_config_overrides(config, overrides, *, preserve_prepared_un
     for selector, value in canonical.items():
         if not selector.startswith("bot.") and selector != "bot":
             _set_path(config, selector.split("."), value)
-    apply_bot_config_patch(config, canonical)
+    apply_bot_config_patch(config, canonical, policy_source=policy_source, bounds_source=bounds_source)
     _restore_matching_optimizer_memberships(config, prepared, require_match=True)
 
 
@@ -326,6 +330,8 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         config = optimizer_overrides(overrides_list or [], config, pside)
     from config.bot_inheritance import get_bot_policy, install_bot_policy, with_normalized_bot_values
     normalization_policy = get_bot_policy(config)
+    origins = ({origin.target: origin for origin in normalization_policy.resolve()[1]}
+               if normalization_policy is not None else {})
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         forager_cfg = pside_cfg.get("forager") if isinstance(pside_cfg, dict) else None
@@ -344,6 +350,8 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         # mirrored targets inherit that source's domain, including at all-low.
         if not any(weights.values()) and all(
             ("bot", source_side, "forager", "score_weights", name) in fixed_value_paths
+            or ((origin := origins.get(("bot", source_side, "forager", "score_weights", name))) is not None
+                and origin.source in fixed_value_paths)
             or (bound := Bound.from_config(key, flat_bounds[key])).low == bound.high == 0
             for name in weights
             if (key := f"{source_side}_forager_score_weights_{name}") in flat_bounds
