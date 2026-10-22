@@ -4,15 +4,16 @@ import copy
 import logging
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config_utils import (
     format_config,
-    get_template_config,
 )
 
 
 
 def _template():
-    return get_template_config()
+    return get_expanded_config_prototype()
 
 
 def _bound(config, pside, *path):
@@ -69,7 +70,8 @@ def test_format_config_missing_short_side_stays_disabled():
     out = format_config(current, verbose=False)
 
     assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.7
-    assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert out["bot"]["short"]["enabled"] is False
+    assert out["bot"]["short"]["risk"] == _template()["bot"]["global"]["risk"]
 
 
 def test_format_config_missing_long_side_stays_disabled():

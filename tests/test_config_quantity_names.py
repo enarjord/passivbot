@@ -125,9 +125,9 @@ def test_released_override_conversion_never_rewrites_a_new_quantity_name_twice(a
 def test_retired_quantity_names_are_converter_inputs_only(section, group, old):
     config = get_template_config()
     if section == "bot":
-        config["bot"]["long"][group][old] = 0.1
+        config["bot"]["long"][group] = {old: 0.1}
     elif section == "bounds":
-        config["optimize"]["bounds"]["long"][group][old] = [0.1, 0.2]
+        config["optimize"]["bounds"] = {"long": {group: {old: [0.1, 0.2]}}}
     elif section == "coin":
         config["coin_overrides"] = {"TEST": {"bot": {"long": {group: {old: 0.1}}}}}
     else:
@@ -245,7 +245,7 @@ def test_smoke_config_checks_recognize_the_public_position_side_scope(tmp_path):
     from live.smoke_report import _smoke_config_check_records
 
     config = generated_template(get_template_config(), "position_side")
-    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["hsl"] = {"enabled": True}
     config["live"]["account"]["balance_override"] = 1000.0
     file = tmp_path / "policy.json"
     file.write_text(json.dumps(config))
