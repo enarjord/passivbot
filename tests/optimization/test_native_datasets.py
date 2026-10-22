@@ -12,6 +12,7 @@ from tools.gpu_parity import build_parser, fixture_inputs
 from config import prepare_config
 from config.project import project_config
 from config.universe import universe_source_view
+from config_utils import clean_config
 
 
 def fixture(manager):
@@ -32,11 +33,11 @@ def fixture(manager):
 
 
 def contexts(base, timestamps, *, lazy):
-    config = deepcopy(base.config)
-    config["backtest"]["coins"]["binance"] = ["COIN00", "COIN02"]
+    config = clean_config(universe_source_view(base.config))
+    columns = deepcopy(base.config["backtest"]["coins"])
+    columns["binance"] = ["COIN00", "COIN02"]
     for side in ("long", "short"):
         config['bot'][side]['universe']['approved_coins'] = ["COIN00", "COIN02"]
-    columns = config["backtest"].pop("coins")
     config = prepare_config(config, verbose=False)
     config["backtest"]["coins"] = columns
     return [SimpleNamespace(

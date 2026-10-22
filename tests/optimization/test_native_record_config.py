@@ -7,6 +7,8 @@ import pytest
 from pymoo.core.population import Population
 
 import optimize
+from config import prepare_config
+from config_utils import clean_config
 from optimization.backends.gpu_backend import NativeSearchProblem, _Search
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY
@@ -43,7 +45,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
             base = variable_base(manager, anchor=True)
         else:
             previous = inputs(manager)
-            config = deepcopy(previous.config)
+            config = clean_config(previous.config)
             if policy == "fixed":
                 config["optimize"]["fixed_runtime_overrides"] = {
                     "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
@@ -55,6 +57,8 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
                 config["optimize"]["bounds"]["long"]["forager"] = {
                     "score_weights": {name: [0.0, 1.0] for name in ("volume", "ema_readiness", "volatility")},
                 }
+            config = prepare_config(config, verbose=False)
+            config["backtest"]["coins"] = deepcopy(previous.config["backtest"]["coins"])
             base = optimize.Evaluator(previous.hlcvs_specs, previous.btc_usd_specs, previous.msss,
                                       config, timestamps=previous.timestamps)
         evaluator = base
@@ -71,7 +75,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
             weights = dict(volume=0.24, ema_readiness=0.55, volatility=0.53)
             for index, (name, _path) in enumerate(base.key_paths):
                 for key, value in weights.items():
-                    if name == f"long_forager_score_weights_{key}":
+                    if name == f"bot.long.forager.score_weights.{key}":
                         vector[index] = value
         supplied = list(vector)
         with NativeDatasetRegistry(evaluator, standalone_candle_coins=COLUMNS) as registry:
@@ -131,7 +135,7 @@ def test_out_of_order_and_cached_anchor_duplicates_record_each_owned_config(monk
         path = ["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_fraction"]
         config[ANCHOR_PLAN_KEY] = dict(
             anchors=[dict(fixed_values=[], source=name) for name in ("first", "second")],
-            key_paths=[path], tunable_keys=["long_entry_initial_qty_pct"], fixed_keys=[],
+            key_paths=[path], tunable_keys=["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"], fixed_keys=[],
         )
         base = optimize.Evaluator(previous.hlcvs_specs, previous.btc_usd_specs, previous.msss,
                                   config, timestamps=previous.timestamps)
@@ -190,7 +194,7 @@ def test_changed_completion_vector_or_custom_builder_uses_existing_record_path(m
         with NativeDatasetRegistry(base, standalone_candle_coins=COLUMNS) as registry:
             plan = registry.planner.prepare("record", vector)
             changed = list(plan.vector)
-            index = [name for name, _path in base.key_paths].index("long_entry_initial_qty_pct")
+            index = [name for name, _path in base.key_paths].index("bot.long.strategy.trailing_martingale.entry.initial_qty_fraction")
             changed[index] = 0.035
             calls = []
             def builder(*args):
