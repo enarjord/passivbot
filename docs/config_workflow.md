@@ -68,13 +68,14 @@ live/scenario coin settings still control data preparation.
 
 ## What The Default Profile Is
 
-The default profile mirrored by `configs/examples/default_trailing_martingale_long.json` is:
+The in-code starter keeps both sides disabled. The maintained
+`configs/examples/default_trailing_martingale_long.json` example explicitly enables long
+and disables short. Its shared numerical profile is:
 
 - trailing martingale style configuration
-- long enabled with `bot.long.risk.max_positions = 7`
-- short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
-- `bot.long.risk.total_wallet_exposure_limit = 1.5`
-- HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
+- `bot.global.risk.max_positions = 7`, inherited separately by each side
+- `bot.global.risk.total_wallet_exposure_limit = 1.5`, a per-side budget rather than a shared pool
+- HSL present but disabled with `bot.global.hsl.enabled = false`
 - HSL signal mode set to per-coin slots with `bot.portfolio.hsl.scope = "coin"`
 - approved-coin universe declared once as the current 41-coin shared starter list; sides inherit it
 - optimizer backend defaulting to `pymoo`

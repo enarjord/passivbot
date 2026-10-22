@@ -55,8 +55,8 @@ management and indicator warmup are independent of this gate.
 Unresolved inception remains retryable in live operation and automatic prepared caches. Live
 lookup runs in a bounded background task; missing facts block new initial entries without delaying
 held-position planning. Automatic caches request facts only for enabled positive-age sides and
-their approved, non-ignored markets. Optimizer preparation includes sides that its candidate bounds
-can activate. Suite contexts freeze source memberships once and request only their applicable
+their approved, non-ignored markets. Optimizer preparation includes enabled sides whose candidate
+capacity bounds can permit entries. Suite contexts freeze source memberships once and request only their applicable
 coins; a zero-age scenario does not make unrelated coins require inception. A supplied
 dataset override remains an immutable input; missing inception in that dataset keeps positive age
 gates closed.
