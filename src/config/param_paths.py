@@ -154,6 +154,9 @@ def require_existing_config_path(
     config: dict, selector_or_path: str
 ) -> tuple[str, ...]:
     resolved = resolve_dotted_config_path(config, selector_or_path)
+    if resolved is not None and resolved[:3] == ("bot", "global", "enabled"):
+        from .activation import GLOBAL_ACTIVATION_ERROR
+        raise ValueError(GLOBAL_ACTIVATION_ERROR)
     if resolved is None or not resolved or any(part == "" for part in resolved):
         raise ValueError("Override paths must not be empty")
 

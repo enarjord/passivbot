@@ -495,11 +495,10 @@ def test_explain_default_activation_and_normalized_weights_are_visible():
     report = explain_config(source, "bot.long.enabled")
     assert report["value"] is False
     assert report["sources"][-1] == {"kind": "default_or_derived", "path": "bot.long.enabled"}
-    source["bot"]["global"] = {"enabled": False}
+    source["bot"]["long"] = {"enabled": False}
     report = explain_config(source, "bot.long.enabled")
     assert report["sources"][-1] == {
-        "kind": "inherited", "path": "bot.global.enabled", "value": False,
-        "target": "bot.long.enabled",
+        "kind": "authored", "path": "bot.long.enabled", "value": False,
     }
     source = policy()
     source["bot"]["long"]["forager"]["score_weights"] = {

@@ -15,7 +15,7 @@ from config_utils import add_config_arguments, clean_config
 def source(kind="trailing_martingale"):
     return {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"enabled": True, "universe": {"approved_coins": ["AAA", "BBB"],
+        "long": {"enabled": True}, "global": { "universe": {"approved_coins": ["AAA", "BBB"],
                     "ignored_coins": ["BBB"], "minimum_coin_age_days": 0.0}},
         "short": {"enabled": False}}}
 

@@ -15,7 +15,7 @@ from optimization.warmup import build_optimizer_data_config, refresh_optimizer_s
 def source(kind="trailing_martingale"):
     return {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"enabled": True, "risk": {
+        "long": {"enabled": True}, "short": {"enabled": True}, "global": { "risk": {
             "max_positions": 0, "total_wallet_exposure_limit": 0.0}}},
         "optimize": {"bounds": {"global": {"risk": {
             "max_positions": [0, 3], "total_wallet_exposure_limit": [0.0, 2.0]}}}}}
@@ -27,7 +27,7 @@ def source(kind="trailing_martingale"):
 def test_acquisition_gate_genes_fan_out_without_changing_pins_or_ranges(kind, short_pin, fixed):
     raw = source(kind)
     if short_pin:
-        raw["bot"]["short"] = {"risk": {
+        raw["bot"]["short"] = {"enabled": True, "risk": {
             "max_positions": 0, "total_wallet_exposure_limit": 0.0}}
     if fixed:
         raw["optimize"]["fixed_runtime_overrides"] = {
@@ -89,11 +89,11 @@ def test_authored_facade_preserves_prior_canonical_edits_and_rejects_invalid_ali
     invalid = deepcopy(config)
     invalid["bot"]["long"]["wallet_exposure_limit"] = 0.5
     with pytest.raises(ValueError, match="unknown"):
-        apply_bot_config_patch(invalid, {"bot.global.enabled": False})
+        apply_bot_config_patch(invalid, {"bot.long.enabled": False})
     invalid = deepcopy(config)
     invalid["bot"]["long"]["risk"]["max_positions"] = 0.5
     with pytest.raises(TypeError, match="max_positions"):
-        apply_bot_config_patch(invalid, {"bot.global.enabled": False})
+        apply_bot_config_patch(invalid, {"bot.long.enabled": False})
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])

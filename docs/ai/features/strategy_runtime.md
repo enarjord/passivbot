@@ -14,8 +14,9 @@ is an absolute normalized-score gap, without an incumbent-relative denominator.
 
 ## Inherited Directional Defaults
 
-The paired directional field registry defines inheritability. Resolve schema fallback, authored
-`bot.global`, explicit side leaf pins and permitted coin patches before runtime hydration.
+The paired directional field registry defines inheritability; side activation is excluded. Resolve
+schema fallback, authored `bot.global`, explicit side leaf pins and permitted coin patches before
+runtime hydration.
 False, zero, empty lists and equal values retain explicit side authority; approval null inherits
 and ignored null clears. Whole-side omission equals an empty side object. One portfolio strategy
 kind selects the engine; new directional numerical fallbacks deliberately share the former long
@@ -30,8 +31,12 @@ and binding authority separately.
 
 ## Explicit Side Activation
 
-`bot.global.enabled` defaults false; side omission inherits it and explicit side booleans
-are pins. Activation is fixed policy, separate from capacity, selection and operational modes.
+`bot.long.enabled` and `bot.short.enabled` are strict booleans, each defaulting to false.
+Activation never inherits: only an explicit true enables the corresponding side, and omitted or
+empty side objects stay disabled. Reject `bot.global.enabled` with an actionable error; do not
+ignore or migrate it. Other nested feature switches remain inheritable. Both-disabled policy is
+valid for held-position management. Activation is fixed policy, separate from capacity, selection
+and operational modes.
 The native `side_activation` packet requires exactly long/short booleans. Disabled sides cannot
 generate or fill initial entries or DCA, including forced-normal selection and one-way arbitration.
 Held closes, reducers, trailing state, fills and HSL continue under their existing inputs, sizing

@@ -22,7 +22,11 @@ def test_optimizer_discovery_retains_global_bounds_without_numeric_runtime_flags
     domain = "optimize.bounds.global.entry_cooldown.base_duration_minutes"
     assert runtime not in keys
     assert domain in keys
-    assert "bot.global.enabled" in keys
+    assert "bot.global.enabled" not in keys
+    assert "bot.long.enabled" in keys
+    assert "bot.short.enabled" in keys
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--bot.global.enabled", "true"])
     with pytest.raises(SystemExit):
         parser.parse_args([f"--{runtime}", "5.0"])
     assert vars(parser.parse_args([f"--{domain}", "0,5"]))[domain] == [0, 5]

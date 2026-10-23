@@ -202,7 +202,6 @@ _FIELDS_BY_TYPE = {
         """,
         "optimize": "compress_results_file write_all_results",
         "optimize.pymoo.shared": "eliminate_duplicates",
-        "bot.global": "enabled",
         "bot.portfolio": "hedge_mode",
         "bot.portfolio.execution": "market_orders_allowed",
     },
@@ -434,7 +433,7 @@ def get_field_registry() -> FieldRegistry:
     common = []
     existing = {field.path for field in enriched}
     for field in enriched:
-        if field.path[:2] != ("bot", "long"):
+        if field.path[:2] != ("bot", "long") or field.path[2:] == ("enabled",):
             continue
         path = ("bot", "global", *field.path[2:])
         if path in existing:

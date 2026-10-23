@@ -111,7 +111,10 @@ def validate_authored_config(config, template, *, policy_context=None):
         from .control_sentinels import validate_control_value
 
         validate_control_value(parts, value)
-        if parts in {("bot", owner, "enabled") for owner in ("global", "long", "short")}:
+        if parts == ("bot", "global", "enabled"):
+            from .activation import GLOBAL_ACTIVATION_ERROR
+            raise ValueError(GLOBAL_ACTIVATION_ERROR)
+        if parts in {("bot", owner, "enabled") for owner in ("long", "short")}:
             if type(value) is not bool:
                 raise TypeError(f"{'.'.join(parts)} must be a boolean")
         from .age_policy import AGE_PATHS, validate_age_value
@@ -179,6 +182,9 @@ def validate_authored_config(config, template, *, policy_context=None):
             for key, child in value.items():
                 if not parts and key in _METADATA_KEYS:
                     continue
+                if (*parts, key) == ("bot", "global", "enabled"):
+                    from .activation import GLOBAL_ACTIVATION_ERROR
+                    raise ValueError(GLOBAL_ACTIVATION_ERROR)
                 if key not in expected:
                     raise ValueError(f"{path}.{key} is an unknown configuration field")
                 visit(child, expected[key], (*parts, key))
@@ -223,6 +229,9 @@ def validate_authored_config(config, template, *, policy_context=None):
                     hsl_signal_mode=mode,
                 )
                 continue
+            if parts == ("bot", "global", "enabled"):
+                from .activation import GLOBAL_ACTIVATION_ERROR
+                raise ValueError(GLOBAL_ACTIVATION_ERROR)
             expected = schema
             for part in parts:
                 if not isinstance(expected, dict) or part not in expected:

@@ -2,7 +2,7 @@
 
 Account-wide strategy selection, hedge mode, execution, warmup, HSL scope and portfolio policy,
 loss-gate policy, and unstuck realized memory live under `bot.portfolio`. `bot.global` supplies
-defaults for every registered directional leaf, including the active strategy, local risk,
+defaults for registered inheritable directional leaves, including the active strategy, local risk,
 universe, forager, HSL and unstuck parameters. Sparse `bot.long`/`bot.short` objects override
 individual leaves; omission inherits and explicit equal values remain pins. HSL, unstuck, and
 loss-gate memories remain independent. Portfolio HSL policy is
@@ -12,9 +12,11 @@ a side bound creates its own coordinate, while an explicit side value without a 
 stays fixed. Omitted domains never open recommended ranges. Exposure limits remain per side,
 including when both sides use one common value.
 
-Side activation is explicit: `bot.global.enabled` defaults false, omitted side flags inherit,
-and explicit `bot.long.enabled`/`bot.short.enabled` booleans pin permission. Disabled sides cannot
-open or DCA, even in forced-normal mode; capacity, approvals and readiness still gate enabled
+Side activation is explicit and never inherits: `bot.long.enabled` and `bot.short.enabled`
+each default to false; only an explicit true enables a side. Omitted or empty side objects stay
+disabled. `bot.global.enabled` is unsupported and rejected with a corrective error. Nested feature
+switches such as `bot.global.unstuck.enabled` still inherit. Both-disabled configs remain valid for
+held-position management. Disabled sides cannot open or DCA, even in forced-normal mode; capacity, approvals and readiness still gate enabled
 sides. Held closes and protection keep their existing sizing, risk and operational gates.
 Zero capacity does not set manual mode or fabricate a replacement budget. Numeric optimizer
 bounds do not grant boolean activation; fixed/scenario declarations retain their precedence.

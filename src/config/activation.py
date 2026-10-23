@@ -6,19 +6,17 @@ from dataclasses import dataclass, replace
 from .access import require_config_value
 
 POSITION_SIDES = ("long", "short")
-ACTIVATION_PATHS = tuple(("bot", owner, "enabled") for owner in ("global", *POSITION_SIDES))
+ACTIVATION_PATHS = tuple(("bot", owner, "enabled") for owner in POSITION_SIDES)
 
 
 @dataclass(frozen=True)
 class ActivationSource:
-    global_enabled: bool | None
     long: bool | None
     short: bool | None
 
     def effective(self, owner):
-        default = False if self.global_enabled is None else self.global_enabled
-        pin = default if owner == "global" else getattr(self, owner)
-        return default if pin is None else pin
+        pin = getattr(self, owner)
+        return False if pin is None else pin
 
 
 class PreparedActivationBot(dict):
@@ -29,6 +27,18 @@ class PreparedActivationBot(dict):
     def __init__(self, values, source):
         super().__init__(values)
         self._activation_source = source
+
+
+GLOBAL_ACTIVATION_ERROR = (
+    "bot.global.enabled is unsupported; enable position sides explicitly with "
+    "bot.long.enabled and/or bot.short.enabled (each defaults to false)"
+)
+
+
+def reject_global_activation(bot):
+    common = bot.get("global", {})
+    if isinstance(common, dict) and "enabled" in common:
+        raise ValueError(GLOBAL_ACTIVATION_ERROR)
 
 
 def _authored_flag(bot, owner):
@@ -51,18 +61,18 @@ def get_activation_source(config):
     bot = config.get("bot", {})
     if not isinstance(bot, dict):
         raise TypeError("bot must be a mapping")
+    reject_global_activation(bot)
     if type(bot) is PreparedActivationBot and type(bot._activation_source) is ActivationSource:
         source = bot._activation_source
         # Preserve ordinary direct value edits when a prepared config is copied
         # and re-prepared. Equal-value authored declarations use the patch API.
         updates = {}
-        for owner, field in (("global", "global_enabled"), ("long", "long"), ("short", "short")):
+        for owner, field in (("long", "long"), ("short", "short")):
             current = _authored_flag(bot, owner)
             if current is None or current != source.effective(owner):
                 updates[field] = current
         return replace(source, **updates)
-    return ActivationSource(_authored_flag(bot, "global"),
-                            _authored_flag(bot, "long"), _authored_flag(bot, "short"))
+    return ActivationSource(_authored_flag(bot, "long"), _authored_flag(bot, "short"))
 
 
 def activation_source_view(config):
@@ -73,7 +83,7 @@ def activation_source_view(config):
     source = get_activation_source(config)
     result = deepcopy(dict(config))
     bot = dict(result.get("bot", {}))
-    for owner, value in (("global", source.global_enabled), ("long", source.long), ("short", source.short)):
+    for owner, value in (("long", source.long), ("short", source.short)):
         node = bot.get(owner)
         if node is None:
             continue
@@ -87,7 +97,8 @@ def activation_source_view(config):
 
 
 def resolve_side_activation(config, source=None, *, tracker=None):
-    from .bot_inheritance import get_bot_policy, install_bot_policy
+    from .bot_inheritance import get_bot_policy
+    reject_global_activation(config.get("bot", {}))
     policy = get_bot_policy(config)
     if policy is not None:
         # The full policy is the single source authority after inheritance.
@@ -95,7 +106,7 @@ def resolve_side_activation(config, source=None, *, tracker=None):
         return config
     source = get_activation_source(config) if source is None else source
     bot = dict(config.setdefault("bot", {}))
-    for owner in ("global", *POSITION_SIDES):
+    for owner in POSITION_SIDES:
         node = bot.setdefault(owner, {})
         value = source.effective(owner)
         if tracker is not None and "enabled" not in node:
@@ -111,6 +122,13 @@ def apply_activation_patch(config, overrides, *, policy_source=None, bounds_sour
     Callers supply their validated canonical selectors. Parent replacement and
     equal-value false declarations carry the same authority as leaf edits.
     """
+    for selector, value in overrides.items():
+        if selector == "bot.global.enabled":
+            raise ValueError(GLOBAL_ACTIVATION_ERROR)
+        if selector == "bot.global" and isinstance(value, dict) and "enabled" in value:
+            raise ValueError(GLOBAL_ACTIVATION_ERROR)
+        if selector == "bot" and isinstance(value, dict):
+            reject_global_activation(value)
     from .bot_inheritance import apply_bot_config_patch
     if apply_bot_config_patch(config, overrides, policy_source=policy_source, bounds_source=bounds_source):
         return
@@ -129,18 +147,18 @@ def apply_activation_patch(config, overrides, *, policy_source=None, bounds_sour
             if target[:len(path)] != path:
                 continue
             projected = value
+            present = True
             for part in target[len(path):]:
                 if not isinstance(projected, dict) or part not in projected:
                     projected = None
+                    present = False
                     break
                 projected = projected[part]
-            if projected is not None and type(projected) is not bool:
+            # Only absence in a parent replacement restores the disabled
+            # default. An explicitly declared null is never a boolean.
+            if present and type(projected) is not bool:
                 raise TypeError(f"{'.'.join(target)} must be a boolean")
-            # A null leaf is invalid; only absence in a parent replacement
-            # declares inheritance.
-            if len(path) == len(target) and projected is None:
-                raise TypeError(f"{'.'.join(target)} must be a boolean")
-            updates["global_enabled" if target[1] == "global" else target[1]] = projected
+            updates[target[1]] = projected
     resolve_side_activation(config, replace(source, **updates))
 
 

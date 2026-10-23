@@ -154,7 +154,6 @@
     },
     "bot": {
         "global": {
-            "enabled": false,
             "entry_cooldown": {
                 "base_duration_minutes": 0.0,
                 "max_duration_minutes": null,
