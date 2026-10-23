@@ -80,7 +80,7 @@ def test_timing_smoothing_uses_successive_warm_observations():
     assert policy.deadline("a", now) == pytest.approx(now + 0.1)
 
 
-def test_preparing_allowance_requires_fresh_arrivals_and_has_an_absolute_bound():
+def test_preparing_allowance_survives_arrival_gaps_but_has_an_absolute_bound():
     policy = BatchCoalescer()
     started = burst_stream(policy)
     warm(policy, seconds=1.0)
@@ -90,11 +90,13 @@ def test_preparing_allowance_requires_fresh_arrivals_and_has_an_absolute_bound()
         assert policy.preparing_deadline("a", started) <= started + 1.5
     assert policy.deadline("a", started) <= started + 0.5
     assert policy.preparing_deadline("a", started) == pytest.approx(started + 1.5)
-    # A stale readiness hint cannot keep work waiting after arrivals stop.
-    assert policy.preparing_deadline("a", now) == pytest.approx(now + 0.1)
+    # Paused preparation keeps the declared allowance. A stale hint still
+    # expires at that same absolute time, even without any further arrivals.
+    assert policy.preparing_deadline("a", started) == pytest.approx(started + 1.5)
+    assert policy.preparing_deadline("a", now) == pytest.approx(now + 1.5)
 
 
-def test_preparing_warm_cost_is_capped_and_cold_or_sparse_evidence_stays_ordinary():
+def test_preparing_warm_cost_is_capped_and_only_cold_evidence_stays_ordinary():
     policy = BatchCoalescer()
     now = burst_stream(policy)
     assert policy.preparing_deadline("a", now) == policy.deadline("a", now)
@@ -105,7 +107,8 @@ def test_preparing_warm_cost_is_capped_and_cold_or_sparse_evidence_stays_ordinar
     assert policy.preparing_deadline("a", now - 75) == pytest.approx(now - 15)
     policy.arrived("b", now, active=False)
     warm(policy, dataset="b", seconds=1.0)
-    assert policy.preparing_deadline("b", now) == policy.deadline("b", now)
+    # Sparse cadence evidence does not override authoritative warm readiness.
+    assert policy.preparing_deadline("b", now) == pytest.approx(now + 1.5)
 
 
 def test_preparing_does_not_spend_a_long_wait_on_fast_replay():

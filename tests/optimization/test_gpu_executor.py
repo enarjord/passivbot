@@ -978,7 +978,7 @@ def warm_preparing_service(service, dataset, now):
     policy.observe(dataset, 4, 2)
 
 
-def test_preparing_producer_fills_across_the_ordinary_absolute_delay(monkeypatch):
+def test_preparing_producer_fills_through_gaps_beyond_the_ordinary_delay(monkeypatch):
     import optimization.gpu.executor as executor
 
     clock = [100.0]
@@ -1000,14 +1000,56 @@ def test_preparing_producer_fills_across_the_ordinary_absolute_delay(monkeypatch
         futures = [service.submit(request(0))]
         waiting.get(timeout=2)
         for index in (1, 2):
-            clock[0] += 0.3
+            clock[0] += 0.7  # Exceeds the learned 0.4 s idle tail while CPU work remains.
+            # Recheck before a fresh submit could refresh last_arrival. The old
+            # arrival-tail policy must release a partial batch at this boundary.
+            with service._condition:
+                service._condition.notify_all()
+            assert waiting.get(timeout=2) > clock[0]
+            with service._condition:
+                assert not replay.calls and all(not future.done() for future in futures)
             futures.append(service.submit(request(index)))
             assert waiting.get(timeout=2) > clock[0]
         assert clock[0] > 100.5 and not replay.calls
-        clock[0] += 0.3
+        clock[0] += 0.7
+        with service._condition:
+            service._condition.notify_all()
+        assert waiting.get(timeout=2) > clock[0]
+        with service._condition:
+            assert not replay.calls and all(not future.done() for future in futures)
         futures.append(service.submit(request(3)))
         assert [future.result(timeout=2).request_id for future in futures] == ["0", "1", "2", "3"]
         assert [[row["value"] for row in batch] for batch in replay.calls] == [[0, 1, 2, 3]]
+    finally:
+        service.close(cancel_pending=True)
+
+
+def test_abandoned_preparing_hint_expires_at_the_original_absolute_deadline(monkeypatch):
+    import optimization.gpu.executor as executor
+
+    clock, waiting, replay = [100.0], Queue(), Replay()
+    monkeypatch.setattr(executor, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=time.perf_counter,
+    ))
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    warm_preparing_service(service, "market", clock[0])
+    ordinary = service._coalescing.preparing_deadline
+    def deadline(dataset, started):
+        value = ordinary(dataset, started)
+        waiting.put(value)
+        return value
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"market"})
+    try:
+        future = service.submit(request(1))
+        assert waiting.get(timeout=2) == 103.0
+        clock[0] = 104.0
+        service.set_preparing({"market"})  # Repeating readiness cannot renew its lease.
+        with service._condition:
+            service._condition.notify_all()
+        assert future.result(timeout=2).request_id == "1"
+        assert len(replay.calls) == 1
     finally:
         service.close(cancel_pending=True)
 

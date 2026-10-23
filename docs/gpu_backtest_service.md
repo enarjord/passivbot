@@ -255,10 +255,12 @@ This is a bounded heuristic, not a guarantee of optimal scheduling for every wor
 
 While the CPU producer can prepare more work, automatic accumulation can continue beyond
 the ordinary 0.5-second absolute limit. Its allowance is 1.5 times successful warm replay
-duration, capped at 60 seconds from the original accumulation start. Actual arrivals must
-remain within the doubled 90th-percentile idle tail, capped at 0.5 seconds; a stale readiness
-hint therefore cannot spend the whole allowance by itself. Cold or sparse timing retains
-the ordinary policy. Exhausted input and full CPU admission windows seal preparation and
+duration, capped at 60 seconds from the original accumulation start. Explicit readiness
+remains authoritative through individual CPU preparation or collection pauses.
+A stale hint can spend the whole allowance,
+so the exclusively borrowing producer must clear it when preparation cannot continue.
+Without warm replay timing, hints retain the ordinary policy; warm hints need no arrival-gap
+samples. Exhausted input and full CPU admission windows seal preparation and
 release partial work promptly. An unrelated queued dataset outside the active preparation
 set retains the ordinary short bound. These internal bounds require no configuration knobs.
 
