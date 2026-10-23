@@ -40,6 +40,8 @@ def test_startup_banner_reports_explicit_activation(
         Passivbot._log_startup_banner(bot)
 
     assert f"Mode: {mode} " in caplog.text
+    assert "Positions: 2L/2S" in caplog.text
+    assert f"TWEL: L:{twel:.0%} S:{twel:.0%}" in caplog.text
     assert (
         f"Long: {'enabled' if long_enabled else 'disabled'}; "
         f"Short: {'enabled' if short_enabled else 'disabled'}"

@@ -2473,22 +2473,13 @@ class Passivbot:
 
         n_pos_long = int(self.bot_value("long", "n_positions") or 0)
         n_pos_short = int(self.bot_value("short", "n_positions") or 0)
-        n_pos = f"{n_pos_long}L" if long_enabled else ""
-        if short_enabled:
-            n_pos = f"{n_pos}/{n_pos_short}S" if n_pos else f"{n_pos_short}S"
+        n_pos = f"{n_pos_long}L/{n_pos_short}S"
 
         twel_long = float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0)
         twel_short = float(
             self.bot_value("short", "total_wallet_exposure_limit") or 0.0
         )
-        if long_enabled and short_enabled:
-            twel_str = f"L:{twel_long:.0%} S:{twel_short:.0%}"
-        elif long_enabled:
-            twel_str = f"{twel_long:.0%}"
-        elif short_enabled:
-            twel_str = f"{twel_short:.0%}"
-        else:
-            twel_str = "0%"
+        twel_str = f"L:{twel_long:.0%} S:{twel_short:.0%}"
 
         # Build content lines and calculate width dynamically
         line1 = f"  PASSIVBOT  │  {exchange}:{user}  │  {now}  "
