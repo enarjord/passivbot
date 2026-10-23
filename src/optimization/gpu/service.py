@@ -304,6 +304,13 @@ def _new_gpu_proxy_profile(
     return {
         "schema_version": 1,
         "scope": "proxy_evaluation",
+        "timing_measurement": {
+            "clock": "time.perf_counter",
+            "scope": "host_wall",
+            "kernel_execution": "synchronized_replay_dispatch_including_host_loop_work",
+            "device_timestamps_measured": False,
+            "kernel_subtimings_are_children": True,
+        },
         "strategy": str(getattr(proxy, "strategy_kind", "unknown")),
         "candidate_count": len(candidates),
         "configured_batch_size": int(getattr(proxy, "batch_size", 0)),
@@ -322,8 +329,17 @@ def _new_gpu_proxy_profile(
         ),
         "actual_dispatch_batch_sizes": [],
         "dispatch_specializations": [],
+        "dispatch_launches": [],
+        # Children of kernel_execution stay outside the additive phase ledger.
+        "kernel_execution_host_subtimings_seconds": {
+            "temporal_submission": 0.0,
+            "temporal_synchronization_wait": 0.0,
+            "other_replay_host_wall": 0.0,
+        },
         "dispatch_chunk_wall_seconds": [],
         "dispatch_count": 0,
+        "dispatch_count_scope": "kernel_dispatches",
+        "actual_dispatch_batch_sizes_scope": "physical_candidate_batches",
         "cold_dispatch_count": 0,
         "warm_dispatch_count": 0,
         "candidate_bars": (
@@ -384,6 +400,7 @@ def _add_gpu_runner_profile(
     dispatch_specialization = runner_profile.get("dispatch_specialization")
     if dispatch_specialization is not None:
         profile["dispatch_specializations"].append(dict(dispatch_specialization))
+    profile["dispatch_launches"].extend(runner_profile.get("dispatch_launches", ()))
     profile["dispatch_count"] += dispatch_count
     cold_dispatches = int(
         runner_profile.get(
@@ -416,10 +433,14 @@ def _add_gpu_runner_profile(
     profile["kernel_candidate_bars"] += (
         candidate_steps * int(getattr(runner, "n_coins", 1)) * int(side_count)
     )
-    if "temporal_chunk_bars" in runner_profile:
+    temporal_profiles = runner_profile.get("temporal_dispatches")
+    if temporal_profiles is None:
+        temporal_profiles = [runner_profile] if "temporal_chunk_bars" in runner_profile else []
+    submission_seconds = synchronization_wait_seconds = 0.0
+    for temporal_profile in temporal_profiles:
         profile.setdefault("temporal_dispatches", []).append(
             {
-                key: runner_profile[key]
+                key: temporal_profile[key]
                 for key in (
                     "dispatch_count",
                     "temporal_chunk_bars",
@@ -431,10 +452,14 @@ def _add_gpu_runner_profile(
                     "dispatch_duration_target_seconds",
                     "temporal_chunk_bars_min",
                     "temporal_chunk_bars_max",
+                    "dispatch_host_timings_seconds",
                 )
-                if key in runner_profile
+                if key in temporal_profile
             }
         )
+        host_timings = temporal_profile.get("dispatch_host_timings_seconds", {})
+        submission_seconds += float(host_timings.get("submission", 0.0))
+        synchronization_wait_seconds += float(host_timings.get("synchronization_wait", 0.0))
     timings = profile["timings_seconds"]
     timings["candidate_packing"] += float(runner_profile.get("cpu_pack_seconds", 0.0))
     timings["upload_and_buffer_clear"] += float(
@@ -443,7 +468,14 @@ def _add_gpu_runner_profile(
     compile_seconds = float(runner_profile.get("compile_seconds", 0.0))
     timings["cold_compilation" if cold else "warm_library_lookup"] += compile_seconds
     timings["pipeline_preparation"] += float(runner_profile.get("pipeline_seconds", 0.0))
-    timings["kernel_execution"] += float(runner_profile.get("kernel_seconds", 0.0))
+    kernel_seconds = float(runner_profile.get("kernel_seconds", 0.0))
+    timings["kernel_execution"] += kernel_seconds
+    children = profile["kernel_execution_host_subtimings_seconds"]
+    children["temporal_submission"] += submission_seconds
+    children["temporal_synchronization_wait"] += synchronization_wait_seconds
+    children["other_replay_host_wall"] += max(
+        0.0, kernel_seconds - submission_seconds - synchronization_wait_seconds,
+    )
     timings["metric_reduction"] += float(
         runner_profile.get("metric_decode_seconds", 0.0)
     )

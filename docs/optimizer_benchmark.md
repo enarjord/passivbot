@@ -144,7 +144,11 @@ iteration counts do not by themselves establish equal search quality.
   it from a branch name.
 - `run --phase-profile` adds opt-in frozen-GPU phase measurements to each
   cohort and runner observation: packing, upload/clear, library compilation,
-  lazy pipeline preparation, kernel execution, readback and metric reduction.
+  lazy pipeline preparation, replay execution, readback and metric reduction.
+  These are host-wall measurements. The legacy `kernel_execution` phase includes
+  submission, synchronization waits and replay-loop work rather than GPU-active time.
+  Temporal submission/wait children and requested launch shapes are retained in raw
+  profiles; the children are not added again to phase totals.
   `outside_replay_seconds` measures caller work outside replay, including service
   submission/collection; it is not a pure queue-time measurement. First use can
   spend most of its time creating a Metal pipeline after library compilation.

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Extend opt-in GPU phase profiles with host submission and synchronization-wait timing,
+  requested launch shapes and compiled pipeline limits. Existing phase timings remain
+  host-wall measurements rather than hardware kernel timings.
+
 - Reduce configuration preparation copying by reusing immutable internal policy payloads;
   candidate values and exported configurations retain independent mutable state.
 

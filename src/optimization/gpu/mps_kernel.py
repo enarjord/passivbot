@@ -924,17 +924,46 @@ class HslFactHistoryOverflow(RuntimeError):
     """A rejected GPU attempt may be repeated with larger worker-owned storage."""
 
 
-def _metal_replay_group_options(kernel, batch_size):
+def _metal_replay_group_options(kernel, batch_size, *, profile_capabilities=None):
     if gpu_device(torch) != "mps":
         return {}
     maximum = int(kernel.max_threads_per_threadgroup)
     width = int(kernel.thread_execution_width)
+    if profile_capabilities is not None:
+        profile_capabilities.update(
+            max_threads_per_threadgroup=maximum, thread_execution_width=width,
+        )
     if maximum < 1 or width < 1 or batch_size < 1:
         raise RuntimeError("Metal replay has invalid dispatch limits")
     # The API's implicit group may reserve private state for many inactive
     # lanes. Bound a state-heavy portfolio group by its actual candidates and
     # one execution width, retaining the compiled pipeline's limit as well.
     return {"group_size": (min(batch_size, maximum, width), 1, 1)}
+
+
+def _replay_launch_profile(kernel, name, threads, group_size, *, capabilities=None):
+    """Describe the requested launch and compiled limits, never occupancy."""
+    if isinstance(group_size, int):
+        group_size = (group_size, 1, 1)
+    capabilities = dict(capabilities or {})
+    for attribute in (
+        "max_threads_per_threadgroup", "thread_execution_width",
+        "static_thread_group_memory_length",
+    ):
+        if attribute not in capabilities:
+            value = getattr(kernel, attribute, None)
+            capabilities[attribute] = int(value) if value is not None else None
+    return {
+        "kernel": name,
+        "threads": list(threads),
+        "group_size": list(group_size) if group_size is not None else None,
+        "threadgroup_count": (
+            [(count + group - 1) // group for count, group in zip(threads, group_size)]
+            if group_size is not None else None
+        ),
+        "pipeline_capabilities": capabilities,
+        "dispatch_count": 1,
+    }
 
 
 def _require_available_held_valuation(scalars):
@@ -1598,7 +1627,7 @@ class _MulticoinReplayRunner:
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self._full_end_steps: dict[int, torch.Tensor] = {}
-        self.last_profile: dict[str, float | int | bool] = {}
+        self.last_profile: dict = {}
         self.start_minute_of_day = int(data["start_minute_of_day"])
         self.start_minute_of_hour = int(data["start_minute_of_hour"])
         self.requested_start_idx = max(
@@ -1847,7 +1876,9 @@ class _MulticoinReplayRunner:
             self.last_profile = {
                 key: sum(p.get(key, 0) for p in profiles)
                 for key in profiles[0]
-                if key.endswith("_seconds")
+                if key.endswith("_seconds") and key not in {
+                    "max_dispatch_seconds", "dispatch_host_timings_seconds",
+                }
             }
             self.last_profile.update(
                 batch_size=len(params),
@@ -1859,7 +1890,18 @@ class _MulticoinReplayRunner:
                 candidate_batch_sizes=[p["batch_size"] for p in profiles],
                 cold_dispatch_count=sum(int(p.get("cold", False)) for p in profiles),
                 cold=any(p.get("cold", False) for p in profiles),
+                timing_scope="host_wall",
+                temporal_dispatches=[
+                    entry for p in profiles for entry in p.get("temporal_dispatches", ())
+                ],
+                dispatch_launches=[
+                    entry for p in profiles for entry in p.get("dispatch_launches", ())
+                ],
             )
+            if any("max_dispatch_seconds" in p for p in profiles):
+                self.last_profile["max_dispatch_seconds"] = max(
+                    p.get("max_dispatch_seconds", 0.0) for p in profiles
+                )
         return combined
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -1994,6 +2036,7 @@ class _MulticoinReplayRunner:
             raise RuntimeError("GPU replay state has an invalid compiled size")
 
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
+        self._last_temporal_dispatch = None
         # Metal creates the compute pipeline lazily at kernel lookup. Keep its
         # first-use cost separate from device execution, including unchunked replay.
         profile_pipeline = getattr(self, "_profile_pipeline", False)
@@ -2003,11 +2046,19 @@ class _MulticoinReplayRunner:
         if profile_pipeline:
             self._pipeline_seconds += pipeline_seconds
         if not self._temporal_replay_enabled():
+            capabilities = {} if profile_pipeline else None
             dispatch_options = {"threads": (batch_size, 1, 1)}
-            dispatch_options.update(_metal_replay_group_options(kernel, batch_size))
+            dispatch_options.update(_metal_replay_group_options(
+                kernel, batch_size, profile_capabilities=capabilities,
+            ))
             if gpu_device(torch) == "cuda" and self.replay_sides == 1 and self.cuda_whole_group_size is not None:
                 # Spread independent, state-heavy candidates across more SMs.
                 dispatch_options["group_size"] = self.cuda_whole_group_size
+            if profile_pipeline:
+                self._profile_dispatch_launches = [_replay_launch_profile(
+                    kernel, self.replay_kernel_name, dispatch_options["threads"],
+                    dispatch_options.get("group_size"), capabilities=capabilities,
+                )]
             kernel(
                 *kernel_args, **dispatch_options
             )
@@ -2041,6 +2092,7 @@ class _MulticoinReplayRunner:
         stop_k = int(end_steps.max().item())
         dispatch_count = 0
         max_dispatch_seconds = 0.0
+        submission_seconds = synchronization_wait_seconds = 0.0
         controller = ReplayDurationController(chunk_bars) if adaptive else None
         adaptive_adjustments = 0
         min_processed_bars, max_processed_bars = chunk_bars, 0
@@ -2050,6 +2102,12 @@ class _MulticoinReplayRunner:
         # Serial candidates need independent CUDA blocks to spread across SMs.
         # Preserve the existing Apple SIMD-width scheduling.
         threads_per_threadgroup = 1 if self.bars.device.type == "cuda" else min(batch_size, 32)
+        if profile_pipeline:
+            launch_profile = _replay_launch_profile(
+                kernel, self.replay_kernel_name, (batch_size, 1, 1),
+                (threads_per_threadgroup, 1, 1),
+            )
+            self._profile_dispatch_launches = [launch_profile]
         begin_k = 1
         while True:
             self.interrupt_check()
@@ -2067,11 +2125,16 @@ class _MulticoinReplayRunner:
                 threads=(batch_size, 1, 1),
                 group_size=(threads_per_threadgroup, 1, 1),
             )
+            submitted = time.perf_counter() if profile_pipeline else 0.0
             # Bound queued work as well as each command, and make Ctrl+C visible
             # between temporal chunks even when profiling is disabled.
             synchronize()
             dispatch_count += 1
-            dispatch_seconds = time.perf_counter() - started
+            completed = time.perf_counter()
+            dispatch_seconds = completed - started
+            if profile_pipeline:
+                submission_seconds += submitted - started
+                synchronization_wait_seconds += completed - submitted
             max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
             completed_k = min(begin_k + dispatch_bars, stop_k)
             processed_bars = completed_k - begin_k
@@ -2114,6 +2177,12 @@ class _MulticoinReplayRunner:
             "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
             "replay_state_bytes_per_candidate": self._replay_state_bytes,
         }
+        if profile_pipeline:
+            launch_profile["dispatch_count"] = dispatch_count
+            self._last_temporal_dispatch["dispatch_host_timings_seconds"] = {
+                "submission": submission_seconds,
+                "synchronization_wait": synchronization_wait_seconds,
+            }
         if adaptive:
             self._last_temporal_dispatch.update(
                 adaptive_temporal_chunks=True,
@@ -2241,6 +2310,7 @@ class _MulticoinReplayRunner:
         self._profile_pipeline = profile
         self._pipeline_seconds = 0.0
         if profile:
+            self._profile_dispatch_launches = []
             synchronize()
             dispatched = time.perf_counter()
         else:
@@ -2278,7 +2348,12 @@ class _MulticoinReplayRunner:
                     (end_steps_mps - 1).clamp(min=0).sum().item()
                 ),
                 "cold": cold,
+                "timing_scope": "host_wall",
+                "dispatch_launches": self._profile_dispatch_launches,
             }
+            if self._last_temporal_dispatch is not None:
+                self.last_profile.update(self._last_temporal_dispatch)
+                self.last_profile["temporal_dispatches"] = [dict(self._last_temporal_dispatch)]
         else:
             self.last_profile = {}
             wait_for_cuda_stream()

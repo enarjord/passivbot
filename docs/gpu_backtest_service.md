@@ -374,6 +374,33 @@ prefix in a fresh control tensor. This keeps stop limits current when a batch sh
 reused and keeps the Metal argument count within the supported limit. Device admission
 includes this control tensor as well as the execution tick pairs.
 
+## Profiling time and launch shapes
+
+`PASSIVBOT_GPU_PROFILE=1` enables optional replay phase profiles. All fields in
+`timings_seconds` use host-wall clocks. The retained `kernel_execution` key includes
+submission, synchronization waits and replay-loop work; it does not measure GPU-active
+time. `timing_measurement` states this scope explicitly. Phase profiling already adds
+synchronization, so use separate unprofiled runs for throughput comparisons.
+
+For temporal replay, one additional host-clock read per chunk separates the kernel-call
+submission interval from the existing synchronization wait. The totals appear in each
+physical replay's `temporal_dispatches[].dispatch_host_timings_seconds` and in
+`kernel_execution_host_subtimings_seconds`, alongside the remaining replay host-wall
+time. These are children of `timings_seconds.kernel_execution`: never add the children
+to that parent or to the phase total. Submission can overlap GPU work, and a wait can
+include driver and scheduling costs, so neither child is a hardware kernel duration.
+History sub-batches retain their separate physical records and actual dispatch counts.
+`dispatch_count_scope` identifies kernel dispatches, while
+`actual_dispatch_batch_sizes_scope` identifies physical candidate batches. Temporal
+chunks partition each batch's history; they do not multiply completed candidates or
+the reported candidate-bar work.
+
+`dispatch_launches` records requested thread and threadgroup shapes, calculated group
+counts and available compiled-pipeline limits. Missing limits or implicit group sizes
+remain null. These describe the launch, not measured occupancy, register pressure or
+bandwidth. Metadata is read only when profiling; replay geometry is unchanged. The
+host-timing split adds no GPU events, device timestamps or synchronization calls.
+
 ## Execution and cleanup
 
 The first accepted request creates one device residency context on its owning worker.
