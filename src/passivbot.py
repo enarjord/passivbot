@@ -2459,13 +2459,9 @@ class Passivbot:
         user = self.user
         exchange = self.exchange
 
-        # Determine enabled sides
-        long_enabled = (
-            float(self.bot_value("long", "total_wallet_exposure_limit") or 0.0) > 0.0
-        )
-        short_enabled = (
-            float(self.bot_value("short", "total_wallet_exposure_limit") or 0.0) > 0.0
-        )
+        activation = side_activation(self.config)
+        long_enabled = activation["long"]
+        short_enabled = activation["short"]
         if long_enabled and short_enabled:
             mode = "LONG + SHORT"
         elif long_enabled:
@@ -2509,6 +2505,15 @@ class Passivbot:
         logging.info("╠%s╣", border)
         logging.info("║%s║", line2)
         logging.info("╚%s╝", border)
+        logging.info(
+            "[boot] side activation | Long: %s; Short: %s",
+            "enabled" if long_enabled else "disabled",
+            "enabled" if short_enabled else "disabled",
+        )
+        if not any(activation.values()):
+            logging.info(
+                "[boot] entries disabled on both sides; held-position management follows configured modes"
+            )
         runtime = self.runtime_identity
         dirty_suffix = "+dirty" if runtime.python_git_dirty else ""
         logging.info(

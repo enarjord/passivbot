@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Report explicit long/short activation in the live startup banner instead of inferring it from
+  exposure capacity. Both-disabled configurations report that entries are disabled while existing
+  position management follows configured modes.
+
 - Resolve every directional bot setting from common `bot.global` defaults and sparse
   `bot.long`/`bot.short` leaf overrides. Explicit equal values, false, zero and empty lists
   remain pins; ignored null clears while side approval null inherits. Both sides share the
