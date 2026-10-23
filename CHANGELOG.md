@@ -6,7 +6,7 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Resolve every directional bot setting from common `bot.global` defaults and sparse
+- Resolve inheritable directional bot settings from common `bot.global` defaults and sparse
   `bot.long`/`bot.short` leaf overrides. Explicit equal values, false, zero and empty lists
   remain pins; ignored null clears while side approval null inherits. Both sides share the
   deliberately retained long starter profile, with activation still disabled by default and
@@ -23,8 +23,10 @@ since the latest release tag; these features may already be available when insta
   every scope and retain explicit declaration changes. Direct released-v8 migration materializes its
   historical directional profiles and search ranges rather than adopting the common profile.
 
-- Add explicit side activation: `bot.global.enabled` defaults false, omitted directional flags
-  inherit it, and explicit side booleans pin permission. Disabled sides cannot open or increase
+- Require side-only activation: `bot.long.enabled` and `bot.short.enabled` each default false;
+  only explicit true enables a side. Reject `bot.global.enabled` with a corrective error instead
+  of inheriting activation. Other nested feature switches still inherit, and both-disabled configs
+  remain valid for held-position management. Disabled sides cannot open or increase
   exposure; numeric capacities, operational modes and held-position close/protection policy remain
   separate. Zero capacity no longer implies manual mode, and existing sizing/risk gates still apply.
   Live, Rust backtests and supported GPU replay transport both strict booleans and include them in

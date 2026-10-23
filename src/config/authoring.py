@@ -23,7 +23,7 @@ _MISSING = object()
 _UNIVERSE_PATHS = tuple(("bot", side, "universe", field)
                         for side in ("global", "long", "short") for field in sorted(COIN_SOURCE_FIELDS))
 _PROTECTED = (
-    *(("bot", owner, "enabled") for owner in ("global", "long", "short")),
+    *(("bot", owner, "enabled") for owner in ("long", "short")),
     ("coin_overrides",), ("optimize", "bounds"),
     ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
     ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),

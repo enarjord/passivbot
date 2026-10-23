@@ -440,7 +440,7 @@ async def test_qualified_policy_lowers_only_against_factual_dataset_venue(tmp_pa
     from tools.gpu_parity import build_parser, fixture_inputs
 
     config = await formatted(tmp_path, monkeypatch, ["bybit::BTCUSDT", "ETH"], ("binance", "bybit"))
-    assert apply_bot_config_patch(config, {"bot.portfolio.strategy_kind": kind, "bot.global.enabled": True})
+    assert apply_bot_config_patch(config, {"bot.portfolio.strategy_kind": kind, "bot.long.enabled": True, "bot.short.enabled": True})
     config["backtest"]["exchanges"] = [exchange]
     config = prepare_config(config, verbose=False)
     _, candles, original_markets, btc, timestamps = fixture_inputs(build_parser().parse_args([

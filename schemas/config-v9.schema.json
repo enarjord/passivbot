@@ -799,19 +799,6 @@
             "global": {
               "type": "object",
               "properties": {
-                "enabled": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Side omission inherits bot.global.enabled; explicit false is a pin. Held closes and protection retain their existing sizing, risk and mode gates.",
-                  "x-passivbot-scope": "global",
-                  "x-passivbot-consumers": [
-                    "live",
-                    "backtest",
-                    "optimize"
-                  ],
-                  "x-passivbot-optimizable": false,
-                  "x-passivbot-coin-override": "forbidden"
-                },
                 "entry_cooldown": {
                   "type": "object",
                   "properties": {
@@ -2295,7 +2282,7 @@
                 "enabled": {
                   "type": "boolean",
                   "default": false,
-                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Side omission inherits bot.global.enabled; explicit false is a pin. Held closes and protection retain their existing sizing, risk and mode gates.",
+                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Only an explicit side true grants permission; omission defaults to false. Activation never inherits. Held closes and protection retain their existing sizing, risk and mode gates.",
                   "x-passivbot-scope": "long",
                   "x-passivbot-consumers": [
                     "live",
@@ -4158,7 +4145,7 @@
                 "enabled": {
                   "type": "boolean",
                   "default": false,
-                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Side omission inherits bot.global.enabled; explicit false is a pin. Held closes and protection retain their existing sizing, risk and mode gates.",
+                  "description": "Permission for initial entries and DCA, independent of numeric capacity and operational mode. Only an explicit side true grants permission; omission defaults to false. Activation never inherits. Held closes and protection retain their existing sizing, risk and mode gates.",
                   "x-passivbot-scope": "short",
                   "x-passivbot-consumers": [
                     "live",
@@ -18027,9 +18014,6 @@
         "bot.global": {
           "$ref": "#/$defs/config/properties/bot/properties/global"
         },
-        "bot.global.enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/enabled"
-        },
         "bot.global.entry_cooldown": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/entry_cooldown"
         },
@@ -20635,9 +20619,6 @@
         "global": {
           "$ref": "#/$defs/scenarioPatch:bot.global"
         },
-        "global.enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/enabled"
-        },
         "global.entry_cooldown": {
           "$ref": "#/$defs/config/properties/bot/properties/global/properties/entry_cooldown"
         },
@@ -21536,9 +21517,6 @@
     "scenarioPatch:bot.global": {
       "type": "object",
       "properties": {
-        "enabled": {
-          "$ref": "#/$defs/config/properties/bot/properties/global/properties/enabled"
-        },
         "entry_cooldown": {
           "$ref": "#/$defs/scenarioPatch:bot.global.entry_cooldown"
         },

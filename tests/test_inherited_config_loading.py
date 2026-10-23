@@ -16,7 +16,7 @@ from config_utils import clean_config
 def source(kind="trailing_martingale"):
     return {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"enabled": True, "universe": {"approved_coins": ["BTC", "ETH"],
+        "long": {"enabled": True}, "global": { "universe": {"approved_coins": ["BTC", "ETH"],
                                                     "minimum_coin_age_days": 0.0},
                    "risk": {"total_wallet_exposure_limit": 2.25}},
         "short": {"enabled": False}}, "live": {}}
@@ -63,14 +63,14 @@ def test_only_explicit_coin_file_template_extension_accepts_standalone_allocatio
 def test_lean_template_has_common_profile_and_no_side_permission_pins():
     raw = get_template_config()
     assert raw["bot"]["long"] == raw["bot"]["short"] == {}
-    assert raw["bot"]["global"]["enabled"] is False
+    assert "enabled" not in raw["bot"]["global"]
     assert raw["optimize"]["bounds"] == {}
-    raw["bot"]["global"]["enabled"] = True
+    raw["bot"]["long"]["enabled"] = True
     prepared = prepare_config(raw, verbose=False)
     assert prepared["bot"]["long"]["enabled"] is True
-    assert prepared["bot"]["short"]["enabled"] is True
+    assert prepared["bot"]["short"]["enabled"] is False
     assert prepared["bot"]["long"]["risk"] == prepared["bot"]["short"]["risk"]
-    assert get_expanded_config_prototype()["bot"]["global"]["enabled"] is False
+    assert "enabled" not in get_expanded_config_prototype()["bot"]["global"]
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])

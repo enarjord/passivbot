@@ -86,6 +86,7 @@ class SideField:
     default: Any
     native_keys: tuple[str | None, str | None]
     optimizable: bool
+    inheritable: bool = True
 
     def default_value(self):
         return _thaw(self.default)
@@ -103,7 +104,8 @@ class SideFieldCatalog:
     def from_registry(cls, registry: FieldRegistry, *, common_defaults: Mapping):
         """Require deliberately supplied common defaults, never choose a side.
 
-        Registry paths determine inheritability.  Coin-override permissions do
+        Paired registry paths determine side capability. Activation is side-only;
+        all other paired leaves support shared defaults.  Coin-override permissions do
         not affect this catalog.  Asymmetric native/schema defaults remain the
         released converter's concern, rather than an implicit merge rule.
         """
@@ -123,13 +125,14 @@ class SideFieldCatalog:
             short = by_side["short"][suffix]
             if (long.types, long.nullable) != (short.types, short.nullable):
                 raise ValueError(f"incompatible side declarations for {'.'.join(suffix)}")
-            default = _get(common_defaults, suffix)
+            inheritable = suffix != ("enabled",)
+            default = _get(common_defaults, suffix) if inheritable else False
             if default is ABSENT:
                 raise ValueError(f"missing explicit common default: {'.'.join(suffix)}")
             field = SideField(suffix, long.types, long.nullable, _freeze(default),
                               (long.optimize_key, short.optimize_key),
-                              bool(long.optimizable and short.optimizable))
-            _validate_value(field, default, ("bot", "global", *suffix), shared=True)
+                              bool(long.optimizable and short.optimizable), inheritable)
+            _validate_value(field, default, ("bot", "global" if inheritable else "long", *suffix), shared=inheritable)
             fields.append(field)
         result = cls(tuple(fields), tuple(portfolio))
         result.validate_tree(common_defaults, ("bot", "global"))
@@ -144,6 +147,9 @@ class SideFieldCatalog:
         def visit(value, suffix):
             field = self.find(suffix)
             if field is not None:
+                if prefix[1] == "global" and not field.inheritable:
+                    from .activation import GLOBAL_ACTIVATION_ERROR
+                    raise ValueError(GLOBAL_ACTIVATION_ERROR)
                 _validate_value(field, value, (*prefix, *suffix), shared=prefix[1] == "global")
                 return
             children = [field for field in self.fields if field.suffix[:len(suffix)] == suffix]
@@ -228,7 +234,8 @@ class BotPolicy:
         if include_defaults:
             common = {}
             for field in self.catalog.fields:
-                _set(common, field.suffix, field.default_value())
+                if field.inheritable:
+                    _set(common, field.suffix, field.default_value())
             authored = result.get("global", {})
             for field in self.catalog.fields:
                 value = _get(authored, field.suffix)
@@ -274,7 +281,8 @@ class BotPolicy:
                 shared = field.default_value()
             elif field.suffix == ("universe", "ignored_coins") and shared is None:
                 shared = []
-            _set(result["global"], field.suffix, deepcopy(shared))
+            if field.inheritable:
+                _set(result["global"], field.suffix, deepcopy(shared))
             for side in SIDES:
                 path = ("bot", side, *field.suffix)
                 value = _get(source.get(side, {}), field.suffix)
@@ -452,6 +460,8 @@ def reconciled_bot_policy(config: Mapping) -> BotPolicy | None:
             registered_view.pop(alias[1])
         policy.catalog.validate_tree(registered_view, ("bot", scope))
         for field in policy.catalog.fields:
+            if scope == "global" and not field.inheritable:
+                continue
             path = (scope, *field.suffix)
             current = _get(bot, path)
             previous = _get(baseline, path)
@@ -541,6 +551,9 @@ def apply_bot_policy_patch(policy: BotPolicy, replacements: Mapping[str, Any], *
             raise ValueError(f"unsupported bot policy selector: {selector}")
         if any(_intersects(path, other) for other in paths):
             raise ValueError("overlapping bot policy replacements")
+        if path == ("bot", "global", "enabled"):
+            from .activation import GLOBAL_ACTIVATION_ERROR
+            raise ValueError(GLOBAL_ACTIVATION_ERROR)
         paths[path] = value
     source = policy.source_view()
     prepared = policy._prepared
@@ -670,6 +683,8 @@ def with_normalized_bot_values(policy, effective_bot):
     entries = []
     for scope in ("global", *SIDES):
         for field in policy.catalog.fields:
+            if scope == "global" and not field.inheritable:
+                continue
             if field.suffix in SOURCE_FIELDS:
                 continue
             path = (scope, *field.suffix)

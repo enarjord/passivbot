@@ -175,7 +175,7 @@ def _compile_projection_guard(value, numeric_paths, path=(), ancestors=(), *, in
                 return None
             source = value._activation_source
             if any(flag is not None and type(flag) is not bool
-                   for flag in (source.global_enabled, source.long, source.short)):
+                   for flag in (source.long, source.short)):
                 return None
             source_guard = lambda current: (type(current._activation_source) is ActivationSource
                                              and current._activation_source == source)

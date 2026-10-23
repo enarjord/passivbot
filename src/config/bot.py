@@ -118,7 +118,8 @@ def validate_bot_config(result: dict) -> None:
     from .activation import side_activation
 
     side_activation(result)
-    _validate_bool(result["bot"]["global"]["enabled"], path="bot.global.enabled")
+    from .activation import reject_global_activation
+    reject_global_activation(result["bot"])
     for pside in BOT_POSITION_SIDES:
         bot_side = result["bot"][pside]
         _validate_positive_ratio_when_enabled(

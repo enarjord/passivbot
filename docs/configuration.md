@@ -157,11 +157,12 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 
 ### Inherited Defaults and Portfolio Policy
 
-`bot.global` supplies defaults for all registered directional settings, including
+`bot.global` supplies defaults for registered inheritable directional settings, including
 `strategy.<strategy_kind>.*`, risk, selection, universe filters and local HSL/unstuck
 parameters. `bot.long` and `bot.short` contain optional overrides. Resolution follows
 schema defaults → authored global defaults → explicit side values → eligible coin overrides.
-Absent and empty side objects are equivalent. One portfolio strategy kind applies to both sides.
+Absent and empty side objects are equivalent. Side activation is the exception to inheritance:
+each side must be enabled explicitly. One portfolio strategy kind applies to both sides.
 
 Inheritance is per leaf. Explicit `false`, `0`, `[]` and values equal to the current common
 value remain side pins; lists replace rather than merge. Null handling is field-specific:
@@ -195,16 +196,19 @@ For example, this authored config enables long with a common profile:
 
 Setting `short.enabled` to `true` gives it the same profile. Hedge/one-way behavior also depends
 on portfolio policy and venue support. Exposure and position limits remain **per side**: enabling
-both does not divide one account-wide budget. Both side objects may be omitted when
-`bot.global.enabled` supplies the intended common activation policy. New schema defaults use one
-common numerical starter profile, retaining the former long defaults; activation defaults false.
+both does not divide one account-wide budget. Either side object may be omitted when that side
+should remain disabled. New schema defaults use one common numerical starter profile, retaining
+the former long defaults; activation defaults false independently for each side.
 
 ### Side Activation
 
-`bot.global.enabled` defaults to `false`. An omitted `bot.long.enabled` or
-`bot.short.enabled` inherits that value; an explicit boolean pins the side.
-Absent and empty side objects have the same parameters and activation policy.
-Enable the intended sides explicitly before live trading, backtesting or optimization.
+`bot.long.enabled` and `bot.short.enabled` are strict booleans, each defaulting to `false`.
+Only an explicit `true` enables that side. Omitted flags and absent or empty side objects
+leave the corresponding side disabled, while its other parameters still inherit normally.
+There is no shared activation switch: `bot.global.enabled` is rejected with an error directing
+you to the two side flags. Other nested feature switches, such as `bot.global.unstuck.enabled`,
+remain inheritable. Enable the intended sides explicitly before live trading, backtesting or
+optimization. A config with both sides disabled remains valid for managing existing positions.
 
 `enabled=false` forbids initial entries and DCA, including forced-normal and
 always-include selection. Positive exposure capacity, position capacity, approvals,
@@ -481,8 +485,8 @@ execution, exchange I/O and startup settings.
 - **bot.<side>.universe.approved_coins**: Omission or `null` inherits the shared source. An
   explicit list, `"all"`, or file replaces it completely; `[]` approves no entries. Lists are
   never merged. An explicit list stays pinned even if it equals the shared list today.
-  Shared omission means `[]`; global `null` is invalid. An omitted side inherits activation
-  as well as parameters, with false as the schema activation default.
+  Shared omission means `[]`; global `null` is invalid. An omitted side inherits these parameters
+  but remains disabled until its own `enabled` flag is explicitly true.
   Refresh rereads files and blocks affected new-entry eligibility when a source is unavailable;
   independent pinned sides and protective position management retain their existing policies.
 

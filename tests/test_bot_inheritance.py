@@ -12,7 +12,7 @@ from config.universe import ResolvedCoinList
 def catalog():
     fields = []
     defaults = {
-        "risk": {"capacity": 1.0}, "enabled": False,
+        "risk": {"capacity": 1.0},
         "entry_cooldown": {"maximum": None},
         "forager": {"always_include": [], "score_weights": {
             "volume": 0.2, "volatility": 0.3, "ema_readiness": 0.5, "unilateralness": 0.0,
@@ -52,7 +52,7 @@ def real_catalog():
 
 def test_leaf_precedence_preserves_false_zero_empty_and_nullable_values():
     policy = resolve_bot_policy({
-        "global": {"enabled": True, "risk": {"capacity": 2.0},
+        "long": {"enabled": True}, "global": { "risk": {"capacity": 2.0},
                    "forager": {"always_include": ["AAA"]},
                    "entry_cooldown": {"maximum": 30.0}},
         "short": {"enabled": False, "risk": {"capacity": 0.0},
@@ -289,13 +289,13 @@ def test_direct_changed_values_are_adopted_before_source_projection():
     policy = resolve_bot_policy({}, catalog())
     config = {}
     install_bot_policy(config, policy)
-    config["bot"]["global"]["enabled"] = True
+    config["bot"]["long"]["enabled"] = True
     config["bot"]["global"]["risk"]["capacity"] = 3.0
     config["bot"]["short"]["risk"]["capacity"] = 2.0
     source = bot_policy_source_view(config)["bot"]
     reloaded = resolve_bot_policy(source, policy.catalog)
     assert reloaded.effective_view()["long"]["enabled"] is True
-    assert reloaded.effective_view()["short"]["enabled"] is True
+    assert reloaded.effective_view()["short"]["enabled"] is False
     assert reloaded.effective_view()["long"]["risk"]["capacity"] == 3.0
     assert reloaded.effective_view()["short"]["risk"]["capacity"] == 2.0
     assert "enabled" not in source["short"]
