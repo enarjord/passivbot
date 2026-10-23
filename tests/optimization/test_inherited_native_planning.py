@@ -42,11 +42,14 @@ def test_actual_registry_and_fast_planner_fan_out_global_gene(kind, independent_
     raw = clean_config(original)
     raw["bot"] = {"portfolio": deepcopy(raw["bot"]["portfolio"]),
                   "global": deepcopy(universe_source_view(original)["bot"]["long"])}
+    raw["bot"]["global"].pop("enabled")
+    for side in ("long", "short"):
+        raw["bot"][side] = {"enabled": original["bot"][side]["enabled"]}
     raw["optimize"]["bounds"] = {"global": {"unstuck": {"close_fraction": [0.02, 0.08]}}}
     if independent_short:
         raw["optimize"]["bounds"]["short"] = {"unstuck": {"close_fraction": [0.04, 0.09]}}
     if topology_search:
-        raw["bot"]["short"] = {"risk": {"total_wallet_exposure_limit": 1.0}}
+        raw["bot"]["short"]["risk"] = {"total_wallet_exposure_limit": 1.0}
         raw["optimize"]["bounds"]["global"]["risk"] = {"total_wallet_exposure_limit": [0.0, 1.0]}
     config = prepare_config(raw, verbose=False)
     config["backtest"]["coins"] = deepcopy(original["backtest"]["coins"])

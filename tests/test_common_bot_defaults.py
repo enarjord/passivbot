@@ -38,8 +38,9 @@ def test_common_shared_profile_retains_former_long_values_and_separate_permissio
     assert prototype["long"]["universe"]["approved_coins"] is None
     inherited = deepcopy(prototype["long"])
     inherited["universe"]["approved_coins"] = []
+    assert inherited.pop("enabled") is False
     assert inherited == common
-    assert common["enabled"] is False
+    assert "enabled" not in common
     assert common["universe"]["approved_coins"] == []
     assert common["risk"]["total_wallet_exposure_limit"] == 1.5
     assert common["risk"]["max_positions"] == 7
