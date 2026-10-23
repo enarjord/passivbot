@@ -16,7 +16,7 @@ from tools.clean_config import cleanup_config, render_source
 def authored(kind="trailing_martingale"):
     return {"config_version": "v9.0.0", "live": {}, "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"enabled": False,
+        "global": {
                    "universe": {"approved_coins": ["BTC", "ETH"], "ignored_coins": []},
                    "risk": {"total_wallet_exposure_limit": 1.5}},
         "long": {"enabled": True},
@@ -121,7 +121,7 @@ def test_lean_referenced_coin_file_imports_declared_global_parameters_only(tmp_p
     current[path[-1]] = value
     file_config = {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"enabled": True, "strategy": {kind: strategy},
+        "long": {"enabled": True}, "global": { "strategy": {kind: strategy},
                    "universe": {"approved_coins": ["ETH"]}},
     }}
     reference = tmp_path / "coin.json"

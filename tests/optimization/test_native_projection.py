@@ -33,7 +33,7 @@ def test_projection_accepts_only_owned_activation_view_with_unchanged_source():
     class ForeignBot(PreparedActivationBot):
         pass
     changed = deepcopy(config)
-    changed["bot"] = ForeignBot(changed["bot"], ActivationSource(None, None, None))
+    changed["bot"] = ForeignBot(changed["bot"], ActivationSource(None, None))
     assert planning._compile_projection_guard(changed, ()) is None
     assert not guard(changed)
     changed["bot"] = dict(config["bot"])

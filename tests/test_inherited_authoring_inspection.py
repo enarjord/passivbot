@@ -16,7 +16,8 @@ def test_compact_defaults_do_not_introduce_side_activation_pins(kind):
     before = deepcopy(source)
     compact = compact_config(source)
     assert compact["bot"]["long"] == compact["bot"]["short"] == {}
-    compact["bot"].setdefault("global", {})["enabled"] = True
+    compact["bot"].setdefault("long", {})["enabled"] = True
+    compact["bot"].setdefault("short", {})["enabled"] = True
     loaded = prepare_config(compact, verbose=False)
     assert loaded["bot"]["long"]["enabled"] is True
     assert loaded["bot"]["short"]["enabled"] is True

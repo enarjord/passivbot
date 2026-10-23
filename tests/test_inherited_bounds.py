@@ -226,6 +226,6 @@ def test_numeric_gene_reuse_is_allowed_but_source_and_enablement_edits_are_not()
     first = plan.apply_vector(policy, vector_for(plan, **{"bot.global.risk.capacity": 2.0}))
     second = plan.apply_vector(first, vector_for(plan, **{"bot.global.risk.capacity": 3.0}))
     assert _get(second.effective_view()["long"], SUFFIX) == 3.0
-    changed = apply_bot_policy_patch(policy, {"bot.global.enabled": True})
+    changed = apply_bot_policy_patch(policy, {"bot.long.enabled": True})
     with pytest.raises(ValueError, match="does not match source authority"):
         plan.apply_vector(changed, vector_for(plan))

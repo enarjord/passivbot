@@ -9,7 +9,6 @@ def get_common_bot_defaults():
     from .strategy_spec import get_common_strategy_defaults
 
     return {
-        "enabled": False,
         "universe": {
             "approved_coins": [],
             "ignored_coins": [],

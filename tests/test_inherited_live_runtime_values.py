@@ -12,10 +12,10 @@ from passivbot import Passivbot
 
 def bot_fixture(*, compiled=False):
     config = prepare_config({"config_version": "v9.0.0", "bot": {
-        "global": {"enabled": True, "risk": {
+        "long": {"enabled": True}, "global": { "risk": {
             "total_wallet_exposure_limit": 2.0, "max_positions": 4},
             "universe": {"approved_coins": ["AAA"], "minimum_coin_age_days": 0.0}},
-        "short": {"risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 2}},
+        "short": {"enabled": True, "risk": {"total_wallet_exposure_limit": 1.0, "max_positions": 2}},
     }}, verbose=False)
     bot = Passivbot.__new__(Passivbot)
     bot.config = compile_runtime_config(config, runtime="live") if compiled else config

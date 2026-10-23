@@ -22,7 +22,7 @@ from shared_arrays import SharedArraySpec
 def source(kind="trailing_martingale"):
     return {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
-        "global": {"enabled": True, "universe": {"approved_coins": ["AAA"], "minimum_coin_age_days": 0.0}},
+        "long": {"enabled": True}, "global": { "universe": {"approved_coins": ["AAA"], "minimum_coin_age_days": 0.0}},
         "short": {"enabled": False}},
         "optimize": {"bounds": {"global": {"risk": {"total_wallet_exposure_limit": [1.0, 3.0]}}}}}
 
@@ -32,12 +32,12 @@ def test_resume_compares_authored_bounds_and_resolved_activation_not_hydrated_do
     from optimize import _resume_config_mismatches
     from optimization.evaluation_contract import CONTRACT_KEY
     raw = source()
-    raw["bot"]["global"]["enabled"] = enabled
+    raw["bot"]["long"]["enabled"] = enabled
     current = load(raw)
     saved = clean_config(current)
     saved["backtest"]["coins"] = deepcopy(current["backtest"]["coins"])
     saved[CONTRACT_KEY] = build_evaluation_contract(current)
-    assert "long" not in raw["bot"]
+    assert raw["bot"]["long"] == {"enabled": enabled}
     assert set(saved["optimize"]["bounds"]) == {"global"}
     assert set(current["optimize"]["bounds"]) != {"global"}
     assert _resume_config_mismatches(saved, current) == []

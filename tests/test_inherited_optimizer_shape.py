@@ -11,7 +11,7 @@ def real_prepared(*, short_enabled=True, short_pin=False):
     from config.schema import get_template_config
     from test_bot_inheritance import real_catalog
     config = get_template_config()
-    raw = {"portfolio": deepcopy(config["bot"]["portfolio"]), "global": {"enabled": True},
+    raw = {"portfolio": deepcopy(config["bot"]["portfolio"]), "long": {"enabled": True},
            "short": {"enabled": short_enabled}}
     if short_pin:
         raw["short"]["unstuck"] = {"close_fraction": 0.041}
@@ -69,7 +69,7 @@ def test_actual_vector_writer_fans_common_gene_out_and_retains_sparse_source(sho
     source = universe_source_view(candidate)["bot"]
     assert source["global"]["unstuck"]["close_fraction"] == 0.055
     assert ("unstuck" in source.get("short", {})) is short_pin
-    assert "long" not in source
+    assert source["long"] == {"enabled": True}
     assert universe_source_view(config) == universe_source_view(before)
 
 
@@ -162,7 +162,7 @@ def test_anchored_vector_installs_common_fixed_values_through_gene_authority():
     source = universe_source_view(candidate)["bot"]
     assert source["global"]["unstuck"]["close_fraction"] == 0.05
     assert source["short"]["unstuck"]["close_fraction"] == 0.041
-    assert "long" not in source
+    assert source["long"] == {"enabled": True}
 
 
 def test_mirrored_and_coupled_targets_do_not_create_unused_independent_axes():
@@ -200,7 +200,7 @@ def test_fixed_source_install_preserves_sparse_policy_and_leaves_numeric_pins_fo
     after = universe_source_view(config)
     assert after["bot"]["global"]["universe"]["approved_coins"] == str(source)
     assert "universe" not in after["bot"]["short"]
-    assert "long" not in after["bot"]
+    assert after["bot"]["long"] == {"enabled": True}
     assert after["bot"]["global"].get("risk") == before["bot"]["global"].get("risk")
     assert get_side_universe_sources(config, "ignored_coins") == {"long": ["ETH"], "short": ["ETH"]}
 
@@ -347,9 +347,9 @@ def test_actual_loader_shape_candidate_and_reload_keep_shared_gene_authority(kin
 
     source = get_template_config()
     source["bot"]["portfolio"]["strategy_kind"] = kind
-    source["bot"]["global"]["enabled"] = True
+    source["bot"]["long"]["enabled"] = True
     source["bot"]["global"]["universe"]["approved_coins"] = []
-    source["bot"]["short"] = {"unstuck": {"close_fraction": 0.041}}
+    source["bot"]["short"] = {"enabled": True, "unstuck": {"close_fraction": 0.041}}
     raw_bounds = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]},
                               "risk": {"max_positions": [0.0, 8.0]}}}
     source["optimize"]["bounds"] = deepcopy(raw_bounds)
@@ -368,7 +368,7 @@ def test_actual_loader_shape_candidate_and_reload_keep_shared_gene_authority(kin
         assert result["bot"]["short"]["risk"]["max_positions"] == 4
         assert optimize_bounds_source_view(result)["optimize"]["bounds"] == raw_bounds
         raw = universe_source_view(result)["bot"]
-        assert raw["short"] == {"unstuck": {"close_fraction": 0.041}}
-        assert not raw.get("long")
+        assert raw["short"] == {"enabled": True, "unstuck": {"close_fraction": 0.041}}
+        assert raw["long"] == {"enabled": True}
     assert get_bound_plan(loaded).identity() == get_bound_plan(prepared).identity()
     assert source == original

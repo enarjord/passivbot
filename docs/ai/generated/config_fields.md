@@ -75,7 +75,6 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 
 | Field | Type | Default | Unit / denominator | Scope / consumers | Optimizer / recommendations | Coin overrides | Domain | Source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `bot.global.enabled` | boolean | `false` | — | global; live, backtest, optimize | No | forbidden | — | python |
 | `bot.global.entry_cooldown.base_duration_minutes` | float | `24.1` | minutes | global; live, backtest, optimize | Eligible; recommended `[0, 60, 0.1]` | forbidden | >= 0.0; finite | python |
 | `bot.global.entry_cooldown.max_duration_minutes` | float \| null | `null` | minutes | global; live, backtest, optimize | Eligible | forbidden | >= 0.0; finite | python |
 | `bot.global.entry_cooldown.min_duration_minutes` | float | `0.0` | minutes | global; live, backtest, optimize | Eligible | forbidden | >= 0.0; finite | python |

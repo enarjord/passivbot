@@ -220,7 +220,8 @@ def test_owned_policy_inspection_retains_false_pin_and_source_authority(monkeypa
 def test_negative_hysteresis_is_invalid_even_for_an_explicitly_disabled_side(tmp_path, scope, disabled):
     config = _config()
     config["bot"].setdefault(scope, {}).setdefault("forager", {})["score_hysteresis_margin"] = -0.1
-    config["bot"][scope]["enabled"] = not disabled
+    for side in (("long", "short") if scope == "global" else (scope,)):
+        config["bot"].setdefault(side, {})["enabled"] = not disabled
     report = build_live_config_preflight_report(_write(tmp_path, "config.json", config))
     assert report["ok"] is False
     assert any(issue["code"] == "config_schema_invalid" and "non-negative" in issue["message"]

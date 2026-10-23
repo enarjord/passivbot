@@ -16,7 +16,7 @@ MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS = 24.0 * 365.25 * 100.0
 
 
 def _side_bot_prototype():
-    result = get_common_bot_defaults()
+    result = {"enabled": False, **get_common_bot_defaults()}
     # This internal shape is also used by explicit authored fixture builders.
     # Null approval retains the shared source; [] would be a concrete deny pin.
     result["universe"]["approved_coins"] = None
