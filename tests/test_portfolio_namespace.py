@@ -56,9 +56,12 @@ def test_registry_declares_exact_portfolio_scope_and_remaining_global_defaults()
     assert {".".join(field.path[2:]) for field in fields
             if field.path[:2] == ("bot", "portfolio")} == set(PORTFOLIO_PATHS)
     common = {field.path[2:] for field in fields if field.path[:2] == ("bot", "global")}
+    assert ("enabled",) not in common
     for side in ("long", "short"):
-        assert common == {field.path[2:] for field in fields
-                          if field.path[:2] == ("bot", side)}
+        directional = {field.path[2:] for field in fields
+                       if field.path[:2] == ("bot", side)}
+        assert ("enabled",) in directional
+        assert common == directional - {("enabled",)}
     assert all(field.scope == "portfolio" for field in fields
                if field.path[:2] == ("bot", "portfolio"))
 
