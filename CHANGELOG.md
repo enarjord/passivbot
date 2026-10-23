@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce configuration preparation copying by reusing immutable internal policy payloads;
+  candidate values and exported configurations retain independent mutable state.
+
 - Keep GPU host ADG and dependent growth metrics stable across CPU float64 batch sizes by
   evaluating each candidate's power with the same scalar arithmetic.
 

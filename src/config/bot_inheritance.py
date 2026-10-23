@@ -8,7 +8,8 @@ with their existing owners; this module never opens a source file.
 
 from __future__ import annotations
 
-from copy import deepcopy
+from copy import Error, deepcopy
+from copyreg import dispatch_table
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import math
@@ -31,14 +32,94 @@ class _Absent(Enum):
 ABSENT = _Absent.VALUE
 
 
+def _immutable_frozen_value(value, active=None):
+    kind = type(value)
+    if (kind is type(None) or kind is bool or kind is int
+            or kind is float or kind is str):
+        return True
+    if (kind is not _Object and kind is not _Array) or value.__dict__.keys() != {"items"}:
+        return False
+    if type(value.items) is not tuple:
+        return False
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        return False
+    active.add(identity)
+    try:
+        if kind is _Object:
+            return all(type(pair) is tuple and len(pair) == 2 and type(pair[0]) is str
+                       and _immutable_frozen_value(pair[1], active) for pair in value.items)
+        return all(_immutable_frozen_value(child, active) for child in value.items)
+    finally:
+        active.remove(identity)
+
+
+def _deepcopy_frozen_value(value, memo):
+    # Only the owned immutable representation is shareable. Direct construction
+    # can contain mutable values or subclasses, which still need ordinary copies.
+    if _immutable_frozen_value(value):
+        memo[id(value)] = value
+        return value
+    reductor = dispatch_table.get(type(value))
+    if reductor:
+        reduced = reductor(value)
+    else:
+        reductor = getattr(value, "__reduce_ex__", None)
+        if reductor is not None:
+            reduced = reductor(4)
+        else:
+            reductor = getattr(value, "__reduce__", None)
+            if not reductor:
+                raise Error(f"un(deep)copyable object of type {type(value)}")
+            reduced = reductor()
+    if isinstance(reduced, str):
+        return value
+    return _reconstruct_frozen_copy(value, memo, *reduced)
+
+
+def _reconstruct_frozen_copy(value, memo, factory, args, state=None, items=None, pairs=None):
+    # Preserve the ordinary deepcopy reduction protocol for foreign payloads,
+    # including subclass constructors, custom state, slots, aliases and cycles.
+    if args:
+        args = (deepcopy(arg, memo) for arg in args)
+    result = factory(*args)
+    memo[id(value)] = result
+    if state is not None:
+        state = deepcopy(state, memo)
+        if hasattr(result, "__setstate__"):
+            result.__setstate__(state)
+        else:
+            slots = None
+            if isinstance(state, tuple) and len(state) == 2:
+                state, slots = state
+            if state is not None:
+                result.__dict__.update(state)
+            if slots is not None:
+                for name, item in slots.items():
+                    setattr(result, name, item)
+    if items is not None:
+        for item in items:
+            result.append(deepcopy(item, memo))
+    if pairs is not None:
+        for key, item in pairs:
+            copied_key = deepcopy(key, memo)
+            result[copied_key] = deepcopy(item, memo)
+    return result
+
+
 @dataclass(frozen=True)
 class _Object:
     items: tuple[tuple[str, Any], ...]
+
+    __deepcopy__ = _deepcopy_frozen_value
 
 
 @dataclass(frozen=True)
 class _Array:
     items: tuple[Any, ...]
+
+    __deepcopy__ = _deepcopy_frozen_value
 
 
 def _freeze(value):
