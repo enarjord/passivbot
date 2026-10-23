@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow automatic GPU batch tuning to try a wider batch when compatible request demand falls
+  between the current width and its doubled target. Physical limits, memory checks and trial
+  rollback still apply.
+
 - Report explicit long/short activation in the live startup banner instead of inferring it from
   exposure capacity. Both-disabled configurations report that entries are disabled while existing
   position management follows configured modes.

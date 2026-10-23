@@ -282,7 +282,10 @@ work without giving a singleton the same influence as a nearly full batch. A rar
 count has fewer samples to smooth. The decision rate is a robust replay-cost estimate,
 not measured end-to-end optimizer throughput. The growth threshold, smaller-plateau
 preference, cooldown and rollback apply. Growth also requires
-observed request demand and device memory headroom. When growth is blocked, the service
+observed request demand and device memory headroom. A growth trial is bounded by the
+largest compatible demand observed in that evidence window, so it can try an intermediate
+width when demand is less than twice the current width. This demand bound does not raise
+the prepared physical ceiling. When growth is blocked, the service
 can probe a smaller width using subsequent submitted work; a slower trial rolls back. This prevents deduplication,
 screening or a bounded producer from indefinitely starving the tuner of evidence or
 smaller-width experiments. Tuning submits no extra simulations and never changes precision
