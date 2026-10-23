@@ -398,3 +398,303 @@ def test_prepared_capture_requires_presence_to_match_the_original_source():
     effective["long"]["universe"]["approved_coins"] = ResolvedCoinList(["AAA"], None, ["AAA"])
     with pytest.raises(ValueError, match="does not match .* source"):
         with_prepared_bot_sources(policy, effective)
+
+
+@pytest.mark.parametrize("source", [
+    {}, [], {"nested": [None, False, 0, 1.25, "value", {"empty": []}]},
+])
+def test_frozen_policy_payloads_share_only_immutable_representation_on_copy(source):
+    from config.bot_inheritance import _freeze, _thaw
+
+    frozen = _freeze(source)
+    memo = {}
+    assert deepcopy(frozen, memo) is frozen
+    assert memo[id(frozen)] is frozen
+    first, second = _thaw(frozen), _thaw(frozen)
+    assert first == second == source
+    assert first is not second
+    if isinstance(first, dict):
+        first["changed"] = []
+    else:
+        first.append("changed")
+    assert _thaw(frozen) == source
+
+
+@pytest.mark.parametrize("kind", ["object", "array"])
+def test_mutable_frozen_payloads_keep_copy_aliases_and_cycles(kind):
+    from config.bot_inheritance import _Array, _Object
+
+    child = []
+    value = (_Object((("left", child), ("right", child))) if kind == "object"
+             else _Array((child, child)))
+    child.append(value)
+    copied = deepcopy(value)
+    left, right = ((copied.items[0][1], copied.items[1][1]) if kind == "object"
+                   else copied.items)
+    assert copied is not value
+    assert left is right and left is not child
+    assert left[0] is copied
+    left.append("changed")
+    assert len(child) == 1
+
+
+def test_cyclic_frozen_wrapper_is_copied_without_immutable_fast_path_recursion():
+    from config.bot_inheritance import _Array
+
+    value = _Array(())
+    object.__setattr__(value, "items", (value,))
+    copied = deepcopy(value)
+    assert copied is not value
+    assert copied.items[0] is copied
+
+
+@pytest.mark.parametrize("scalar_type, scalar", [(int, 3), (float, 1.25), (str, "value")])
+def test_scalar_subclasses_in_frozen_payloads_keep_mutable_state_isolated(scalar_type, scalar):
+    from config.bot_inheritance import _freeze, _thaw
+
+    class Scalar(scalar_type):
+        pass
+
+    value = Scalar(scalar)
+    value.extra = []
+    frozen = _freeze({"value": value})
+    copied = deepcopy(frozen)
+    copied_value = _thaw(copied)["value"]
+    assert copied is not frozen
+    assert type(copied_value) is Scalar
+    assert copied_value is not value
+    copied_value.extra.append("changed")
+    assert value.extra == []
+
+
+def test_string_subclass_object_key_keeps_copy_isolation():
+    from config.bot_inheritance import _freeze
+
+    class Key(str):
+        pass
+
+    key = Key("value")
+    key.extra = []
+    frozen = _freeze({key: 1})
+    copied = deepcopy(frozen)
+    copied_key = copied.items[0][0]
+    assert copied is not frozen
+    assert copied_key is not key and type(copied_key) is Key
+    copied_key.extra.append("changed")
+    assert key.extra == []
+
+
+@pytest.mark.parametrize("kind", ["scalar", "wrapper"])
+def test_metaclass_equality_cannot_grant_immutable_payload_sharing(kind):
+    from config.bot_inheritance import _Array
+
+    class MasqueradingType(type):
+        def __eq__(cls, other):
+            return True
+
+        __hash__ = type.__hash__
+
+    if kind == "scalar":
+        class ForeignScalar(int, metaclass=MasqueradingType):
+            pass
+
+        child = ForeignScalar(1)
+        child.extra = []
+        value = _Array((child,))
+        copied = deepcopy(value)
+        assert copied is not value and copied.items[0] is not child
+        copied.items[0].extra.append("changed")
+        assert child.extra == []
+    else:
+        class ForeignArray(_Array, metaclass=MasqueradingType):
+            pass
+
+        child = []
+        value = ForeignArray((child,))
+        copied = deepcopy(value)
+        assert type(copied) is ForeignArray and copied is not value
+        assert copied.items[0] is not child
+        copied.items[0].append("changed")
+        assert child == []
+
+
+def test_frozen_payload_extra_state_and_subclass_slots_are_copied():
+    from config.bot_inheritance import _Array
+
+    class SlottedArray(_Array):
+        __slots__ = ("extra",)
+
+        def __init__(self, items, extra):
+            super().__init__(items)
+            object.__setattr__(self, "extra", extra)
+
+    for value in (_Array((1,)), SlottedArray((1,), [])):
+        object.__setattr__(value, "extra", [])
+        copied = deepcopy(value)
+        assert type(copied) is type(value) and copied is not value
+        copied.extra.append("changed")
+        assert value.extra == []
+
+
+def test_frozen_wrapper_subclass_keeps_custom_reduction_and_state():
+    from config.bot_inheritance import _Array
+
+    calls = []
+
+    class ReducedArray(_Array):
+        def __reduce_ex__(self, protocol):
+            calls.append(protocol)
+            return (ReducedArray, (self.items,), {"extra": self.extra})
+
+        def __setstate__(self, state):
+            object.__setattr__(self, "extra", state["extra"])
+            calls.append("state")
+
+    value = ReducedArray((1,))
+    object.__setattr__(value, "extra", [])
+    copied = deepcopy(value)
+    assert calls == [4, "state"]
+    assert type(copied) is ReducedArray and copied is not value
+    copied.extra.append("changed")
+    assert value.extra == []
+
+
+def test_frozen_wrapper_subclass_keeps_reduction_item_aliases():
+    from config.bot_inheritance import _Array
+
+    class ContainerArray(_Array):
+        def __reduce_ex__(self, protocol):
+            return (ContainerArray, (self.items,), {"sequence": [], "mapping": {}},
+                    iter(self.sequence), iter(self.mapping.items()))
+
+        def append(self, item):
+            self.sequence.append(item)
+
+        def __setitem__(self, key, item):
+            self.mapping[key] = item
+
+    child = []
+    value = ContainerArray((child,))
+    object.__setattr__(value, "sequence", [child])
+    object.__setattr__(value, "mapping", {"same": child})
+    copied = deepcopy(value)
+    copied_child = copied.items[0]
+    assert copied_child is copied.sequence[0] is copied.mapping["same"]
+    assert copied_child is not child
+
+
+def test_frozen_wrapper_subclass_keeps_keyword_new_arguments():
+    from config.bot_inheritance import _Array
+
+    class KeywordArray(_Array):
+        def __new__(cls, items, *, token):
+            value = super().__new__(cls)
+            object.__setattr__(value, "token", token)
+            return value
+
+        def __init__(self, items, *, token):
+            super().__init__(items)
+
+        def __getnewargs_ex__(self):
+            return (self.items,), {"token": self.token}
+
+    value = KeywordArray((1,), token=[])
+    copied = deepcopy(value)
+    assert type(copied) is KeywordArray and copied is not value
+    copied.token.append("changed")
+    assert value.token == []
+
+
+def test_frozen_wrapper_subclass_keeps_registered_and_atomic_reductions(monkeypatch):
+    from copyreg import dispatch_table
+    from config.bot_inheritance import _Array
+
+    class RegisteredArray(_Array):
+        def __reduce_ex__(self, protocol):
+            pytest.fail("registered reduction must retain precedence")
+
+    monkeypatch.setitem(dispatch_table, RegisteredArray,
+                        lambda value: (_Array, (value.items,)))
+    value = RegisteredArray(([],))
+    copied = deepcopy(value)
+    assert type(copied) is _Array
+    assert copied.items[0] is not value.items[0]
+
+    class AtomicArray(_Array):
+        def __reduce_ex__(self, protocol):
+            return "atomic"
+
+    atomic = AtomicArray((1,))
+    assert deepcopy(atomic) is atomic
+
+
+def test_frozen_wrapper_subclass_does_not_add_six_element_reduction_support():
+    from config.bot_inheritance import _Array
+
+    class ExtendedArray(_Array):
+        def __reduce_ex__(self, protocol):
+            return (_Array, (self.items,), None, None, None, lambda value, state: None)
+
+    with pytest.raises(TypeError):
+        deepcopy(ExtendedArray((1,)))
+
+
+def test_frozen_wrapper_subclass_keeps_reduce_fallback_when_reduce_ex_is_none():
+    from copy import Error
+    from config.bot_inheritance import _Array
+
+    class ReducedArray(_Array):
+        __reduce_ex__ = None
+
+        def __reduce__(self):
+            return (_Array, (self.items,))
+
+    value = ReducedArray(([],))
+    copied = deepcopy(value)
+    assert type(copied) is _Array and copied.items[0] is not value.items[0]
+
+    class UncopyableArray(_Array):
+        __reduce_ex__ = None
+        __reduce__ = None
+
+    with pytest.raises(Error, match="un\\(deep\\)copyable"):
+        deepcopy(UncopyableArray((1,)))
+
+
+def test_frozen_payload_dataclass_and_pickle_shape_are_unchanged():
+    from dataclasses import asdict, fields
+    import pickle
+    from config.bot_inheritance import _freeze
+
+    value = _freeze({"items": [1, "value"]})
+    assert [item.name for item in fields(value)] == ["items"]
+    expected = {"items": (("items", {"items": (1, "value")}),)}
+    assert asdict(value) == expected
+    restored = pickle.loads(pickle.dumps(value))
+    assert restored == value and hash(restored) == hash(value)
+    assert repr(restored) == repr(value)
+    assert deepcopy(restored) is restored
+
+
+def test_copied_prepared_policy_retains_independent_values_and_sparse_source_authority():
+    from config.bot_inheritance import bot_policy_source_view, get_bot_policy, install_bot_policy
+
+    policy = resolve_bot_policy({"short": {"risk": {"capacity": 1.0}}}, catalog())
+    config = {}
+    install_bot_policy(config, policy)
+    copied = deepcopy(config)
+    copied_policy = get_bot_policy(copied)
+    assert copied["bot"] is not config["bot"]
+    assert copied_policy is not policy
+    assert copied_policy._source is policy._source
+    assert copied["bot"]._effective_baseline is config["bot"]._effective_baseline
+    # Catalog defaults and all outward mutable value projections remain copies.
+    assert copied_policy.catalog is not policy.catalog
+    source = bot_policy_source_view(copied)["bot"]
+    source["short"]["risk"]["capacity"] = 9.0
+    copied["bot"]["global"]["risk"]["capacity"] = 3.0
+    assert config["bot"]["global"]["risk"]["capacity"] == 1.0
+    assert bot_policy_source_view(config)["bot"] == {"short": {"risk": {"capacity": 1.0}}}
+    assert bot_policy_source_view(copied)["bot"] == {
+        "global": {"risk": {"capacity": 3.0}}, "short": {"risk": {"capacity": 1.0}},
+    }
