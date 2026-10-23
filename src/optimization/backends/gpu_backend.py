@@ -139,6 +139,15 @@ class _Search:
         self.checkpoint()
 
     def evaluate_population(self):
+        screening = self.state["phase"] == "screening"
+        datasets = frozenset(binding.dataset_id for binding in self.registry.bindings
+                             if not screening or binding.scenario in self.screening_policy["scenarios"])
+        try:
+            self._evaluate_population(datasets)
+        finally:
+            self.session.set_preparing(())
+
+    def _evaluate_population(self, datasets):
         population = self.state["population"]
         screening = self.state["phase"] == "screening"
         waiting = iter(index for index, individual in enumerate(population)
@@ -151,9 +160,13 @@ class _Search:
         while self._pending or not exhausted:
             self.interrupt_check()
             self._progress.report()
-            # Start GPU work after the first prepared candidate. Then alternate
+            self.session.set_preparing(
+                datasets if not exhausted and len(self._pending) < self.session.max_candidates else (),
+            )
+            # Submit after the first prepared candidate. Then alternate
             # bounded CPU preparation with scoring/persistence instead of filling
             # the entire admission window before pumping or consuming the service.
+            # The service may accumulate while this producer can make progress.
             started = time.perf_counter()
             timeout = (0.0 if not exhausted and len(self._pending) < self.session.max_candidates
                        else self._cadence.budget_seconds)
@@ -171,6 +184,9 @@ class _Search:
                 if not completions or finished - started >= self._cadence.budget_seconds:
                     break
                 self.interrupt_check()
+            self.session.set_preparing(
+                datasets if not exhausted and len(self._pending) < self.session.max_candidates else (),
+            )
             started = time.perf_counter()
             while not exhausted and len(self._pending) < self.session.max_candidates:
                 self.interrupt_check()
@@ -198,6 +214,10 @@ class _Search:
                 if initial or time.perf_counter() - started >= self._cadence.budget_seconds:
                     initial = False
                     break
+            if exhausted or len(self._pending) >= self.session.max_candidates:
+                # More preparation now needs a completion. Seal before the next
+                # blocking poll, including all-alias or partially cached windows.
+                self.session.set_preparing(())
 
     def promote_screening(self):
         population = self.state["population"]

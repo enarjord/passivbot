@@ -152,6 +152,9 @@ class NativeBacktestService:
     def submit(self, request):
         return self._executor.submit(request)
 
+    def set_preparing(self, dataset_ids):
+        self._executor.set_preparing(dataset_ids)
+
     def close(self, *, cancel_pending=False):
         try:
             self._executor.close(cancel_pending=cancel_pending)

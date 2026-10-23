@@ -51,6 +51,52 @@ def plan(index, *, key=None):
     return CandidatePlan(str(index), (float(index),), key or str(index), "full", requests, slots)
 
 
+def test_preparing_is_advisory_without_changing_deduplication_or_request_demand():
+    class ObservedService(Service):
+        def __init__(self):
+            super().__init__()
+            self.preparing = None
+        def set_preparing(self, dataset_ids):
+            self.preparing = frozenset(dataset_ids)
+    service = ObservedService()
+    session = NativeEvaluationSession(service, scorer(), max_candidates=2)
+    session.set_preparing({"binance", "bybit"})
+    session.admit(plan(0, key="shared"))
+    session.admit(plan(1, key="shared"))
+    session.poll()
+    assert service.preparing == {"binance", "bybit"}
+    assert session.pending_request_count == len(service.requests) == 2
+    assert session.active_candidate_ids == ("0", "1")
+    session.set_preparing(())
+    service.complete("0:binance")
+    service.complete("0:bybit")
+    assert [row.candidate_id for row in session.poll()] == ["0", "1"]
+    session.admit(plan(2, key="shared"))
+    assert [row.candidate_id for row in session.poll()] == ["2"]
+    assert len(service.requests) == 2  # Cached candidates create no promised demand.
+    session.stop_admission()
+    session.set_preparing({"binance"})
+    assert service.preparing == frozenset()
+
+
+def test_producer_failure_clears_readiness_before_cancelling_pending_work():
+    class ObservedService(Service):
+        def set_preparing(self, dataset_ids):
+            self.preparing = frozenset(dataset_ids)
+    service = ObservedService()
+    session = NativeEvaluationSession(service, scorer())
+    session.set_preparing({"binance", "bybit"})
+    session.admit(plan(0))
+    session.poll()
+    failure = RuntimeError("original replay failure")
+    service.complete("0:binance", failure=failure)
+    with pytest.raises(RuntimeError) as raised:
+        session.poll()
+    assert raised.value is failure
+    assert service.preparing == frozenset()
+    assert service.futures["0:bybit"].cancelled()
+
+
 def test_bounded_admission_refills_service_and_scores_on_cpu_poller(monkeypatch):
     service, value = Service(), scorer()
     caller = get_ident()

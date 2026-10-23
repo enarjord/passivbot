@@ -46,6 +46,12 @@ class NativeEvaluationSession:
     def pending_request_count(self):
         return len(self._queued) + len(self._futures)
 
+    def set_preparing(self, dataset_ids):
+        """Advise an optional service scheduler; never reserve replay demand."""
+        setter = getattr(self.service, "set_preparing", None)
+        if setter is not None:
+            setter(() if self._stopped else dataset_ids)
+
     @staticmethod
     def _key(plan):
         # The full-candidate identity is shared, but cached screening observations
@@ -219,6 +225,7 @@ class NativeEvaluationSession:
         Partial candidates may be re-created and rerun on GPU after resumption.
         """
         self._stopped = True
+        self.set_preparing(())
         self._queued.clear()
         for future in tuple(self._futures):
             future.cancel()

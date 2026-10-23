@@ -21,6 +21,7 @@ class _Stream:
 class BatchCoalescer:
     minimum_delay = 0.005
     maximum_delay = 0.5
+    maximum_preparing_delay = 60.0
 
     def __init__(self):
         self._streams: dict[str, _Stream] = {}
@@ -61,3 +62,20 @@ class BatchCoalescer:
         # Keep a hard accumulation bound even while arrivals continue. Stop early
         # after a stream stalls, or when work already waited through another replay.
         return min(started + ceiling, stream.last_arrival + idle)
+
+    def preparing_deadline(self, dataset_id, started):
+        """Accumulate active CPU production within a fixed warm-cost allowance.
+
+        Accepted arrivals must stay fresh even when a producer forgets to clear
+        its readiness hint. Neither arrivals nor readiness updates restart the
+        absolute deadline. First-use shapes retain the ordinary cold policy.
+        """
+        stream = self._streams[dataset_id]
+        if stream.replay_seconds is None or len(stream.gaps) < 3:
+            return self.deadline(dataset_id, started)
+        gaps = sorted(stream.gaps)
+        gap = gaps[math.ceil(len(gaps) * 0.9) - 1]
+        idle = min(self.maximum_delay, max(self.minimum_delay, gap * 2.0))
+        allowance = min(self.maximum_preparing_delay,
+                        max(self.minimum_delay, stream.replay_seconds * 1.5))
+        return min(started + allowance, stream.last_arrival + idle)

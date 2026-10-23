@@ -7,6 +7,9 @@ from pathlib import Path
 import subprocess
 import sys
 from threading import Event, Thread, get_ident
+from queue import Queue
+from types import SimpleNamespace
+import time
 import gc
 import weakref
 
@@ -964,3 +967,236 @@ def test_failed_thread_start_rolls_back_admission_and_can_retry(monkeypatch):
     monkeypatch.setattr(executor, "Thread", real_thread)
     assert service.submit(request(1)).result(timeout=3).request_id == "1"
     service.close()
+
+
+def warm_preparing_service(service, dataset, now):
+    policy = service._coalescing
+    policy.arrived(dataset, now - 1, active=False)
+    for step in range(1, 5):
+        policy.arrived(dataset, now - 1 + step * 0.2, active=True)
+    policy.observe(dataset, 4, 100)
+    policy.observe(dataset, 4, 2)
+
+
+def test_preparing_producer_fills_across_the_ordinary_absolute_delay(monkeypatch):
+    import optimization.gpu.executor as executor
+
+    clock = [100.0]
+    monkeypatch.setattr(executor, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=time.perf_counter,
+    ))
+    replay, waiting = Replay(), Queue()
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    warm_preparing_service(service, "market", clock[0])
+    ordinary = service._coalescing.preparing_deadline
+    def deadline(dataset, started):
+        value = ordinary(dataset, started)
+        waiting.put(value)
+        return value
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"market"})
+    try:
+        futures = [service.submit(request(0))]
+        waiting.get(timeout=2)
+        for index in (1, 2):
+            clock[0] += 0.3
+            futures.append(service.submit(request(index)))
+            assert waiting.get(timeout=2) > clock[0]
+        assert clock[0] > 100.5 and not replay.calls
+        clock[0] += 0.3
+        futures.append(service.submit(request(3)))
+        assert [future.result(timeout=2).request_id for future in futures] == ["0", "1", "2", "3"]
+        assert [[row["value"] for row in batch] for batch in replay.calls] == [[0, 1, 2, 3]]
+    finally:
+        service.close(cancel_pending=True)
+
+
+def test_sealing_preparing_producer_releases_a_partial_batch(monkeypatch):
+    replay, waiting = Replay(), Event()
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    def deadline(_dataset, started):
+        waiting.set()
+        return started + 30
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"market"})
+    try:
+        future = service.submit(request(1))
+        assert waiting.wait(2)
+        assert not future.done()
+        service.set_preparing(())
+        assert future.result(timeout=2).request_id == "1"
+    finally:
+        service.close(cancel_pending=True)
+
+
+def test_unrelated_ready_dataset_keeps_the_ordinary_fairness_bound(monkeypatch):
+    import optimization.gpu.executor as executor
+
+    clock, waiting, order = [100.0], Queue(), []
+    monkeypatch.setattr(executor, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], perf_counter=time.perf_counter,
+    ))
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    for dataset in ("a", "b"):
+        class OrderedReplay(Replay):
+            def evaluate(self, candidates, dataset=dataset):
+                order.append(dataset)
+                return super().evaluate(candidates)
+        service.register_dataset(dataset, OrderedReplay())
+    warm_preparing_service(service, "a", clock[0])
+    ordinary = service._coalescing.preparing_deadline
+    def deadline(dataset, started):
+        value = ordinary(dataset, started)
+        waiting.put(value)
+        return value
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"a"})
+    try:
+        first = service.submit(request(1, "a"))
+        waiting.get(timeout=2)
+        clock[0] = 100.3
+        second = service.submit(request(2, "a"))
+        waiting.get(timeout=2)
+        clock[0] = 100.6
+        other = service.submit(request(3, "b"))
+        assert [future.result(timeout=2).request_id for future in (first, second, other)] == ["1", "2", "3"]
+        assert order == ["a", "b"]
+    finally:
+        service.close(cancel_pending=True)
+
+
+@pytest.mark.parametrize("cancel_close", [False, True])
+def test_close_releases_or_cancels_preparing_work_without_waiting(monkeypatch, cancel_close):
+    replay, waiting = Replay(), Event()
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    service.register_dataset("market", replay)
+    def deadline(_dataset, started):
+        waiting.set()
+        return started + 30
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"market"})
+    future = service.submit(request(1))
+    assert waiting.wait(2)
+    service.close(cancel_pending=cancel_close)
+    assert future.cancelled() if cancel_close else future.result(timeout=2).request_id == "1"
+    assert bool(replay.calls) is not cancel_close
+    service.set_preparing(())  # Cleanup is safe after close.
+
+
+def test_preparing_hint_does_not_override_an_explicit_delay(monkeypatch):
+    replay, waiting = Replay(), Event()
+    service = GpuBacktestService(batch_size=4, max_batch_delay=30)
+    service.register_dataset("market", replay)
+    wait = service._condition.wait
+    def observe_wait(timeout=None):
+        if timeout is not None:
+            waiting.set()
+        return wait(timeout)
+    monkeypatch.setattr(service._condition, "wait", observe_wait)
+    try:
+        service.set_preparing(())
+        future = service.submit(request(1))
+        assert waiting.wait(2)
+        assert not future.done()
+        service.close()
+        assert future.result(timeout=2).request_id == "1"
+    finally:
+        service.close(cancel_pending=True)
+
+
+def test_preparing_hint_validates_before_mutating_and_empty_work_stays_lazy():
+    constructed = []
+    @contextmanager
+    def factory():
+        constructed.append(True)
+        yield Replay()
+    service = GpuBacktestService(max_batch_delay=None)
+    service.register_dataset_factory("market", factory)
+    service.set_preparing({"market"})
+    for invalid in ("market", {"other"}, {1}):
+        with pytest.raises(ValueError, match="preparing datasets"):
+            service.set_preparing(invalid)
+        assert service._preparing == frozenset({"market"})
+    service.close()
+    assert not constructed and service._thread is None
+
+
+def test_cancelling_preparing_oldest_reselects_the_next_dataset(monkeypatch):
+    waiting, first_replay, second_replay = Queue(), Replay(), Replay()
+    service = GpuBacktestService(batch_size=4, max_batch_delay=None)
+    service.register_dataset("a", first_replay)
+    service.register_dataset("b", second_replay)
+    def deadline(dataset, started):
+        waiting.put(dataset)
+        return started + 30
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"a", "b"})
+    try:
+        first = service.submit(request(1, "a"))
+        assert waiting.get(timeout=2) == "a"
+        second = service.submit(request(2, "b"))
+        assert first.cancel()
+        # The old dataset can wake once before its cancellation is observed.
+        while waiting.get(timeout=2) != "b":
+            pass
+        service.set_preparing(())
+        assert second.result(timeout=2).request_id == "2"
+        assert first.cancelled() and not first_replay.calls
+        assert len(second_replay.calls) == 1
+    finally:
+        service.close(cancel_pending=True)
+
+
+def test_full_mixed_queue_releases_preparing_work_before_more_admission(monkeypatch):
+    waiting, dispatched, order = Event(), Event(), []
+    service = GpuBacktestService(batch_size=3, max_pending=3, max_batch_delay=None)
+    for dataset in ("a", "b", "c"):
+        class OrderedReplay(Replay):
+            def evaluate(self, candidates, dataset=dataset):
+                order.append(dataset)
+                dispatched.set()
+                return super().evaluate(candidates)
+        service.register_dataset(dataset, OrderedReplay())
+    def deadline(_dataset, started):
+        waiting.set()
+        return started + 30
+    monkeypatch.setattr(service._coalescing, "preparing_deadline", deadline)
+    service.set_preparing({"a", "b", "c"})
+    try:
+        futures = [service.submit(request(1, "a"))]
+        assert waiting.wait(2)
+        futures.extend(service.submit(request(index, dataset))
+                       for index, dataset in ((2, "b"), (3, "c")))
+        assert dispatched.wait(2) and order[0] == "a"
+        service.set_preparing(())
+        assert [future.result(timeout=2).request_id for future in futures] == ["1", "2", "3"]
+        assert order == ["a", "b", "c"]
+    finally:
+        service.close(cancel_pending=True)
+
+
+def test_late_preparing_hint_preserves_original_future_failure():
+    failure, failed = ValueError("original replay exception"), Event()
+    class BrokenReplay:
+        def evaluate(self, candidates):
+            raise failure
+    service = GpuBacktestService(batch_size=1, max_batch_delay=None)
+    service.register_dataset("market", BrokenReplay())
+    service.set_preparing({"market"})
+    try:
+        future = service.submit(request(1))
+        future.add_done_callback(lambda _future: failed.set())
+        assert failed.wait(2)
+        service.set_preparing({"market"})
+        assert service._preparing == frozenset()
+        with pytest.raises(ValueError) as raised:
+            future.result(timeout=2)
+        assert raised.value is failure
+        with pytest.raises(RuntimeError, match="service failed"):
+            service.submit(request(2))
+    finally:
+        service.close(cancel_pending=True)
+    service.set_preparing({"market"})  # Closed readiness has no admission effect.
+    assert service._preparing == frozenset()
