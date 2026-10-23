@@ -9,9 +9,10 @@ with their existing owners; this module never opens a source file.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import math
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .field_spec import FieldRegistry, FieldSpec, FieldType, NO_DEFAULT
@@ -96,9 +97,45 @@ class SideField:
 
 
 @dataclass(frozen=True)
+class _SideFieldLookup:
+    """Immutable structural indexes, independent of field values and defaults."""
+    suffixes: tuple[Path, ...]
+    positions: Mapping = field(init=False, repr=False, compare=False)
+    prefixes: frozenset[Path] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        positions = {}
+        for index, suffix in enumerate(self.suffixes):
+            positions.setdefault(suffix, index)  # Preserve first-match ordering.
+        object.__setattr__(self, "positions", MappingProxyType(positions))
+        object.__setattr__(self, "prefixes", frozenset(
+            suffix[:depth] for suffix in self.suffixes for depth in range(len(suffix) + 1)
+        ))
+
+    def __deepcopy__(self, memo):
+        return self  # Contains only immutable paths, positions and prefixes.
+
+    def __reduce__(self):
+        return (type(self), (self.suffixes,))
+
+
+@dataclass(frozen=True)
 class SideFieldCatalog:
     fields: tuple[SideField, ...]
     portfolio_fields: tuple[FieldSpec, ...] = ()
+    _lookup: _SideFieldLookup | None = field(init=False, default=None, repr=False, compare=False)
+
+    def __post_init__(self):
+        # Direct construction historically accepts mutable/foreign declarations.
+        # Only exact, immutable suffix declarations can retain a reusable index.
+        if type(self.fields) is tuple and all(
+            type(entry) is SideField and type(entry.suffix) is tuple
+            and all(type(part) is str for part in entry.suffix)
+            for entry in self.fields
+        ):
+            object.__setattr__(self, "_lookup", _SideFieldLookup(
+                tuple(entry.suffix for entry in self.fields)
+            ))
 
     @classmethod
     def from_registry(cls, registry: FieldRegistry, *, common_defaults: Mapping):
@@ -139,6 +176,11 @@ class SideFieldCatalog:
         return result
 
     def find(self, suffix):
+        if self._lookup is not None and type(suffix) in (tuple, list) and all(
+            type(part) is str for part in suffix
+        ):
+            index = self._lookup.positions.get(tuple(suffix))
+            return None if index is None else self.fields[index]
         return next((field for field in self.fields if field.suffix == tuple(suffix)), None)
 
     def validate_tree(self, node, prefix):
@@ -152,8 +194,12 @@ class SideFieldCatalog:
                     raise ValueError(GLOBAL_ACTIVATION_ERROR)
                 _validate_value(field, value, (*prefix, *suffix), shared=prefix[1] == "global")
                 return
-            children = [field for field in self.fields if field.suffix[:len(suffix)] == suffix]
-            if not children:
+            if self._lookup is not None and all(type(part) is str for part in suffix):
+                has_children = suffix in self._lookup.prefixes
+            else:
+                has_children = bool([field for field in self.fields
+                                     if field.suffix[:len(suffix)] == suffix])
+            if not has_children:
                 raise ValueError(f"unknown inherited bot field: {'.'.join((*prefix, *suffix))}")
             if not isinstance(value, Mapping):
                 raise TypeError(f"{'.'.join((*prefix, *suffix))} must be an object")
