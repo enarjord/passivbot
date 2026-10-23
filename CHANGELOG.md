@@ -18,6 +18,9 @@ since the latest release tag; these features may already be available when insta
   exposure capacity. Both-disabled configurations report that entries are disabled while existing
   position management follows configured modes.
 
+- Reduce repeated field-path scans during configuration validation and optimizer preparation
+  with immutable catalog indexes. Each candidate still resolves and validates its own policy values.
+
 - Resolve inheritable directional bot settings from common `bot.global` defaults and sparse
   `bot.long`/`bot.short` leaf overrides. Explicit equal values, false, zero and empty lists
   remain pins; ignored null clears while side approval null inherits. Both sides share the
