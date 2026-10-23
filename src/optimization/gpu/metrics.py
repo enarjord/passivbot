@@ -451,9 +451,23 @@ def _smoothed_gain_adg(day_eq, active):
         torch.full_like(end, float("inf")),
     )
     duration_days = counts.clamp(min=1).to(day_eq.dtype)
+    bases = gain.clamp(min=1e-12)
+    exponents = 1.0 / duration_days
+    if day_eq.device.type == "cpu" and day_eq.dtype == torch.float64:
+        # CPU tensor pow may select different scalar/vector math for a batch
+        # tail. Evaluate each candidate identically before subtracting one.
+        # The existing clamp and positive reciprocal counts retain the domain;
+        # NaN/infinity and the sentinels selected below keep their prior meaning.
+        powers = torch.tensor(
+            [math.pow(base, exponent) for base, exponent in zip(bases.tolist(), exponents.tolist())],
+            dtype=day_eq.dtype,
+            device=day_eq.device,
+        )
+    else:
+        powers = bases ** exponents
     adg = torch.where(
         (gain > 0) & (counts >= 2),
-        gain.clamp(min=1e-12) ** (1.0 / duration_days) - 1.0,
+        powers - 1.0,
         torch.where(counts >= 2, torch.full_like(gain, -1.0), torch.zeros_like(gain)),
     )
     gain = torch.where(counts >= 2, gain, torch.zeros_like(gain))

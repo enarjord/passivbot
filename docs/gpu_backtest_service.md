@@ -343,6 +343,11 @@ Full weighted histories never transfer to the CPU. CUDA/Metal fitness and checkp
 are distinct. Changes to that contract require fresh
 evaluation; the existing strict config resume checks also remain in force.
 
+Host f64 ADG evaluates its power separately for each candidate, preserving the current
+terminal smoothing and clamping formula. CPU tensor batch sizes and vector tails must
+not change reported growth or its dependent metrics. Device-side reductions retain
+their declared precision.
+
 Native checkpoints retain fine-tune anchor definitions and restore them before optimizer
 shape construction, without requiring the original seed files. Changed fixed anchor values
 invalidate saved fitness. Older experimental anchored checkpoints without a stored plan

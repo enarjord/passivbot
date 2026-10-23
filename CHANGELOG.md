@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep GPU host ADG and dependent growth metrics stable across CPU float64 batch sizes by
+  evaluating each candidate's power with the same scalar arithmetic.
+
 - Allow automatic GPU batch tuning to try a wider batch when compatible request demand falls
   between the current width and its doubled target. Physical limits, memory checks and trial
   rollback still apply.
