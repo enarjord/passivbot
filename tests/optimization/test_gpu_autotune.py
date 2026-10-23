@@ -111,6 +111,62 @@ def test_ceiling_memory_pressure_and_invalid_timings():
     assert controller.width == 150
 
 
+def test_optional_growth_limit_preserves_physical_ceiling_and_boolean_guard():
+    calls = []
+    limit = 500
+
+    def can_grow():
+        calls.append("headroom")
+        return True
+
+    controller = tune.BatchController(512, 256, can_grow=can_grow,
+                                      growth_limit=lambda: limit)
+    window(controller)
+    assert controller.width == 500
+    assert controller.ceiling == 512
+    assert calls == ["headroom"]
+    window(controller, 3)  # Accept the bounded trial, then consume its cooldown.
+    window(controller, 3)
+    limit = 1000  # A demand hint never raises the physical ceiling.
+    window(controller, 3)
+    assert controller.width == controller.ceiling == 512
+    assert calls == ["headroom", "headroom"]
+
+
+def test_default_growth_limit_keeps_doubling_and_no_argument_guard():
+    calls = []
+    controller = tune.BatchController(512, 128, can_grow=lambda: calls.append(1) or True)
+    assert controller.growth_limit is None
+    window(controller)
+    assert controller.width == 256
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, float("nan"), float("inf"), None])
+def test_invalid_growth_limit_does_not_start_a_trial(value):
+    def forbidden():
+        pytest.fail("invalid growth hints must not query device headroom")
+
+    controller = tune.BatchController(512, 256, can_grow=forbidden,
+                                      growth_limit=lambda: value)
+    with pytest.raises(ValueError, match="growth limit must be a positive integer"):
+        window(controller)
+    assert controller.width == 256 and controller.baseline is None
+
+
+def test_growth_limit_is_lazy_and_requires_a_callback():
+    with pytest.raises(TypeError, match="growth limit must be callable"):
+        tune.BatchController(512, 256, growth_limit=500)
+
+    def forbidden():
+        pytest.fail("disabled trials must not query growth hints or headroom")
+
+    controller = tune.BatchController(512, 256, can_trial=lambda: False,
+                                      growth_limit=forbidden, can_grow=forbidden)
+    window(controller)
+    assert controller.width == 256 and controller.baseline is None
+
+
 def test_fixed_batches_do_not_read_clock():
     def forbidden():
         raise AssertionError("fixed sizing does not collect timings")

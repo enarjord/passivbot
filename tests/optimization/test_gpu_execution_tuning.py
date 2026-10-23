@@ -66,6 +66,58 @@ def test_growth_uses_demand_and_headroom_then_rolls_back_slow_trial():
     assert other.width("a", 16) == 2  # Probe smaller work; never grow without headroom.
 
 
+@pytest.mark.parametrize("trial_seconds,retained_width,cooldown", [(3, 500, 1), (5, 256, 3)])
+def test_bounded_cohort_can_try_non_power_of_two_growth_and_accept_or_roll_back(
+    trial_seconds, retained_width, cooldown,
+):
+    queries = []
+    policy = ExecutionBatchTuner(initial=256, headroom=lambda: queries.append(1) or True)
+    policy.constrain("a", 512)
+    assert policy.width("a", 512) == 256
+    # Four finite 500-request cohorts. The final tail has no backlog; earlier
+    # compatible demand in this same evidence window still permits a 500 trial.
+    for count in (256, 244) * 4:
+        policy.observe("a", count, 2, backlog=244 if count == 256 else 0, closing=False)
+    controller = policy.controllers["a"]
+    assert controller.width == 500 and controller.ceiling == 512
+    assert controller.baseline == (256, 125.0)
+    assert queries == [1]
+    assert policy._demand["a"] == 0
+    for _ in range(EVIDENCE_SAMPLES + 1):
+        policy.observe("a", 500, trial_seconds, backlog=0, closing=False)
+    assert policy.width("a", 512) == retained_width
+    assert controller.baseline is None and controller.cooldown == cooldown
+    assert queries == [1]  # Acceptance/rollback does not query headroom again.
+
+
+@pytest.mark.parametrize("demand", [1, 255, 256])
+def test_demand_at_or_below_current_width_probes_smaller_without_headroom_query(demand):
+    def forbidden():
+        pytest.fail("no feasible growth must not query device headroom")
+
+    policy = ExecutionBatchTuner(initial=256, headroom=forbidden)
+    policy.constrain("a", 512)
+    policy.width("a", 512)
+    for _ in range(EVIDENCE_SAMPLES + 1):
+        policy.observe("a", demand, 2, backlog=0, closing=False)
+    assert policy.width("a", 512) == 128
+    assert policy.controllers["a"].ceiling == 512
+
+
+def test_non_power_of_two_growth_requires_headroom_and_never_changes_other_dataset():
+    queries = []
+    policy = ExecutionBatchTuner(initial=256, headroom=lambda: queries.append(1) or False)
+    for dataset in ("a", "b"):
+        policy.constrain(dataset, 512)
+        policy.width(dataset, 512)
+    for _ in range(EVIDENCE_SAMPLES + 1):
+        policy.observe("a", 256, 2, backlog=244, closing=False)
+    assert policy.width("a", 512) == 128
+    assert policy.width("b", 512) == 256
+    assert not policy.controllers["b"].seen
+    assert queries == [1]
+
+
 def test_warm_partial_work_is_actual_count_evidence_and_dataset_owned():
     policy = prepared_policy(initial=4)
     policy.width("a", 16)

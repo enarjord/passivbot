@@ -71,7 +71,11 @@ def is_auto(value):
 
 
 class BatchController:
-    """Bounded hill climbing over completed work, with median smoothing."""
+    """Bounded hill climbing over completed work, with median smoothing.
+
+    An optional ``growth_limit`` callback caps the next doubled trial. It does
+    not replace the physical ceiling or the no-argument ``can_grow`` guard.
+    """
 
     def __init__(
         self,
@@ -80,6 +84,7 @@ class BatchController:
         *,
         save=lambda *args: None,
         can_grow=lambda: True,
+        growth_limit=None,
         can_trial=lambda: True,
         allow_partial_batches=False,
         window_samples=None,
@@ -95,10 +100,13 @@ class BatchController:
             raise ValueError("batch evidence duration must be finite and non-negative")
         if not isinstance(rate_aggregation, str) or rate_aggregation not in {"median", "per_count"}:
             raise ValueError("batch rate aggregation must be median or per_count")
+        if growth_limit is not None and not callable(growth_limit):
+            raise TypeError("batch growth limit must be callable")
         self.ceiling = max(1, int(ceiling))
         self.width = max(1, min(int(initial), self.ceiling))
         self.save = save
         self.can_grow = can_grow
+        self.growth_limit = growth_limit
         self.can_trial = can_trial
         self.allow_partial_batches = allow_partial_batches
         self.window_samples = window_samples
@@ -186,7 +194,15 @@ class BatchController:
             self.direction *= -1
             self.cooldown = 1
             return True
-        if trial > self.width and not self.can_grow():
+        if trial > self.width and self.growth_limit is not None:
+            # A producer may have useful demand between the current width and
+            # its doubled target. Bound that trial without changing the physical
+            # ceiling or requiring a full doubled cohort to become available.
+            growth_limit = self.growth_limit()
+            if type(growth_limit) is not int or growth_limit < 1:
+                raise ValueError("batch growth limit must be a positive integer")
+            trial = max(self.width, min(trial, growth_limit))
+        if self.direction > 0 and (trial == self.width or not self.can_grow()):
             if not self.allow_partial_batches or self.width == 1:
                 self.cooldown = 1
                 return True
