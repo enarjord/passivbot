@@ -260,7 +260,7 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot.config = {"bot": {"portfolio": {"execution": {
         "market_orders_allowed": True,
         "market_order_near_touch_fraction": 0.001,
-    }}}}
+    }}, "long": {"enabled": True}, "short": {"enabled": False}}}
     bot.bot_value = lambda pside, key: {
         ("long", "total_wallet_exposure_limit"): 1.5,
         ("short", "total_wallet_exposure_limit"): 0.0,
