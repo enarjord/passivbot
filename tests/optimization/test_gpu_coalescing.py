@@ -78,3 +78,41 @@ def test_timing_smoothing_uses_successive_warm_observations():
     policy.observe("a", 16, 0.2)
     assert policy._streams["a"].replay_seconds == pytest.approx(0.12)
     assert policy.deadline("a", now) == pytest.approx(now + 0.1)
+
+
+def test_preparing_allowance_survives_arrival_gaps_but_has_an_absolute_bound():
+    policy = BatchCoalescer()
+    started = burst_stream(policy)
+    warm(policy, seconds=1.0)
+    for step in range(1, 31):
+        now = started + step * 0.05
+        policy.arrived("a", now, active=True)
+        assert policy.preparing_deadline("a", started) <= started + 1.5
+    assert policy.deadline("a", started) <= started + 0.5
+    assert policy.preparing_deadline("a", started) == pytest.approx(started + 1.5)
+    # Paused preparation keeps the declared allowance. A stale hint still
+    # expires at that same absolute time, even without any further arrivals.
+    assert policy.preparing_deadline("a", started) == pytest.approx(started + 1.5)
+    assert policy.preparing_deadline("a", now) == pytest.approx(now + 1.5)
+
+
+def test_preparing_warm_cost_is_capped_and_only_cold_evidence_stays_ordinary():
+    policy = BatchCoalescer()
+    now = burst_stream(policy)
+    assert policy.preparing_deadline("a", now) == policy.deadline("a", now)
+    warm(policy, seconds=100.0)
+    for _ in range(1500):
+        now += 0.05
+        policy.arrived("a", now, active=True)
+    assert policy.preparing_deadline("a", now - 75) == pytest.approx(now - 15)
+    policy.arrived("b", now, active=False)
+    warm(policy, dataset="b", seconds=1.0)
+    # Sparse cadence evidence does not override authoritative warm readiness.
+    assert policy.preparing_deadline("b", now) == pytest.approx(now + 1.5)
+
+
+def test_preparing_does_not_spend_a_long_wait_on_fast_replay():
+    policy = BatchCoalescer()
+    now = burst_stream(policy)
+    warm(policy, seconds=0.02)
+    assert policy.preparing_deadline("a", now) == pytest.approx(now + 0.03)

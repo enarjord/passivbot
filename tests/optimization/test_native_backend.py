@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import pickle
 import time
 from types import SimpleNamespace
+from threading import Event
 
 import numpy as np
 import pytest
@@ -389,3 +390,62 @@ def test_cpu_pipeline_starts_gpu_and_records_before_preparing_full_window(
             execute(base, SimpleNamespace(record=records.append), checkpoint)
         assert len(records) == 16 - int(duplicate_seed)
         assert load_checkpoint(checkpoint, base.config)["phase"] == "idle"
+
+
+@pytest.mark.parametrize("fail_preparation", [False, True])
+def test_preparing_hint_seals_full_cpu_windows_and_clears_after_failure(
+    monkeypatch, tmp_path, fail_preparation,
+):
+    import optimization.gpu.native as native
+    from optimization.native_planning import NativeCandidatePlanner
+    from optimization.native_session import NativeEvaluationSession
+
+    guard_cpu(monkeypatch)
+    hints, services, full_polls = [], [], []
+    class ObservedService(FakeService):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.release = Event()
+            services.append(self)
+        def register_dataset(self, dataset_id, dataset):
+            super().register_dataset(dataset_id, dataset)
+            replay = self._replays[dataset_id]
+            evaluate = replay.evaluate
+            def wait_for_cpu_window(candidates):
+                assert self.release.wait(5), "CPU admission must seal before waiting for a completion"
+                return evaluate(candidates)
+            replay.evaluate = wait_for_cpu_window
+        def set_preparing(self, dataset_ids):
+            hints.append(frozenset(dataset_ids))
+            super().set_preparing(dataset_ids)
+            if not dataset_ids:
+                self.release.set()
+    monkeypatch.setattr(native, "NativeBacktestService", ObservedService)
+    original_poll = NativeEvaluationSession.poll
+    def poll(self, **kwargs):
+        if len(self.active_candidate_ids) == self.max_candidates:
+            full_polls.append(True)
+            assert not self.service._preparing
+        return original_poll(self, **kwargs)
+    monkeypatch.setattr(NativeEvaluationSession, "poll", poll)
+    original_prepare = NativeCandidatePlanner.prepare
+    failure = ValueError("later CPU plan failed")
+    def prepare(self, candidate_id, vector, **kwargs):
+        if fail_preparation and candidate_id == "candidate:2":
+            assert hints[-1]
+            raise failure
+        return original_prepare(self, candidate_id, vector, **kwargs)
+    monkeypatch.setattr(NativeCandidatePlanner, "prepare", prepare)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        records = []
+        run = lambda: execute(base, SimpleNamespace(record=records.append), tmp_path / "checkpoint.pkl")
+        if fail_preparation:
+            with pytest.raises(ValueError) as raised:
+                run()
+            assert raised.value is failure
+        else:
+            run()
+            assert len(records) == 8 and full_polls
+        assert any(hints) and hints[-1] == frozenset()
+        assert services and all(service._preparing == frozenset() for service in services)

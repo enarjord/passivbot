@@ -119,6 +119,7 @@ class GpuBacktestService:
         self._thread: Thread | None = None
         self._worker_context = worker_context
         self._batch_policy = batch_policy
+        self._preparing: frozenset[str] | None = None
 
     def register_dataset(self, dataset_id: str, replay: BatchReplay) -> None:
         """Take exclusive replay ownership until close; never replace a handle.
@@ -155,6 +156,29 @@ class GpuBacktestService:
             if dataset_id in self._replays or dataset_id in self._factories:
                 raise ValueError(f"dataset already registered: {dataset_id}")
             self._factories[dataset_id] = factory
+
+    def set_preparing(self, dataset_ids) -> None:
+        """Hint which datasets can receive more CPU-prepared work without waiting.
+
+        This exclusively borrowing producer reserves no requests or capacity.
+        An empty hint seals the current production burst. Clearing is safe after
+        failure/close. Late hints cannot replace authoritative future failures.
+        Numeric accumulation delays ignore this advisory scheduling state.
+        """
+        if isinstance(dataset_ids, str):
+            raise ValueError("preparing datasets must be a collection of registered identities")
+        identities = frozenset(dataset_ids)
+        with self._condition:
+            if identities:
+                if any(not isinstance(identity, str) or not identity for identity in identities):
+                    raise ValueError("preparing datasets must contain only registered identities")
+                if self._closing or self._failure is not None:
+                    identities = frozenset()
+                elif not identities <= self._replays.keys() | self._factories.keys():
+                    raise ValueError("preparing datasets must contain only registered identities")
+            if self._preparing != identities:
+                self._preparing = identities
+                self._condition.notify_all()
 
     def submit(self, request: BacktestRequest) -> Future[BacktestResult]:
         if not isinstance(request.request_id, str) or not request.request_id:
@@ -267,8 +291,18 @@ class GpuBacktestService:
                     compatible = sum(item.request.dataset_id == dataset_id for item in self._queue)
                     if not compatible or compatible >= width or len(self._queue) >= self.max_pending:
                         break
-                    until = (self._coalescing.deadline(dataset_id, started)
-                             if self._coalescing is not None else deadline)
+                    if self._coalescing is None:
+                        until = deadline
+                    elif self._preparing is None:
+                        until = self._coalescing.deadline(dataset_id, started)
+                    elif dataset_id not in self._preparing:
+                        break  # The producer finished or needs completions first.
+                    elif any(item.request.dataset_id not in self._preparing for item in self._queue):
+                        # An unrelated ready dataset must not wait through the
+                        # active producer's longer accumulation allowance.
+                        until = self._coalescing.deadline(dataset_id, started)
+                    else:
+                        until = self._coalescing.preparing_deadline(dataset_id, started)
                     remaining = until - time.monotonic()
                     if remaining <= 0:
                         break

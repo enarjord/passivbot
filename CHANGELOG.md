@@ -10,6 +10,10 @@ since the latest release tag; these features may already be available when insta
   between the current width and its doubled target. Physical limits, memory checks and trial
   rollback still apply.
 
+- Accumulate GPU optimizer requests while CPU preparation is actively supplying compatible
+  work, using bounded warm replay cost and producer readiness. Release partial batches when
+  preparation finishes or needs results, while retaining queue pressure, cancellation and fixed-delay behavior.
+
 - Report explicit long/short activation in the live startup banner instead of inferring it from
   exposure capacity. Both-disabled configurations report that entries are disabled while existing
   position management follows configured modes.

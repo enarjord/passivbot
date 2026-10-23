@@ -220,8 +220,10 @@ submitted request before entering either collection or this cache. Each candidat
 simulator-row LRU is independently limited by `cache_size`; eviction or loss only repeats GPU
 work. These snapshots are run-local, without device handles or checkpoint state.
 
-GPU submission starts after the first prepared candidate rather than waiting for the
-entire CPU admission window. Preparation and CPU result servicing then alternate within
+GPU requests are submitted after the first prepared candidate. The CPU session advises
+the service which phase datasets can receive more work without waiting for a completion;
+this hint reserves no requests or capacity and does not contribute to width-tuning demand.
+Preparation and CPU result servicing then alternate within
 a soft 50 ms latency target, with interruption checks between candidates. Single preparation,
 scoring or storage operations can exceed that target; it is not a hard deadline. Completion
 grouping starts at one candidate and grows from observed CPU work, up to 256, with immediate
@@ -250,6 +252,17 @@ tail; successful warm replay duration supplies the total allowance, capped at 0.
 seconds. The first replay of each actual batch count is excluded from warm evidence.
 Until warm timing and three gaps exist, the fixed 5 ms accumulation policy remains.
 This is a bounded heuristic, not a guarantee of optimal scheduling for every workload.
+
+While the CPU producer can prepare more work, automatic accumulation can continue beyond
+the ordinary 0.5-second absolute limit. Its allowance is 1.5 times successful warm replay
+duration, capped at 60 seconds from the original accumulation start. Explicit readiness
+remains authoritative through individual CPU preparation or collection pauses.
+A stale hint can spend the whole allowance,
+so the exclusively borrowing producer must clear it when preparation cannot continue.
+Without warm replay timing, hints retain the ordinary policy; warm hints need no arrival-gap
+samples. Exhausted input and full CPU admission windows seal preparation and
+release partial work promptly. An unrelated queued dataset outside the active preparation
+set retains the ordinary short bound. These internal bounds require no configuration knobs.
 
 The CUDA facade's default `max_batch_delay=None` selects that policy. A numeric service
 delay, including zero, retains fixed waiting; tuning-off mode defaults to 5 ms. An
