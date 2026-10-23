@@ -31,7 +31,7 @@ from optimization.native_checkpoint import CHECKPOINT_VERSION, checkpoint_config
 from optimization.native_datasets import NativeDatasetRegistry
 from optimization.native_pipeline import ResultCadence
 from optimization.native_session import NativeEvaluationSession
-from optimization.progress import OptimizerProgress
+from optimization.progress import CohortDiagnostics, OptimizerProgress, search_boundary
 from optimization.scenario_screening import screening_survivor_indices, screening_survivor_count
 from optimization.fine_tune_anchors import get_anchor_plan
 
@@ -142,12 +142,26 @@ class _Search:
         screening = self.state["phase"] == "screening"
         datasets = frozenset(binding.dataset_id for binding in self.registry.bindings
                              if not screening or binding.scenario in self.screening_policy["scenarios"])
+        diagnostics = CohortDiagnostics(
+            generation=self.state["algorithm"].n_iter or 0, phase=self.state["phase"],
+            counts=lambda: dict(completed=self.state["completed"], screened=self.state["screened"],
+                                prefilter_rejected=self.state.get("prefilter_rejected", 0)),
+            session=self.session,
+        )
+        status = "interrupted"
         try:
-            self._evaluate_population(datasets)
+            self._evaluate_population(datasets, diagnostics)
+            status = "complete"
+        except Exception:
+            status = "failed"
+            raise
         finally:
-            self.session.set_preparing(())
+            try:
+                self.session.set_preparing(())
+            finally:
+                diagnostics.finish(status)
 
-    def _evaluate_population(self, datasets):
+    def _evaluate_population(self, datasets, diagnostics):
         population = self.state["population"]
         screening = self.state["phase"] == "screening"
         waiting = iter(index for index, individual in enumerate(population)
@@ -172,9 +186,11 @@ class _Search:
                        else self._cadence.budget_seconds)
             while self._pending:
                 polled = time.perf_counter()
-                completions = self.session.poll(timeout=timeout, max_completions=self._cadence.limit)
+                with diagnostics.measure("poll"):
+                    completions = self.session.poll(timeout=timeout, max_completions=self._cadence.limit)
                 consumed = time.perf_counter()
-                self.consume(completions)
+                with diagnostics.measure("consume"):
+                    self.consume(completions)
                 finished = time.perf_counter()
                 # Blocking polls may include device idle time. Their record work
                 # still counts; nonblocking polls include CPU fan-in/scoring too.
@@ -197,17 +213,20 @@ class _Search:
                     break
                 candidate_id = f"candidate:{self.state['sequence']}"
                 self.state["sequence"] += 1
-                plan = self.registry.planner.prepare(
-                    candidate_id, population[index].X,
-                    scenarios=self.screening_policy["scenarios"] if screening else None,
-                )
+                with diagnostics.measure("prepare"):
+                    plan = self.registry.planner.prepare(
+                        candidate_id, population[index].X,
+                        scenarios=self.screening_policy["scenarios"] if screening else None,
+                    )
                 if plan.prefilter_payload is not None:
-                    self.apply_terminal(index, plan.prefilter_payload,
-                                        prepared=(plan.vector, plan.record_config))
+                    with diagnostics.measure("consume"):
+                        self.apply_terminal(index, plan.prefilter_payload,
+                                            prepared=(plan.vector, plan.record_config))
                     if time.perf_counter() - started >= self._cadence.budget_seconds:
                         break
                     continue
-                self.session.admit(replace(plan, record_config=None))
+                with diagnostics.measure("prepare"):
+                    self.session.admit(replace(plan, record_config=None))
                 self._pending[candidate_id] = index
                 if plan.record_config is not None and self._reuse_record_configs:
                     self._record_configs[candidate_id] = (plan.vector, plan.record_config)
@@ -344,7 +363,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             ):
                 interrupt_check()
                 if state["phase"] == "idle":
-                    population = state["algorithm"].ask()
+                    with search_boundary(state["algorithm"].n_iter or 0, "ask"):
+                        population = state["algorithm"].ask()
                     if population is None and state["algorithm"].termination.force_termination:
                         break
                     if population is None or not len(population):
@@ -358,9 +378,11 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     state.update(phase="screening" if screening else "generation", population=population)
                 if state["phase"] == "screening":
                     search.evaluate_population()
-                    search.promote_screening()
+                    with search_boundary(state["algorithm"].n_iter or 0, "promotion"):
+                        search.promote_screening()
                 search.evaluate_population()
-                state["algorithm"].tell(infills=state["population"])
+                with search_boundary(state["algorithm"].n_iter or 0, "tell"):
+                    state["algorithm"].tell(infills=state["population"])
                 state.update(phase="idle", population=None)
                 search.checkpoint(force=True)
             service.close()

@@ -154,6 +154,42 @@ def test_effective_duplicates_share_pending_work_and_bounded_snapshot_cache():
     session.stop_admission()
 
 
+def test_transport_diagnostics_do_not_count_cache_or_alias_attempts_as_gpu_rows():
+    service = Service()
+    session = NativeEvaluationSession(service, scorer())
+    session.admit(plan(0))
+    session.admit(plan(1, key="0"))
+    session.poll()
+    for name in tuple(service.requests):
+        service.complete(name)
+    assert len(session.poll()) == 2
+    session.admit(plan(2, key="0"))
+    assert len(session.poll()) == 1
+    expected = dict(admitted_attempts=3, cache_attempts=1, alias_attempts=1,
+                    submitted_rows=2, replay_rows=2, reused_rows=0, delivered_attempts=3)
+    assert session.diagnostics_snapshot() == expected
+    snapshot = session.diagnostics_snapshot()
+    snapshot["replay_rows"] = -1
+    assert session.diagnostics_snapshot() == expected
+
+
+def test_failed_or_cancelled_futures_are_not_successful_diagnostic_rows():
+    service = Service()
+    session = NativeEvaluationSession(service, scorer())
+    session.admit(plan(0))
+    session.poll()
+    failure = ValueError("original failed row")
+    service.complete("0:binance", failure=failure)
+    with pytest.raises(ValueError) as raised:
+        session.poll()
+    assert raised.value is failure
+    assert service.futures["0:bybit"].cancelled()
+    assert session.diagnostics_snapshot() == dict(
+        admitted_attempts=1, cache_attempts=0, alias_attempts=0,
+        submitted_rows=2, replay_rows=0, reused_rows=0, delivered_attempts=0,
+    )
+
+
 def test_stop_cancels_waiting_work_and_preserves_completed_candidates():
     service = Service(capacity=4)
     session = NativeEvaluationSession(service, scorer())
@@ -280,6 +316,10 @@ def test_screening_rows_reuse_simulations_but_cannot_satisfy_full_suite_score(mo
         service.complete(name)
     assert session.poll()[0].require_full()["fitness"]
     assert scored == [("base",), ("base", "stress")]
+    assert session.diagnostics_snapshot() == dict(
+        admitted_attempts=2, cache_attempts=0, alias_attempts=0,
+        submitted_rows=4, replay_rows=4, reused_rows=2, delivered_attempts=2,
+    )
 
 
 def test_screening_reuse_preserves_independent_metadata_snapshots():

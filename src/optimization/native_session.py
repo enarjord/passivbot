@@ -37,6 +37,11 @@ class NativeEvaluationSession:
         self._stopped = False
         self._failure = None
         self._submission_failure = None
+        # Run-local counts, not search evidence. No identities or history grow
+        # with the number of optimizer attempts.
+        self._diagnostics = dict(admitted_attempts=0, cache_attempts=0, alias_attempts=0,
+                                 submitted_rows=0, replay_rows=0, reused_rows=0,
+                                 delivered_attempts=0)
 
     @property
     def active_candidate_ids(self):
@@ -45,6 +50,16 @@ class NativeEvaluationSession:
     @property
     def pending_request_count(self):
         return len(self._queued) + len(self._futures)
+
+    def diagnostics_snapshot(self):
+        """Copy cumulative transport counts; attempts and request rows differ.
+
+        A suite fans one attempt out to multiple rows. Cache/alias attempts need
+        no fresh rows; screening rows may be reused by later full collection.
+        ``replay_rows`` counts successful, collector-validated fresh futures,
+        never cancelled/submitted-only requests or reused row-cache evidence.
+        """
+        return dict(self._diagnostics)
 
     def set_preparing(self, dataset_ids):
         """Advise an optional service scheduler; never reserve replay demand."""
@@ -75,7 +90,7 @@ class NativeEvaluationSession:
         if requests != slots or len(requests) != len(plan.requests):
             raise ValueError("candidate requests must exactly match its result slots")
         other_ids = {request.request_id for _owner, request in self._queued}
-        other_ids.update(request.request_id for _owner, request in self._futures.values())
+        other_ids.update(request.request_id for _owner, request, _reused in self._futures.values())
         if other_ids & requests.keys():
             raise ValueError("request identities collide with admitted work")
         snapshots = tuple(BacktestRequest(request.request_id, request.dataset_id,
@@ -83,10 +98,13 @@ class NativeEvaluationSession:
                           for request in plan.requests)
         key = self._key(plan)
         self._active[plan.candidate_id] = (plan, collector)
+        self._diagnostics["admitted_attempts"] += 1
         if key in self._cache:
+            self._diagnostics["cache_attempts"] += 1
             self._cache.move_to_end(key)
             self._ready.append(self._reuse(plan, self._cache[key]))
         elif key in self._primary:
+            self._diagnostics["alias_attempts"] += 1
             self._aliases.setdefault(key, []).append(plan.candidate_id)
         else:
             self._primary[key] = plan.candidate_id
@@ -115,7 +133,8 @@ class NativeEvaluationSession:
             try:
                 plan, _collector = self._active[candidate_id]
                 key = self._row_key(plan, request)
-                if key in self._row_cache:
+                reused = key in self._row_cache
+                if reused:
                     # Reuse identified simulator evidence, never a partial score.
                     # Full collection must still validate every required slot.
                     self._row_cache.move_to_end(key)
@@ -140,7 +159,9 @@ class NativeEvaluationSession:
                 self._submission_failure = failure
                 return
             self._queued.popleft()
-            self._futures[future] = (candidate_id, request)
+            if not reused:
+                self._diagnostics["submitted_rows"] += 1
+            self._futures[future] = (candidate_id, request, reused)
             future.add_done_callback(self._notifications.put)
 
     def _complete(self, complete):
@@ -182,7 +203,7 @@ class NativeEvaluationSession:
                 except Empty:
                     break
                 processed += 1
-                candidate_id, _request = self._futures.pop(future)
+                candidate_id, _request, reused = self._futures.pop(future)
                 try:
                     row = future.result()
                 except CancelledError:
@@ -195,6 +216,7 @@ class NativeEvaluationSession:
                     raise RuntimeError("backtest result identity does not match its submitted request")
                 plan, collector = self._active[candidate_id]
                 complete = collector.add_result(row)
+                self._diagnostics["reused_rows" if reused else "replay_rows"] += 1
                 # Only collector-validated simulator rows enter this bounded,
                 # run-local cache. Keys include the complete effective candidate
                 # identity and prepared dataset, independent of screening stage.
@@ -211,6 +233,7 @@ class NativeEvaluationSession:
                 complete = self._ready.popleft()
                 del self._active[complete.candidate_id]
                 ready.append(complete)
+                self._diagnostics["delivered_attempts"] += 1
             return ready
         except BaseException as failure:
             self._failure = failure

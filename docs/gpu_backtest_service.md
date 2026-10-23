@@ -201,6 +201,43 @@ and writes full candidate records immediately through the existing results/Paret
 Evolution advances after the cohort's complete evaluations finish. Effective duplicates
 share pending/cached work.
 
+At INFO, each evaluation stage reports a compact `GPU cohort` summary with its generation,
+phase and completion status. `attempts/s` divides additional completed stage attempts by that
+stage's wall time. It includes prefilter and cached/aliased completions; screening attempts are
+partial observations, not full fitness. Restored evaluations are excluded. `gpu_rows/s` instead
+counts fresh, successfully collected service request rows per stage wall second. One attempt
+can require several scenario/exchange rows, while aliases, candidate-cache hits and reused
+screening rows require no fresh replay. Neither rate is pure device time or necessarily a
+unique-vector rate. Failed/interrupted summaries are partial snapshots taken before shutdown
+draining and do not claim successful completion of the cohort.
+
+DEBUG detail separates admitted/cache/alias attempts, submitted request rows, validated fresh
+rows and reused rows. Submission does not imply success. Main-thread `prepare`, `poll` and
+`consume` wall and thread-CPU spans are disjoint: preparation covers canonical planning and
+admission; polling includes submission, row fan-in, scoring and any blocking wait; consumption
+includes candidate application, recording and its checkpoints. `other` covers the remaining
+evaluation-stage work. Thread CPU time excludes device waiting and other threads. Serial
+`ask`, `tell` and scenario-promotion boundaries are reported separately at DEBUG and lie outside
+evaluation-stage wall time. These stage rates exclude startup, registry/data preparation and
+serial search boundaries, so they are not a whole-command throughput measurement.
+
+Optional owner diagnostics report completed validated batches/rows, host replay plus reduction
+and validation time, claimed-request accumulation, and worker/dataset preparation. These owner
+spans overlap the CPU stage wall spans and must not be added to them. Replay timing adds no
+device synchronization and is not a kernel-time measurement. Tuner context retains fixed-size
+aggregate counts and only the first trial selection and latest decision. Elapsed
+seconds begin at tuner construction and include supply gaps; cumulative row/replay totals cover
+all observed dataset classes, while each class's decision still uses its own existing evidence.
+The latest class snapshot distinguishes actual count, target width, ceiling, trial state,
+retained warm samples and duration thresholds. Trial selection is a future target, not proof
+that a full target-width batch has executed. Capacity changes may invalidate timing evidence
+without removing the completed request rows from the diagnostic totals.
+
+Diagnostics retain no candidate history, device handles or checkpoint state and never supply
+tuning, admission, cadence, screening or search decisions. INFO-enabled native optimization
+enables the optional host timers; a generic fixed-policy execution service remains untimed by
+default. Diagnostic snapshots and console failures cannot replace authoritative execution errors.
+
 `optimize.gpu.screening` uses the existing scenario labels, survival fraction and minimum
 survivor settings. Seeds and initial parents receive full-suite GPU evaluation. Later
 offspring can be screened on a scenario subset; CPU feasibility/Pareto-diversity selection

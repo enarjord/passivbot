@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add GPU optimizer cohort throughput diagnostics that separate candidate attempts from fresh
+  request rows, CPU preparation and collection, overlapping replay work, and tuner evidence.
+
 - Extend opt-in GPU phase profiles with host submission and synchronization-wait timing,
   requested launch shapes and compiled pipeline limits. Existing phase timings remain
   host-wall measurements rather than hardware kernel timings.

@@ -7,6 +7,7 @@ optimizer acceptance map records the validated scope and remaining gates.
 
 from contextlib import contextmanager
 import json
+import logging
 from types import SimpleNamespace
 
 from optimization.gpu.datasets import PreparedGpuDataset
@@ -34,7 +35,9 @@ class NativeBacktestService:
         if not isinstance(tuning_mode, str) or tuning_mode not in {"auto", "refresh", "off"}:
             raise ValueError("GPU tuning mode must be auto, refresh, or off")
         automatic = is_auto(batch_size) and tuning_mode != "off"
-        self._batch_tuner = ExecutionBatchTuner(headroom=self._headroom) if automatic else None
+        diagnostics = logging.getLogger().isEnabledFor(logging.INFO)
+        self._batch_tuner = (ExecutionBatchTuner(headroom=self._headroom, diagnostics=diagnostics)
+                             if automatic else None)
         requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)
         self._batch_policy = self._batch_tuner or ExecutionBatchTuner(initial=requested_width, enabled=False)
         if (isinstance(max_dispatch_candidate_bars, bool)
@@ -54,8 +57,12 @@ class NativeBacktestService:
                              else max_batch_delay),
             worker_context=self._worker_scope,
             batch_policy=self._batch_policy,
+            diagnostics=diagnostics,
         )
         self._batch_size = self._executor.batch_size
+
+    def diagnostics_snapshot(self):
+        return self._executor.diagnostics_snapshot()
 
     @staticmethod
     def _headroom():

@@ -3,6 +3,7 @@ import logging
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+import json
 from threading import RLock
 
 
@@ -120,3 +121,130 @@ class OptimizerProgress:
             ])
             if delivered:
                 self.last_log = now
+
+
+@contextmanager
+def search_boundary(generation, operation):
+    """Time serial ask/tell/promotion outside evaluation-stage wall spans."""
+    if not logging.getLogger().isEnabledFor(logging.INFO):
+        yield
+        return
+    try:
+        started = time.perf_counter(), time.thread_time()
+    except Exception:
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            log_tokens(f"GPU search boundary | gen={generation} operation={operation} |", [
+                f"wall_s={time.perf_counter() - started[0]:.6f}",
+                f"main_thread_cpu_s={time.thread_time() - started[1]:.6f}",
+            ], level=logging.DEBUG)
+        except Exception:
+            pass  # Optional presentation must preserve the original search error.
+
+
+class CohortDiagnostics:
+    """Bounded presentation of one CPU-owned evaluation stage.
+
+    Main-thread prepare, poll and consume spans are disjoint. Poll wall time
+    includes blocking waits; thread CPU time does not. Owner replay/accumulation
+    spans overlap this wall time and must never be added to the CPU spans.
+    No diagnostic value enters search, checkpoints, cadence or execution policy.
+    """
+
+    def __init__(self, *, generation, phase, counts, session):
+        self.enabled = logging.getLogger().isEnabledFor(logging.INFO)
+        self.generation, self.phase = generation, phase
+        self.counts, self.session = counts, session
+        self.spans = {name: [0.0, 0.0] for name in ("prepare", "poll", "consume")}
+        if self.enabled:
+            try:
+                self.started = time.perf_counter(), time.thread_time()
+                self.before = dict(counts())
+                self.transport = self._snapshot(session)
+                self.owner = self._snapshot(session.service)
+            except Exception:
+                self.enabled = False
+
+    @staticmethod
+    def _snapshot(owner):
+        snapshot = getattr(owner, "diagnostics_snapshot", None)
+        if snapshot is None:
+            return None
+        try:
+            return snapshot()
+        except Exception:
+            return None  # Optional telemetry cannot change a future's failure.
+
+    @contextmanager
+    def measure(self, name):
+        if not self.enabled:
+            yield
+            return
+        try:
+            started = time.perf_counter(), time.thread_time()
+        except Exception:
+            self.enabled = False
+            yield
+            return
+        try:
+            yield
+        finally:
+            try:
+                self.spans[name][0] += time.perf_counter() - started[0]
+                self.spans[name][1] += time.thread_time() - started[1]
+            except Exception:
+                self.enabled = False
+
+    @staticmethod
+    def _delta(after, before):
+        if after is None or before is None:
+            return None
+        return {name: value - before[name] for name, value in after.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                and name in before and isinstance(before[name], (int, float))}
+
+    def finish(self, status):
+        if not self.enabled:
+            return
+        try:
+            wall, cpu = time.perf_counter() - self.started[0], time.thread_time() - self.started[1]
+            counts = self._delta(dict(self.counts()), self.before)
+            transport = self._delta(self._snapshot(self.session), self.transport)
+            owner_after = self._snapshot(self.session.service)
+            owner = self._delta(owner_after, self.owner)
+            attempts = counts["completed"] + counts["screened"]
+            rows = None if transport is None else transport["replay_rows"]
+            rate = lambda value: f"{value / wall:.4f}" if value is not None and wall > 0 else "unknown"
+            prefix = f"GPU cohort | gen={self.generation} phase={self.phase} status={status} |"
+            log_tokens(prefix, [f"attempts={attempts}", f"prefilter={counts['prefilter_rejected']}",
+                                f"gpu_rows={rows if rows is not None else 'unknown'}", f"wall_s={wall:.3f}",
+                                f"attempts/s={rate(attempts)}", f"gpu_rows/s={rate(rows)}"])
+            details = [f"full_attempts={counts['completed']}", f"screened_attempts={counts['screened']}",
+                       f"main_thread_cpu_s={cpu:.6f}"]
+            for name, (seconds, cpu_seconds) in self.spans.items():
+                details.extend((f"{name}_wall_s={seconds:.6f}", f"{name}_cpu_s={cpu_seconds:.6f}"))
+            details.extend((f"other_wall_s={max(0.0, wall - sum(v[0] for v in self.spans.values())):.6f}",
+                            f"other_cpu_s={max(0.0, cpu - sum(v[1] for v in self.spans.values())):.6f}"))
+            if transport is None:
+                details.append("transport=unavailable")
+            else:
+                details.extend(f"{name}={value}" for name, value in transport.items())
+            if owner is None:
+                details.append("owner=unavailable")
+            else:
+                details.extend(f"overlapping_owner_{name}={value:.6f}" for name, value in owner.items()
+                               if name.endswith("seconds"))
+                details.extend(f"owner_{name}={value}" for name, value in owner.items()
+                               if name in {"batches", "rows"})
+            log_tokens(prefix, details, level=logging.DEBUG)
+            tuner = None if owner_after is None else owner_after.get("tuner")
+            if tuner is not None:
+                log_tokens(prefix, ["tuner_since_construction=" + json.dumps(tuner, sort_keys=True)],
+                           level=logging.DEBUG)
+        except Exception as error:
+            log_tokens("GPU cohort diagnostics unavailable |", [f"error_type={type(error).__name__}"],
+                       level=logging.DEBUG)

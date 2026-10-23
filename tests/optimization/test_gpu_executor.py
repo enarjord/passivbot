@@ -49,6 +49,99 @@ def request(index, dataset="market", **params):
     return BacktestRequest(str(index), dataset, {"value": index, **params})
 
 
+def test_fixed_service_remains_untimed_without_optional_diagnostics(monkeypatch):
+    from optimization.gpu import executor as module
+
+    def forbidden():
+        pytest.fail("fixed service must not acquire replay clocks by default")
+    monkeypatch.setattr(module.time, "perf_counter", forbidden)
+    with GpuBacktestService(batch_size=1, max_batch_delay=0) as service:
+        service.register_dataset("market", Replay())
+        assert service.submit(request(1)).result(timeout=3).metrics == {"gain": 1}
+        assert service.diagnostics_snapshot() is None
+
+
+def test_optional_owner_diagnostics_separate_preparation_and_validated_execution(monkeypatch):
+    from optimization.gpu import executor as module
+
+    tick = [0.0]
+    monkeypatch.setattr(module.time, "perf_counter", lambda: tick[0])
+    @contextmanager
+    def worker():
+        tick[0] += 2
+        yield
+    class TimedReplay(Replay):
+        def evaluate(self, candidates):
+            tick[0] += 7
+            return super().evaluate(candidates)
+    @contextmanager
+    def factory():
+        tick[0] += 3
+        yield TimedReplay()
+    with GpuBacktestService(batch_size=1, max_batch_delay=0, worker_context=worker,
+                             diagnostics=True) as service:
+        service.register_dataset_factory("market", factory)
+        assert service.submit(request(1)).result(timeout=3).metrics == {"gain": 1}
+        snapshot = service.diagnostics_snapshot()
+        assert snapshot["batches"] == snapshot["rows"] == snapshot["last_count"] == 1
+        assert snapshot["execution_seconds"] == 7
+        assert snapshot["preparation_seconds"] == 5
+        assert snapshot["accumulation_seconds"] >= 0
+        snapshot["rows"] = -1
+        assert service.diagnostics_snapshot()["rows"] == 1
+
+
+def test_owner_diagnostics_do_not_count_an_invalid_batch_as_completed():
+    failure = ValueError("original producer failure")
+    def failed(_rows):
+        raise failure
+    with GpuBacktestService(max_batch_delay=0, diagnostics=True) as service:
+        service.register_dataset("market", SimpleNamespace(evaluate=failed))
+        with pytest.raises(ValueError) as raised:
+            service.submit(request(0)).result(timeout=3)
+        assert raised.value is failure
+        snapshot = service.diagnostics_snapshot()
+        assert snapshot["batches"] == snapshot["rows"] == 0
+        assert snapshot["execution_seconds"] == 0
+
+
+@pytest.mark.parametrize("clock", ["monotonic", "perf_counter"])
+def test_optional_owner_clock_failure_does_not_fail_successful_futures(monkeypatch, clock):
+    from optimization.gpu import executor as module
+
+    original = getattr(module.time, clock)
+    calls = [0]
+    def unavailable():
+        calls[0] += 1
+        # The first monotonic read belongs to the existing fixed scheduler;
+        # its second read is only the new accumulation diagnostic.
+        if calls[0] == (2 if clock == "monotonic" else 1):
+            raise OSError("optional clock unavailable")
+        return original()
+    monkeypatch.setattr(module.time, clock, unavailable)
+    with GpuBacktestService(batch_size=1, max_batch_delay=0, diagnostics=True) as service:
+        service.register_dataset("market", Replay())
+        assert service.submit(request(1)).result(timeout=3).metrics == {"gain": 1}
+        assert service.diagnostics_snapshot() is None
+
+
+def test_required_policy_timing_failure_remains_authoritative(monkeypatch):
+    from optimization.gpu import executor as module
+
+    failure = OSError("required policy clock unavailable")
+    def unavailable():
+        raise failure
+    policy = SimpleNamespace(width=lambda *_args: 1,
+                             observe=lambda *_args, **_kwargs: pytest.fail("no valid timing evidence"))
+    monkeypatch.setattr(module.time, "perf_counter", unavailable)
+    with GpuBacktestService(batch_size=1, max_batch_delay=0, batch_policy=policy,
+                             diagnostics=True) as service:
+        service.register_dataset("market", Replay())
+        with pytest.raises(OSError) as raised:
+            service.submit(request(1)).result(timeout=3)
+        assert raised.value is failure
+
+
 def test_service_changes_batch_width_only_between_successful_dispatches():
     class Policy:
         def __init__(self):
