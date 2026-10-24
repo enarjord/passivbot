@@ -27,6 +27,62 @@ class _FakeAttachment:
         self.closed += 1
 
 
+@pytest.mark.asyncio
+async def test_prepare_suite_contexts_skips_missing_historical_coins(monkeypatch):
+    from config.load import prepare_config
+    from config.schema import get_template_config
+    from config.universe import universe_source_view
+
+    _stub_market_identity_validation(monkeypatch)
+    raw = get_template_config()
+    raw["bot"]["long"]["enabled"] = True
+    raw["bot"]["global"]["universe"].update(
+        approved_coins=["AAA", "BBB", "CCC"], ignored_coins=[], minimum_coin_age_days=0.0,
+    )
+    raw["backtest"].update(
+        start_date="2024-01-01", end_date="2024-01-02", exchanges=["binance"],
+        suite_enabled=True, scenarios=[
+            {"label": "base"},
+            {"label": "subset", "coins": ["BBB", "AAA"]},
+            {"label": "ignored", "ignored_coins": ["CCC", "BBB"]},
+        ],
+    )
+    config = prepare_config(raw, verbose=False)
+
+    async def fake_load_markets(*_args, **_kwargs):
+        return {}
+
+    async def fake_format_approved_ignored_coins(*_args, **_kwargs):
+        return None
+
+    async def fake_prepare_master_datasets(*_args, **_kwargs):
+        return {"combined": _make_lazy_dataset(
+            coins=("AAA", "CCC"), coin_exchange={"AAA": "binance", "CCC": "binance"},
+            available_exchanges=["binance"],
+        )}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", fake_format_approved_ignored_coins)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config, optimize_suite.extract_suite_config(config, suite_override=None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+
+    assert [context.label for context in contexts] == ["base", "subset", "ignored"]
+    for context in contexts:
+        columns = ["AAA"] if context.label == "subset" else ["AAA", "CCC"]
+        assert context.config["backtest"]["coins"]["combined"] == columns
+        assert context.coin_slice_indices["combined"] == ([0] if context.label == "subset" else [0, 1])
+        assert require_side_universe_sources(context.config, "approved_coins") == {
+            side: columns if context.label == "base" else ["AAA"] for side in ("long", "short")}
+    subset_source = universe_source_view(contexts[1].config)
+    ignored_source = universe_source_view(contexts[2].config)
+    for side in ("long", "short"):
+        assert subset_source["bot"][side]["universe"]["approved_coins"] == ["BBB", "AAA"]
+        assert ignored_source["bot"][side]["universe"]["ignored_coins"] == ["CCC", "BBB"]
+
+
 def _stub_market_identity_validation(monkeypatch):
     async def fake_reject_cross_exchange_market_identifier_collisions(
         _identifiers, _exchanges, **_kwargs
@@ -497,8 +553,9 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", [False, True])
 async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
-    monkeypatch,
+    monkeypatch, canonical,
 ):
     config = get_expanded_config_prototype()
     config["bot"]["long"]["enabled"] = True
@@ -535,6 +592,9 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
         optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
     )
 
+    if canonical:
+        from config.load import prepare_config
+        config = prepare_config(config, verbose=False)
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     with pytest.raises(ValueError, match="missing_coin could not be prepared"):
         await optimize_suite.prepare_suite_contexts(

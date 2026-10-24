@@ -25,6 +25,54 @@ def _scenario(config, scenario, context, columns=("AAA", "BBB")):
     )
 
 
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize("replacement", ["approved", "ignored", "both"])
+def test_missing_historical_coins_preserve_scenario_sources(prepared, replacement, caplog):
+    from config.load import prepare_config
+    from config.schema import get_template_config
+    from config.universe import require_side_universe_sources, universe_source_view
+    from suite_runner import apply_scenario, build_scenarios
+
+    raw = get_template_config()
+    raw["bot"]["long"]["enabled"] = True
+    raw["bot"]["global"]["universe"].update(
+        approved_coins=["AAA", "BBB", "CCC"], ignored_coins=[], minimum_coin_age_days=0.0,
+    )
+    config = prepare_config(raw, verbose=False)
+    original = universe_source_view(config)
+    spec = {"label": "historical"}
+    if replacement in {"approved", "both"}:
+        spec["coins"] = ["BBB", "AAA"]
+    if replacement in {"ignored", "both"}:
+        spec["ignored_coins"] = ["CCC", "BBB"]
+    scenarios, _ = build_scenarios({"scenarios": [spec]}, ["binance"])
+    context = _contexts(config, scenarios, ("AAA", "BBB", "CCC"))["historical"]
+    frozen = deepcopy(context)
+
+    result, columns = apply_scenario(
+        config, scenarios[0], master_coins=["AAA", "BBB", "CCC"], master_ignored=[],
+        available_exchanges=["binance"], available_coins={"AAA", "CCC"},
+        base_coins=["AAA", "BBB", "CCC"], base_ignored=[],
+        prepared_universe=context if prepared else None,
+    )
+
+    assert columns == (["AAA", "CCC"] if replacement == "ignored" else ["AAA"])
+    assert result["backtest"]["coins"]["binance"] == columns
+    assert require_side_universe_sources(result, "approved_coins") == {
+        side: ["AAA"] for side in ("long", "short")}
+    source = universe_source_view(result)
+    for side in ("long", "short"):
+        universe = source["bot"][side]["universe"]
+        for key, field in (("coins", "approved_coins"), ("ignored_coins", "ignored_coins")):
+            if key in spec:
+                assert universe[field] == spec[key]
+            else:
+                assert field not in universe
+    assert "skipping 1 coin(s) missing in dataset: BBB" in caplog.text
+    assert universe_source_view(config) == original
+    assert context == frozen
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recover", [False, True])
 @pytest.mark.parametrize("source", ["inline", "external"])

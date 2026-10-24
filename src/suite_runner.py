@@ -1534,14 +1534,8 @@ def apply_scenario(
         backtest_section["end_date"] = new_end
 
     default_coins = base_coins if base_coins is not None else master_coins
-    default_ignored = base_ignored if base_ignored is not None else master_ignored
     scenario_coins = (
         list(scenario.coins) if scenario.coins is not None else list(default_coins)
-    )
-    scenario_ignored = (
-        list(scenario.ignored_coins)
-        if scenario.ignored_coins is not None
-        else list(default_ignored)
     )
     available_exchange_list = list(available_exchanges)
     scenario_exchanges = (
@@ -1551,8 +1545,6 @@ def apply_scenario(
     routing = approvals["long"].market_aliases if type(approvals["long"]) is ResolvedCoinList else None
     scenario_coins = _reconcile_suite_identifiers_to_available(
         scenario_coins, available_coins, scenario_exchanges, prepared_aliases=routing)
-    scenario_ignored = _reconcile_suite_identifiers_to_available(
-        scenario_ignored, available_coins, scenario_exchanges, prepared_aliases=routing)
 
     filtered_coins = [coin for coin in scenario_coins if coin in available_coins]
     missing = sorted(set(scenario_coins) - set(filtered_coins))
@@ -1566,9 +1558,6 @@ def apply_scenario(
     if not filtered_coins:
         raise SimulationConfigError("No coins remain after scenario selection and market matching.", context=scenario.label)
     filtered_coins = sorted(dict.fromkeys(filtered_coins))
-
-    filtered_ignored = [coin for coin in scenario_ignored if coin in available_coins]
-    filtered_ignored = sorted(dict.fromkeys(filtered_ignored))
 
     if scenario_exchanges != backtest_section.get("exchanges"):
         tracker.update(
@@ -1590,16 +1579,19 @@ def apply_scenario(
             )
         backtest_section["coins"][exchange] = list(filtered_coins)
 
-    for field, values in (("approved_coins", filtered_coins), ("ignored_coins", filtered_ignored)):
+    # Scenario declarations remain source policy even when historical data has
+    # fewer columns. Restrict execution membership during materialization below.
+    for field, values in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
+        if values is None:
+            continue
         for side in ("long", "short"):
             universe = cfg["bot"][side].setdefault("universe", {})
             current = universe.get(field, [])
             if current != values:
                 tracker.update(["bot", side, "universe", field], deepcopy(current), list(values))
-            if (field == "approved_coins" and scenario.coins is not None) or (field == "ignored_coins" and scenario.ignored_coins is not None):
-                from config.bot_inheritance import apply_bot_config_patch
-                if not apply_bot_config_patch(cfg, {f"bot.{side}.universe.{field}": list(values)}):
-                    universe[field] = list(values)
+            from config.bot_inheritance import apply_bot_config_patch
+            if not apply_bot_config_patch(cfg, {f"bot.{side}.universe.{field}": list(values)}):
+                universe[field] = list(values)
 
     resolved_sources = resolve_coin_sources(
         base_coin_sources or {},
