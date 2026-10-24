@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cli_utils import help_requested
 from passivbot_version import __version__
-from passivbot_exceptions import GPUScreeningMigrationError
+from passivbot_exceptions import GPUScreeningMigrationError, SimulationConfigError
 
 
 @dataclass(frozen=True)
@@ -559,6 +559,11 @@ def _run_module(
             print(_full_install_message(prog_name, exc.name), file=sys.stderr)
             return 2
         raise
+    except SimulationConfigError as exc:
+        from simulation_validation import simulation_config_error_message
+
+        print(simulation_config_error_message(exc, prog_name), file=sys.stderr)
+        return 2
     except GPUScreeningMigrationError as exc:
         print(f"Configuration migration required: {exc}", file=sys.stderr)
         return 2

@@ -44,6 +44,7 @@ import numpy as np
 import math
 import pandas as pd
 import json
+from passivbot_exceptions import SimulationConfigError
 import asyncio
 import numbers
 import time
@@ -3335,7 +3336,7 @@ async def main():
         epilog=(
             "Examples:\n"
             "  passivbot backtest configs/examples/default_trailing_martingale_long.json -s XMR -sd 2025 --suite n\n"
-            "  passivbot backtest -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
+            "  passivbot backtest --bot.long.enabled y -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
             "\n"
             "Use --help-all to show every config override flag."
         ),
@@ -3563,11 +3564,15 @@ async def main():
         )
         return
 
+    from simulation_validation import validate_simulation_config
+
+    validate_simulation_config(config)
     for ex in backtest_exchanges:
         await load_markets(ex, offline=config["backtest"].get("offline", False))
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
+    validate_simulation_config(config, resolved=True)
     config["disable_plotting"] = (
         args.disable_plotting if args.disable_plotting is not None else False
     )
@@ -3688,6 +3693,11 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except SimulationConfigError as exc:
+        from simulation_validation import simulation_config_error_message
+
+        print(simulation_config_error_message(exc, get_cli_prog("backtest")), file=sys.stderr)
+        sys.exit(2)
     except ValueError as exc:
         logging.error("Backtest failed: %s", exc, exc_info=True)
         sys.exit(1)

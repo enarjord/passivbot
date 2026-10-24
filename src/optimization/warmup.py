@@ -622,6 +622,31 @@ def validate_optimizer_effective_configs(config: dict) -> None:
         )
 
 
+def validate_optimizer_simulation_config(config: dict, *, suite_cfg: dict) -> None:
+    """Require reachable trading capacity without freezing unresolved dataset sources."""
+    from passivbot_exceptions import SimulationConfigError
+    from simulation_validation import validate_simulation_config
+    from suite_runner import build_scenarios, validate_simulation_scenarios
+
+    scenarios = None
+    if suite_cfg.get("enabled"):
+        scenarios, _ = build_scenarios(suite_cfg, base_exchanges=config["backtest"]["exchanges"])
+    first_error = None
+    for candidate in _build_optimizer_boundary_configs(config):
+        try:
+            if scenarios is None:
+                validate_simulation_config(candidate)
+            else:
+                validate_simulation_scenarios(candidate, scenarios)
+        except SimulationConfigError as exc:
+            if first_error is None:
+                first_error = exc
+        else:
+            return
+    if first_error is not None:
+        raise first_error
+
+
 def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str) -> None:
     """Reject reachable RMS consumers only after per-coin eligibility is known."""
     if config["backtest"]["candle_interval_minutes"] == 1:

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reject backtests and optimizer runs with no active trading universe before candle preparation,
+  with actionable configuration guidance instead of a traceback. Validate effective suite scenarios
+  after their overrides; schema defaults and live position management remain unchanged.
+
 - Add GPU optimizer cohort throughput diagnostics that separate candidate attempts from fresh
   request rows, CPU preparation and collection, overlapping replay work, and tuner evidence.
 

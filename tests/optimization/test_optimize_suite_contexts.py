@@ -79,11 +79,12 @@ def _make_lazy_dataset(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rms_search", [False, True])
 @pytest.mark.parametrize("interval", [1, 5])
-async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_short_disabled(
+async def test_prepare_suite_contexts_keeps_directional_scenarios_with_reachable_sides(
     monkeypatch, rms_search, interval,
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["candle_interval_minutes"] = interval
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -102,9 +103,9 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     ]
     set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
-    # Schema defaults keep shorts disabled. Optimizer candidates may enable
-    # shorts later, so context preparation must not dedupe base vs long_only.
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    # The data view covers both reachable sides; directional scenarios must
+    # retain their distinct runtime gates instead of deduplicating against base.
+    config["bot"]["short"]["enabled"] = True
     if rms_search:
         config['bot']["portfolio"]['warmup']['max_minutes'] = 3
         forager = config["optimize"]["bounds"]["long"]["forager"]
@@ -250,6 +251,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -334,6 +336,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
 async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkeypatch):
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -391,6 +394,7 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance", "bybit"]
@@ -451,6 +455,7 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -496,6 +501,7 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
     monkeypatch,
 ):
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -541,6 +547,7 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeypatch):
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -592,6 +599,7 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
 
     _stub_market_identity_validation(monkeypatch)
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["optimize"]["backend"] = backend
     config["backtest"].update(
         start_date="2024-01-01",

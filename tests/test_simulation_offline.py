@@ -286,10 +286,14 @@ async def test_online_market_expiry_still_refreshes(tmp_path, monkeypatch):
 ])
 async def test_suite_policy_precedes_metadata_preload(tmp_path, monkeypatch, module, function, extra):
     import importlib
+    from config import prepare_config
+
     monkeypatch.chdir(tmp_path)
     config = get_template_config()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["binance"])
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
+    config = prepare_config(config, verbose=False)
     with pytest.raises(OfflineDataError, match="markets.json"):
         await getattr(importlib.import_module(module), function)(
             config, {"scenarios": [{"label": "one"}]}, **extra)

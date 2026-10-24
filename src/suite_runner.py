@@ -8,6 +8,8 @@ backtester and the optimizer import this module when operating in suite mode.
 
 from __future__ import annotations
 from simulation_data import simulation_data_scope
+from simulation_validation import validate_simulation_config
+from passivbot_exceptions import SimulationConfigError
 
 import asyncio
 import json
@@ -183,9 +185,9 @@ def _scenario_universe_recipe(base_config, scenario):
 
 def _prepare_scenario_universes(
     base_config, scenarios, *, master_coins, master_ignored, available_exchanges,
-    base_coin_sources=None, base_coins=None, base_ignored=None,
+    base_coin_sources=None, base_coins=None, base_ignored=None, require_runnable=False,
 ):
-    """Resolve each scenario once through the execution owner before shared acquisition."""
+    """Resolve each scenario once; execution callers additionally require trading eligibility."""
     from config.age_policy import minimum_coin_age_days
     from backtest_universe import backtest_side_enabled
     from config.universe import raw_side_universe_sources, runtime_universe_snapshot
@@ -197,6 +199,8 @@ def _prepare_scenario_universes(
             base_config, scenario, master_coins, master_ignored, available_exchanges,
             set(master_coins), base_coin_sources, base_coins=base_coins, base_ignored=base_ignored, quiet=True,
         )
+        if require_runnable:
+            validate_simulation_config(effective, resolved=True, context=scenario.label)
         approved = require_side_universe_sources(effective, "approved_coins")
         required = frozenset(
             coin for side in ("long", "short")
@@ -1374,6 +1378,19 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     normalize_hsl(config, get_expanded_config_prototype(), verbose=False)
 
 
+def validate_simulation_scenarios(config, scenarios):
+    """Check each effective scenario before market lookup, allowing scenario activation."""
+    for scenario in scenarios:
+        effective = deepcopy(config)
+        patches = {}
+        for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
+            if value is not None:
+                patches.update({f"bot.{side}.universe.{field}": value for side in ("long", "short")})
+        patches.update(scenario.overrides or {})
+        apply_scenario_overrides(effective, patches)
+        validate_simulation_config(effective, context=scenario.label)
+
+
 def _materialize_scenario_universe(
     config, prepared_base, *, available_coins, exchanges, columns=None, replacement_paths=()
 ):
@@ -1547,7 +1564,7 @@ def apply_scenario(
             ",".join(missing),
         )
     if not filtered_coins:
-        raise ValueError(f"Scenario {scenario.label} has no usable coins.")
+        raise SimulationConfigError("No coins remain after scenario selection and market matching.", context=scenario.label)
     filtered_coins = sorted(dict.fromkeys(filtered_coins))
 
     filtered_ignored = [coin for coin in scenario_ignored if coin in available_coins]
@@ -1620,7 +1637,7 @@ def apply_scenario(
         candidates = period_coins(cfg, master_coins)
         filtered_coins = [coin for coin in filtered_coins if coin in candidates]
         if not filtered_coins:
-            raise ValueError(f"Organillo scenario {scenario.label} has no usable coin identities")
+            raise SimulationConfigError("Organillo eligibility leaves no usable coin identities.", context=scenario.label)
         for exchange in scenario_exchanges:
             cfg["backtest"]["coins"][exchange] = list(filtered_coins)
 
@@ -2405,6 +2422,7 @@ async def run_backtest_suite_async(
     base_exchanges = require_config_value(config, "backtest.exchanges")
 
     scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+    validate_simulation_scenarios(config, scenarios)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
     needed_individual = _determine_needed_individual_exchanges(
@@ -2454,7 +2472,7 @@ async def run_backtest_suite_async(
     prepared_universes = _prepare_scenario_universes(
         base_config, scenarios, master_coins=master_coins, master_ignored=master_ignored,
         available_exchanges=exchanges_list, base_coin_sources=suite_coin_sources,
-        base_coins=base_coins, base_ignored=base_ignored,
+        base_coins=base_coins, base_ignored=base_ignored, require_runnable=True,
     )
     master_config = deepcopy(base_config)
     if isinstance(require_side_universe_sources(master_config, 'approved_coins'), dict):
