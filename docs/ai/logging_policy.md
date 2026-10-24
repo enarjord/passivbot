@@ -183,8 +183,18 @@ count, screened count, pending requests and elapsed time. Phase changes are imme
 unchanged summaries are at most once per minute. `completed/s` and `screened/s` divide the
 additional complete suite or screening candidates since the first summary by elapsed run
 time; restored checkpoint counts are excluded. These observed rates include waiting and
-other orchestration time. Completed candidates and Pareto members
+other orchestration time. These are completed attempts, including prefilter/cache/alias work,
+and are not unique vectors or physical GPU rows. Completed candidates and Pareto members
 remain independently durable; log cadence never controls persistence.
+
+One compact cohort summary at each evaluation-stage exit distinguishes completed attempts and
+fresh collector-validated GPU request rows per stage wall second, with phase and complete/failed/
+interrupted status. Screening attempts remain explicitly partial. DEBUG detail supplies bounded
+transport counts, disjoint main-thread wall/CPU spans, serial search boundaries, overlapping owner
+timing, and fixed-size completed tuner context. It retains no candidate history and adds no device
+queries or synchronization. Stage wall excludes startup and ask/tell; owner replay time includes
+host reduction/validation and overlaps CPU wall, so neither is a kernel-only or whole-command rate.
+Disabled diagnostics and optional snapshot/console failures do not change authoritative outcomes.
 
 Temporal replay start/update/completion records carry a replay ID, historical-bar progress,
 actual command count and a scoped `eta_batch`. Bar counts are batch-wide time steps, not

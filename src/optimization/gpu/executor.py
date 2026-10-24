@@ -91,6 +91,7 @@ class GpuBacktestService:
         self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float | None = 0.005,
         worker_context: Callable[[], ContextManager] | None = None,
         batch_policy=None,
+        diagnostics: bool = False,
     ):
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
@@ -120,6 +121,39 @@ class GpuBacktestService:
         self._worker_context = worker_context
         self._batch_policy = batch_policy
         self._preparing: frozenset[str] | None = None
+        # Optional host timing only. Fixed-policy users retain their untimed
+        # default; no device clock, synchronization or replay is added.
+        self._diagnostics = (dict(batches=0, rows=0, execution_seconds=0.0,
+                                  accumulation_seconds=0.0, preparation_seconds=0.0,
+                                  last_count=0) if diagnostics else None)
+
+    def diagnostics_snapshot(self):
+        """Copy owner accounting; these spans overlap producer CPU time."""
+        with self._condition:
+            result = None if self._diagnostics is None else dict(self._diagnostics)
+            policy = self._batch_policy
+        snapshot = getattr(policy, "diagnostics_snapshot", None)
+        if result is not None and snapshot is not None:
+            result["tuner"] = snapshot()
+        return result
+
+    def _diagnostic_time(self, clock):
+        if self._diagnostics is None:
+            return None
+        try:
+            return clock()
+        except Exception:
+            with self._condition:
+                self._diagnostics = None
+            return None
+
+    def _diagnostic_duration(self, name, started, clock):
+        if started is None:
+            return
+        finished = self._diagnostic_time(clock)
+        if finished is not None:
+            with self._condition:
+                self._diagnostics[name] += finished - started
 
     def register_dataset(self, dataset_id: str, replay: BatchReplay) -> None:
         """Take exclusive replay ownership until close; never replace a handle.
@@ -312,6 +346,7 @@ class GpuBacktestService:
                 batch = []
                 self._claim_batch(dataset_id, width, batch)
                 if batch:
+                    self._diagnostic_duration("accumulation_seconds", started, time.monotonic)
                     return batch
 
     @staticmethod
@@ -357,10 +392,13 @@ class GpuBacktestService:
                 if not batch:
                     return
                 if self._worker_context is not None and not context_entered:
+                    preparing = self._diagnostic_time(time.perf_counter)
                     resources.enter_context(self._worker_context())
                     context_entered = True
+                    self._diagnostic_duration("preparation_seconds", preparing, time.perf_counter)
                 dataset_id = batch[0].request.dataset_id
                 if dataset_id not in self._replays:
+                    preparing = self._diagnostic_time(time.perf_counter)
                     replay = resources.enter_context(self._factories[dataset_id]())
                     if not callable(getattr(replay, "evaluate", None)):
                         raise TypeError("dataset factory must yield a replay implementing evaluate(candidates)")
@@ -373,9 +411,10 @@ class GpuBacktestService:
                         if width < len(batch):
                             raise ValueError("prepared dispatch ceiling is below claimed work")
                         self._claim_batch(dataset_id, width, batch)
+                        self._diagnostic_duration("preparation_seconds", preparing, time.perf_counter)
                 replay = self._replays[dataset_id]
                 timed = self._batch_policy is not None or self._coalescing is not None
-                started = time.perf_counter() if timed else 0.0
+                started = time.perf_counter() if timed else self._diagnostic_time(time.perf_counter)
                 try:
                     rows = replay.evaluate([dict(item.request.parameters) for item in batch])
                 finally:
@@ -389,10 +428,19 @@ class GpuBacktestService:
                             self._coalescing.observe(dataset_id, len(batch), seconds)
                         backlog = sum(item.request.dataset_id == dataset_id for item in self._queue)
                         closing = self._closing
+                else:
+                    finished = self._diagnostic_time(time.perf_counter)
+                    seconds = None if finished is None else finished - started
                 if self._batch_policy is not None:
                     self._batch_policy.observe(
                         dataset_id, len(batch), seconds, backlog=backlog, closing=closing,
                     )
+                if self._diagnostics is not None:
+                    with self._condition:
+                        self._diagnostics["batches"] += 1
+                        self._diagnostics["rows"] += len(batch)
+                        self._diagnostics["execution_seconds"] += seconds
+                        self._diagnostics["last_count"] = len(batch)
                 for entry, result in zip(batch, results):
                     self._release(entry)
                     entry.future.set_result(result)

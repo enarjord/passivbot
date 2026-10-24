@@ -1,6 +1,7 @@
 from copy import deepcopy
 from contextlib import contextmanager
 import pickle
+import logging
 import time
 from types import SimpleNamespace
 from threading import Event
@@ -206,6 +207,38 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         assert len(FakeService.rows) == done and len(records) == 8
         base.config["optimize"]["iters"] = 12
         execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 12
+
+
+def test_cohort_diagnostics_exclude_restored_attempts_and_preserve_result_lineage(monkeypatch, tmp_path, caplog):
+    guard_cpu(monkeypatch)
+    caplog.set_level(logging.DEBUG)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        records = []
+        checkpoint = tmp_path / "checkpoint.pkl"
+        execute(base, SimpleNamespace(record=records.append), checkpoint)
+        summaries = [record.getMessage() for record in caplog.records
+                     if record.levelno == logging.INFO and record.getMessage().startswith("GPU cohort |")]
+        assert len(summaries) == 2
+        def facts(message):
+            return dict(token.split("=", 1) for token in message.split() if "=" in token)
+        assert sum(int(facts(message)["attempts"]) for message in summaries) == len(records) == 8
+        assert sum(int(facts(message)["gpu_rows"]) for message in summaries) == len(FakeService.rows)
+        assert all("status=complete" in message and "phase=generation" in message for message in summaries)
+        assert "operation=ask" in caplog.text and "operation=tell" in caplog.text
+        state = load_checkpoint(checkpoint, base.config)
+        assert not any("diagnostic" in key for key in state)
+        caplog.clear()
+        execute(base, SimpleNamespace(record=records.append), checkpoint, resume=True)
+        assert not any(record.getMessage().startswith("GPU cohort |") for record in caplog.records)
+        before_rows = len(FakeService.rows)
+        base.config["optimize"]["iters"] = 12
+        execute(base, SimpleNamespace(record=records.append), checkpoint, resume=True)
+        summaries = [record.getMessage() for record in caplog.records
+                     if record.levelno == logging.INFO and record.getMessage().startswith("GPU cohort |")]
+        assert len(summaries) == 1 and facts(summaries[0])["attempts"] == "4"
+        assert int(facts(summaries[0])["gpu_rows"]) == len(FakeService.rows) - before_rows
         assert len(records) == 12
 
 

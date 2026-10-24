@@ -244,3 +244,85 @@ def test_cuda_coalescing_is_independent_of_explicit_width_and_honors_delay(mode,
         assert service._executor.max_batch_delay == (
             None if automatic else 0.005 if delay is None else delay
         )
+
+
+@pytest.mark.parametrize("trial_seconds,decision,retained_width,elapsed,replay_seconds", [
+    (1, "accepted", 8, 91, 21), (5, "rollback", 4, 119, 49),
+])
+def test_diagnostics_expose_supply_time_and_actual_rows_without_changing_decisions(
+    monkeypatch, trial_seconds, decision, retained_width, elapsed, replay_seconds,
+):
+    from optimization.gpu import execution_tuning as module
+
+    tick = [0.0]
+    monkeypatch.setattr(module.time, "perf_counter", lambda: tick[0])
+    queries = [0, 0]
+    def headroom(index):
+        queries[index] += 1
+        return True
+    plain = prepared_policy(initial=4, headroom=lambda: headroom(0))
+    observed = prepared_policy(initial=4, headroom=lambda: headroom(1), diagnostics=True)
+    for policy in (plain, observed):
+        policy.width("a", 16)
+    for count, seconds in [(4, 2)] * 7 + [(8, trial_seconds)] * 7:
+        tick[0] += seconds + 5  # CPU supply gaps are absent from replay seconds.
+        for policy in (plain, observed):
+            policy.observe("a", count, seconds, backlog=64, closing=False)
+        left, right = plain.controllers["a"], observed.controllers["a"]
+        assert (left.width, left.baseline, left.cooldown, left.seconds, left.seen, list(left.samples)) == (
+            right.width, right.baseline, right.cooldown, right.seconds, right.seen, list(right.samples))
+    assert queries == [1, 1]
+    assert plain.diagnostics_snapshot() is None
+    snapshot = observed.diagnostics_snapshot()
+    assert snapshot["observations"] == 14 and snapshot["rows"] == 84
+    assert snapshot["replay_seconds"] == replay_seconds and snapshot["cold_observations"] == 2
+    assert snapshot["completed_windows"] == 2
+    assert snapshot["first_trial"]["kind"] == "trial_selected"
+    assert snapshot["first_trial"]["elapsed_seconds"] == 49
+    assert snapshot["first_trial"]["rows"] == 28
+    assert snapshot["last_decision"]["kind"] == decision
+    assert snapshot["last_decision"]["elapsed_seconds"] == elapsed
+    assert snapshot["last_decision"]["rows"] == 84
+    assert snapshot["last_decision"]["window_rows_per_second"] == 8 / trial_seconds
+    snapshot["latest"]["width"] = -1
+    snapshot["last_decision"]["width"] = -1
+    assert observed.diagnostics_snapshot()["latest"]["width"] == retained_width
+    assert observed.diagnostics_snapshot()["last_decision"]["width"] == retained_width
+
+
+def test_optional_diagnostic_failure_does_not_replace_policy_or_future_failure(monkeypatch):
+    policy = prepared_policy(initial=4, diagnostics=True)
+    policy.width("a", 16)
+    def unavailable(*_args, **_kwargs):
+        raise OSError("observer unavailable")
+    monkeypatch.setattr(policy, "_observe_diagnostics", unavailable)
+    evidence(policy)
+    assert policy.diagnostics_snapshot() is None
+    assert policy.width("a", 16) == 8
+
+
+def test_disabled_tuner_diagnostics_take_no_extra_clocks(monkeypatch):
+    from optimization.gpu import execution_tuning as module
+
+    def forbidden():
+        pytest.fail("disabled diagnostic clocks must not run")
+    monkeypatch.setattr(module.time, "perf_counter", forbidden)
+    policy = prepared_policy(initial=4)
+    evidence(policy)
+    assert policy.width("a", 16) == 8
+    assert policy.diagnostics_snapshot() is None
+
+
+def test_diagnostics_count_completed_rows_when_capacity_change_discards_tuner_evidence():
+    policy = prepared_policy(initial=4, diagnostics=True)
+    policy.width("a", 16)
+    policy.constrain("a", 2)  # A replay may learn a new limit before observation.
+    policy.observe("a", 4, 2, backlog=0, closing=False)
+    snapshot = policy.diagnostics_snapshot()
+    assert snapshot["rows"] == 4 and snapshot["observations"] == 1
+    assert snapshot["untrained_observations"] == 1
+    assert snapshot["cold_observations"] == snapshot["completed_windows"] == 0
+    assert not snapshot["latest"]["evidence_available"]
+    assert snapshot["latest"]["ceiling"] == 2
+    assert policy.width("a", 16) == 2
+    assert not policy.controllers["a"].seen
