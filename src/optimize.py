@@ -63,6 +63,7 @@ from backtest import (
     execute_backtest,
     get_backtest_execution_settings,
 )
+from passivbot_exceptions import SimulationConfigError
 import asyncio
 import multiprocessing
 import random
@@ -3739,7 +3740,7 @@ async def main():
         epilog=(
             "Examples:\n"
             "  passivbot optimize configs/examples/default_trailing_martingale_long.json -s XMR -sd 2025 -c 4 --suite n\n"
-            "  passivbot optimize -e bybit -s BTC,ETH -i 10000 -ps 200\n"
+            "  passivbot optimize --bot.long.enabled y -e bybit -s BTC,ETH -i 10000 -ps 200\n"
             "\n"
             "Use --help-all to show every config override flag, including optimize bounds."
         ),
@@ -4014,6 +4015,10 @@ async def main():
     ):
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     validate_optimizer_effective_configs(config)
+    from simulation_validation import validate_simulation_config
+    from optimization.warmup import validate_optimizer_simulation_config
+
+    validate_optimizer_simulation_config(config, suite_cfg=suite_cfg)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     # Freeze routing facts only after required metadata is available, including
     # cached-data runs. Resume must not depend on a previously warmed alias map.
@@ -4031,11 +4036,14 @@ async def main():
         from organillo import freeze_config
         freeze_config(config)
     data_config = build_optimizer_data_config(config)
+    if not suite_cfg.get("enabled"):
+        validate_simulation_config(data_config, resolved=True)
     allow_internal_nan_gaps = (
         str(config.get("optimize", {}).get("backend", "")).strip().lower() == "gpu"
     )
     interrupted = False
     failed = False
+    configuration_error = None
     starting_snapshot = None
     pool = None
     manager = None
@@ -4356,6 +4364,9 @@ async def main():
         pool = getattr(exc, "pool", pool)
         pool_terminated = bool(getattr(exc, "pool_terminated", pool_terminated))
         pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
+    except SimulationConfigError as exc:
+        failed = True
+        configuration_error = exc
     except Exception as e:
         failed = True
         logging.error(f"An error occurred: {e}")
@@ -4401,11 +4412,18 @@ async def main():
                 logging.exception("Failed to release shared memory")
 
         logging.info("Shutdown complete.")
+        if configuration_error is not None:
+            raise configuration_error
         sys.exit(_optimizer_exit_code(interrupted=interrupted, failed=failed))
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except SimulationConfigError as exc:
+        from simulation_validation import simulation_config_error_message
+
+        print(simulation_config_error_message(exc, get_cli_prog("optimize")), file=sys.stderr)
+        sys.exit(2)
     except KeyboardInterrupt:
         sys.exit(130)

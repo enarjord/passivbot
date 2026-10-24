@@ -37,6 +37,13 @@ empty side objects stay disabled. Reject `bot.global.enabled` with an actionable
 ignore or migrate it. Other nested feature switches remain inheritable. Both-disabled policy is
 valid for held-position management. Activation is fixed policy, separate from capacity, selection
 and operational modes.
+Simulation entry points require a runnable effective universe: at least one explicitly enabled
+side with positive exposure/position capacity and approved coins remaining after resolution.
+Apply CLI, fixed optimizer policy, reachable optimizer capacity, and scenario overrides before
+checking their respective execution views. Reject known empty runs before candle acquisition with
+an actionable configuration error and a nonzero exit; this does not invalidate both-disabled live
+position management or change schema defaults.
+
 The native `side_activation` packet requires exactly long/short booleans. Disabled sides cannot
 generate or fill initial entries or DCA, including forced-normal selection and one-way arbitration.
 Held closes, reducers, trailing state, fills and HSL continue under their existing inputs, sizing

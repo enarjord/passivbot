@@ -92,6 +92,9 @@ async def prepare_suite_contexts(
     validate_forager_weight_search(config, suite_config=suite_cfg)
     base_exchanges = require_config_value(config, "backtest.exchanges")
     scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+    from suite_runner import validate_simulation_scenarios
+
+    validate_simulation_scenarios(config, scenarios)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
     needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
@@ -164,7 +167,7 @@ async def prepare_suite_contexts(
     prepared_universes = _prepare_scenario_universes(
         base_config, scenarios, master_coins=master_coins_list, master_ignored=master_ignored_list,
         available_exchanges=exchanges_list, base_coin_sources=suite_coin_sources,
-        base_coins=base_coins_list, base_ignored=base_ignored_list,
+        base_coins=base_coins_list, base_ignored=base_ignored_list, require_runnable=True,
     )
     master_config = deepcopy(base_config)
     from config.universe import materialize_side_universe_sources

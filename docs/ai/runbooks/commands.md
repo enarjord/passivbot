@@ -52,14 +52,14 @@ sandbox, or paper-trading sessions as this offline fake-live tier.
 
 ```bash
 passivbot backtest path/to/config.json
-passivbot backtest --suite
+passivbot backtest configs/examples/btc_long.json --suite
 ```
 
 ## Optimize
 
 ```bash
 passivbot optimize path/to/config.json
-passivbot optimize --suite
+passivbot optimize configs/examples/default_trailing_martingale_long.json --suite
 passivbot optimize path/to/config.json -t path/to/anchor_configs -ft long.forager,long.risk
 ```
 

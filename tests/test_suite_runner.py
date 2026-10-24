@@ -1179,6 +1179,7 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
     import suite_runner as suite
 
     config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["exchanges"] = ["binance"]
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
