@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix backtest and optimizer suite preparation when historical data lacks coins
+  requested by a scenario. Preserve declared approval and ignore sources while
+  restricting execution to available dataset columns.
+
 - Reject backtests and optimizer runs with no active trading universe before candle preparation,
   with actionable configuration guidance instead of a traceback. Validate effective suite scenarios
   after their overrides; schema defaults and live position management remain unchanged.
