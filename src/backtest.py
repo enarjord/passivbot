@@ -44,6 +44,7 @@ import numpy as np
 import math
 import pandas as pd
 import json
+from passivbot_exceptions import SimulationConfigError
 import asyncio
 import numbers
 import time
@@ -69,7 +70,10 @@ from config.access import (
     require_config_value,
     require_live_value,
 )
-from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
+from config.risk_memory import (
+    normalize_memory_ema_span_minutes,
+)
 from metrics_schema import attach_result_metrics, build_standalone_metrics
 from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_signal_mode
@@ -131,6 +135,7 @@ from hlcvs_manifest import (
     manifest_has_required_schema,
     save_numpy_artifact_with_hash,
     verify_hlcvs_manifest,
+    verify_hlcvs_manifest_metadata,
     write_hlcvs_manifest,
 )
 from hlcvs_override import load_hlcvs_data_override
@@ -144,6 +149,8 @@ from backtest_universe import (
     effective_backtest_approved_coins_by_side,
     effective_backtest_data_coins,
     normalize_backtest_coin,
+    backtest_side_enabled,
+    reconcile_backtest_coin_identifiers,
 )
 from pathlib import Path
 import re
@@ -259,21 +266,25 @@ def _looks_like_bool_token(value: str) -> bool:
 
 
 def _resolve_backtest_hsl(config, coin_policies):
-    """Transport canonical policies, preserving explicit disabled null choices."""
+    """Transport canonical v9 HSL policies without retired restart choices."""
+    from config.hsl import native_hsl_policy
+
     mode = _resolve_backtest_hsl_signal_mode(config)
     return {
         "engine": "hsl",
         "mode": mode,
-        "sides": [deepcopy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
-        "portfolio": deepcopy(config["bot"]["hsl"]) if mode == "unified" else None,
-        "coins": coin_policies if mode == "coin" else {},
+        "sides": [native_hsl_policy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
+        "portfolio": native_hsl_policy({key: deepcopy(value) for key, value in config["bot"]["portfolio"]["hsl"].items()
+                      if key != "scope"}) if mode == "portfolio" else None,
+        "coins": {coin: [native_hsl_policy(policy) for policy in policies]
+                  for coin, policies in coin_policies.items()} if mode == "coin" else {},
     }
 
 
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
-    return normalize_hsl_signal_mode(
-        require_config_value(config, "live.hsl_signal_mode")
-    )
+    from config.hsl import native_hsl_mode
+
+    return native_hsl_mode(require_config_value(config, "bot.portfolio.hsl.scope"))
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -621,6 +632,7 @@ def _build_hlcvs_bundle(
     bundle_meta_base: dict,
     *,
     coin_indices: list[int] | None = None,
+    selection=None,
 ) -> pbr.HlcvsBundle:
     active_coin_indices = None
     if coin_indices is not None:
@@ -689,6 +701,13 @@ def _build_hlcvs_bundle(
             os.getpid(),
             f"{rss_after:.1f}" if rss_after is not None else "na",
         )
+    if selection is not None:
+        values = selection.values
+        if active_coin_indices is not None:
+            values = np.zeros((len(values), hlcvs_arr.shape[1]), dtype=np.uint8)
+            values[:, active_coin_indices] = selection.values
+        return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta,
+                               values, selection.rows)
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 
@@ -934,8 +953,8 @@ class BacktestExecutionSettings:
     market_order_near_touch_threshold: float
     market_order_slippage_pct: float
     limit_order_fill_buffer_pct: float
-    pnls_max_lookback_days: str | float
-    pnls_max_lookback_days_backtest_value: float
+    unstuck_memory_ema_span_minutes: float
+    loss_gate_memory_ema_span_minutes: float
 
 
 @dataclass
@@ -965,6 +984,7 @@ def build_backtest_payload(
     skip_btc_analysis: bool = False,
     runtime_config: dict | None = None,
     execution_settings: BacktestExecutionSettings | None = None,
+    selection=None,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
@@ -972,10 +992,10 @@ def build_backtest_payload(
 
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
     if runtime_config is not None:
         require_runtime_support(
-            runtime_config, supported_modes=("coin", "pside", "unified")
+            runtime_config, supported_modes=("coin", "position_side", "portfolio")
         )
     if runtime_config is None:
         runtime_config = compile_runtime_config(
@@ -1118,6 +1138,26 @@ def build_backtest_payload(
     )
     # RMS readiness belongs to each consuming Rust side/order branch; it must
     # not delay other sides or coins through shared activation metadata.
+    partial_initial_universe = False
+    if selection is not None and config["backtest"].get("organillo_csv") is None:
+        raise ValueError("Organillo prepared eligibility requires backtest.organillo_csv")
+    if config["backtest"].get("organillo_csv") is not None:
+        if selection is None:
+            from organillo import prepare_selection
+            selection = prepare_selection(config, coins_order, timestamps)
+        from organillo import validate_buffers
+        validate_buffers(selection.values, selection.rows, len(timestamps), len(coins_order))
+        expected_hash = config["backtest"].get("organillo_sha256")
+        if expected_hash is not None and selection.sha256 != expected_hash:
+            raise ValueError("Organillo prepared eligibility SHA-256 differs from the configured input; prepare again")
+        first_operational = min(requested_start_idx, len(timestamps) - 1)
+        initial_members = selection.values[selection.rows[first_operational]]
+        # Keep the established all-ones path exact. Only a partial historical
+        # universe needs its future-only warmup contributions removed.
+        partial_initial_universe = not np.all(initial_members)
+        if partial_initial_universe:
+            global_warmup_minutes = max((int(warmup_map.get(coin, default_warm))
+                for i, coin in enumerate(coins_order) if initial_members[i]), default=1)
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []
@@ -1155,11 +1195,14 @@ def build_backtest_payload(
         # Only producer-tagged history budgets may be replaced with a local
         # activation budget. Optimizer activation stamps and untyped external
         # metadata remain authoritative, independent of candidate RMS settings.
-        activation_warm = max(int(warmup_map.get(coin, default_warm)), global_warmup_minutes)
+        coin_global_warm = global_warmup_minutes
+        if partial_initial_universe:
+            coin_global_warm = int(warmup_map.get(coin, default_warm))
+        activation_warm = max(int(warmup_map.get(coin, default_warm)), coin_global_warm)
         metadata_warm = int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
         if coin_meta.get("warmup_minutes_source") == "history":
             metadata_warm = activation_warm
-        warm = max(metadata_warm, int(global_warmup_minutes))
+        warm = max(metadata_warm, int(coin_global_warm))
         warmup_minutes.append(warm)
         # trade_start_idx is in candle units, adjust warm from minutes to candle periods
         warm_bars = (
@@ -1229,6 +1272,7 @@ def build_backtest_payload(
         trade_start_indices,
         bundle_meta_base,
         coin_indices=coin_indices,
+        selection=selection,
     )
 
     if coin_indices is not None:
@@ -1305,7 +1349,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             final_equity_usd,
             float(
                 get_optional_config_value(
-                    config, "backtest.liquidation_threshold", 0.05
+                    config, "backtest.equity_floor_ratio", 0.05
                 )
                 or 0.0
             ),
@@ -1397,7 +1441,12 @@ def subset_backtest_payload(
         coin_entry["index"] = new_idx
         new_meta["coins"].append(coin_entry)
 
-    new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta)
+    if getattr(payload.bundle, "eligibility", None) is not None:
+        values = np.ascontiguousarray(np.asarray(payload.bundle.eligibility)[:, source_columns])
+        new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta,
+                                   values, payload.bundle.eligibility_rows)
+    else:
+        new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta)
 
     def _select(seq):
         return [seq[pos] for pos in selected_positions]
@@ -1680,7 +1729,7 @@ def check_keys(dict0, dict1):
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     data_coins = effective_backtest_data_coins(config)
-    minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
+    minimum_coin_age = {side: minimum_coin_age_days(config, side) for side in POSITION_SIDES}
     coin_sources = config.get("backtest", {}).get("coin_sources") or {}
     coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
     market_settings_sources = (
@@ -1719,6 +1768,7 @@ def get_cache_hash(config, exchange):
         "start_date": require_config_value(config, "backtest.start_date"),
         "exchange": exchanges_cfg if exchange == "combined" else exchange,
         "minimum_coin_age_days": minimum_coin_age,
+        "age_admission_contract": 1,
         "gap_tolerance_ohlcvs_minutes": require_config_value(
             config, "backtest.gap_tolerance_ohlcvs_minutes"
         ),
@@ -1840,7 +1890,96 @@ def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamp
     return HLCVS_CACHE_ROOT / dir_name
 
 
-def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
+def _automatic_cache_unresolved_inception_coins(config, coins, mss, *, inception_fact_coins=None):
+    """Retry unknown facts only for enabled positive-age prepared memberships.
+
+    Optimizer acquisition supplies its reachable-side sizing view, so sides that
+    candidates can activate are included without querying permanently disabled
+    sides. Suite acquisition supplies the exact assigned-context coin union.
+    This transient requirement changes neither age policy nor cache identity.
+    Explicit dataset overrides are immutable inputs and do not use this retry gate.
+    """
+    exchanges = require_config_value(config, "backtest.exchanges")
+    # A combined cache can contain different venues. A qualified permission must
+    # resolve against each column's factual venue, not any configured exchange.
+    venues = {coin: mss[coin]["exchange"] for coin in coins if mss[coin].get("exchange")}
+    def reconcile(identifiers):
+        return reconcile_backtest_coin_identifiers(
+            identifiers, set(coins), exchanges, coin_exchanges=venues,
+        )
+    if inception_fact_coins is None:
+        from config.universe import require_side_universe_sources
+        required = set()
+        for side in POSITION_SIDES:
+            if minimum_coin_age_days(config, side) <= 0 or not backtest_side_enabled(config, side):
+                continue
+            approved = require_side_universe_sources(config, "approved_coins")[side]
+            ignored = require_side_universe_sources(config, "ignored_coins")[side]
+            if not isinstance(approved, list) or not isinstance(ignored, list):
+                raise TypeError("inception acquisition requires prepared side coin memberships")
+            allowed = reconcile(approved)
+            excluded = reconcile(ignored)
+            required.update(set(allowed) - set(excluded))
+    else:
+        if not isinstance(inception_fact_coins, frozenset) or any(not isinstance(c, str) for c in inception_fact_coins):
+            raise TypeError("inception_fact_coins must be a frozenset of coin identifiers or None")
+        required = set(reconcile(inception_fact_coins))
+    return [coin for coin in coins if coin in required
+            if inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) is None]
+
+
+def _inception_market_identity_matches(previous, current):
+    return bool(current.get("exchange")) and all(
+        previous.get(key) == current.get(key)
+        for key in ("exchange", "symbol", "ohlcv_source")
+    )
+
+
+def _preserve_cached_inception_facts(config, exchange, mss):
+    """Carry matching, verified facts through independent candle-cache rebuilds.
+
+    A transient lookup cannot erase a known fact. New positive facts win; only
+    unknown values on the same coin, venue and source identity may be repaired.
+    Read JSON independently of candle warmup/array validity and never mutate the
+    acquisition result or a caller-owned metadata dictionary.
+    """
+    unresolved = [coin for coin, settings in mss.items() if not coin.startswith("__")
+                  and inception_timestamp_ms(settings.get("inception_timestamp_ms")) is None]
+    if not unresolved:
+        return mss
+    cache_hash = get_cache_hash(config, exchange)
+    cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
+    if cache_dir is None:
+        return mss
+    try:
+        cached = verify_hlcvs_manifest_metadata(
+            cache_dir, expected_cache_hash=cache_hash, expected_exchange=exchange,
+        )
+        old_mss = cached["market_specific_settings"]
+        old_coins = set(cached["coins"])
+        retained = {}
+        for coin in unresolved:
+            old = old_mss.get(coin, {})
+            new = mss[coin]
+            if coin not in old_coins or not _inception_market_identity_matches(old, new):
+                continue
+            fact = inception_timestamp_ms(old.get("inception_timestamp_ms"))
+            if fact is not None:
+                retained[coin] = fact
+    except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
+        logging.info("[hlcvs] cannot retain unverified inception facts from %s: %s", cache_dir, exc)
+        return mss
+    if not retained:
+        return mss
+    preserved = deepcopy(mss)
+    for coin, fact in retained.items():
+        preserved[coin]["inception_timestamp_ms"] = fact
+    return preserved
+
+
+def load_coins_hlcvs_from_cache(
+    config, exchange, warmup_minutes=0, *, inception_fact_coins=None,
+):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     if cache_dir and os.path.exists(cache_dir):
@@ -1857,11 +1996,9 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
                 cache_dir,
             )
             return None
-        else:
-            # Collect the arrays the verifier already decompressed so we don't
-            # pay a second multi-GB decompression below.
-            verified_arrays: dict = {}
-            verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
+        metadata = verify_hlcvs_manifest_metadata(
+            cache_dir, manifest, expected_cache_hash=cache_hash, expected_exchange=exchange,
+        )
         # Check warmup sufficiency: cached data must cover at least the needed warmup
         meta_path = cache_dir / "cache_meta.json"
         if meta_path.exists():
@@ -1878,8 +2015,18 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
                 f"needed={warmup_minutes} min. Will re-fetch."
             )
             return None
-        coins = json.load(open(cache_dir / "coins.json"))
-        mss = json.load(open(cache_dir / "market_specific_settings.json"))
+        coins = metadata["coins"]
+        mss = metadata["market_specific_settings"]
+        unresolved = _automatic_cache_unresolved_inception_coins(
+            config, coins, mss, inception_fact_coins=inception_fact_coins,
+        )
+        if unresolved:
+            logging.info("[hlcvs] cache has unresolved inception for %s; rebuilding", unresolved)
+            return None
+        # Only reusable caches materialize arrays. Full integrity validation is
+        # still required, and its arrays are reused instead of decompressed twice.
+        verified_arrays: dict = {}
+        verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
         # verify_hlcvs_manifest hard-fails unless all three array artifacts
         # exist and match their recorded hashes, so the verified arrays are
         # authoritative here — no re-read needed.
@@ -1904,7 +2051,10 @@ def save_coins_hlcvs_to_cache(
     timestamps=None,
     warmup_minutes=0,
     force_overwrite=False,
+    *,
+    inception_fact_coins=None,
 ):
+    mss = _preserve_cached_inception_facts(config, exchange, mss)
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _get_hlcvs_cache_dir_for_save(
         config,
@@ -1925,8 +2075,31 @@ def save_coins_hlcvs_to_cache(
             if existing_warmup >= warmup_minutes and manifest_has_required_schema(
                 existing_manifest
             ):
-                verify_hlcvs_manifest(cache_dir, existing_manifest)
-                return cache_dir
+                metadata = verify_hlcvs_manifest_metadata(
+                    cache_dir, existing_manifest, expected_cache_hash=cache_hash,
+                    expected_exchange=exchange,
+                )
+                existing_coins = metadata["coins"]
+                existing_mss = metadata["market_specific_settings"]
+                unresolved = _automatic_cache_unresolved_inception_coins(
+                    config, existing_coins, existing_mss,
+                    inception_fact_coins=inception_fact_coins,
+                )
+                corrected = []
+                for coin in existing_coins:
+                    old, new = existing_mss[coin], mss.get(coin)
+                    if new is None or not _inception_market_identity_matches(old, new):
+                        continue
+                    previous = inception_timestamp_ms(old.get("inception_timestamp_ms"))
+                    incoming = inception_timestamp_ms(new.get("inception_timestamp_ms"))
+                    if previous is not None and incoming is not None and previous != incoming:
+                        corrected.append(coin)
+                if not unresolved and not corrected:
+                    verify_hlcvs_manifest(cache_dir, existing_manifest)
+                    return cache_dir
+                logging.info(
+                    "[hlcvs] refreshing cache inception: unresolved=%s corrected=%s", unresolved, corrected,
+                )
         except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
             logging.warning(
                 "[hlcvs] existing cache %s failed validation; overwriting: %s",
@@ -2235,7 +2408,11 @@ async def prepare_hlcvs_mss(
     *,
     force_refetch_gaps: bool = False,
     allow_internal_nan_gaps: bool = False,
+    inception_fact_coins: frozenset[str] | None = None,
 ):
+    if config["backtest"].get("organillo_csv") is not None:
+        from organillo import freeze_config
+        freeze_config(config)
     if is_offline() and force_refetch_gaps:
         raise ValueError("backtest.offline cannot be combined with force_refetch_gaps")
     base_dir = require_config_value(config, "backtest.base_dir")
@@ -2307,12 +2484,18 @@ async def prepare_hlcvs_mss(
             btc_usd_prices,
             timestamps,
         )
+    cache_requirements = (
+        {} if inception_fact_coins is None
+        else {"inception_fact_coins": inception_fact_coins}
+    )
     try:
         sts = utc_ms()
         result = (
             None
             if force_refetch_gaps
-            else load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
+            else load_coins_hlcvs_from_cache(
+                config, exchange, backtest_warmup_minutes, **cache_requirements,
+            )
         )
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
@@ -2389,6 +2572,7 @@ async def prepare_hlcvs_mss(
             "for the requested range"
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
+    mss = _preserve_cached_inception_facts(config, exchange, mss)
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     _validate_hlcvs_valid_windows_from_mss(
         hlcvs,
@@ -2414,6 +2598,7 @@ async def prepare_hlcvs_mss(
             timestamps,
             warmup_minutes=backtest_warmup_minutes,
             force_overwrite=force_refetch_gaps or is_offline(),
+            **cache_requirements,
         )
     except Exception as e:
         release_materialized_payload(hlcvs)
@@ -2445,40 +2630,40 @@ def get_backtest_execution_settings(
     from config.validate import validate_limit_order_fill_buffer_pct
 
     limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
-        require_config_value(config, "backtest.limit_order_fill_buffer_pct")
+        require_config_value(config, "backtest.limit_order_fill_buffer_fraction")
     )
     market_order_slippage_pct = float(
-        get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005)
+        get_optional_config_value(config, "backtest.market_order_slippage_fraction", 0.0005)
         or 0.0
     )
     if market_order_slippage_pct < 0.0:
-        raise ValueError("backtest.market_order_slippage_pct must be >= 0.0")
-    market_orders_allowed_raw = get_optional_live_value(
-        config, "market_orders_allowed", False
-    )
+        raise ValueError("backtest.market_order_slippage_fraction must be >= 0.0")
+    market_orders_allowed_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_orders_allowed', False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
-        field_name="live.market_orders_allowed",
+        field_name='bot.portfolio.execution.market_orders_allowed',
     )
-    market_order_near_touch_threshold_raw = get_optional_live_value(
-        config, "market_order_near_touch_threshold", 0.001
-    )
+    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_order_near_touch_fraction', 0.001)
     market_order_near_touch_threshold = float(
         market_order_near_touch_threshold_raw or 0.0
     )
     if market_order_near_touch_threshold < 0.0:
-        raise ValueError("live.market_order_near_touch_threshold must be >= 0.0")
-    pnls_max_lookback = parse_pnls_max_lookback_days(
-        get_optional_live_value(config, "pnls_max_lookback_days", 30.0),
-        field_name="live.pnls_max_lookback_days",
+        raise ValueError("bot.portfolio.execution.market_order_near_touch_fraction must be >= 0.0")
+    unstuck_memory_span = normalize_memory_ema_span_minutes(
+        require_config_value(config, "bot.portfolio.unstuck.memory_ema_span_minutes"),
+        field="bot.portfolio.unstuck.memory_ema_span_minutes",
+    )
+    loss_gate_memory_span = normalize_memory_ema_span_minutes(
+        require_config_value(config, "bot.portfolio.loss_gate.memory_ema_span_minutes"),
+        field="bot.portfolio.loss_gate.memory_ema_span_minutes",
     )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
         limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
-        pnls_max_lookback_days=pnls_max_lookback.display_value,
-        pnls_max_lookback_days_backtest_value=pnls_max_lookback.to_backtest_days_value(),
+        unstuck_memory_ema_span_minutes=unstuck_memory_span,
+        loss_gate_memory_ema_span_minutes=loss_gate_memory_span,
     )
 
 
@@ -2489,24 +2674,28 @@ def log_backtest_execution_settings(
         return
     logging.info("[backtest] effective execution settings:")
     logging.info(
-        "[backtest]   market_orders_allowed = %s (live)",
+        "[backtest]   market_orders_allowed = %s (bot.portfolio.execution)",
         execution_settings.market_orders_allowed,
     )
     logging.info(
-        "[backtest]   market_order_near_touch_threshold = %s (live)",
+        "[backtest]   market_order_near_touch_fraction = %s (bot.portfolio.execution)",
         execution_settings.market_order_near_touch_threshold,
     )
     logging.info(
-        "[backtest]   market_order_slippage_pct = %s (backtest)",
+        "[backtest]   market_order_slippage_fraction = %s (backtest)",
         execution_settings.market_order_slippage_pct,
     )
     logging.info(
-        "[backtest]   limit_order_fill_buffer_pct = %s (backtest)",
+        "[backtest]   limit_order_fill_buffer_fraction = %s (backtest)",
         execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
-        "[backtest]   pnls_max_lookback_days = %s (live)",
-        execution_settings.pnls_max_lookback_days,
+        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.portfolio.unstuck)",
+        execution_settings.unstuck_memory_ema_span_minutes,
+    )
+    logging.info(
+        "[backtest]   loss_gate_memory_ema_span_minutes = %s (bot.portfolio.loss_gate)",
+        execution_settings.loss_gate_memory_ema_span_minutes,
     )
 
 
@@ -2561,7 +2750,15 @@ def prep_backtest_args(
     metrics_only: bool = False,
 ):
     from config.hsl import engine
+    from config.ew import validate_ew_candle_interval, validate_ew_half_life_days
+    from config.policy import effective_minimum_cost_filters
+    from config.universe import always_include_matches, approval_allows_coin, require_side_universe_sources
 
+    ew_half_life_days = validate_ew_half_life_days(
+        config.get("backtest", {}).get("ew_half_life_days")
+    )
+    if ew_half_life_days is not None:
+        validate_ew_candle_interval(config.get("backtest", {}).get("candle_interval_minutes", 1))
     engine(config)
 
     if not is_runtime_compiled:
@@ -2570,7 +2767,7 @@ def prep_backtest_args(
         execution_settings = get_backtest_execution_settings(
             config, is_runtime_compiled=True
         )
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     approved_by_side = {
         pside: set(side_coins)
@@ -2578,6 +2775,7 @@ def prep_backtest_args(
             config
         ).items()
     }
+    prepared_approvals = require_side_universe_sources(config, "approved_coins")
     candle_interval = int(
         config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
     )
@@ -2606,20 +2804,22 @@ def prep_backtest_args(
                 pside=pside,
                 override_side=override_side,
             )
-            coin_specific_bot_params[pside]["is_forced_active"] = (
-                coin_override.get("live", {}).get(f"forced_mode_{pside}", "")
-                == "normal"
+            coin_specific_bot_params[pside]["is_forced_active"] = coin_override.get(
+                "live", {}
+            ).get("modes", {}).get(pside, "") == "normal" or always_include_matches(
+                config,
+                pside,
+                coin,
+                exchange=mss.get(coin, {}).get("exchange") or exchange,
+                market_symbol=mss.get(coin, {}).get("symbol"),
             )
         coin_key = normalize_backtest_coin(coin)
-        coin_canonical = heuristic_symbol_to_coin(coin_key)
         for pside in POSITION_SIDES:
             approved_exact = approved_by_side[pside]
-            approved_by_alias = any(
-                not looks_like_exact_market_identifier(identifier)
-                and heuristic_symbol_to_coin(identifier) == coin_canonical
-                for identifier in approved_exact
-            )
-            if coin_key not in approved_exact and not approved_by_alias:
+            approved = approval_allows_coin(prepared_approvals[pside], coin_key,
+                exchange=mss.get(coin, {}).get("exchange") or exchange,
+                market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
+            if not approved:
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
             elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
@@ -2686,19 +2886,33 @@ def prep_backtest_args(
             }
             for coin in coins
         ]
+    from config.forager_hysteresis import forager_score_hysteresis, validate_forager_score_hysteresis
+    from config.activation import side_activation, validate_side_activation
+    activation = side_activation(config)
+    hysteresis = forager_score_hysteresis(config)
+    age_days = [minimum_coin_age_days(config, side) for side in POSITION_SIDES]
+    inception_facts = [inception_timestamp_ms(mss[coin].get("inception_timestamp_ms")) for coin in coins]
     if backtest_params is not None:
+        if validate_side_activation(backtest_params.get("side_activation")) != activation:
+            raise ValueError("cached side activation differs from the effective config")
+        if validate_forager_score_hysteresis(backtest_params.get("forager_score_hysteresis")) != hysteresis:
+            raise ValueError("cached Forager hysteresis differs from the effective config")
+        if backtest_params.get("minimum_coin_age_days") != age_days or backtest_params.get("inception_timestamps_ms") != inception_facts:
+            raise ValueError("cached age admission inputs differ from the effective config or market facts")
+        if backtest_params.get("ew_half_life_days") != ew_half_life_days:
+            raise ValueError("cached EW half-life differs from the effective config")
         supplied_hsl = backtest_params["equity_hard_stop_loss"]
         if supplied_hsl != _resolve_backtest_hsl(config, hsl_coin_policies):
             raise ValueError("cached HSL policies differ from the effective config")
     if backtest_params is None:
         hard_stop_cfg_long = _resolve_backtest_hsl(config, hsl_coin_policies)
         liquidation_threshold = float(
-            get_optional_config_value(config, "backtest.liquidation_threshold", 0.05)
+            get_optional_config_value(config, "backtest.equity_floor_ratio", 0.05)
             or 0.0
         )
         if not (0.0 <= liquidation_threshold < 1.0):
             raise ValueError(
-                "backtest.liquidation_threshold must satisfy 0.0 <= x < 1.0"
+                "backtest.equity_floor_ratio must satisfy 0.0 <= x < 1.0"
             )
         btc_collateral_cap = float(
             require_config_value(config, "backtest.btc_collateral_cap")
@@ -2725,30 +2939,30 @@ def prep_backtest_args(
             "trade_start_indices": [],
             "global_warmup_bars": 0,
             "metrics_only": bool(metrics_only),
+            "ew_half_life_days": ew_half_life_days,
             "hsl_detailed_report": require_config_value(
                 config, "backtest.hsl_detailed_report"
             ),
             "skip_btc_analysis": False,
-            "filter_by_min_effective_cost": bool(
-                require_config_value(config, "backtest.filter_by_min_effective_cost")
-            ),
+            "side_activation": activation,
+            "minimum_coin_age_days": age_days,
+            "inception_timestamps_ms": inception_facts,
+            "filter_by_min_effective_cost": effective_minimum_cost_filters(config),
             "dynamic_wel_by_tradability": bool(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
-            "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
+            "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
             "max_realized_loss_pct": float(
-                require_config_value(config, "live.max_realized_loss_pct")
+                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_ratio")
             ),
-            "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days_backtest_value,
+            "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
+            "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,
             "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
             "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,
             "market_orders_allowed": execution_settings.market_orders_allowed,
             "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
-            "forager_score_hysteresis_pct": float(
-                get_optional_live_value(config, "forager_score_hysteresis_pct", 0.02)
-                or 0.0
-            ),
+            "forager_score_hysteresis": hysteresis,
             "liquidation_threshold": liquidation_threshold,
         }
     if backtest_params["equity_hard_stop_loss"].get("engine") == "hsl":
@@ -2764,7 +2978,14 @@ def prep_backtest_args(
 def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     analysis_usd = dict(analysis_usd)
     analysis_btc = dict(analysis_btc)
-    keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
+    ew_metadata = {}
+    for analysis in (analysis_usd, analysis_btc):
+        metadata = analysis.pop("_ew_metadata", None)
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise ValueError("Rust EW metadata must be a mapping")
+            ew_metadata.update(metadata)
+    keys = ["adg", "mdg", "gain"]
     for pside in ["long", "short"]:
         twel = float(
             flatten_shared_bot_side(config.get("bot", {}).get(pside, {})).get(
@@ -2787,6 +3008,8 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
                 )
 
     result = {}
+    if ew_metadata:
+        result["ew_metadata"] = ew_metadata
 
     def _scalar_values_match(usd_val, btc_val) -> bool:
         if usd_val is None or btc_val is None:
@@ -3113,7 +3336,7 @@ async def main():
         epilog=(
             "Examples:\n"
             "  passivbot backtest configs/examples/default_trailing_martingale_long.json -s XMR -sd 2025 --suite n\n"
-            "  passivbot backtest -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
+            "  passivbot backtest --bot.long.enabled y -e bybit -s BTC,ETH -sd 2024-01 -ed 2024-06\n"
             "\n"
             "Use --help-all to show every config override flag."
         ),
@@ -3248,7 +3471,9 @@ async def main():
     cli_log_level = args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
-    source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
+    source_config, base_config_path, raw_snapshot = load_input_config(
+        args.config_path, allow_result_records=True,
+    )
     update_config_with_args(
         source_config, args, verbose=True, allowed_keys=allowed_config_keys
     )
@@ -3271,7 +3496,7 @@ async def main():
     )
     from config.hsl import require_runtime_support
 
-    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
+    require_runtime_support(config, supported_modes=("coin", "position_side", "portfolio"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1
@@ -3339,11 +3564,15 @@ async def main():
         )
         return
 
+    from simulation_validation import validate_simulation_config
+
+    validate_simulation_config(config)
     for ex in backtest_exchanges:
         await load_markets(ex, offline=config["backtest"].get("offline", False))
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
+    validate_simulation_config(config, resolved=True)
     config["disable_plotting"] = (
         args.disable_plotting if args.disable_plotting is not None else False
     )
@@ -3464,6 +3693,11 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except SimulationConfigError as exc:
+        from simulation_validation import simulation_config_error_message
+
+        print(simulation_config_error_message(exc, get_cli_prog("backtest")), file=sys.stderr)
+        sys.exit(2)
     except ValueError as exc:
         logging.error("Backtest failed: %s", exc, exc_info=True)
         sys.exit(1)

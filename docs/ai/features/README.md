@@ -4,6 +4,7 @@ Open only the contract for the subsystem being changed.
 
 | Feature | Contract |
 |---|---|
+| Historical coin eligibility in backtests and native optimization | `organillo.md` |
 | Exchange integrations and broker attribution | `exchange_integrations.md` |
 | Stock perpetuals (HIP-3) | `stock_perps.md` |
 | Candles, cache continuity, and projections | `candlestick_manager.md` |

@@ -21,6 +21,7 @@ from optimization.warmup import (
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
     validate_optimizer_dataset_intervals,
+    refresh_optimizer_source_bindings,
 )
 from shared_arrays import attach_shared_array
 from suite_runner import (
@@ -38,6 +39,7 @@ from suite_runner import (
     _normalize_date_to_ts,
     _determine_needed_individual_exchanges,
     _coalesce_master_coins,
+    _prepare_scenario_universes,
 )
 from utils import (
     format_approved_ignored_coins,
@@ -47,6 +49,9 @@ from utils import (
     utc_ms,
 )
 
+
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 
 @dataclass
 class ScenarioEvalContext:
@@ -67,6 +72,9 @@ class ScenarioEvalContext:
     master_btc_specs: Optional[Dict[str, Any]] = None
     time_slice: Optional[Dict[str, tuple]] = None  # per-exchange (start_idx, end_idx)
     coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
+    # Actual source-column identities, including full masters on lazy paths.
+    candle_coins: Optional[Dict[str, tuple[str, ...]]] = None
+    selection_specs: Optional[Dict[str, tuple]] = None
 
 
 @simulation_data_scope
@@ -79,8 +87,14 @@ async def prepare_suite_contexts(
 ) -> tuple[List[ScenarioEvalContext], Dict[str, Any]]:
     """Prepare datasets and configs for every optimizer suite scenario."""
 
+    from optimization.config_adapter import validate_forager_weight_search
+
+    validate_forager_weight_search(config, suite_config=suite_cfg)
     base_exchanges = require_config_value(config, "backtest.exchanges")
     scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+    from suite_runner import validate_simulation_scenarios
+
+    validate_simulation_scenarios(config, scenarios)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
     needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
@@ -106,11 +120,12 @@ async def prepare_suite_contexts(
         verbose=False,
         prefer_backtest_coin_source_keys=True,
     )
+    refresh_optimizer_source_bindings(config)
     validate_suite_side_coin_lists(config, exchanges_list)
 
     base_start = require_config_value(config, "backtest.start_date")
     base_end = require_config_value(config, "backtest.end_date")
-    base_coins = require_live_value(config, "approved_coins")
+    base_coins = require_side_universe_sources(config, 'approved_coins')
     if isinstance(base_coins, dict):
         coins_union = set(base_coins.get("long", [])) | set(base_coins.get("short", []))
         base_coins_list = sorted(coins_union)
@@ -119,7 +134,7 @@ async def prepare_suite_contexts(
     else:
         base_coins_list = []
 
-    base_ignored = require_live_value(config, "ignored_coins")
+    base_ignored = require_side_universe_sources(config, 'ignored_coins')
     if isinstance(base_ignored, dict):
         ignored_union = set(base_ignored.get("long", [])) | set(base_ignored.get("short", []))
         base_ignored_list = sorted(ignored_union)
@@ -147,27 +162,33 @@ async def prepare_suite_contexts(
     )
 
     base_config = deepcopy(config)
-    if isinstance(base_config["live"]["approved_coins"], dict):
-        base_config["live"]["approved_coins"]["long"] = master_coins_list
-        base_config["live"]["approved_coins"]["short"] = master_coins_list
-    else:
-        base_config["live"]["approved_coins"] = master_coins_list
-    if isinstance(base_config["live"]["ignored_coins"], dict):
-        base_config["live"]["ignored_coins"]["long"] = master_ignored_list
-        base_config["live"]["ignored_coins"]["short"] = master_ignored_list
-    else:
-        base_config["live"]["ignored_coins"] = master_ignored_list
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
+    prepared_universes = _prepare_scenario_universes(
+        base_config, scenarios, master_coins=master_coins_list, master_ignored=master_ignored_list,
+        available_exchanges=exchanges_list, base_coin_sources=suite_coin_sources,
+        base_coins=base_coins_list, base_ignored=base_ignored_list, require_runnable=True,
+    )
+    master_config = deepcopy(base_config)
+    from config.universe import materialize_side_universe_sources
+    materialize_side_universe_sources(
+        master_config, "approved_coins", {side: list(master_coins_list) for side in ("long", "short")}
+    )
+    materialize_side_universe_sources(
+        master_config, "ignored_coins", {side: list(master_ignored_list) for side in ("long", "short")}
+    )
+    refresh_optimizer_source_bindings(master_config)
 
     candle_interval = int(base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     datasets = await prepare_master_datasets(
-        base_config,
+        master_config,
         exchanges_list,
         shared_array_manager=shared_array_manager,
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
         scenarios=scenarios,
+        prepared_universes=prepared_universes,
+        scenario_policy_config=base_config,
         allow_internal_nan_gaps=allow_internal_nan_gaps,
     )
     available_coins = set()
@@ -280,14 +301,54 @@ async def prepare_suite_contexts(
                 base_coin_sources=suite_coin_sources,
                 base_coins=base_coins_list,
                 base_ignored=base_ignored_list,
+                prepared_universe=prepared_universes[scenario.label],
             )
         except ValueError as exc:
             raise ValueError(f"Suite scenario {scenario.label} could not be prepared: {exc}") from exc
-        scenario_config = format_config(scenario_config_raw, verbose=False)
+        # apply_scenario carries producer-owned dataset membership/cache metadata.
+        # Rebuild these below from the selected datasets after public formatting.
+        for key in ("coins", "cache_dir"):
+            scenario_config_raw["backtest"].pop(key, None)
+        from config.universe import (
+            fixed_runtime_universe_view,
+            materialize_universe_snapshot,
+            raw_side_universe_sources,
+            runtime_universe_snapshot,
+            universe_source_view,
+        )
+        # Formatting is an authored-policy boundary. Give it the fixed execution
+        # view here so this prepared context never rereads mutable source files.
+        source_policy = universe_source_view(scenario_config_raw)
+        from config.bot_inheritance import (
+            reconciled_bot_policy, install_bot_policy, with_normalized_bot_values,
+        )
+        from config.inherited_bounds import optimize_bounds_source_view, prepare_bound_plan
+        bot_policy = reconciled_bot_policy(scenario_config_raw)
+        authored_bounds = optimize_bounds_source_view(scenario_config_raw)["optimize"]["bounds"]
+        membership = runtime_universe_snapshot(scenario_config_raw, available_coins=available_coins)
+        scenario_config = format_config(
+            fixed_runtime_universe_view(scenario_config_raw, snapshot=membership), verbose=False
+        )
         scenario_config = parse_overrides(scenario_config, verbose=False)
+        if bot_policy is not None:
+            install_bot_policy(scenario_config, with_normalized_bot_values(bot_policy, scenario_config["bot"]))
+        else:
+            scenario_config["bot"]["global"]["universe"]["approved_coins"] = deepcopy(
+                source_policy["bot"]["global"]["universe"]["approved_coins"]
+            )
+            for field in ("approved_coins", "ignored_coins"):
+                set_side_universe_sources(scenario_config, field, raw_side_universe_sources(source_policy, field))
+        scenario_config = materialize_universe_snapshot(scenario_config, membership)
+        if bot_policy is not None:
+            prepare_bound_plan(scenario_config, authored_bounds=authored_bounds)
         # Freeze the resolved patch in both candidate evaluation and resume evidence.
         # Reapplying raw file references would discard preparation's resolved values.
         scenario_overrides = deepcopy(scenario.overrides) if scenario.overrides else {}
+        if scenario_config["backtest"].get("organillo_csv") is not None:
+            # Freeze preparation's source rather than clearing its hash again
+            # when the scenario overrides are applied to each candidate.
+            scenario_overrides["backtest.organillo_csv"] = scenario_config["backtest"]["organillo_csv"]
+            scenario_overrides["backtest.organillo_sha256"] = scenario_config["backtest"]["organillo_sha256"]
         coin_keys = [
             key for key in scenario_overrides
             if key == "coin_overrides" or key.startswith("coin_overrides.")
@@ -394,6 +455,7 @@ async def prepare_suite_contexts(
                         master_btc_specs={dataset.exchange: dataset.btc_spec},
                         time_slice={dataset.exchange: (start_idx, end_idx)},
                         coin_slice_indices={dataset.exchange: coin_indices},
+                        candle_coins={dataset.exchange: tuple(dataset.coins)},
                     )
                 )
             else:
@@ -437,6 +499,7 @@ async def prepare_suite_contexts(
                         master_btc_specs=None,
                         time_slice=None,
                         coin_slice_indices=None,
+                        candle_coins={dataset.exchange: tuple(selected_coins)},
                     )
                 )
 
@@ -521,6 +584,8 @@ async def prepare_suite_contexts(
         master_btc_specs = {}
         coin_slice_indices = {}
         time_slice = {}
+        candle_coins = {ex: tuple(scenario_config["backtest"]["coins"][ex])
+                        for ex in exchanges_for_scenario}
         for exchange_key, dataset in datasets.items():
             if exchange_key == "combined":
                 continue
@@ -538,6 +603,7 @@ async def prepare_suite_contexts(
             master_hlcvs_specs[exchange_key] = dataset.hlcvs_spec
             master_btc_specs[exchange_key] = dataset.btc_spec
             coin_slice_indices[exchange_key] = coin_indices
+            candle_coins[exchange_key] = tuple(dataset.coins)
 
         contexts.append(
             ScenarioEvalContext(
@@ -557,6 +623,7 @@ async def prepare_suite_contexts(
                 master_btc_specs=master_btc_specs or None,
                 time_slice=time_slice or None,
                 coin_slice_indices=coin_slice_indices or None,
+                candle_coins=candle_coins,
             )
         )
 

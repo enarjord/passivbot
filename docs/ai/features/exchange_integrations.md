@@ -9,18 +9,8 @@ The supported production live connectors are Binance, Bybit, Bitget, Bitunix, OK
 KuCoin, Hyperliquid, WEEX, and Lighter. The fake connector is an offline deterministic test harness, not an
 exchange.
 
-Defx is deliberately unsupported. `src/exchanges/defx.py` and the `setup_bot()` routing branch are
-stale legacy placeholders retained only until a separate cleanup removes them. Their presence does
-not make Defx a supported connector and must not expand feature coverage, implementation matrices,
-regression requirements, or live-testing scope. The canonical live fill-event factory rejects Defx
-because required realized-PnL, unstuck, and HSL reconstruction support is absent. Do not use the Defx adapter
-for live operation or authenticated probes.
-
-Paradex is experimental and outside the supported production boundary. Its adapter and
-`setup_bot()` routing branch may be used as comparative implementation or rate-limit research, but
-required live fill/PnL, unstuck, and HSL reconstruction contracts are incomplete. Do not infer production
-support, implementation coverage, regression requirements, or live-testing scope from its runtime
-routing branch or comparative documentation.
+Defx and Paradex are retired. Runtime routing and offline connector inspection reject
+these identifiers before generic CCXT fallback; no adapter implementation remains.
 
 The generic `CCXTBot` fallback for arbitrary exchange names is also outside the supported
 production boundary. It preserves compatibility for unaudited CCXT venues, but a feature requiring
@@ -38,7 +28,7 @@ must never infer a suspension from exception text or a portable-looking numeric 
 connector may opt in only with an exact structured exchange code and a fixture-backed regression
 test.
 
-On a proven suspension, `live.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
+On a proven suspension, `live.recovery.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
 RAM-only cooldown (default `6.0` hours; `0` disables it; maximum `876600` hours). Values outside
 that bounded conversion domain are rejected during configuration and cannot mask the original
 exchange failure. A flat affected symbol is nontradable for
@@ -134,7 +124,7 @@ ignores it when the caller supplies a client order ID.
 
 ## Exchange Hedge Mode Versus Strategy Hedge Mode
 
-`live.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
+`bot.portfolio.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
 exchange account into one-way mode. Binance and Bitget connectors keep the exchange account in
 hedge mode. Their private order updates must therefore normalize `position_side` and close-only
 semantics from the exchange's actual mode and explicit `positionSide`/`posSide` fields even when
@@ -241,7 +231,7 @@ Handling:
 
 1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
 2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
-3. The connector keeps the exchange account in hedge mode even when `live.hedge_mode=false`
+3. The connector keeps the exchange account in hedge mode even when `bot.portfolio.hedge_mode=false`
    disables simultaneous strategy exposure. Normalize order updates against that actual exchange
    mode, not the strategy flag.
 4. Never infer a resting order's position side from the current position. Require explicit
@@ -296,7 +286,7 @@ Handling:
 
 1. Treat current same-mode success as success (`code=00000`, `data.posMode=hedge_mode`).
 2. Let unknown `set_position_mode` failures raise unless a verified Bitget no-op code is added with a targeted test.
-3. Normalize against the actual exchange account mode, not `live.hedge_mode`, which only controls
+3. Normalize against the actual exchange account mode, not `bot.portfolio.hedge_mode`, which only controls
    simultaneous strategy exposure.
 4. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
 

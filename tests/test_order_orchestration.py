@@ -26,9 +26,17 @@ class OrchestrationBot(Passivbot):
     """Minimal bot wrapper exposing high-level orchestration helpers for testing."""
 
     def __init__(self, market_prices: dict[str, float]):
-        from config.schema import get_template_config
+        from config.schema import get_expanded_config_prototype
 
-        self.config = get_template_config()
+        from config import prepare_config
+
+        source = get_expanded_config_prototype()
+        for side in ("long", "short"):
+            source["bot"][side]["enabled"] = True
+            source["bot"][side]["unstuck"]["enabled"] = False
+        # This wrapper stubs unstuck selection and tests ordinary reconciliation.
+        self.config = prepare_config(source, target="live", runtime="live", verbose=False)
+        self.coin_overrides = {}
         self.balance = 1_000.0
         from live.hsl_live import Wave
 
@@ -39,7 +47,7 @@ class OrchestrationBot(Passivbot):
         self.positions: dict[str, dict[str, dict[str, float]]] = {}
         self.PB_modes = {"long": {}, "short": {}}
         self._market_prices = market_prices
-        self._live_values = {"market_orders_allowed": False}
+        self._live_values = {"market_orders_allowed": False, "max_realized_loss_pct": 1.0}
         self.qty_steps = {}
         self.price_steps = {}
         self.min_qtys = {}
@@ -237,7 +245,7 @@ def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
     assert order["position_side"] == position_side
 
     ccxt_bot = CCXTBot.__new__(CCXTBot)
-    ccxt_bot.config = {"live": {"time_in_force": "post_only"}}
+    ccxt_bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
 
     params = ccxt_bot._build_order_params(order)
 
@@ -249,11 +257,10 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.user = "hyperliquid_pf1"
     bot.exchange = "hyperliquid"
-    live_values = {
+    bot.config = {"bot": {"portfolio": {"execution": {
         "market_orders_allowed": True,
-        "market_order_near_touch_threshold": 0.001,
-    }
-    bot.live_value = lambda key: live_values.get(key)
+        "market_order_near_touch_fraction": 0.001,
+    }}, "long": {"enabled": True}, "short": {"enabled": False}}}
     bot.bot_value = lambda pside, key: {
         ("long", "total_wallet_exposure_limit"): 1.5,
         ("short", "total_wallet_exposure_limit"): 0.0,
@@ -266,7 +273,7 @@ def test_startup_banner_warns_when_market_orders_allowed(caplog):
 
     assert any(
         "live market order execution is enabled" in rec.message
-        and "market_order_near_touch_threshold=0.001" in rec.message
+        and "market_order_near_touch_fraction=0.001" in rec.message
         for rec in caplog.records
     )
 

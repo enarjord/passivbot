@@ -11,6 +11,7 @@ Tests cover:
 - Inception timestamp tracking
 - Parallel fetching behavior
 """
+from config.universe import set_side_universe_sources
 
 import asyncio
 import json
@@ -36,6 +37,7 @@ import utils
 from hlcv_preparation import HLCVManager, prepare_hlcvs, prepare_hlcvs_combined
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from ohlcv_catalog import OhlcvCatalog
+from ohlcv_legacy_import import import_legacy_range_into_store
 from ohlcv_store import OhlcvStore, month_start_ts
 
 LEGACY_DTYPE = np.dtype(
@@ -217,6 +219,10 @@ def sample_config():
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "entry_volatility_ema_span_1h": 1.0,
+                "universe": {"minimum_coin_age_days": 0.0,
+                    "approved_coins": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                    "ignored_coins": [],
+                },
             },
             "short": {
                 "enabled": True,
@@ -228,18 +234,11 @@ def sample_config():
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "entry_volatility_ema_span_1h": 1.0,
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
+            "portfolio": {"warmup": {"max_minutes": None, "span_multiplier": 3.0}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {
-                "long": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
-                "short": ["BTC/USDT:USDT"],
-            },
-            "ignored_coins": {"long": [], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "max_warmup_minutes": 0.0,
-            "warmup_ratio": 3.0,
-        },
+        "live": {},
         "backtest": {
             "start_date": "2024-01-01",
             "end_date": "2024-01-02",
@@ -248,9 +247,7 @@ def sample_config():
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 10.0,
         },
-        "optimize": {
-            "bounds": {},
-        },
+        "optimize": {"bounds": {}},
     }
 
 
@@ -830,81 +827,31 @@ async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
 
 
 @pytest.mark.asyncio
-async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
-    sample_config, monkeypatch
+@pytest.mark.parametrize("inception", [None, 0.0, 1_704_067_200_000])
+async def test_prepare_hlcvs_internal_retains_pre_age_warmup_and_unknown_facts(
+    sample_config, monkeypatch, inception,
 ):
-    sample_config["live"]["minimum_coin_age_days"] = 1.0
-
+    start = 1_704_067_200_000
+    sample_config["bot"]["long"]["universe"]["minimum_coin_age_days"] = 60.0
+    sample_config["bot"]["short"]["universe"]["minimum_coin_age_days"] = 7.0
+    requested = []
     class FakeManager:
-        async def load_markets(self):
-            return None
-
-        def has_coin(self, coin):
-            return True
-
+        async def load_markets(self): return None
+        def has_coin(self, coin): return True
         async def get_first_timestamp(self, coin):
-            raise RuntimeError("simulated timestamp outage")
-
-        def update_date_range(self, start_ts):
-            raise AssertionError("get_ohlcvs should not run after first timestamp failure")
-
+            pytest.fail("admission does not request a second fabricated inception")
+        def update_date_range(self, timestamp): requested.append(timestamp)
         async def get_ohlcvs(self, coin):
-            raise AssertionError("get_ohlcvs should not run after first timestamp failure")
-
-        def get_market_specific_settings(self, coin):
-            return {"exchange": "binance", "symbol": f"{coin}/USDT:USDT"}
-
-    monkeypatch.setattr(
-        hp,
-        "get_first_timestamps_unified",
-        AsyncMock(return_value={"BAD": 1, "GOOD": 1}),
-    )
-
-    with pytest.raises(RuntimeError, match="get_first_timestamp failed for BAD"):
-        await hp.prepare_hlcvs_internal(
-            sample_config,
-            ["BAD", "GOOD"],
-            "binance",
-            0,
-            0,
-            60_000,
-            FakeManager(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_prepare_hlcvs_internal_rejects_zero_inception_when_age_filter_enabled(
-    sample_config, monkeypatch
-):
-    sample_config["live"]["minimum_coin_age_days"] = 30.0
-
-    class FakeManager:
-        async def load_markets(self):
-            return None
-
-        def has_coin(self, _coin):
-            return True
-
-        async def get_first_timestamp(self, _coin):
-            pytest.fail("zero unified inception must fail before exchange age lookup")
-
-        async def get_ohlcvs(self, _coin):
-            pytest.fail("coin with unknown inception must not fetch tradable candles")
-
-    monkeypatch.setattr(
-        hp, "get_first_timestamps_unified", AsyncMock(return_value={"NEW": 0.0})
-    )
-
-    with pytest.raises(ValueError, match="No valid coins found with data"):
-        await hp.prepare_hlcvs_internal(
-            sample_config,
-            ["NEW"],
-            "kucoinfutures",
-            0,
-            0,
-            60_000,
-            FakeManager(),
-        )
+            return pd.DataFrame([[start + k * 60_000, 101.0, 99.0, 100.0, 10.0] for k in range(3)], columns=["timestamp", "high", "low", "close", "volume"])
+        def get_market_specific_settings(self, coin): return {"exchange": "binance"}
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", AsyncMock(return_value={"NEW": inception}))
+    mss, timestamps, values = await hp.prepare_hlcvs_internal(
+        sample_config, ["NEW"], "binance", start, start + 60_000, start + 120_000, FakeManager())
+    assert requested == [start]
+    assert timestamps.tolist() == [start, start + 60_000, start + 120_000]
+    assert values["NEW"].shape == (3, 4)
+    assert mss["NEW"]["inception_timestamp_ms"] == (int(inception) if inception else None)
+    assert mss["NEW"]["first_valid_index"] == 0
 
 
 # ============================================================================
@@ -1670,7 +1617,7 @@ class TestPrepareHLCVSCombined:
         self, sample_config, monkeypatch
     ):
         sample_config["backtest"]["exchanges"] = ["binance", "bybit"]
-        sample_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["BTC"], "short": []})
 
         class FakeManager:
             def __init__(self, exchange, start_date, end_date, **kwargs):
@@ -1725,7 +1672,7 @@ class TestPrepareHLCVSCombined:
     ):
         monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance"]
-        sample_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["ETH"], "short": []})
 
         class FakeManager:
             def __init__(self, exchange, start_date, end_date, **kwargs):
@@ -1816,7 +1763,7 @@ class TestPrepareHLCVSCombined:
     ):
         monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance"]
-        sample_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["ETH"], "short": []})
         sample_config["backtest"]["start_date"] = "2026-04-01"
         sample_config["backtest"]["end_date"] = "2026-04-01"
         sample_config["backtest"]["cm_progress_log_interval_seconds"] = 0.0
@@ -1902,7 +1849,7 @@ class TestPrepareHLCVSCombined:
     ):
         monkeypatch.chdir(tmp_path)
         sample_config["backtest"]["exchanges"] = ["binance", "bybit"]
-        sample_config["live"]["approved_coins"] = {"long": ["ETH", "SOL"], "short": []}
+        set_side_universe_sources(sample_config, 'approved_coins', {"long": ["ETH", "SOL"], "short": []})
         sample_config["backtest"]["start_date"] = "2026-04-01"
         sample_config["backtest"]["end_date"] = "2026-04-01"
         sample_config["backtest"]["cm_progress_log_interval_seconds"] = 0.0
@@ -2051,7 +1998,6 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
         int(start_ts + 120_000),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         use_v2_local=True,
     )
 
@@ -2108,7 +2054,6 @@ async def test_fetch_data_for_coin_and_exchange_counts_sparse_v2_valid_rows(tmp_
         int(start_ts + 120_000),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         use_v2_local=True,
     )
 
@@ -2328,8 +2273,6 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
         base_start_ts=0,
         end_ts=1,
         first_timestamps_unified={"SOL": 0},
-        minimum_coin_age_days=0.0,
-        min_coin_age_ms=0,
         tradfi_for_stock_perps=False,
         forced_sources={"BTC": "okx"},
         exchanges_to_consider=configured,
@@ -2340,8 +2283,6 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
         base_start_ts=0,
         end_ts=1,
         first_timestamps_unified={"BTC": 0},
-        minimum_coin_age_days=0.0,
-        min_coin_age_ms=0,
         tradfi_for_stock_perps=False,
         forced_sources={"BTC": "okx"},
         exchanges_to_consider=configured,
@@ -2366,21 +2307,13 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
     )
 
 
-def test_plan_combined_coin_rejects_unknown_inception_when_minimum_age_enabled():
-    assert (
-        hp._plan_combined_coin(
-            coin="NEW",
-            base_start_ts=1_700_000_000_000,
-            end_ts=1_800_000_000_000,
-            first_timestamps_unified={"NEW": 0.0},
-            minimum_coin_age_days=30.0,
-            min_coin_age_ms=30 * 24 * 60 * 60 * 1000,
-            tradfi_for_stock_perps=False,
-            forced_sources={},
-            exchanges_to_consider=["bybit", "hyperliquid"],
-        )
-        is None
+def test_plan_combined_coin_retains_unknown_inception_history_for_rust_admission():
+    plan = hp._plan_combined_coin(
+        coin="NEW", base_start_ts=1_700_000_000_000, end_ts=1_800_000_000_000,
+        first_timestamps_unified={"NEW": 0.0}, tradfi_for_stock_perps=False,
+        forced_sources={}, exchanges_to_consider=["bybit", "hyperliquid"],
     )
+    assert plan.effective_start_ts == 1_700_000_000_000
 
 
 def test_exact_forced_source_key_matches_active_alias(tmp_path, monkeypatch):
@@ -2923,7 +2856,6 @@ async def test_load_combined_coin_candidates_raises_failed_non_forced_exchange(m
             force_refetch_gaps=False,
             catalog=catalog,
             store=store,
-            legacy_root=None,
             exchanges_to_consider=("binanceusdm", "bybit"),
             candidate_report=report,
         )
@@ -2976,7 +2908,6 @@ async def test_load_combined_coin_candidates_tolerates_failed_normalization_only
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
         candidate_report=report,
     )
@@ -3024,7 +2955,6 @@ async def test_load_combined_coin_candidates_bounds_normalization_only_exchange_
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
     )
 
@@ -3078,7 +3008,6 @@ async def test_load_combined_coin_candidates_can_bypass_v2_for_source_dir(monkey
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
         use_v2_local=False,
         candidate_report=candidate_report,
@@ -3148,7 +3077,6 @@ async def test_combined_force_refetch_uses_v2_resolver_for_large_internal_gap(
         force_refetch_gaps=True,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchanges_to_consider=("binanceusdm",),
         candidate_report=report,
     )
@@ -3225,7 +3153,6 @@ async def test_combined_force_refetch_btc_prices_rejects_truncated_v2_range(monk
         force_refetch_gaps=True,
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     # The resolver truncates at the unsupported internal gap. A partial BTC
@@ -3273,7 +3200,6 @@ async def test_combined_btc_source_dir_uses_source_dir_only(monkeypatch, tmp_pat
         force_refetch_gaps=False,
         catalog=catalog,
         store=OhlcvStore(tmp_path / "ohlcvs", catalog),
-        legacy_root=None,
         ohlcv_source_dir=str(tmp_path / "source"),
         use_v2_local=False,
     )
@@ -3309,6 +3235,14 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
     btc_source_symbol_dir = legacy_root / "binance" / "1m" / "BTC_USDT:USDT"
     btc_source_symbol_dir.mkdir(parents=True, exist_ok=True)
     np.save(btc_source_symbol_dir / "2026-04-01.npy", btc_arr)
+    current_root = tmp_path / "caches" / "ohlcvs"
+    catalog = OhlcvCatalog(current_root / "catalog.sqlite")
+    store = OhlcvStore(current_root, catalog)
+    for symbol in ("ETH/USDT:USDT", "BTC/USDT:USDT"):
+        assert import_legacy_range_into_store(
+            store=store, legacy_root=legacy_root, exchange="binance", timeframe="1m",
+            symbol=symbol, start_ts=int(start_ts), end_ts=int(start_ts),
+        ) == 1
     with open(tmp_path / "caches" / "binance" / "first_timestamps.json", "w", encoding="utf-8") as f:
         json.dump({"ETH": int(start_ts), "BTC": int(start_ts)}, f)
 
@@ -3347,25 +3281,25 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             "cm_progress_log_interval_seconds": 0.0,
             "ohlcv_source_dir": str(legacy_root),
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
+        "live": {},
         "bot": {
             "long": {
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "wallet_exposure_limit": 1.0,
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["ETH"]},
             },
             "short": {
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
                 "wallet_exposure_limit": 0.0,
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": []},
             },
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
 
     with caplog.at_level("INFO"):
         await hp.try_prepare_hlcvs_v2_local(config, "binance")

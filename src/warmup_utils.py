@@ -16,6 +16,9 @@ from strategy_warmup import (
 )
 
 
+from config.access import get_optional_config_value
+from config.universe import get_side_universe_sources
+
 def _to_float(value, *, context: str) -> float:
     try:
         numeric = float(value)
@@ -26,11 +29,24 @@ def _to_float(value, *, context: str) -> float:
     return numeric
 
 
-def _require_max_warmup_minutes(config: dict) -> float:
-    return _to_float(
-        require_live_value(config, "max_warmup_minutes"),
-        context="live.max_warmup_minutes",
+def _require_max_warmup_minutes(config: dict) -> float | None:
+    from config.control_sentinels import warmup_cap
+
+    return warmup_cap(
+        require_config_value(config, 'bot.portfolio.warmup.max_minutes'),
+        path='bot.portfolio.warmup.max_minutes',
     )
+
+
+def ceil_warmup_minutes(minutes: float) -> int:
+    """Round history up at the whole-minute candle acquisition boundary."""
+    return math.ceil(minutes)
+
+
+def live_warmup_cap_minutes(config: dict) -> int:
+    """Return a whole-minute acquisition cap; internal zero means uncapped."""
+    cap = _require_max_warmup_minutes(config)
+    return 0 if cap is None else ceil_warmup_minutes(cap)
 
 
 def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
@@ -42,7 +58,7 @@ def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
 
 def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
     bot_cfg = config.get("bot", {})
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     strategy_cfg = get_active_strategy_config(config, strategy_kind=strategy_kind)
     base_long = flatten_shared_bot_side(bot_cfg.get("long", {}) or {})
     base_short = flatten_shared_bot_side(bot_cfg.get("short", {}) or {})
@@ -126,7 +142,7 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
         return False
     bounds = flatten_optimize_bounds(
         config.get("optimize", {}).get("bounds", {}),
-        strategy_kind=config.get("live", {}).get("strategy_kind"),
+        strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind'),
     )
     pinned = flatten_shared_bot_side(
         config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
@@ -263,7 +279,7 @@ def _rms_policy_keys(config, eligible, overrides):
     return policies
 
 
-def _rms_param_sets(config, bounds, *, param_sets=None):
+def _rms_param_sets(config, bounds, *, param_sets=None, for_trade_activation=False):
     """Size RMS from eligible coin-side policies, retaining unresolved defaults."""
     from backtest_universe import normalize_backtest_coin
     from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
@@ -274,7 +290,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
         normalize_backtest_coin(coin) for group in groups
         if isinstance(group, (list, tuple, set)) for coin in group
     }
-    approved = config.get("live", {}).get("approved_coins", {})
+    approved = get_side_universe_sources(config, 'approved_coins', {})
     if not selected and isinstance(approved, dict):
         selected = {
             normalize_backtest_coin(coin) for group in approved.values()
@@ -305,6 +321,11 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
         )
     for coin, long, short, *_ in (param_sets if param_sets is not None else _iter_param_sets(config)):
         for side, params in (("long", long), ("short", short)):
+            from config.activation import optimizer_side_may_activate, side_enabled
+            if not side_enabled(config, side) and (
+                for_trade_activation or not optimizer_side_may_activate(config, side)
+            ):
+                continue
             if coin not in policies_by_side[side]:
                 continue
             patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
@@ -431,7 +452,7 @@ def compute_backtest_warmup_minutes(
 
     bounds = flatten_optimize_bounds(
         config.get("optimize", {}).get("bounds", {}),
-        strategy_kind=config.get("live", {}).get("strategy_kind"),
+        strategy_kind=get_optional_config_value(config, 'bot.portfolio.strategy_kind'),
     )
     bound_keys_minutes = [
         "long_forager_volume_ema_span_1m",
@@ -459,13 +480,13 @@ def compute_backtest_warmup_minutes(
         max_minutes = max(max_minutes, extracted * 60.0)
 
     warmup_ratio = _to_float(
-        require_config_value(config, "live.warmup_ratio"),
-        context="live.warmup_ratio",
+        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
+        context='bot.portfolio.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
 
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-    if limit > 0:
+    if limit is not None:
         warmup_minutes = min(warmup_minutes, limit)
     if include_rms:
         warmup_minutes = max(
@@ -479,27 +500,29 @@ def compute_backtest_warmup_minutes(
                     for rms_config, rms_bounds in (
                         [(config, {})] if for_trade_activation else _rms_history_configs(config, bounds)
                     )
-                    for _, side, params, effective_bounds, ranking_possible in _rms_param_sets(rms_config, rms_bounds)
+                    for _, side, params, effective_bounds, ranking_possible in _rms_param_sets(
+                        rms_config, rms_bounds, for_trade_activation=for_trade_activation)
                 ),
                 default=0,
             ),
         )
-    return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+    return ceil_warmup_minutes(warmup_minutes) if warmup_minutes > 0.0 else 0
 
 
 def compute_per_coin_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
     warmup_ratio = _to_float(
-        require_config_value(config, "live.warmup_ratio"),
-        context="live.warmup_ratio",
+        require_config_value(config, 'bot.portfolio.warmup.span_multiplier'),
+        context='bot.portfolio.warmup.span_multiplier',
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
     param_sets = list(_iter_param_sets(config))
     rms_pairs = {
         (coin, side): ranking_possible
-        for coin, side, _, _, ranking_possible in _rms_param_sets(config, {}, param_sets=param_sets)
+        for coin, side, _, _, ranking_possible in _rms_param_sets(
+            config, {}, param_sets=param_sets, for_trade_activation=for_trade_activation)
     } if include_rms else {}
     minute_fields = [
         "ema_span_0",
@@ -539,7 +562,7 @@ def compute_per_coin_warmup_minutes(
                 requirements.max_h1_span_hours * 60.0,
             )
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-        if limit > 0:
+        if limit is not None:
             warmup_minutes = min(warmup_minutes, limit)
         if include_rms:
             for side, params in (("long", long_params), ("short", short_params)):
@@ -552,7 +575,7 @@ def compute_per_coin_warmup_minutes(
                         ranking_possible=rms_pairs[coin, side],
                     ),
                 )
-        per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+        per_coin[coin] = ceil_warmup_minutes(warmup_minutes) if warmup_minutes > 0.0 else 0
     return per_coin
 
 

@@ -88,7 +88,6 @@ def _rust_bot_params(**overrides):
         "filter_volatility_ema_span_1m": 10.0,
         "filter_volatility_drop_pct": 0.0,
         "filter_volume_ema_span_1m": 10.0,
-        "filter_volume_drop_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "n_positions": 1,
@@ -154,39 +153,6 @@ def _rust_strategy_params(**overrides):
     return params
 
 
-def _rust_trailing_grid_v7_strategy_params():
-    return {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
-        "entry": {
-            "grid_double_down_factor": 1.0,
-            "grid_spacing_pct": 0.01,
-            "grid_spacing_we_weight": 0.0,
-            "grid_spacing_volatility_weight": 0.0,
-            "initial_ema_dist": 0.0,
-            "initial_qty_pct": 0.1,
-            "trailing_double_down_factor": 1.0,
-            "trailing_grid_ratio": 0.0,
-            "trailing_retracement_pct": 0.01,
-            "trailing_retracement_we_weight": 0.0,
-            "trailing_retracement_volatility_weight": 0.0,
-            "trailing_threshold_pct": 0.01,
-            "trailing_threshold_we_weight": 0.0,
-            "trailing_threshold_volatility_weight": 0.0,
-            "volatility_ema_span_hours": 1.0,
-        },
-        "close": {
-            "grid_markup_start": 0.01,
-            "grid_markup_end": 0.005,
-            "grid_qty_pct": 0.2,
-            "trailing_grid_ratio": 0.0,
-            "trailing_qty_pct": 0.1,
-            "trailing_retracement_pct": 0.005,
-            "trailing_threshold_pct": 0.01,
-        },
-    }
-
-
 def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pairs):
     trailing = {
         "min_since_open": 0.0,
@@ -196,13 +162,17 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
     }
     return {
         "balance": 1000.0,
+        "balance_raw": 1000.0,
         "global": {
-            "filter_by_min_effective_cost": False,
+            # Explicit known-empty continuous realized memory for these order fixtures.
+            "side_activation": {"long": True, "short": True},
+            "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
+            "unstuck_realized_pnl_drawdown": 0.0,
+            "loss_gate_realized_pnl_drawdown": 0.0,
+            "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
             "max_realized_loss_pct": 1.0,
-            "realized_pnl_cumsum_max": 0.0,
-            "realized_pnl_cumsum_last": 0.0,
             "sort_global": True,
             "global_bot_params": {
                 "long": _rust_bot_params(),
@@ -235,14 +205,14 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
                     },
                     "h1": {"close": [], "log_range": [], "volume": []},
                 },
-                "long": {
+                "long": {"minimum_coin_age_days": 0.0,
                     "mode": "normal",
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,
                     "bot_params": _rust_bot_params(),
                     "strategy_params": _rust_strategy_params(),
                 },
-                "short": {
+                "short": {"minimum_coin_age_days": 0.0,
                     "mode": "manual",
                     "position": {"size": 0.0, "price": 0.0},
                     "trailing": trailing,
@@ -313,7 +283,10 @@ class _BundleReproBot:
         self.cached_metric_error = cached_metric_error
         self.completed_candle_health_calls = 0
         self._orchestrator_close_ema_fallback_counts = {}
-        self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+        self.config = {
+            "live": {"candles": {"max_forager_candle_staleness_minutes": 10}}
+        }
+        self.config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         self.exchange = "kucoin"
         now_ms = int(time.time() * 1000)
         if prev_close_ema is None:
@@ -1204,7 +1177,7 @@ async def test_orchestrator_ema_bundle_clears_stale_rank_feature_failures():
     }
 
 
-def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
+def test_py_orchestrator_rejects_retired_strategy_before_indicator_planning():
     try:
         import passivbot_rust as pbr
     except ImportError:
@@ -1224,12 +1197,7 @@ def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
         m1_lr_pairs=[],
     )
     payload["global"]["strategy_kind"] = "trailing_grid_v7"
-    params = _rust_trailing_grid_v7_strategy_params()
-    params["close"].pop("trailing_threshold_pct")
-    payload["symbols"][0]["long"]["strategy_params"] = params
-    payload["symbols"][0]["short"]["strategy_params"] = _rust_trailing_grid_v7_strategy_params()
-
-    with pytest.raises(ValueError, match="trailing_threshold_pct"):
+    with pytest.raises(ValueError, match="unknown variant `trailing_grid_v7`"):
         pbr.compute_ideal_orders_json(json.dumps(payload))
 
 
@@ -2500,7 +2468,8 @@ async def test_close_ema_fallback_scopes_symbol_when_previous_ema_is_stale(caplo
         prev_close_ema=prev,
         prev_age_ms=11 * 60_000,
     )
-    bot.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_forager_candle_staleness_minutes": 10}}}
+    bot.config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
 
     with caplog.at_level(logging.WARNING):
         result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
@@ -2760,7 +2729,7 @@ async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
     )
     bot.PB_modes = {"long": {symbol: "manual"}, "short": {symbol: "manual"}}
     bot.active_symbols = []
-    bot.config["live"]["max_ohlcv_fetches_per_minute"] = 1
+    bot.config["live"]["candles"]["max_ohlcv_fetches_per_minute"] = 1
     bot.cm.get_last_refresh_ms = lambda _symbol: fixed_now_ms
     bot.cm.get_last_final_ts = (
         lambda _symbol, timeframe=None: 8 * hour_ms
@@ -2807,7 +2776,7 @@ async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_trailing_grid_v7_grid_spacing_volatility_requires_h1_log_range():
+async def test_trailing_martingale_threshold_volatility_requires_h1_log_range():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2822,26 +2791,19 @@ async def test_trailing_grid_v7_grid_spacing_volatility_requires_h1_log_range():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {
-            "strategy_kind": "trailing_grid_v7",
-            "max_forager_candle_staleness_minutes": 10,
-        }
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
-    def trailing_grid_v7_params(_pside, _symbol=None):
-        return {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "entry": {
-                "volatility_ema_span_hours": 4.0,
-                "grid_spacing_volatility_weight": 1.0,
-                "trailing_threshold_volatility_weight": 0.0,
-                "trailing_retracement_volatility_weight": 0.0,
-            },
-            "close": {},
-        }
+    def trailing_martingale_params(_pside, _symbol=None):
+        params = _rust_strategy_params()
+        params["volatility_ema_span_1h"] = 4.0
+        params["entry"]["threshold_volatility_1h_weight"] = 1.0
+        return params
 
-    bot._strategy_params_to_rust_dict = trailing_grid_v7_params
+    bot._strategy_params_to_rust_dict = trailing_martingale_params
 
     (
         _m1_close_emas,
@@ -2856,7 +2818,7 @@ async def test_trailing_grid_v7_grid_spacing_volatility_requires_h1_log_range():
 
 
 @pytest.mark.asyncio
-async def test_trailing_grid_v7_grid_spacing_h1_missing_is_scoped_in_rust():
+async def test_trailing_martingale_threshold_h1_missing_is_scoped_in_rust():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2870,26 +2832,19 @@ async def test_trailing_grid_v7_grid_spacing_h1_missing_is_scoped_in_rust():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {
-            "strategy_kind": "trailing_grid_v7",
-            "max_forager_candle_staleness_minutes": 10,
-        }
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
-    def trailing_grid_v7_params(_pside, _symbol=None):
-        return {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "entry": {
-                "volatility_ema_span_hours": 4.0,
-                "grid_spacing_volatility_weight": 1.0,
-                "trailing_threshold_volatility_weight": 0.0,
-                "trailing_retracement_volatility_weight": 0.0,
-            },
-            "close": {},
-        }
+    def trailing_martingale_params(_pside, _symbol=None):
+        params = _rust_strategy_params()
+        params["volatility_ema_span_1h"] = 4.0
+        params["entry"]["threshold_volatility_1h_weight"] = 1.0
+        return params
 
-    bot._strategy_params_to_rust_dict = trailing_grid_v7_params
+    bot._strategy_params_to_rust_dict = trailing_martingale_params
 
     result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
         bot, [symbol], bot.PB_modes
@@ -2901,7 +2856,7 @@ async def test_trailing_grid_v7_grid_spacing_h1_missing_is_scoped_in_rust():
 
 
 @pytest.mark.asyncio
-async def test_trailing_grid_v7_present_none_grid_spacing_weight_fails_loudly():
+async def test_trailing_martingale_present_none_threshold_weight_fails_loudly():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2915,30 +2870,23 @@ async def test_trailing_grid_v7_present_none_grid_spacing_weight_fails_loudly():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {
-            "strategy_kind": "trailing_grid_v7",
-            "max_forager_candle_staleness_minutes": 10,
-        }
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
+        "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
-    def trailing_grid_v7_params(_pside, _symbol=None):
-        return {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "entry": {
-                "volatility_ema_span_hours": 4.0,
-                "grid_spacing_volatility_weight": None,
-                "trailing_threshold_volatility_weight": 0.0,
-                "trailing_retracement_volatility_weight": 0.0,
-            },
-            "close": {},
-        }
+    def trailing_martingale_params(_pside, _symbol=None):
+        params = _rust_strategy_params()
+        params["volatility_ema_span_1h"] = 4.0
+        params["entry"]["threshold_volatility_1h_weight"] = None
+        return params
 
-    bot._strategy_params_to_rust_dict = trailing_grid_v7_params
+    bot._strategy_params_to_rust_dict = trailing_martingale_params
 
     with pytest.raises(
         ValueError,
-        match=r"entry\.grid_spacing_volatility_weight.*None",
+        match=r"entry\.threshold_volatility_1h_weight.*None",
     ):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
@@ -3007,11 +2955,11 @@ async def test_ema_anchor_h1_offset_weight_path_is_tuple_not_character_path():
         entry_h1_span_hours=0.0,
     )
     bot.config = {
-        "live": {
-            "strategy_kind": "ema_anchor",
-            "max_forager_candle_staleness_minutes": 10,
-        }
+        "live": {"candles": {"max_forager_candle_staleness_minutes": 10}},
+        "bot": {"portfolio": {"strategy_kind": "ema_anchor"}},
     }
+    bot.config["bot"]["long"] = {"enabled": True}
+    bot.config["bot"]["short"] = {"enabled": True}
 
     def ema_anchor_params(_pside, _symbol=None):
         return {
@@ -3096,6 +3044,7 @@ class _PacingProbeBot:
     def __init__(self, exchange: str, sleep_fn):
         self.exchange = exchange
         self.config = {"live": {}}
+        self.config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         self.positions = {}
         self.cm = _PacingProbeCM(sleep_fn)
 

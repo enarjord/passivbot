@@ -602,9 +602,9 @@ async def test_kucoin_first_timestamp_wire_range_and_age_gate(
     assert json.loads(cache.read_text())[symbol] == {"kucoin": expected}
 
     bot = types.SimpleNamespace(
-        is_forager_mode=lambda _side: True,
-        minimum_market_age_millis=30 * 86400000,
-        get_first_timestamp=lambda s: result[s],
+        config={"bot": {"long": {"universe": {"minimum_coin_age_days": 30.0}}}},
+        first_timestamps=result,
+        get_exchange_time=lambda: now_ms,
     )
     assert Passivbot.is_old_enough(bot, "long", symbol) is (outcome == "candles")
 

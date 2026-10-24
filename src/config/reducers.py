@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Mapping, Sequence
 
+from .metrics import reject_retired_metric
+
 
 SUPPORTED_REDUCERS = frozenset({"min", "max", "mean", "std", "median"})
 REDUCER_ALIASES = ("reducer", "aggregate", "stat", "scenario_stat")
@@ -57,6 +59,7 @@ def reducer_mapping_from_aliases(
         mapping = {}
         for metric, value in raw_mapping.items():
             metric_path = f"{path}.{key}.{metric}"
+            reject_retired_metric(metric, path=metric_path)
             reducer = normalize_reducer(value, path=metric_path)
             if reducer is None:
                 raise ValueError(f"{metric_path} must be a reducer name, not null")

@@ -1,4 +1,5 @@
 """HSL through public backtest and CPU optimizer entry points."""
+from config.universe import set_side_universe_sources
 
 from copy import deepcopy
 import json
@@ -36,15 +37,16 @@ def deny_network(monkeypatch):
 
 def runtime_inputs(mode):
     cfg, markets, candles = inputs(mode)
-    cfg["live"].update(
-        warmup_ratio=1.0, max_warmup_minutes=1, minimum_coin_age_days=0.0
-    )
+    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
+    for side in ("long", "short"):
+        cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
     cfg["backtest"].update(start_date="2024-01-01", end_date="2024-01-01T02:40:00")
     timestamps = 1704067200000 + np.arange(len(candles), dtype=np.int64) * 60000
     return cfg, markets, candles, timestamps
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_public_payload_runs_red_panic_and_cooldown(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     original = deepcopy(cfg)
@@ -53,7 +55,7 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     )
     fills, equities, analysis = execute_backtest(prepared, cfg)
     report = prepared.hard_stop_plot_data["hsl"]
-    assert report["mode"] == mode
+    assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert analysis["hard_stop_triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert report["detailed"] is False
@@ -65,16 +67,16 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     assert cfg == original
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
     cfg, markets, candles, timestamps = runtime_inputs(mode)
     fixed_side_bounds(cfg)
     target = (
-        cfg["optimize"]["bounds"]
-        if mode == "unified"
+        cfg["optimize"]["bounds"]["portfolio"]
+        if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"] = {"red_threshold": [0.01, 0.9]}
+    target["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["hard_stop_triggers"]
     cfg["optimize"]["limits"] = []
     manager = SharedArrayManager()
@@ -109,9 +111,9 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         )
         # Exercise effective scenario overrides through the complete suite evaluator.
         path = (
-            "bot.hsl.red_threshold"
-            if mode == "unified"
-            else "bot.long.hsl.red_threshold"
+            "bot.portfolio.hsl.drawdown_ratio_threshold"
+            if mode == "portfolio"
+            else "bot.long.hsl.drawdown_ratio_threshold"
         )
         contexts = [
             ScenarioEvalContext(
@@ -152,7 +154,8 @@ def offline_cli_config(tmp_path, monkeypatch, mode):
     metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
     cfg, _, candles, timestamps = runtime_inputs(mode)
-    cfg["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    del cfg["backtest"]["coins"]
+    set_side_universe_sources(cfg, 'approved_coins', {"long": ["BTC"], "short": []})
     cfg["backtest"].update(
         offline=True,
         exchanges=["binance"],
@@ -181,7 +184,7 @@ def offline_cli_config(tmp_path, monkeypatch, mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("detailed", [False, True])
 async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
     tmp_path, monkeypatch, mode, detailed
@@ -200,7 +203,8 @@ async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
     await main()
     (artifact,) = (tmp_path / "results").rglob("hsl_report.json")
     report = json.loads(artifact.read_text())
-    assert report["engine"] == "hsl" and report["mode"] == mode
+    assert report["engine"] == "hsl"
+    assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert report["summary"]["panic_close_fills"] > 0
     assert report["detailed"] is detailed
     assert bool(report["samples"]) is detailed
@@ -209,15 +213,13 @@ async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["deap", "pymoo"])
-async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, backend):
+async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch):
     from optimize import main
     import msgpack
 
-    cfg = offline_cli_config(tmp_path, monkeypatch, "unified")
-    fixed_side_bounds(cfg)
+    cfg = offline_cli_config(tmp_path, monkeypatch, "portfolio")
     cfg["optimize"].update(
-        backend=backend,
+        backend="pymoo",
         iters=2,
         n_cpus=1,
         population_size=2,
@@ -232,7 +234,20 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, b
     cfg["optimize"]["pymoo"]["shared"].update(
         mutation_prob=1.0, mutation_prob_per_variable=0.5,
     )
-    cfg["optimize"]["bounds"]["hsl"] = {"red_threshold": [0.01, 0.1]}
+    # This checkpoint test varies HSL alone. Other strategy genes retain the
+    # minute-scale fixture's fixed policy, including no hourly-volatility input.
+    from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+    from config.param_paths import resolve_optimizer_key_path
+
+    fixed_bounds = {}
+    kind = cfg['bot']["portfolio"]['strategy_kind']
+    for key in flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind=kind):
+        value = cfg
+        for part in resolve_optimizer_key_path(cfg, key):
+            value = value[part]
+        set_flat_optimize_bound(fixed_bounds, kind, key, [value, value])
+    cfg["optimize"]["bounds"] = fixed_bounds
+    cfg["optimize"]["bounds"]["portfolio"]["hsl"] = {"drawdown_ratio_threshold": [0.01, 0.1]}
     # Spawned workers and the manager also deny IP networking; local Unix IPC
     # remains available for the real multiprocessing backend.
     guard = tmp_path / "guard"
@@ -281,3 +296,13 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, b
         await main()
     assert finished.value.code == 0
     assert result_file.stat().st_size > before
+
+
+def test_retired_deap_backend_is_rejected_before_offline_hsl_search():
+    from config import prepare_config
+
+    config, _, _ = inputs("portfolio")
+    del config["backtest"]["coins"]
+    config["optimize"]["backend"] = "deap"
+    with pytest.raises(ValueError, match="deap|pymoo"):
+        prepare_config(config, target="canonical", runtime=None, verbose=False)

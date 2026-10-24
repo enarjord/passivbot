@@ -9333,11 +9333,22 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
     config_path.write_text(
         json.dumps(
             {
-                "live": {"hsl_signal_mode": "unified"},
+                "live": {},
                 "bot": {
-                    "hsl": {"enabled": True},
-                    "long": {"hsl": {"enabled": True}},
-                    "short": {"hsl": {"enabled": False}},
+                    "portfolio": {"hsl": {
+                            "scope": "portfolio",
+                            "enabled": True,
+                        }},
+                    "long": {
+                        "hsl": {
+                            "enabled": True,
+                        },
+                    },
+                    "short": {
+                        "hsl": {
+                            "enabled": False,
+                        },
+                    },
                 },
             }
         ),
@@ -9376,6 +9387,7 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
     report = build_live_smoke_report(
         tmp_path / "monitor",
         logs_root=None,
+        repo_root=tmp_path,
         supervisor_config=supervisor_config,
     )
     summary = summarize_live_smoke_report(report)
@@ -9400,7 +9412,7 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
     assert issue["code"] == "hsl_balance_override_account_level_replay_unsafe"
     assert issue["severity"] == "error"
     assert issue["account"] == "ebybitsub03"
-    assert issue["hsl_signal_mode"] == "unified"
+    assert issue["hsl_signal_mode"] == "portfolio"
     assert issue["enabled_scopes"] == ["portfolio"]
     assert issue["balance_override_active"] is True
     assert issue["balance_override_source"] == "argument"
@@ -9422,11 +9434,9 @@ def test_live_smoke_report_allows_coin_hsl_with_balance_override(
     config_path.write_text(
         json.dumps(
             {
-                "live": {
-                    "hsl_signal_mode": "coin",
-                    "balance_override": 1000,
-                },
+                "live": {"account": {"balance_override": 1000}},
                 "bot": {
+                    "portfolio": {"hsl": {"scope": "coin"}},
                     "long": {"hsl": {"enabled": True}},
                     "short": {"hsl": {"enabled": True}},
                 },
@@ -9453,6 +9463,7 @@ def test_live_smoke_report_allows_coin_hsl_with_balance_override(
     report = build_live_smoke_report(
         tmp_path / "monitor",
         logs_root=None,
+        repo_root=tmp_path,
         include_processes=True,
     )
 
@@ -9477,7 +9488,7 @@ def test_live_smoke_report_uses_coin_default_for_missing_hsl_signal_mode_with_ba
     config_path.write_text(
         json.dumps(
             {
-                "live": {"balance_override": 1000},
+                "live": {"account": {"balance_override": 1000}},
                 "bot": {
                     "long": {"hsl": {"enabled": True}},
                     "short": {"hsl": {"enabled": False}},
@@ -9505,6 +9516,7 @@ def test_live_smoke_report_uses_coin_default_for_missing_hsl_signal_mode_with_ba
     report = build_live_smoke_report(
         tmp_path / "monitor",
         logs_root=None,
+        repo_root=tmp_path,
         include_processes=True,
     )
 
@@ -9547,7 +9559,7 @@ def test_live_smoke_report_includes_repository_metadata(tmp_path, monkeypatch):
 
     repository = report["repository"]
     assert report["ok"] is True
-    assert repository == {
+    assert {**repository, "root": str(Path(repository["root"]).expanduser())} == {
         "root": str(tmp_path.resolve()),
         "is_git_repo": True,
         "branch": "v8",
@@ -9634,7 +9646,7 @@ def test_live_smoke_report_discovers_repository_from_monitor_root(
     report = build_live_smoke_report(repo_root / "monitor", logs_root=None)
 
     assert set(roots) == {repo_root.resolve()}
-    assert report["repository"]["root"] == str(repo_root.resolve())
+    assert Path(report["repository"]["root"]).expanduser() == repo_root.resolve()
     assert report["repository"]["dirty"] is False
 
 
@@ -9657,7 +9669,8 @@ def test_live_smoke_report_repository_metadata_is_observational_on_git_error(
 
     assert report["ok"] is True
     assert report["hard_failures"] == 0
-    assert report["repository"] == {
+    repository = report["repository"]
+    assert {**repository, "root": str(Path(repository["root"]).expanduser())} == {
         "root": str(tmp_path.resolve()),
         "is_git_repo": False,
         "branch": None,

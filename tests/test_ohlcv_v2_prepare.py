@@ -19,7 +19,7 @@ from hlcv_preparation import (
     try_prepare_hlcvs_v2_local,
 )
 from ohlcv_catalog import OhlcvCatalog
-from ohlcv_legacy_import import resolve_legacy_symbol_dir
+from ohlcv_legacy_import import import_legacy_range_into_store, resolve_legacy_symbol_dir
 from ohlcv_store import OhlcvStore, month_end_ts, month_start_ts
 
 
@@ -41,17 +41,18 @@ def _write_day(root, exchange, symbol, day, rows):
     np.save(symbol_dir / f"{day}.npy", np.array(rows, dtype=LEGACY_DTYPE))
 
 
-def _minimal_bot_config():
+def _minimal_bot_config(approved_coins):
     return {
+        "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         "long": {
-            "n_positions": 1,
-            "total_wallet_exposure_limit": 1.0,
-            "wallet_exposure_limit": 1.0,
+            "enabled": True,
+            "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
+            "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["long"], "ignored_coins": []},
         },
         "short": {
-            "n_positions": 0,
-            "total_wallet_exposure_limit": 0.0,
-            "wallet_exposure_limit": 0.0,
+            "enabled": False,
+            "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+            "universe": {"minimum_coin_age_days": 0.0, "approved_coins": approved_coins["short"], "ignored_coins": []},
         },
     }
 
@@ -200,7 +201,6 @@ async def test_fetch_coin_range_into_v2_store_accepts_sparse_within_tolerance(tm
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -263,7 +263,6 @@ async def test_fetch_coin_range_into_v2_store_accepts_edge_sparse_within_toleran
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -348,7 +347,6 @@ async def test_fetch_coin_range_short_tail_requires_corroboration(tmp_path):
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -475,7 +473,6 @@ async def test_resolve_v2_store_range_retries_mixed_sparse_tail_before_partial(t
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -552,7 +549,6 @@ async def test_resolve_v2_store_range_retries_pure_tail_before_partial(tmp_path)
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="ETH",
         symbol=symbol,
@@ -665,7 +661,6 @@ async def test_fetch_coin_range_terminal_empty_tail_requires_corroboration(tmp_p
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -770,7 +765,6 @@ async def test_fetch_coin_range_into_v2_store_accepts_leading_unavailable_prefix
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bitget",
         coin="BTC",
         symbol="BTC/USDT:USDT",
@@ -915,7 +909,7 @@ async def test_fetch_coin_range_into_v2_store_rejects_conflicting_pagination_dup
 
 
 @pytest.mark.asyncio
-async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legacy(
+async def test_resolve_v2_store_range_uses_explicitly_imported_partial_legacy(
     monkeypatch, tmp_path
 ):
     monkeypatch.chdir(tmp_path)
@@ -934,10 +928,8 @@ async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legac
         ]
     )
 
-    # V2 has bounded local data but one invalid middle minute. The requested
-    # range spans into 2026-04-02, which is absent from legacy, so full-range
-    # legacy inspection is intentionally partial even though the missing v2
-    # minute is repairable from the 2026-04-01 legacy shard.
+    # Import the historical middle minute explicitly before ordinary preparation.
+    # The second UTC day is absent from the source; current valid rows survive.
     store.write_rows("binance", "1m", symbol, timestamps[[0, 2]], values[[0, 2]])
     _write_day(
         legacy_root,
@@ -947,8 +939,13 @@ async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legac
         [(int(timestamps[1]), 0.0, 203.0, 201.0, 202.0, 22.0)],
     )
 
+    assert import_legacy_range_into_store(
+        store=store, legacy_root=legacy_root, exchange="binance", timeframe="1m",
+        symbol=symbol, start_ts=int(timestamps[0]), end_ts=int(timestamps[-1]),
+    ) == 1
+
     async def fail_remote_fetch(*args, **kwargs):
-        raise AssertionError("legacy repair should happen before remote fetch")
+        raise AssertionError("explicitly imported local data must prevent remote fetch")
 
     monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", fail_remote_fetch)
 
@@ -956,7 +953,6 @@ async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legac
         om=object(),
         catalog=catalog,
         store=store,
-        legacy_root=legacy_root,
         exchange="binance",
         coin="ETH",
         symbol=symbol,
@@ -1016,7 +1012,6 @@ async def test_resolve_v2_store_range_fetches_invalid_windows_with_context(monke
         om=StrictGapManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol=symbol,
@@ -1084,7 +1079,6 @@ async def test_resolve_v2_store_range_ignores_persistent_gap_after_local_repair(
         om=StrictGapManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol=symbol,
@@ -1141,7 +1135,6 @@ async def test_resolve_v2_store_range_keeps_verified_internal_gap_after_retry(
         om=object(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol=symbol,
@@ -1207,7 +1200,6 @@ async def test_resolve_v2_store_range_retries_persistent_gap_when_due(
         om=object(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol=symbol,
@@ -1257,7 +1249,6 @@ async def test_resolve_v2_store_range_excludes_large_internal_gap_from_partial_w
         om=StrictGapManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol=symbol,
@@ -1340,7 +1331,6 @@ async def test_resolve_v2_store_range_repairs_stale_pre_inception_gap(monkeypatc
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="CC",
         symbol=symbol,
@@ -1426,7 +1416,6 @@ async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_incep
             om=FakeManager(),
             catalog=catalog,
             store=store,
-            legacy_root=None,
             exchange="binance",
             coin="CC",
             symbol=symbol,
@@ -1537,7 +1526,6 @@ async def test_resolve_v2_store_range_keeps_unrepaired_stale_pre_inception_gap(
             om=FakeManager(),
             catalog=catalog,
             store=store,
-            legacy_root=None,
             exchange="binance",
             coin="CC",
             symbol=symbol,
@@ -1631,7 +1619,6 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="HYPE",
         symbol=symbol,
@@ -1726,7 +1713,6 @@ async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="HYPE",
         symbol=symbol,
@@ -1757,7 +1743,6 @@ async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="HYPE",
         symbol=symbol,
@@ -1846,7 +1831,6 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="OKB",
         symbol=symbol,
@@ -1937,7 +1921,6 @@ async def test_resolve_v2_store_range_accepts_confirmed_boundary_with_trailing_u
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="OKB",
         symbol=symbol,
@@ -2015,7 +1998,6 @@ async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="bybit",
         coin="SOL",
         symbol=symbol,
@@ -2104,7 +2086,6 @@ async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundar
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="HYPE",
         symbol=symbol,
@@ -2127,7 +2108,7 @@ async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundar
 
 
 @pytest.mark.asyncio
-async def test_try_prepare_hlcvs_v2_local_uses_local_cache(monkeypatch, tmp_path):
+async def test_try_prepare_hlcvs_v2_local_uses_explicitly_imported_cache(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     legacy_root = tmp_path / "caches" / "ohlcv"
     (tmp_path / "caches" / "binance").mkdir(parents=True, exist_ok=True)
@@ -2156,6 +2137,15 @@ async def test_try_prepare_hlcvs_v2_local_uses_local_cache(monkeypatch, tmp_path
             (int(ts[2]), 0.0, 50021.0, 50019.0, 50020.0, 102.0),
         ],
     )
+
+    current_root = tmp_path / "caches" / "ohlcvs"
+    catalog = OhlcvCatalog(current_root / "catalog.sqlite")
+    store = OhlcvStore(current_root, catalog)
+    for symbol in ("ETH/USDT:USDT", "BTC/USDT:USDT"):
+        assert import_legacy_range_into_store(
+            store=store, legacy_root=legacy_root, exchange="binance", timeframe="1m",
+            symbol=symbol, start_ts=int(ts[0]), end_ts=int(ts[-1]),
+        ) == 3
 
     with open(tmp_path / "caches" / "binance" / "first_timestamps.json", "w", encoding="utf-8") as f:
         json.dump({"ETH": int(ts[0]), "BTC": int(ts[0])}, f)
@@ -2194,13 +2184,7 @@ async def test_try_prepare_hlcvs_v2_local_uses_local_cache(monkeypatch, tmp_path
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -2232,16 +2216,12 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["binance"],
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2298,16 +2278,12 @@ async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["binance"],
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2350,12 +2326,7 @@ async def test_prepare_hlcvs_mss_rejects_outer_v2_miss_without_legacy_fallback(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2398,12 +2369,7 @@ async def test_prepare_hlcvs_mss_strict_reraises_outer_v2_exception(monkeypatch,
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2447,12 +2413,7 @@ async def test_prepare_hlcvs_mss_does_not_fallback_after_outer_v2_exception(
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2491,12 +2452,7 @@ async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_p
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2535,17 +2491,13 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["hyperliquid"],
             "ohlcv_source_dir": str(source_dir),
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
     prepared = (
         {
@@ -2605,17 +2557,13 @@ async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["binance"],
             "ohlcv_source_dir": str(source_dir),
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
     prepared = (
         {
@@ -2678,12 +2626,7 @@ async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boun
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2728,12 +2671,7 @@ async def test_prepare_hlcvs_mss_mixed_stock_without_source_dir_does_not_downgra
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH", "xyz:AAPL"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH", "xyz:AAPL"], "short": []}),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -2794,18 +2732,13 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
     config = {
         "backtest": {
             "base_dir": str(tmp_path / "results"),
+            "exchanges": ["hyperliquid"],
             "ohlcv_source_dir": str(source_dir),
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["xyz:AAPL"], "short": []}),
     }
 
     class FakeCm:
@@ -2985,13 +2918,7 @@ async def test_prepare_hlcvs_internal_masks_invalid_direct_fetch_rows(monkeypatc
             return {}
 
     config = {
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     mss, timestamps, aligned = await prepare_hlcvs_internal(
@@ -3029,12 +2956,7 @@ async def test_prepare_hlcvs_prefers_local_v2_before_legacy_prepare(monkeypatch)
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     async def fake_try_prepare(*args, **kwargs):
@@ -3121,13 +3043,7 @@ async def test_try_prepare_hlcvs_v2_local_fetches_missing_remote_range_into_stor
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -3213,13 +3129,7 @@ async def test_try_prepare_hlcvs_v2_local_persists_persistent_cm_gap_after_empty
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
         },
-        "live": {
-            "approved_coins": {"long": ["ETH"], "short": []},
-            "minimum_coin_age_days": 0.0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
-        "bot": _minimal_bot_config(),
+        "bot": _minimal_bot_config({"long": ["ETH"], "short": []}),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -3302,7 +3212,6 @@ async def test_resolve_v2_store_range_refetches_corrupt_chunk(tmp_path):
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -3357,7 +3266,6 @@ async def test_resolve_v2_store_range_repairs_missing_checksum_chunk(tmp_path):
         om=manager,
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -3421,7 +3329,6 @@ async def test_corrupt_chunk_repair_rebuilds_full_chunk_not_only_requested_slice
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -3487,7 +3394,6 @@ async def test_corrupt_chunk_repair_clears_unreturned_rows_in_refetch_window(tmp
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",
@@ -3551,7 +3457,6 @@ async def test_corrupt_chunk_failed_repair_preserves_existing_rows(tmp_path):
         om=FakeManager(),
         catalog=catalog,
         store=store,
-        legacy_root=None,
         exchange="binance",
         coin="ETH",
         symbol="ETH/USDT:USDT",

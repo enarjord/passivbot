@@ -1,13 +1,13 @@
 from copy import deepcopy
 
 from .gpu import GPU_SCREENING_DEFAULTS
+from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
-from .strategy import get_all_strategy_defaults
+from .bot_defaults import get_common_bot_defaults
+from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
-CONFIG_SCHEMA_VERSION = "v8.6.0"
-SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset(
-    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0", "v8.4.0", "v8.5.0"}
-)
+CONFIG_SCHEMA_VERSION = "v9.0.0"
+SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset()
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
 # generous bound also keeps hours-to-milliseconds conversion finite and well
@@ -15,113 +15,32 @@ DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long
 MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS = 24.0 * 365.25 * 100.0
 
 
-def _get_shared_bot_defaults():
-    return {
-        "long": {
-            "forager": {
-                "score_weights": {
-                    "unilateralness": 0.0,
-                    "ema_readiness": 0.21,
-                    "volatility": 0.61,
-                    "volume": 0.18,
-                },
-                "unilateralness_ema_span_1m": 60.0,
-                "volatility_ema_span_1m": 2274.0,
-                "volume_drop_pct": 0.04,
-                "volume_ema_span_1m": 310.0,
-            },
-            "hsl": {
-                "cooldown_minutes_after_red": 2160.0,
-                "ema_span_minutes": 720.0,
-                "enabled": False,
-                "scale_budget_with_excess_allowance": False,
-                "panic_close_order_type": "limit",
-                "red_threshold": 0.15,
-                "restart_after_red_policy": "always",
-            },
-            "entry_cooldown": {
-                "base_duration_minutes": 24.1,
-                "min_duration_minutes": 0.0,
-                "max_duration_minutes": None,
-                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-            },
-            "risk": {
-                "n_positions": 7.0,
-                "position_exposure_enforcer_enabled": False,
-                "position_exposure_enforcer_threshold": 1.0,
-                "total_exposure_enforcer_enabled": False,
-                "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 1.0,
-                "total_exposure_entry_gate_enabled": True,
-                "total_wallet_exposure_limit": 1.5,
-                "we_excess_allowance_pct": 0.37,
-            },
-            "unstuck": {
-                "close_pct": 0.041,
-                "ema_dist": -0.0269,
-                "ema_gating_enabled": True,
-                "ema_span_0": 790.0,
-                "ema_span_1": 1080.0,
-                "enabled": True,
-                "loss_allowance_pct": 0.0052,
-                "threshold": 0.466,
-            },
-        },
-        "short": {
-            "forager": {
-                "score_weights": {
-                    "unilateralness": 0.0,
-                    "ema_readiness": 0.0,
-                    "volatility": 0.0,
-                    "volume": 0.0,
-                },
-                "unilateralness_ema_span_1m": 60.0,
-                "volatility_ema_span_1m": 10.0,
-                "volume_drop_pct": 0.02,
-                "volume_ema_span_1m": 60.0,
-            },
-            "hsl": {
-                "cooldown_minutes_after_red": 1.0,
-                "ema_span_minutes": 1.0,
-                "enabled": False,
-                "scale_budget_with_excess_allowance": False,
-                "panic_close_order_type": "limit",
-                "red_threshold": 0.01,
-                "restart_after_red_policy": "always",
-            },
-            "entry_cooldown": {
-                "base_duration_minutes": 0.0,
-                "min_duration_minutes": 0.0,
-                "max_duration_minutes": None,
-                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-            },
-            "risk": {
-                "n_positions": 1.0,
-                "position_exposure_enforcer_enabled": True,
-                "position_exposure_enforcer_threshold": 0.8,
-                "total_exposure_enforcer_enabled": True,
-                "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 0.8,
-                "total_exposure_entry_gate_enabled": True,
-                "total_wallet_exposure_limit": 0.0,
-                "we_excess_allowance_pct": 0.0,
-            },
-            "unstuck": {
-                "close_pct": 0.01,
-                "ema_dist": -0.2,
-                "ema_gating_enabled": True,
-                "ema_span_0": 60.0,
-                "ema_span_1": 60.0,
-                "enabled": True,
-                "loss_allowance_pct": 0.005,
-                "threshold": 0.3,
-            },
-        },
-    }
+def _side_bot_prototype():
+    result = {"enabled": False, **get_common_bot_defaults()}
+    # This internal shape is also used by explicit authored fixture builders.
+    # Null approval retains the shared source; [] would be a concrete deny pin.
+    result["universe"]["approved_coins"] = None
+    return result
 
 
-def get_template_config():
-    strategy_defaults = get_all_strategy_defaults()
+_template_cache = None
+
+
+def get_expanded_config_prototype():
+    """Return an owned template; only its process-constant construction is cached.
+
+    Retain metadata objects so cache invalidation/reload cannot reuse their ids.
+    A replaced Rust metadata snapshot rebuilds the template before returning it.
+    """
+    global _template_cache
+    specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
+    if (_template_cache is None or len(specs) != len(_template_cache[0])
+            or any(a is not b for a, b in zip(specs, _template_cache[0]))):
+        _template_cache = (specs, _build_template_config())
+    return deepcopy(_template_cache[1])
+
+
+def _build_template_config():
     return deepcopy(
         {
             "config_version": CONFIG_SCHEMA_VERSION,
@@ -135,17 +54,20 @@ def get_template_config():
                 "coin_sources": {},
                 "compress_cache": True,
                 "dynamic_wel_by_tradability": True,
+                "organillo_csv": None,
+                "organillo_sha256": None,
                 "end_date": "now",
+                "ew_half_life_days": None,
                 "exchanges": ["binance", "bybit"],
-                "filter_by_min_effective_cost": False,
+                "filter_by_min_effective_cost": None,
                 "gap_tolerance_ohlcvs_minutes": 120,
                 "hsl_detailed_report": False,
                 "hlcvs_data_dir": None,
                 "hlcvs_data_override_mode": "intersection",
-                "liquidation_threshold": 0.05,
+                "equity_floor_ratio": 0.05,
                 "maker_fee_override": 0.0004,
-                "market_order_slippage_pct": 0.0005,
-                "limit_order_fill_buffer_pct": 0.0,
+                "market_order_slippage_fraction": 0.0005,
+                "limit_order_fill_buffer_fraction": 0.0,
                 "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
                 "market_settings_sources": {},
                 "offline": False,
@@ -271,7 +193,6 @@ def get_template_config():
                 "taker_fee_override": 0.00055,
                 "visible_metrics": [
                     "adg_strategy_eq",
-                    "adg_strategy_eq_w",
                     "mdg_strategy_eq",
                     "strategy_eq_recovery_days_max",
                     "position_held_days_max",
@@ -287,163 +208,89 @@ def get_template_config():
                 "volume_normalization": True,
             },
             "bot": {
-                "long": {
-                    **deepcopy(_get_shared_bot_defaults()["long"]),
-                    "strategy": strategy_defaults["long"],
+                "portfolio": {
+                    "strategy_kind": "trailing_martingale",
+                    "hedge_mode": False,
+                    "execution": {
+                        "market_orders_allowed": False,
+                        "market_order_near_touch_fraction": 0.001,
+                    },
+                    "warmup": {"span_multiplier": 0.3, "max_minutes": None},
+                    "hsl": {"scope": "coin"},
+                    "loss_gate": {
+                        "max_drawdown_ratio": 1.0,
+                        "memory_ema_span_minutes": 43200.0,
+                    },
+                    "unstuck": {"memory_ema_span_minutes": 43200.0},
                 },
-                "short": {
-                    **deepcopy(_get_shared_bot_defaults()["short"]),
-                    "strategy": strategy_defaults["short"],
-                },
+                "global": get_common_bot_defaults(),
+                "long": _side_bot_prototype(),
+                "short": _side_bot_prototype(),
             },
             "coin_overrides": {},
             "live": {
-                "approved_coins": {
-                    "long": [
-                        "BTC",
-                        "ETH",
-                        "BNB",
-                        "XRP",
-                        "SOL",
-                        "TRX",
-                        "HYPE",
-                        "DOGE",
-                        "ZEC",
-                        "XLM",
-                        "ADA",
-                        "LINK",
-                        "XMR",
-                        "CC",
-                        "BCH",
-                        "TON",
-                        "GRAM",
-                        "LTC",
-                        "HBAR",
-                        "SUI",
-                        "AVAX",
-                        "NEAR",
-                        "UNI",
-                        "TAO",
-                        "ASTER",
-                        "ONDO",
-                        "AAVE",
-                        "DOT",
-                        "WLD",
-                        "MNT",
-                        "MORPHO",
-                        "POL",
-                        "ATOM",
-                        "RENDER",
-                        "KAS",
-                        "ENA",
-                        "ALGO",
-                        "FIL",
-                        "ARB",
-                        "APT",
-                        "INJ",
-                    ],
-                    "short": [
-                        "BTC",
-                        "ETH",
-                        "BNB",
-                        "XRP",
-                        "SOL",
-                        "TRX",
-                        "HYPE",
-                        "DOGE",
-                        "ZEC",
-                        "XLM",
-                        "ADA",
-                        "LINK",
-                        "XMR",
-                        "CC",
-                        "BCH",
-                        "TON",
-                        "GRAM",
-                        "LTC",
-                        "HBAR",
-                        "SUI",
-                        "AVAX",
-                        "NEAR",
-                        "UNI",
-                        "TAO",
-                        "ASTER",
-                        "ONDO",
-                        "AAVE",
-                        "DOT",
-                        "WLD",
-                        "MNT",
-                        "MORPHO",
-                        "POL",
-                        "ATOM",
-                        "RENDER",
-                        "KAS",
-                        "ENA",
-                        "ALGO",
-                        "FIL",
-                        "ARB",
-                        "APT",
-                        "INJ",
-                    ],
+                "account": {
+                    "balance_hysteresis_snap_fraction": 0.01,
+                    "balance_override": None,
+                    "leverage": 10,
+                    "margin_mode_preference": "cross",
+                    "user": "bybit_01",
                 },
-                "auto_gs": True,
-                "balance_hysteresis_snap_pct": 0.01,
-                "balance_override": None,
-                "candle_lock_timeout_seconds": 10,
-                "custom_endpoints_path": None,
-                "defer_broad_candle_warmup": True,
-                "enable_archive_candle_fetch": False,
-                "enable_forager_ws_candles": True,
-                "execution_delay_seconds": 2,
-                "exchange_symbol_unavailable_cooldown_hours": 6.0,
-                "fee_conversion_max_age_ms": 86400000,
-                "fee_pct_fallback": 0.0002,
-                "fee_pct_sanity_abs_max": 0.001,
-                "fills_confirmation_overlap_minutes": 60,
-                "fills_recent_overlap_minutes": 10,
-                "filter_by_min_effective_cost": True,
-                "forager_score_hysteresis_pct": 0.02,
-                "forager_ws_candle_rest_audit_minutes": 30,
-                "force_cold_startup": False,
-                "forced_mode_long": "",
-                "forced_mode_short": "",
-                "hedge_mode": False,
-                "hsl_signal_mode": "coin",
-                "ignored_coins": {"long": [], "short": []},
-                "inactive_coin_candle_ttl_minutes": 10,
-                "leverage": 10,
-                "limit_order_create_max_market_dist_pct": 0.8,
-                "margin_mode_preference": "cross",
-                "market_order_near_touch_threshold": 0.001,
-                "market_orders_allowed": False,
-                "market_snapshot_ticker_strategy": "auto",
-                "max_active_candle_tail_gap_minutes": 10,
-                "max_concurrent_api_requests": None,
-                "max_disk_candles_per_symbol_per_tf": 2000000,
-                "max_forager_candle_refresh_seconds": 45,
-                "max_forager_candle_staleness_minutes": None,
-                "max_memory_candles_per_symbol": 200000,
-                "max_n_cancellations_per_batch": 5,
-                "max_n_creations_per_batch": 3,
-                "max_n_restarts_per_day": 10,
-                "max_ohlcv_fetches_per_minute": 30,
-                "max_realized_loss_pct": 1,
-                "max_warmup_minutes": 0,
-                "minimum_coin_age_days": 60,
-                "order_match_tolerance_pct": 0.0002,
-                "order_replacement_churn_gate_activation_count": 10,
-                "order_replacement_churn_gate_market_dist_pct": 0.005,
-                "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_replacement_churn_gate_window_minutes": 10.0,
-                "pnls_max_lookback_days": 30.0,
-                "recv_window_ms": 5000,
-                "startup_phase_budgets": {},
-                "strategy_kind": "trailing_martingale",
-                "time_in_force": "good_till_cancelled",
-                "user": "bybit_01",
-                "warmup_concurrency": 0,
-                "warmup_jitter_seconds": 30,
-                "warmup_ratio": 0.3,
+                "api": {
+                    "custom_endpoints_path": None,
+                    "market_snapshot_ticker_strategy": "auto",
+                    "max_concurrent_api_requests": None,
+                    "recv_window_milliseconds": 5000,
+                },
+                "candles": {
+                    "candle_lock_timeout_seconds": 10,
+                    "enable_archive_candle_fetch": False,
+                    "enable_forager_ws_candles": True,
+                    "forager_ws_candle_rest_audit_minutes": 30,
+                    "inactive_coin_candle_ttl_minutes": 10,
+                    "max_active_candle_tail_gap_minutes": 10,
+                    "max_disk_candles_per_symbol_per_tf": 2000000,
+                    "max_forager_candle_refresh_seconds": 45,
+                    "max_forager_candle_staleness_minutes": None,
+                    "max_memory_candles_per_symbol": 200000,
+                    "max_ohlcv_fetches_per_minute": 30,
+                },
+                "startup": {
+                    "defer_broad_candle_warmup": True,
+                    "force_cold_startup": False,
+                    "risk_bootstrap_max_lookback_minutes": 129600.0,
+                    "startup_phase_budgets": {},
+                    "warmup_concurrency": "auto",
+                    "warmup_jitter_seconds": 30,
+                },
+                "fills": {
+                    "fee_conversion_max_age_milliseconds": 86400000,
+                    "fallback_fee_fraction": 0.0002,
+                    "max_abs_fee_fraction": 0.001,
+                    "fills_confirmation_overlap_minutes": 60,
+                    "fills_recent_overlap_minutes": 10,
+                },
+                "execution": {
+                    "execution_delay_seconds": 2,
+                    "limit_order_create_max_market_distance_fraction": 0.8,
+                    "max_n_cancellations_per_batch": 5,
+                    "max_n_creations_per_batch": 3,
+                    "order_match_tolerance_fraction": 0.0002,
+                    "order_replacement_churn_gate_activation_count": 10,
+                    "order_replacement_churn_gate_market_distance_fraction": 0.005,
+                    "order_replacement_churn_gate_stability_minutes": 2.0,
+                    "order_replacement_churn_gate_window_minutes": 10.0,
+                    "time_in_force": "good_till_cancelled",
+                },
+                "recovery": {
+                    "exchange_symbol_unavailable_cooldown_hours": 6.0,
+                    "max_n_restarts_per_day": 10,
+                },
+                "modes": {
+                    "disapproved_position": "graceful_stop",
+                    "long": None,
+                    "short": None,
+                },
             },
             "logging": {
                 "backup_count": 5,
@@ -465,7 +312,7 @@ def get_template_config():
                 "event_rotation_minutes": 60.0,
                 "include_raw_fill_payloads": False,
                 "max_total_bytes": 1073741824,
-                "price_tick_min_interval_ms": 500,
+                "price_tick_min_interval_milliseconds": 500,
                 "retain_candles": True,
                 "retain_days": 7.0,
                 "retain_fills": True,
@@ -478,45 +325,22 @@ def get_template_config():
                 **{
                     "backend": "pymoo",
                     "compress_results_file": True,
-                    "crossover_eta": 20,
-                    "crossover_probability": 0.64,
                     "enable_overrides": [],
+                    "prefilter": deepcopy(PREFILTER_DEFAULTS),
                     "fixed_params": [],
-                    "fixed_runtime_overrides": {
-                        "bot.long.hsl.restart_after_red_policy": "always",
-                        "bot.short.hsl.restart_after_red_policy": "always",
-                    },
+                    "fixed_runtime_overrides": {},
                     "iters": 200000,
-                    "mutation_eta": 20,
-                    "mutation_indpb": 0.0135135135,
-                    "mutation_probability": 0.34,
                     "n_cpus": 4,
                     "objective_scenario": None,
-                    "offspring_multiplier": 1,
                     "pareto_max_size": 1000,
                     "population_size": None,
                     "seed": None,
                     "gpu": {
                         "tuning_mode": "auto",
-                        "auto_lean_parallelism": True,
                         "batch_size": None,
                         "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,
-                        "drift_halt": 0.6,
-                        "drift_rank_halt": None,
-                        "drift_objective_tolerance": 1.0e-6,
-                        "drift_min_samples": 32,
-                        "drift_probes": 4,
-                        "drift_window": 128,
-                        "exact_workers": None,
-                        "max_pending_exact": None,
-                        "population_size": None,
-                        "seed_bootstrap": {
-                            "max_exact": 128,
-                            "mode": "auto",
-                        },
                         "screening": deepcopy(GPU_SCREENING_DEFAULTS),
-                        "validate_per_generation": 8,
                     },
                     "pymoo": {
                         "algorithm": "auto",
@@ -557,7 +381,6 @@ def get_template_config():
                     ],
                     "scoring": [
                         {"goal": "max", "metric": "adg_strategy_eq"},
-                        {"goal": "max", "metric": "adg_strategy_eq_w"},
                         {"goal": "max", "metric": "mdg_strategy_eq"},
                         {"goal": "max", "metric": "sortino_ratio_strategy_eq"},
                         {"goal": "max", "metric": "volume_pct_per_day_avg"},
@@ -572,3 +395,20 @@ def get_template_config():
             },
         }
     )
+
+
+def get_template_config():
+    """Canonical authored defaults: one common policy and sparse side pins.
+
+    Expanded runtime shapes are a separate internal prototype. In particular,
+    default false activation is not an explicit side pin in this source view.
+    An omitted optimizer bound fixes its effective value rather than opening a
+    recommended search range.
+    """
+    result = get_expanded_config_prototype()
+    kind = result["bot"]["portfolio"]["strategy_kind"]
+    result["bot"]["global"]["strategy"] = {kind: result["bot"]["global"]["strategy"][kind]}
+    result["bot"]["long"] = {}
+    result["bot"]["short"] = {}
+    result["optimize"]["bounds"] = {}
+    return result

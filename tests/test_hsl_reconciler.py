@@ -60,7 +60,7 @@ def test_martingale_tape_preserves_every_transition(
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 def test_ambiguous_extra_inventory_and_delayed_add_repair(native, side, mode):
     d = 1 if side == "long" else -1
     fills = [
@@ -69,7 +69,7 @@ def test_ambiguous_extra_inventory_and_delayed_add_repair(native, side, mode):
         Fill("reopen", 3 * cases.M, d, 100, 0),
     ]
     p = cases.pair(pside=side, size=d * 2, basis=100, mark=100, fills=fills)
-    selectors = {} if mode == "unified" else dict(pside=side)
+    selectors = {} if mode == "portfolio" else dict(pside=side)
     if mode == "coin":
         selectors["symbol"] = "A"
     request = payload(
@@ -167,9 +167,6 @@ def test_flat_reconciliation_does_not_reappear_as_exposure_after_boundary(native
     assert history["events"][-1]["after"] == 1  # factual reduction preserved
     assert history["reconciliation"]["applied_at"] == 2 * cases.M
     assert [s["size"] for s in history["samples"]] == [2, 0, 0, 0]
-    trace = json.loads(native.hsl_trace(json.dumps(request)))
-    assert all(
-        not point["exposed"]
-        for episode in trace["episodes"][1:]
-        for point in episode["points"]
-    )
+    from test_hsl_evaluator import evaluate_snapshot
+    result=evaluate_snapshot(cases.frame(p))
+    assert result["risk"]["exposed"] is False

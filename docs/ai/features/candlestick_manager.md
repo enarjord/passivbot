@@ -7,7 +7,14 @@
    valid stale metadata, preserve confirmed exchange-side coverage boundaries, and fail on
    missing required local inputs. The task-local policy must never enable offline behavior
    in live callers. Verified prepared datasets retain input provenance.
-2. For backtest preparation, use v2 OHLCV chunks first, legacy raw shards second, and targeted remote fetches last.
+2. Backtest preparation reads the current OHLCV store first, then uses targeted remote fetches
+   when offline policy permits them. Importing legacy historical data is an explicit offline
+   `import-historical-data` command with separate dry-run and execute modes; startup does not
+   convert or silently consume a legacy store. Imports preserve sources and already-valid target
+   rows. Dry runs leave the target tree unchanged, including locks and SQLite sidecars. Validate
+   sources and all overlapping destination chunks before the first row write, then revalidate each
+   chunk under its write lock; this is not a transaction across months. Reject historical inputs
+   whose volume units are ambiguous. Current-store integrity and recovery checks remain active.
    For missing Binance futures 1m data in the current v2 path, remote source priority is Binance
    Vision monthly archives, Binance Vision daily archives, then CCXT. More than seven days of
    missing bars in an eligible closed month selects the monthly archive. Eligible days with more
@@ -38,6 +45,14 @@
    symbol/position-side availability, trailing deferral, readiness results, or trading behavior.
 
 ## Non-Obvious Details
+
+Span-based warmup acquisition rounds positive `bot.portfolio.warmup.max_minutes` caps upward to
+whole minutes in live and backtest paths; `0.5` means one minute, never uncapped. Null remains
+uncapped. Round only the acquisition window, preserving fractional EMA spans and naturally shorter
+requirements. Native hourly acquisition retains whole-hour alignment, and independent RMS history
+requirements are unchanged. Positive integer and fractional caps are ceilings rather than minimum
+requests; only uncapped background candidate refresh retains its default minimum window. Direct
+live ranking readers pass floating EMA spans through to the candle manager without rounding them.
 
 Ordinary native higher-timeframe reads reuse verified persisted rows and fetch only missing spans,
 with one source bucket of overlap on each side. Overlapping requests are coalesced; the overlap
@@ -191,7 +206,8 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
    disk coverage without entering the reusable range or EMA caches. Affected higher-timeframe EMA
-   cache entries are invalidated, and higher-timeframe EMAs require full requested coverage.
+   cache entries are invalidated by changes to processed history. Higher-timeframe EMAs require
+   full coverage of their required one-span window; an older optional bootstrap prefix is separate.
 
    A flat symbol selected by forager remains eligible for symbol-scoped required-EMA degradation
    even while one of its entry orders is resting. The unavailable symbol is sent to Rust as
@@ -230,8 +246,9 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
    bulk backtest-data download.
-10. Native higher-timeframe EMA windows require full requested coverage on every exchange. WEEX
-    additionally requires exact aligned coverage for 1m EMA windows because its recent endpoint
+10. Native higher-timeframe EMAs require full coverage of their required one-span window on every
+    exchange; an optional older bootstrap prefix may be shorter. WEEX additionally requires exact
+    aligned coverage for the required 1m EMA window because its recent endpoint
     silently tail-anchors responses. HSL restart and live trailing restart reconstruction may fetch
     1m candles first, then cover only the older leading prefix with 5m, 15m, and 1h candles. The
     finest available source wins and source counts remain visible. Normally only coarse buckets
@@ -273,7 +290,7 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
     Missing rows remain unavailable to ordinary candle consumers until an authoritative row
     arrives. Live strategy EMA reads may provisionally bridge a later-bracketed internal gap with
     non-persistent flat zero-volume rows only when the gap is no wider than
-    `live.max_active_candle_tail_gap_minutes`; current remote-enabled forager ranking reads use the
+    `live.candles.max_active_candle_tail_gap_minutes`; current remote-enabled forager ranking reads use the
     same bounded internal-gap rule, while cache-only forager ranking carry-forward remains
     unavailable across an unresolved internal gap.
     Complete rows in the supplied EMA window remain
@@ -496,3 +513,40 @@ synchronous cohort share the index, avoiding NumPy's repeated materialization of
 the strided structured-array timestamp field. The index is never retained across
 calls: corrections, RAM eviction/replacement and synthetic-set changes remain
 visible immediately. Full outage widths and candle/EMA policies are unchanged.
+
+### Ordinary market EMA initialization and continuation
+
+Ordinary price, quote/base volume and log-range indicators use floating sample spans. For a new
+indicator, normalize exponential weights over at most `ceil(2 * span)` available completed samples:
+`numerator = value + decay * numerator`, `denominator = 1 + decay * denominator`, then finalize
+`ema = numerator / denominator`. Here `alpha = min(1, 2 / (span + 1))` and `decay = 1 - alpha`.
+Prefer one span of history; two spans are a bootstrap cap, never a universal readiness requirement.
+Existing strict one-span coverage rules and scoped missing-data policies still apply. A missing
+optional older prefix must not become fabricated candles. Bootstrap uses the available contiguous
+completed suffix, subject to those policies.
+
+After bootstrap, retain only the finalized value as arithmetic state and advance each new completed
+sample once with `ema = decay * previous_ema + alpha * value`. Do not continue the normalized-weight
+bootstrap denominator into ordinary operation. Full-series APIs normalize their initial bounded
+prefix and then use the same ordinary recurrence. Latest scalar bootstrap helpers fold their
+bounded suffix without allocating an output series.
+
+Live cache TTL controls candle refresh, not EMA age or repeated consumption. The same completed
+source prefix and end timestamp reuse the finalized value. Appended completed rows advance only
+the new suffix; changed/removed processed rows invalidate affected cached values, including
+canonical corrections older than the retained bootstrap window. A changed span/timeframe has a
+separate initializer. Quote and unknown-tail projections use a temporary copy and cannot advance
+committed state. Cache loss or restart uses the available completed bootstrap window; equality to
+an unknown infinite past is neither required nor claimed.
+
+CPU backtests initialize each coin at its first usable planning boundary, after the global warmup
+and requested-start guards and once the coin is tradeable. Selection and order construction run
+after that initializer. Bootstrap includes completed candle `k` and its preceding bounded warmup,
+never `k + 1`. Newly eligible coins can use a shorter available prefix. Subsequent candles advance
+once. Native GPU replay follows the same boundary. Hourly range indicators include only completed
+hour buckets, retain their hourly alpha and advance on hour boundaries rather than every minute.
+
+For example, span `3` and completed values `[2, 4]` initialize to `10/3`; the next completed value
+`8` advances to `17/3`. Continuing normalized weights would instead produce `6`, which is a distinct
+formula. This policy does not change deliberate HSL zero initialization, realized-loss memory,
+risk-history/refold contracts or the existing exposure RMS model.

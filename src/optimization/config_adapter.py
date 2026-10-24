@@ -12,10 +12,12 @@ from config.bot import validate_unstuck_ema_dist_value
 from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
+    iter_optimizer_key_paths,
     resolve_optimizer_key_path,
     require_existing_config_path,
 )
 from config.optimize_bounds import flatten_optimize_bounds
+from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
 from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
 from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
@@ -26,12 +28,15 @@ from config.strategy_spec import (
 from optimization.bounds import Bound
 from optimizer_overrides import (
     COUPLED_UNSTUCK_EMA_BOUND_KEYS,
+    optimizer_numeric_group_source_side,
     unstuck_ema_spans_coupled,
 )
 
 
+from config.access import get_optional_config_value
+
 def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
 
 
@@ -49,13 +54,19 @@ def _flatten_required_optimize_bounds(config: dict) -> dict:
 
 
 def _strategy_path_map(config: dict) -> dict[str, Tuple[str, ...]]:
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     return strategy_optimize_key_path_map(strategy_kind)
 
 
 def resolve_optimization_bound_path(
     config: dict, bound_key: str
 ) -> Tuple[str, ...] | None:
+    plan = get_bound_plan(config)
+    if plan is not None:
+        for binding in plan.bindings:
+            if bound_key == binding.key or bound_key in binding.native_ids:
+                return binding.authoring_path
+        return None
     return resolve_optimizer_key_path(config, bound_key)
 
 
@@ -63,35 +74,52 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     if not isinstance(optimize_bounds, dict):
         return
     bot_config = config.get("bot") or get_template_config()["bot"]
+    authored_bounds = optimize_bounds
     optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
     strategy_path_map = _strategy_path_map(config)
     cooldown_ranges = {}
-    for bound_key in optimize_bounds:
-        if not isinstance(bound_key, str):
-            continue
+    for bound_key, resolved in iter_optimizer_key_paths(
+        config, (key for key in optimize_bounds if isinstance(key, str))
+    ):
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
-        resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             raise KeyError(
                 f"optimize bound {bound_key} does not map to a known bot parameter"
             )
+        if resolved in {
+            ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
+            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
+        }:
+            from config.risk_memory import normalize_memory_ema_span_minutes
+
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            for endpoint in (bound.low, bound.high):
+                normalize_memory_ema_span_minutes(endpoint, field=f"optimize.bounds.{bound_key}")
+            continue
         if "hsl" in resolved:
             from config.hsl import _number
 
             name = resolved[-1]
             constraints = {
-                "red_threshold": dict(minimum=0, maximum=1, strict=True),
-                "ema_span_minutes": dict(minimum=1),
-                "cooldown_minutes_after_red": dict(minimum=0),
+                "drawdown_ratio_threshold": dict(minimum=0, maximum=1, strict=True),
+                "memory_ema_span_minutes": dict(minimum=1),
+                "drawdown_ratio_ema_span_minutes": dict(minimum=1),
+                "cooldown_after_red_minutes": dict(minimum=0),
             }
             if name in constraints:
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
+                    if name in {"memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes"}:
+                        from config.risk_memory import normalize_memory_ema_span_minutes
+
+                        normalize_memory_ema_span_minutes(
+                            endpoint, field=f"optimize.bounds.{bound_key}"
+                        )
         adaptive_domain = {
-            ("forager", "unilateralness_ema_span_1m"): (1.0, 100_000.0),
+            ("forager", "unilateralness_ema_span_minutes"): (1.0, 100_000.0),
             ("forager", "score_weights", "unilateralness"): (0.0, math.inf),
             ("entry_cooldown", "weights_minutes", "exposure_ratio"): (0.0, math.inf),
             ("entry_cooldown", "weights_minutes", "adverse_directionality"): (0.0, math.inf),
@@ -115,8 +143,8 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             ("entry_cooldown", "max_duration_minutes"),
         ):
             cooldown_ranges[resolved[1], resolved[-1]] = bound
-        if resolved[:2] == ("bot", "hsl"):
-            value = bot_config["hsl"].get(resolved[-1])
+        if resolved[:3] == ("bot", "portfolio", "hsl"):
+            value = bot_config["portfolio"]["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise KeyError(
                     f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter"
@@ -133,13 +161,13 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             raise KeyError(
                 f"optimize bound {bound_key} resolved to invalid path {resolved!r}"
             ) from exc
-        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
         key = canonical_key.split("_", 1)[1] if "_" in canonical_key else canonical_key
-        if key not in flat_pside_cfg:
-            raise KeyError(
-                f"optimize bound {bound_key} does not map to bot.{pside}.{key}"
-            )
-        value = flat_pside_cfg[key]
+        value = config
+        try:
+            for part in resolved:
+                value = value[part]
+        except (KeyError, TypeError) as exc:
+            raise KeyError(f"optimize bound {bound_key} has no canonical value at {resolved!r}") from exc
         if isinstance(value, dict):
             raise KeyError(
                 f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}"
@@ -216,19 +244,301 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 )
 
 
+    validate_forager_weight_search(config, authored_bounds)
+
+
+def validate_forager_weight_search(
+    config: dict, optimize_bounds=None, *, tunable_keys=None, suite_config=None
+) -> None:
+    """Check normalized weight authority before candidate or dataset evaluation.
+
+    Runtime pins precede mirroring and scenario pins follow it. Validate the
+    base candidate stage too, before the final scenario patches are applied.
+    """
+    from config.param_paths import resolve_bound_selectors
+    from config.scenario_overrides import normalize_scenario_overrides
+
+    raw = (config.get("optimize", {}).get("bounds", {})
+           if optimize_bounds is None else optimize_bounds)
+    flat = _flatten_bounds_for_config(config, raw)
+    plan = get_bound_plan(config)
+    if plan is not None:
+        if optimize_bounds is not None and optimize_bounds is not config.get("optimize", {}).get("bounds"):
+            from copy import deepcopy
+            from config.inherited_bounds import prepare_bound_plan
+
+            config = deepcopy(config)
+            plan = prepare_bound_plan(config, authored_bounds=optimize_bounds)
+        selected = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [])
+        fixed = {key for binding in plan.bindings if binding.key in selected for key in binding.native_ids}
+        if tunable_keys is not None:
+            tunable_keys = {key for binding in plan.bindings
+                            if binding.key in tunable_keys or set(binding.native_ids) & set(tunable_keys)
+                            for key in binding.native_ids}
+    else:
+        fixed = set(resolve_bound_selectors(
+            config, config.get("optimize", {}).get("fixed_params", []) or [], flat
+        ))
+    runtime_pins = list(normalize_scenario_overrides(
+        config.get("optimize", {}).get("fixed_runtime_overrides", {})
+    ).items())
+    contexts = [("", [])]
+    suite = config.get("backtest", {}) if suite_config is None else suite_config
+    enabled = (suite.get("suite_enabled", False)
+               if suite_config is None else suite.get("enabled", False))
+    if enabled:
+        for index, scenario in enumerate(suite.get("scenarios") or []):
+            if not isinstance(scenario, dict):
+                continue  # The scenario-schema gate owns malformed rows.
+            label = scenario.get("label", index + 1)
+            context = f"backtest.scenarios[{index}] ({label}): "
+            scenario_pins = normalize_scenario_overrides(scenario.get("overrides"))
+            contexts.append((context, list(scenario_pins.items())))
+    for context, scenario_pins in contexts:
+        validator = (_validate_inherited_forager_weight_context if plan is not None
+                     else _validate_forager_weight_context)
+        validator(
+            config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
+        )
+
+
+def _validate_inherited_forager_weight_context(
+    config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
+):
+    """Follow declared gene ownership through runtime and scenario replacements.
+
+    Materializing each binding at its current value establishes side-bound pins
+    without sampling. Origins then distinguish an explicit equal-value pin from
+    an untouched inherited gene, including atomic parent replacements.
+    """
+    from copy import deepcopy
+    from config.activation import side_enabled
+    from config.bot_inheritance import (
+        apply_bot_config_patch, apply_bot_policy_patch, get_bot_policy, install_bot_policy,
+    )
+
+    def apply_pins(target, pins):
+        try:
+            apply_bot_config_patch(target, dict(pins))
+        except ValueError as exc:
+            for selector, value in pins:
+                selected_path = tuple(selector.split("."))
+                for scope in ("global", "long", "short"):
+                    weight_path = ("bot", scope, "forager", "score_weights")
+                    if weight_path[:len(selected_path)] != selected_path:
+                        continue
+                    weight_value = value
+                    for part in weight_path[len(selected_path):]:
+                        if not isinstance(weight_value, dict) or part not in weight_value:
+                            break
+                        weight_value = weight_value[part]
+                    else:
+                        if isinstance(weight_value, dict) and set(names) - set(weight_value):
+                            raise ValueError(
+                                f"{context}override removes required {'.'.join(weight_path)}; "
+                                "provide the complete object or use leaf overrides"
+                            ) from exc
+            if context:
+                raise ValueError(f"{context}{exc}") from exc
+            raise
+
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    plan = get_bound_plan(config)
+    bindings = {binding.authoring_path: binding for binding in plan.bindings}
+    values = {}
+    for binding in plan.bindings:
+        value = config
+        for part in binding.authoring_path:
+            value = value[part]
+        values[binding.key] = value
+    runtime = deepcopy(config)
+    install_bot_policy(runtime, apply_bot_policy_patch(get_bot_policy(config), values, channel="gene"))
+    apply_pins(runtime, runtime_pins)
+    runtime_bot, runtime_origins = get_bot_policy(runtime).resolve()
+    runtime_origins = {origin.target: origin for origin in runtime_origins}
+    scenario = deepcopy(runtime)
+    apply_pins(scenario, scenario_pins)
+    scenario_bot, scenario_origins = get_bot_policy(scenario).resolve()
+    scenario_origins = {origin.target: origin for origin in scenario_origins}
+
+    def field_domain(side, group, suffix):
+        target = ("bot", side, group, *suffix)
+        # A scenario declaration follows mirroring. An untouched target still
+        # consumes the runtime source group selected by the existing transform.
+        if scenario_origins[target] != runtime_origins[target]:
+            origin, bot = scenario_origins[target], scenario_bot
+            selected_side = side
+        else:
+            selected_side = optimizer_numeric_group_source_side(config, side, group)
+            selected = ("bot", selected_side, group, *suffix)
+            origin, bot = runtime_origins[selected], runtime_bot
+        value = bot[selected_side][group]
+        for part in suffix:
+            value = value[part]
+        binding = bindings.get(origin.source) if origin.kind == "gene" else None
+        if (binding is None or set(binding.native_ids) & fixed
+                or tunable_keys is not None and not set(binding.native_ids) & set(tunable_keys)):
+            return Bound(float(value), float(value))
+        return binding.bound
+
+    for side in ("long", "short"):
+        if not side_enabled(scenario, side) or any(
+            field_domain(side, "risk", (field,)).high <= 0
+            for field in ("max_positions", "total_wallet_exposure_limit")
+        ):
+            continue
+        domains = {name: field_domain(side, "forager", ("score_weights", name)) for name in names}
+        for name, bound in domains.items():
+            if any(not math.isfinite(value) or value < 0 for value in (bound.low, bound.high)):
+                raise ValueError(f"{context}bot.{side}.forager.score_weights.{name} pin must be finite and nonnegative")
+        varied = [name for name, bound in domains.items() if bound.low != bound.high]
+        fixed_positive = [name for name, bound in domains.items() if bound.low == bound.high and bound.low > 0]
+        fallback_fixed = (sum(bound.low for bound in domains.values()) == 0
+                          and domains["ema_readiness"].low == domains["ema_readiness"].high)
+        if varied and (fixed_positive or fallback_fixed):
+            affected = sorted(fixed_positive) or ["ema_readiness (all-zero normalization fallback)"]
+            weight_source = optimizer_numeric_group_source_side(config, side, "forager")
+            source_note = (
+                f" Mirrored search domains come from bot.{weight_source}.forager.score_weights; "
+                "freeze that source group or replace the complete target weight group."
+                if weight_source != side else ""
+            )
+            raise ValueError(
+                f"{context}bot.{side}.forager.score_weights: partial normalized-weight search would change "
+                f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
+                "weight or freeze the whole score_weights group; omitted zero weights must "
+                f"also remain zero at the all-zero fallback.{source_note}"
+            )
+
+
+def _validate_forager_weight_context(
+    config, flat, fixed, tunable_keys, runtime_pins, scenario_pins, context
+):
+    from copy import deepcopy
+    from config.activation import apply_activation_patch, side_enabled
+
+    activation_context = deepcopy(config)
+    apply_activation_patch(activation_context, dict(runtime_pins))
+    apply_activation_patch(activation_context, dict(scenario_pins))
+    def pinned_value(path, configured, pins):
+        pinned, removed = False, False
+        for selector, value in pins:
+            parts = tuple(selector.split("."))
+            if path[:len(parts)] != parts:
+                continue
+            pinned, removed = True, False
+            for part in path[len(parts):]:
+                if not isinstance(value, dict) or part not in value:
+                    removed = True
+                    break
+                value = value[part]
+            if not removed:
+                configured = value
+        if removed:
+            raise ValueError(
+                f"{context}override removes required {'.'.join(path)}; "
+                "provide the complete object or use leaf overrides"
+            )
+        return configured, pinned
+
+    names = ("volume", "volatility", "ema_readiness", "unilateralness")
+    for side in ("long", "short"):
+        weight_source = optimizer_numeric_group_source_side(config, side, "forager")
+        bot = config.get("bot", {}).get(weight_source, {})
+        weights = bot.get("forager", {}).get("score_weights")
+        if not isinstance(weights, dict):
+            continue
+        missing = set(names) - set(weights)
+        if missing:
+            raise ValueError(
+                f"{context}bot.{side}.forager.score_weights missing required weights: "
+                f"{', '.join(sorted(missing))}"
+            )
+        active = side_enabled(activation_context, side)
+        risk_source = optimizer_numeric_group_source_side(config, side, "risk")
+        risk = config.get("bot", {}).get(risk_source, {}).get("risk", {})
+        for field, key in (("max_positions", "n_positions"),
+                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
+            bound_key = f"{risk_source}_{key}"
+            value, runtime_pinned = pinned_value(
+                ("bot", risk_source, "risk", field), risk.get(field, 0.0), runtime_pins
+            )
+            value, scenario_pinned = pinned_value(
+                ("bot", side, "risk", field), value, scenario_pins
+            )
+            pinned = runtime_pinned or scenario_pinned
+            if (not pinned and bound_key in flat and bound_key not in fixed
+                    and (tunable_keys is None or bound_key in tunable_keys)):
+                value = Bound.from_config(bound_key, flat[bound_key]).high
+            if float(value) <= 0:
+                active = False
+        if not active:
+            continue
+        varied, fixed_positive, minima, fixed_values = [], [], [], {}
+        for name in names:
+            key = f"{weight_source}_forager_score_weights_{name}"
+            configured, runtime_pinned = pinned_value(
+                ("bot", weight_source, "forager", "score_weights", name),
+                weights[name], runtime_pins,
+            )
+            configured, scenario_pinned = pinned_value(
+                ("bot", side, "forager", "score_weights", name), configured, scenario_pins
+            )
+            pinned = runtime_pinned or scenario_pinned
+            if pinned and (isinstance(configured, bool) or not isinstance(configured, (int, float))
+                           or not math.isfinite(configured) or configured < 0):
+                raise ValueError(
+                    f"{context}bot.{side}.forager.score_weights.{name} pin "
+                    "must be finite and nonnegative"
+                )
+            can_vary = (key in flat and key not in fixed and not pinned
+                        and (tunable_keys is None or key in tunable_keys))
+            bound = (Bound.from_config(key, flat[key]) if key in flat
+                     else Bound(float(configured), float(configured)))
+            if can_vary and bound.low != bound.high:
+                varied.append(name)
+                minima.append(bound.low)
+            else:
+                value = (float(configured) if pinned or key in fixed
+                         or (tunable_keys is not None and key not in tunable_keys) else bound.low)
+                fixed_values[name] = value
+                minima.append(value)
+                if value > 0:
+                    fixed_positive.append(name)
+        if not varied:
+            continue
+        fallback_fixed = (sum(minima) == 0 and "ema_readiness" in fixed_values)
+        if fixed_positive or fallback_fixed:
+            affected = sorted(fixed_positive) or ["ema_readiness (all-zero normalization fallback)"]
+            source_note = (
+                f" Mirrored search domains come from bot.{weight_source}.forager.score_weights; "
+                "freeze that source group or replace the complete target weight group."
+                if weight_source != side else ""
+            )
+            raise ValueError(
+                f"{context}bot.{side}.forager.score_weights: partial normalized-weight search would change "
+                f"fixed positive weight(s): {', '.join(affected)}. Search every participating "
+                "weight or freeze the whole score_weights group; omitted zero weights must "
+                f"also remain zero at the all-zero fallback.{source_note}"
+            )
+
+
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
+    plan = get_bound_plan(config)
+    if plan is not None:
+        return [(binding.key, binding.authoring_path) for binding in plan.bindings
+                if _binding_supplies_runtime_values(config, binding)]
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
-    template = get_template_config()
     bot_config = config.get("bot")
     if bot_config is None:
-        bot_config = template["bot"]
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+        bot_config = get_template_config()["bot"]
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     strategy_path_map = _strategy_path_map(config)
     optimize_bounds = _flatten_required_optimize_bounds(config)
-    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
-    for bound_key in sorted(optimize_bounds):
-        if not isinstance(bound_key, str):
-            continue
+    validate_optimize_bounds_against_bot_config(config, config["optimize"]["bounds"])
+    for bound_key, resolved in iter_optimizer_key_paths(
+        config, (key for key in sorted(optimize_bounds) if isinstance(key, str))
+    ):
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
@@ -237,29 +547,42 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             and canonical_key in COUPLED_UNSTUCK_EMA_BOUND_KEYS
         ):
             continue
-        resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             continue
-        if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS or resolved[:2] == ("bot", "hsl"):
+        if (canonical_key in OPTIMIZABLE_BOT_KEY_PATHS
+            or resolved[:3] == ("bot", "portfolio", "hsl")
+            or resolved in {("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
+                            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes")}):
             key_paths.append((bound_key, resolved))
             continue
         if canonical_key in strategy_path_map:
             key_paths.append((bound_key, resolved))
             continue
-        pside, key = canonical_key.split("_", 1)
-        if pside not in ("long", "short"):
-            continue
-        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
-        if key not in flat_pside_cfg:
-            raise KeyError(
-                f"optimize bound {bound_key} does not map to bot.{pside}.{key}"
-            )
-        if isinstance(flat_pside_cfg[key], dict):
-            raise KeyError(
-                f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}"
-            )
+        value = config
+        try:
+            for part in resolved:
+                value = value[part]
+        except (KeyError, TypeError) as exc:
+            raise KeyError(f"optimize bound {bound_key} has no canonical value at {resolved!r}") from exc
+        if isinstance(value, dict):
+            raise KeyError(f"optimize bound {bound_key} must map to a scalar at {resolved!r}")
         key_paths.append((bound_key, resolved))
     return key_paths
+
+
+def _binding_supplies_runtime_values(config, binding):
+    if unstuck_ema_spans_coupled(config) and set(binding.native_ids) & COUPLED_UNSTUCK_EMA_BOUND_KEYS:
+        return False
+    mirror = "mirror_short_from_long" in (config.get("optimize", {}).get("enable_overrides") or [])
+    for target in binding.effective_targets:
+        if target[1] not in {"long", "short"}:
+            return True
+        source_side = optimizer_numeric_group_source_side(config, target[1], target[2])
+        if mirror and target[1] == "short" and target[2] == "strategy":
+            source_side = "long"
+        if source_side == target[1]:
+            return True
+    return False
 
 
 def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
@@ -273,6 +596,9 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         - [low, high, 0] or [low, high, null]: treated as continuous
         - single value: fixed parameter (low=high, step=None)
     """
+    plan = get_bound_plan(config)
+    if plan is not None:
+        return _inherited_optimization_bounds(config, plan)
     bounds = []
     optimize_bounds = _flatten_required_optimize_bounds(config)
     key_paths = get_optimization_key_paths(config)
@@ -280,10 +606,13 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
     if bot_config is None:
         bot_config = get_template_config()["bot"]
     pside_enabled = {}
+    from config.activation import optimizer_side_may_activate
     for pside in ("long", "short"):
-        pside_enabled[pside] = all(
-            Bound.from_config(k, optimize_bounds[k]).high > 0.0
-            for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
+        pside_enabled[pside] = optimizer_side_may_activate(config, pside) and all(
+            (Bound.from_config(key, optimize_bounds[key]).high if key in optimize_bounds
+             else float(bot_config[pside]["risk"][field])) > 0.0
+            for key, field in ((f"{pside}_n_positions", "max_positions"),
+                               (f"{pside}_total_wallet_exposure_limit", "total_wallet_exposure_limit"))
         )
 
     for bound_key, path in key_paths:
@@ -305,3 +634,35 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             continue
         bounds.append(bound_vals)
     return bounds
+
+
+def _inherited_optimization_bounds(config, plan):
+    """A common domain remains searchable if any effective target can use it."""
+    from config.activation import optimizer_side_may_activate
+
+    by_target = {target: binding for binding in plan.bindings for target in binding.effective_targets}
+    enabled = {}
+    for side in ("long", "short"):
+        enabled[side] = optimizer_side_may_activate(config, side)
+        for name in ("max_positions", "total_wallet_exposure_limit"):
+            target = ("bot", side, "risk", name)
+            binding = by_target.get(target)
+            value = (binding.bound.high if binding is not None else
+                     config["bot"][side]["risk"][name])
+            enabled[side] = enabled[side] and value > 0.0
+    by_key = {binding.key: binding for binding in plan.bindings}
+    fixed = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [])
+    result = []
+    for key, _ in get_optimization_key_paths(config):
+        binding = by_key[key]
+        bound = binding.bound
+        if key in fixed:
+            value = config
+            for part in binding.authoring_path:
+                value = value[part]
+            result.append(Bound(float(value), float(value), bound.step))
+        elif all(target[1] in enabled and not enabled[target[1]] for target in binding.effective_targets):
+            result.append(Bound(bound.low, bound.low, bound.step))
+        else:
+            result.append(bound)
+    return result

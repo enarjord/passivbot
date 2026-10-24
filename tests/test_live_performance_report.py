@@ -5614,9 +5614,9 @@ def test_live_performance_report_max_event_files_prefers_current_then_recent(tmp
     )
 
     assert report["ok"] is True
-    assert report["files"] == [
-        str(current),
-        str(new_rotated),
+    assert [Path(path).expanduser() for path in report["files"]] == [
+        current,
+        new_rotated,
     ]
     assert report["files_scanned"] == 2
     assert report["records_total"] == 2
@@ -5718,11 +5718,11 @@ def test_live_performance_report_max_event_files_per_bot_is_fair(tmp_path):
     )
 
     assert report["ok"] is True
-    assert report["files"] == [
-        str(paths["okx_current"]),
-        str(paths["binance_current"]),
-        str(paths["okx_new"]),
-        str(paths["binance_new"]),
+    assert [Path(path).expanduser() for path in report["files"]] == [
+        paths["okx_current"],
+        paths["binance_current"],
+        paths["okx_new"],
+        paths["binance_new"],
     ]
     assert report["files_scanned"] == 4
     assert report["records_total"] == 4

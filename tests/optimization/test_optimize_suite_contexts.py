@@ -1,11 +1,16 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import pickle
+from copy import deepcopy
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 import optimize_suite
-from config.schema import get_template_config
+from config.authored import validate_authored_config
+from config.schema import get_template_config, get_expanded_config_prototype
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 from suite_runner import ExchangeDataset
 
 
@@ -20,6 +25,62 @@ class _FakeAttachment:
 
     def close(self):
         self.closed += 1
+
+
+@pytest.mark.asyncio
+async def test_prepare_suite_contexts_skips_missing_historical_coins(monkeypatch):
+    from config.load import prepare_config
+    from config.schema import get_template_config
+    from config.universe import universe_source_view
+
+    _stub_market_identity_validation(monkeypatch)
+    raw = get_template_config()
+    raw["bot"]["long"]["enabled"] = True
+    raw["bot"]["global"]["universe"].update(
+        approved_coins=["AAA", "BBB", "CCC"], ignored_coins=[], minimum_coin_age_days=0.0,
+    )
+    raw["backtest"].update(
+        start_date="2024-01-01", end_date="2024-01-02", exchanges=["binance"],
+        suite_enabled=True, scenarios=[
+            {"label": "base"},
+            {"label": "subset", "coins": ["BBB", "AAA"]},
+            {"label": "ignored", "ignored_coins": ["CCC", "BBB"]},
+        ],
+    )
+    config = prepare_config(raw, verbose=False)
+
+    async def fake_load_markets(*_args, **_kwargs):
+        return {}
+
+    async def fake_format_approved_ignored_coins(*_args, **_kwargs):
+        return None
+
+    async def fake_prepare_master_datasets(*_args, **_kwargs):
+        return {"combined": _make_lazy_dataset(
+            coins=("AAA", "CCC"), coin_exchange={"AAA": "binance", "CCC": "binance"},
+            available_exchanges=["binance"],
+        )}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", fake_format_approved_ignored_coins)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config, optimize_suite.extract_suite_config(config, suite_override=None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+
+    assert [context.label for context in contexts] == ["base", "subset", "ignored"]
+    for context in contexts:
+        columns = ["AAA"] if context.label == "subset" else ["AAA", "CCC"]
+        assert context.config["backtest"]["coins"]["combined"] == columns
+        assert context.coin_slice_indices["combined"] == ([0] if context.label == "subset" else [0, 1])
+        assert require_side_universe_sources(context.config, "approved_coins") == {
+            side: columns if context.label == "base" else ["AAA"] for side in ("long", "short")}
+    subset_source = universe_source_view(contexts[1].config)
+    ignored_source = universe_source_view(contexts[2].config)
+    for side in ("long", "short"):
+        assert subset_source["bot"][side]["universe"]["approved_coins"] == ["BBB", "AAA"]
+        assert ignored_source["bot"][side]["universe"]["ignored_coins"] == ["CCC", "BBB"]
 
 
 def _stub_market_identity_validation(monkeypatch):
@@ -74,11 +135,12 @@ def _make_lazy_dataset(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rms_search", [False, True])
 @pytest.mark.parametrize("interval", [1, 5])
-async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_short_disabled(
+async def test_prepare_suite_contexts_keeps_directional_scenarios_with_reachable_sides(
     monkeypatch, rms_search, interval,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["candle_interval_minutes"] = interval
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -88,24 +150,23 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
         {"label": "base"},
         {
             "label": "long_only",
-            "overrides": {"bot.short.total_wallet_exposure_limit": 0},
+            "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0},
         },
         {
             "label": "short_only",
-            "overrides": {"bot.long.total_wallet_exposure_limit": 0},
+            "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0},
         },
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
-    # Schema defaults keep shorts disabled. Optimizer candidates may enable
-    # shorts later, so context preparation must not dedupe base vs long_only.
-    config["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
+    # The data view covers both reachable sides; directional scenarios must
+    # retain their distinct runtime gates instead of deduplicating against base.
+    config["bot"]["short"]["enabled"] = True
     if rms_search:
-        config["live"]["max_warmup_minutes"] = 3
-        config["optimize"]["bounds"]["long"]["forager"].update(
-            unilateralness_ema_span_1m=[1.0, 60.0],
-            score_weights={"unilateralness": [0.0, 1.0]},
-        )
+        config['bot']["portfolio"]['warmup']['max_minutes'] = 3
+        forager = config["optimize"]["bounds"]["long"]["forager"]
+        forager["unilateralness_ema_span_minutes"] = [1.0, 60.0]
+        forager["score_weights"]["unilateralness"] = [0.0, 1.0]
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -244,7 +305,9 @@ def test_suite_evaluator_pickle_strips_attached_and_cached_arrays():
 async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_coins(
     monkeypatch,
 ):
-    config = get_template_config()
+    _stub_market_identity_validation(monkeypatch)
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -253,9 +316,23 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
         {"label": "explicit", "coins": ["DOGE"]},
         {"label": "default"},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     captured = {}
+    format_scenario = optimize_suite.format_config
+
+    def capture_public_scenario_format(scenario_config, **kwargs):
+        # Dataset selection may carry these internal values, but public
+        # formatting must receive only canonical authored configuration.
+        assert "coins" not in scenario_config["backtest"]
+        assert "cache_dir" not in scenario_config["backtest"]
+        for side in ("long", "short"):
+            assert not set(scenario_config["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH)
+        validate_authored_config(scenario_config, get_template_config())
+        captured.setdefault("formatted_approved", []).append(
+            deepcopy(require_side_universe_sources(scenario_config, 'approved_coins'))
+        )
+        return format_scenario(scenario_config, **kwargs)
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -266,7 +343,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
         return None
 
     async def fake_prepare_master_datasets(base_config, exchanges, *_args, **_kwargs):
-        captured["approved"] = list(base_config["live"]["approved_coins"]["long"])
+        captured["approved"] = list(base_config['bot']["long"]['universe']['approved_coins'])
         captured["exchanges"] = list(exchanges)
         return {
             "combined": _make_lazy_dataset(
@@ -285,6 +362,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     monkeypatch.setattr(
         optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
     )
+    monkeypatch.setattr(optimize_suite, "format_config", capture_public_scenario_format)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
@@ -296,12 +374,25 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     assert captured["approved"] == ["DOGE", "HYPE"]
     assert captured["exchanges"] == ["binance"]
     assert [ctx.label for ctx in contexts] == ["explicit", "default"]
+    assert captured["formatted_approved"] == [
+        {"long": ["DOGE"], "short": ["DOGE"]},
+        {"long": ["HYPE"], "short": ["HYPE"]},
+    ]
+    assert [ctx.config["backtest"]["coins"] for ctx in contexts] == [
+        {"combined": ["DOGE"]}, {"combined": ["HYPE"]},
+    ]
+    assert [ctx.candle_coins for ctx in contexts] == [
+        {"combined": ("DOGE", "HYPE")}, {"combined": ("DOGE", "HYPE")},
+    ]
+    assert contexts[0].coin_slice_indices["combined"] == [0]
+    assert contexts[1].coin_slice_indices["combined"] == [1]
 
 
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkeypatch):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -309,8 +400,8 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
     config["backtest"]["scenarios"] = [
         {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["HYPE"]},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     loaded_exchanges = []
     captured = {}
 
@@ -358,7 +449,8 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
     monkeypatch,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance", "bybit"]
@@ -366,8 +458,8 @@ async def test_prepare_suite_contexts_keeps_explicit_exchange_out_of_combined_da
     config["backtest"]["scenarios"] = [
         {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["HYPE"]},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -418,7 +510,8 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
     monkeypatch,
 ):
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
@@ -426,8 +519,8 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
     config["backtest"]["scenarios"] = [
         {"label": "bybit_only", "exchanges": ["bybit"], "coins": ["HYPE"]},
     ]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -460,17 +553,19 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", [False, True])
 async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
-    monkeypatch,
+    monkeypatch, canonical,
 ):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "missing_coin", "coins": ["MISSING"]}]
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -497,6 +592,9 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
         optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets
     )
 
+    if canonical:
+        from config.load import prepare_config
+        config = prepare_config(config, verbose=False)
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
     with pytest.raises(ValueError, match="missing_coin could not be prepared"):
         await optimize_suite.prepare_suite_contexts(
@@ -508,14 +606,15 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(
 
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeypatch):
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "base"}]
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": ["ETH"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -533,7 +632,7 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
     )
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
-    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+    with pytest.raises(ValueError, match=r"asymmetric bot\.<side>\.universe\.approved_coins"):
         await optimize_suite.prepare_suite_contexts(
             config,
             suite_cfg,
@@ -542,7 +641,7 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+@pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contract(
     tmp_path, monkeypatch, backend
 ):
@@ -559,7 +658,8 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
     from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 
     _stub_market_identity_validation(monkeypatch)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["optimize"]["backend"] = backend
     config["backtest"].update(
         start_date="2024-01-01",
@@ -567,8 +667,8 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
         exchanges=["binance"],
         suite_enabled=True,
     )
-    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
-    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     path = tmp_path / "scenario-coin.json"
     config["backtest"]["scenarios"] = [
         {
@@ -603,7 +703,7 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
 
     async def prepare(value):
         path.write_text(
-            json.dumps({"bot": {"long": {"risk": {"entry_cooldown_minutes": value}}}})
+            json.dumps({"bot": {"long": {"entry_cooldown": {"base_duration_minutes": value}}}})
         )
         run = deepcopy(config)
         suite = optimize_suite.extract_suite_config(run, suite_override=None)

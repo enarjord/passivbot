@@ -25,12 +25,8 @@ def staged_planner_required_surfaces(
 ) -> frozenset[str]:
     """Return live input surfaces required before staged order planning may proceed."""
     surfaces = set(ACCOUNT_SURFACES)
-    from config.pnl_lookback import parse_pnls_max_lookback_days
-
     now = int(bot.get_exchange_time())
-    start = parse_pnls_max_lookback_days(
-        bot.config["live"]["pnls_max_lookback_days"]
-    ).event_history_start_ms(now)
+    start = bot._pnls_lookback_start_ms()
     required, _ = bot._required_fill_history_start_ms(now, pnl_start_ms=start)
     if not required:
         # HSL can estimate history. Other enabled fill/PnL
@@ -274,7 +270,7 @@ def build_staged_planning_snapshot(
         ),
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
-        user=str(bot.config_get(["live", "user"]) or ""),
+        user=str(bot.config_get(["live", "account", "user"]) or ""),
         ledger=ledger,
         required_surfaces=required,
         min_epochs=min_epochs,
@@ -342,7 +338,7 @@ def build_protective_planning_snapshot(
         ),
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
-        user=str(bot.config_get(["live", "user"]) or ""),
+        user=str(bot.config_get(["live", "account", "user"]) or ""),
         ledger=ledger,
         required_surfaces=required,
         min_epochs=min_epochs,

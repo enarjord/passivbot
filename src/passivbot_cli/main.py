@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cli_utils import help_requested
 from passivbot_version import __version__
-from passivbot_exceptions import GPUScreeningMigrationError
+from passivbot_exceptions import GPUScreeningMigrationError, SimulationConfigError
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,9 @@ CORE_COMMANDS: dict[str, CommandSpec] = {
 }
 
 TOOL_COMMANDS: dict[str, CommandSpec] = {
+    "optimizer-bounds": CommandSpec(
+        "tools.optimizer_bounds", "explicitly apply recommended optimizer bounds to a v9 config"
+    ),
     "candle-doctor": CommandSpec(
         "tools.candle_doctor",
         "audit candle caches (requires full install)",
@@ -141,9 +144,28 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.hsl_startup_preview",
         "read-only offline HSL startup preview",
     ),
-    "gpu-proxy-benchmark": CommandSpec(
-        "tools.gpu_proxy_benchmark",
-        "benchmark deterministic Apple MPS proxy workloads",
+    "organillo-validate": CommandSpec(
+        "organillo", "Validate an external historical eligibility CSV.",
+    ),
+    "gpu-parity": CommandSpec(
+        "tools.gpu_parity",
+        "compare offline CPU/GPU backtest metrics (requires full install)",
+        requires_full=True,
+    ),
+    "gpu-cohort-benchmark": CommandSpec(
+        "tools.gpu_cohort_benchmark",
+        "measure offline CPU/GPU cohorts and native CUDA service latency (requires full install)",
+        requires_full=True,
+    ),
+    "optimizer-benchmark": CommandSpec(
+        "tools.optimizer_benchmark",
+        "freeze offline candidate populations and compare optimizer implementations",
+        requires_full=True,
+    ),
+    "gpu-service-benchmark": CommandSpec(
+        "tools.gpu_service_benchmark",
+        "measure offline native CUDA suite resources and default tuning evidence (requires full install)",
+        requires_full=True,
     ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
@@ -187,17 +209,13 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "audit and repair v2 OHLCV catalog metadata (requires full install)",
         requires_full=True,
     ),
-    "migrate-historical-data": CommandSpec(
-        "tools.migrate_historical_data",
-        "migrate historical data layout (requires full install)",
+    "import-historical-data": CommandSpec(
+        "tools.import_historical_data",
+        "explicit offline import preserving source and current OHLCV rows (requires full install)",
         requires_full=True,
     ),
-    "migrate-hsl": CommandSpec(
-        "tools.migrate_hsl_config", "write a validated HSL config without deploying it"
-    ),
-    "migrate-config-v7": CommandSpec(
-        "tools.migrate_config_v7",
-        "migrate a v7 trailing-grid config to v8 trailing_grid_v7",
+    "migrate-config-v9": CommandSpec(
+        "tools.migrate_config_v9", "explicitly migrate v8 risk policy to v9 without exchange access"
     ),
     "merge-paretos": CommandSpec(
         "tools.merge_paretos",
@@ -275,6 +293,12 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "clean-config": CommandSpec(
         "tools.clean_config", "clean/export configs or format JSON with explicit output paths"
     ),
+    "config-explain": CommandSpec(
+        "tools.config_explain", "explain config values, sources and search treatment offline"
+    ),
+    "config-schema": CommandSpec(
+        "tools.config_schema", "print/check the authored-config JSON Schema or field metadata"
+    ),
     "trailing-inspect": CommandSpec(
         "tools.trailing_inspect",
         "explain trailing_martingale entry and close thresholds",
@@ -299,7 +323,6 @@ FULL_INSTALL_MODULE_HINTS = {
     "colorama",
     "dash",
     "dash_bootstrap_components",
-    "deap",
     "dictdiffer",
     "matplotlib",
     "msgpack",
@@ -536,6 +559,11 @@ def _run_module(
             print(_full_install_message(prog_name, exc.name), file=sys.stderr)
             return 2
         raise
+    except SimulationConfigError as exc:
+        from simulation_validation import simulation_config_error_message
+
+        print(simulation_config_error_message(exc, prog_name), file=sys.stderr)
+        return 2
     except GPUScreeningMigrationError as exc:
         print(f"Configuration migration required: {exc}", file=sys.stderr)
         return 2

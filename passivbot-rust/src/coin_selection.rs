@@ -18,7 +18,6 @@ pub struct CoinFeature {
 #[derive(Debug, Clone)]
 pub struct SelectionConfig {
     pub slots_to_fill: usize,
-    pub volume_drop_pct: f64,
     pub weights: ForagerScoreWeights,
     pub require_forager: bool,
     pub score_hysteresis_pct: f64,
@@ -60,7 +59,6 @@ pub struct ForagerCandidate {
 #[derive(Debug, Clone)]
 pub struct ForagerSelectionConfig {
     pub slots_to_fill: usize,
-    pub volume_drop_pct: f64,
     pub weights: ForagerScoreWeights,
     pub require_forager: bool,
     pub position_side: ForagerPositionSide,
@@ -105,19 +103,9 @@ pub enum ForagerSelectionError {
     InvalidConfig { field: &'static str, value: String },
 }
 
-impl SelectionConfig {
-    fn volume_drop(&self) -> Result<f64, ForagerSelectionError> {
-        validate_unit_pct("forager_volume_drop_pct", self.volume_drop_pct)
-    }
-}
-
 impl ForagerSelectionConfig {
-    fn volume_drop(&self) -> Result<f64, ForagerSelectionError> {
-        validate_unit_pct("forager_volume_drop_pct", self.volume_drop_pct)
-    }
-
     fn volume_required(&self) -> Result<bool, ForagerSelectionError> {
-        Ok(self.require_forager && (self.volume_drop()? > 0.0 || self.weights.volume != 0.0))
+        Ok(self.require_forager && self.weights.volume != 0.0)
     }
 
     fn volatility_required(&self) -> bool {
@@ -308,11 +296,9 @@ pub fn select_forager_candidates_with_diagnostics(
     cfg: &ForagerSelectionConfig,
 ) -> Result<ForagerSelectionResult, ForagerSelectionError> {
     let normalized_weights = validate_forager_weights(&cfg.weights)?;
-    let volume_drop_pct = cfg.volume_drop()?;
     let score_hysteresis_pct = cfg.score_hysteresis()?;
     let normalized_cfg = ForagerSelectionConfig {
         slots_to_fill: cfg.slots_to_fill,
-        volume_drop_pct,
         weights: normalized_weights,
         require_forager: cfg.require_forager,
         position_side: cfg.position_side,
@@ -322,7 +308,6 @@ pub fn select_forager_candidates_with_diagnostics(
     let features = build_coin_features(candidates, &normalized_cfg)?;
     let selection_cfg = SelectionConfig {
         slots_to_fill: normalized_cfg.slots_to_fill,
-        volume_drop_pct: normalized_cfg.volume_drop_pct,
         weights: normalized_cfg.weights,
         require_forager: normalized_cfg.require_forager,
         score_hysteresis_pct: normalized_cfg.score_hysteresis_pct,
@@ -363,56 +348,20 @@ pub fn select_coins_with_diagnostics(
     }
 
     let slots_to_fill = cfg.slots_to_fill.max(1);
-    prune_low_volume_tail(
-        &mut enabled_pos,
-        cfg.volume_drop().expect("invalid forager_volume_drop_pct"),
-        slots_to_fill,
-        |pos| (features[pos].volume_score, features[pos].index),
-    );
     score_forager_candidates(features, &enabled_pos, cfg, slots_to_fill)
 }
 
-/// Positions whose scores can affect selection after deterministic volume pruning.
-/// Shares the exact keep count and tie break with final coin selection.
+/// Every enabled candidate participates in weighted ranking. Scoring readiness
+/// must use that same complete set; volume is a ranking feature, not a prefilter.
 pub(crate) fn forager_scoring_positions(
     candidates: &[ForagerCandidate],
-    cfg: &ForagerSelectionConfig,
+    _cfg: &ForagerSelectionConfig,
 ) -> Result<Vec<usize>, ForagerSelectionError> {
-    let mut positions: Vec<usize> = candidates.iter().enumerate()
-        .filter_map(|(pos, candidate)| candidate.enabled.then_some(pos)).collect();
-    if cfg.require_forager {
-        prune_low_volume_tail(&mut positions, cfg.volume_drop()?, cfg.slots_to_fill.max(1),
-            |pos| (candidates[pos].volume_score, candidates[pos].index));
-    }
-    Ok(positions)
-}
-
-fn prune_low_volume_tail(
-    positions: &mut Vec<usize>,
-    volume_drop_pct: f64,
-    slots_to_fill: usize,
-    volume_and_index: impl Fn(usize) -> (f64, usize),
-) {
-    if positions.is_empty() {
-        return;
-    }
-
-    let mut keep = ((positions.len() as f64) * (1.0 - volume_drop_pct)).round() as usize;
-    if keep == 0 {
-        keep = 1;
-    }
-    keep = keep.max(slots_to_fill).min(positions.len());
-    if keep >= positions.len() {
-        return;
-    }
-
-    let cmp_volume = |pa: &usize, pb: &usize| {
-        let (a_volume, a_index) = volume_and_index(*pa);
-        let (b_volume, b_index) = volume_and_index(*pb);
-        compare_desc(a_volume, b_volume, a_index, b_index)
-    };
-    positions.select_nth_unstable_by(keep.saturating_sub(1), cmp_volume);
-    positions.truncate(keep);
+    Ok(candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, candidate)| candidate.enabled.then_some(pos))
+        .collect())
 }
 
 fn score_forager_candidates(
@@ -745,7 +694,6 @@ impl<'source> FromPyObject<'source> for ForagerCandidate {
 pub fn select_coin_indices_py(
     py_features: Vec<CoinFeatureInput>,
     slots_to_fill: usize,
-    volume_drop_pct: f64,
     weights: ForagerScoreWeights,
     require_forager: bool,
 ) -> PyResult<Vec<usize>> {
@@ -754,12 +702,9 @@ pub fn select_coin_indices_py(
             "forager_score_weights must be finite and non-negative",
         )
     })?;
-    validate_unit_pct("forager_volume_drop_pct", volume_drop_pct)
-        .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("{err:?}")))?;
     let features: Vec<CoinFeature> = py_features.into_iter().map(Into::into).collect();
     let cfg = SelectionConfig {
         slots_to_fill,
-        volume_drop_pct,
         weights,
         require_forager,
         score_hysteresis_pct: 0.0,
@@ -779,7 +724,6 @@ pub fn select_forager_candidates_py(
     py_candidates: Vec<ForagerCandidate>,
     pside: &str,
     slots_to_fill: usize,
-    volume_drop_pct: f64,
     weights: ForagerScoreWeights,
     require_forager: bool,
 ) -> PyResult<Vec<usize>> {
@@ -793,7 +737,6 @@ pub fn select_forager_candidates_py(
     })?;
     let cfg = ForagerSelectionConfig {
         slots_to_fill,
-        volume_drop_pct,
         weights: validate_forager_weights(&weights).map_err(|_| {
             pyo3::exceptions::PyValueError::new_err(
                 "forager_score_weights must be finite and non-negative",
@@ -849,25 +792,32 @@ mod tests {
     }
 
     #[test]
-    fn rms_scoring_set_matches_volume_pruning_with_ties_and_disabled_candidates() {
-        let mut candidates: Vec<_> = [7, 3, 9, 0].iter()
-            .map(|&index| make_candidate(index, 100.0, 1.0, 100.0, 100.0)).collect();
+    fn rms_scoring_set_covers_all_enabled_candidates_with_ties() {
+        let mut candidates: Vec<_> = [7, 3, 9, 0]
+            .iter()
+            .map(|&index| make_candidate(index, 100.0, 1.0, 100.0, 100.0))
+            .collect();
         candidates[3].enabled = false;
         for slots in [1, 2, 3] {
-            for drop in [0.0, 0.5, 1.0] {
-                let cfg = ForagerSelectionConfig {
-                    slots_to_fill: slots,
-                    volume_drop_pct: drop,
-                    ..default_forager_config(ForagerPositionSide::Long)
-                };
-                let mut expected: Vec<_> = forager_scoring_positions(&candidates, &cfg)
-                    .unwrap().iter().map(|&pos| candidates[pos].index).collect();
-                let mut actual: Vec<_> = select_forager_candidates_with_diagnostics(&candidates, &cfg)
-                    .unwrap().scored.iter().map(|item| item.index).collect();
-                expected.sort_unstable();
-                actual.sort_unstable();
-                assert_eq!(expected, actual);
-            }
+            let cfg = ForagerSelectionConfig {
+                slots_to_fill: slots,
+                ..default_forager_config(ForagerPositionSide::Long)
+            };
+            let mut scoring: Vec<_> = forager_scoring_positions(&candidates, &cfg)
+                .unwrap()
+                .iter()
+                .map(|&pos| candidates[pos].index)
+                .collect();
+            let mut ranked: Vec<_> = select_forager_candidates_with_diagnostics(&candidates, &cfg)
+                .unwrap()
+                .scored
+                .iter()
+                .map(|item| item.index)
+                .collect();
+            scoring.sort_unstable();
+            ranked.sort_unstable();
+            assert_eq!(scoring, vec![3, 7, 9]);
+            assert_eq!(ranked, scoring);
         }
     }
 
@@ -885,7 +835,6 @@ mod tests {
     fn default_config() -> SelectionConfig {
         SelectionConfig {
             slots_to_fill: 3,
-            volume_drop_pct: 0.0,
             weights: ForagerScoreWeights::default(),
             require_forager: true,
             score_hysteresis_pct: 0.0,
@@ -896,7 +845,6 @@ mod tests {
     fn default_forager_config(pside: ForagerPositionSide) -> ForagerSelectionConfig {
         ForagerSelectionConfig {
             slots_to_fill: 3,
-            volume_drop_pct: 0.0,
             weights: ForagerScoreWeights::default(),
             require_forager: true,
             position_side: pside,
@@ -962,7 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn respects_volume_drop_percentage_but_keeps_enough_candidates() {
+    fn volume_ranking_keeps_all_candidates_in_the_scored_population() {
         let features = vec![
             make_feature(0, 0.1, 0.1, 0.1),
             make_feature(1, 0.2, 0.2, 0.2),
@@ -971,10 +919,11 @@ mod tests {
         ];
         let cfg = SelectionConfig {
             slots_to_fill: 3,
-            volume_drop_pct: 0.9,
             ..default_config()
         };
-        assert_eq!(select_coins(&features, &cfg), vec![3, 2, 1]);
+        let result = select_coins_with_diagnostics(&features, &cfg);
+        assert_eq!(result.selected_indices, vec![3, 2, 1]);
+        assert_eq!(result.scored.len(), features.len());
     }
 
     #[test]

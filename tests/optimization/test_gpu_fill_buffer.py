@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 import numpy as np
 import pytest
 
@@ -23,7 +24,7 @@ def test_buffered_ticks_match_strict_float64_order_predicate(buffer, step):
 
 @pytest.mark.parametrize('buffer', [-1, 1, float('nan'), float('inf'), True, None])
 def test_buffered_ticks_reject_invalid_buffer(buffer):
-    with pytest.raises(ValueError, match='limit_order_fill_buffer_pct'):
+    with pytest.raises(ValueError, match='limit_order_fill_buffer_fraction'):
         _strict_fill_tick_boundaries([100.0], [99.0], 0.01, buffer)
 
 
@@ -66,18 +67,16 @@ def test_buffer_changes_gpu_checkpoint_identity():
 def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     from config.schema import get_template_config
     cfg = get_template_config()
-    cfg['live'].update(strategy_kind=strategy_kind, max_warmup_minutes=1,
-                       market_orders_allowed=market_orders, market_order_near_touch_threshold=0.01)
+    cfg['bot']["portfolio"]['strategy_kind'] = strategy_kind
+    cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
+    cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = market_orders
+    cfg['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.01
     coins = ['BTC', 'ETH'][:coin_count]
-    cfg['live']['approved_coins'] = {s: coins if s == side else [] for s in ['long', 'short']}
+    set_side_universe_sources(cfg, 'approved_coins', {s: coins if s == side else [] for s in ['long', 'short']})
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
                           starting_balance=1000.0, limit_order_fill_buffer_pct=buffer)
     for s in ['long', 'short']:
-        cfg['bot'][s]['risk'].update(total_wallet_exposure_limit=1.0 if s == side else 0.0,
-                                     n_positions=coin_count if s == side else 0,
-                                     entry_cooldown_minutes=0.0, we_excess_allowance_pct=0.0,
-                                     position_exposure_enforcer_enabled=False,
-                                     total_exposure_enforcer_enabled=False)
+        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
         cfg['bot'][s]['hsl']['enabled'] = False
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
@@ -115,13 +114,13 @@ def test_buffered_gpu_matches_rust_marginal_entries(side, strategy_kind, coin_co
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip('GPU unavailable')
     from backtest import run_backtest
-    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    from optimization.gpu.service import SharedAccountReplay
     from rust_utils import verify_loaded_runtime_extension
     verify_loaded_runtime_extension()
     cfg, candles, mss, btc, ts = _fixture(side, strategy_kind, 0.0015, coin_count, market_orders)
-    proxy_cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    proxy_cls = SharedAccountReplay
     for buffer in [0.0, 0.0015]:
-        cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
+        cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = proxy_cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
                           exchange='bybit', batch_size=1, needed_metrics={'fills_per_day'})
         result = proxy.evaluate([{}])[0]
@@ -133,8 +132,8 @@ def test_buffered_gpu_matches_rust_marginal_entries(side, strategy_kind, coin_co
             assert len(fills) > 0
         # Preparation must not alter candle inputs used by indicators or touches.
         if coin_count == 1:
-            np.testing.assert_array_equal(proxy.data['high_f'].cpu().numpy(), candles[:, 0, 0].astype(np.float32))
-            np.testing.assert_array_equal(proxy.data['low_f'].cpu().numpy(), candles[:, 0, 1].astype(np.float32))
+            np.testing.assert_array_equal(proxy.data['bars'][:, 0, 0].cpu().numpy(), candles[:, 0, 0].astype(np.float32))
+            np.testing.assert_array_equal(proxy.data['bars'][:, 0, 1].cpu().numpy(), candles[:, 0, 1].astype(np.float32))
 
 
 @pytest.mark.parametrize('side', ['long', 'short'])
@@ -144,7 +143,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip('GPU unavailable')
     from backtest import run_backtest
-    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    from optimization.gpu.service import SharedAccountReplay
     cfg, candles, mss, btc, ts = _fixture(side, 'trailing_martingale', 0.0015, coin_count)
     candles[:, :, :3] = 100.0
     if side == 'long':
@@ -155,9 +154,9 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
         candles[10, :, 0] = 100.2
         candles[11:21, :, 1] = 98.95
         candles[21, :, 1] = 98.7
-    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    cls = SharedAccountReplay
     for buffer in [0.0, 0.0015]:
-        cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
+        cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
                     exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_usd'})
         result = proxy.evaluate([{}])[0]
@@ -172,65 +171,45 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
 
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
-    from types import SimpleNamespace
     from copy import deepcopy
 
     torch = pytest.importorskip("torch")
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip("GPU unavailable")
     from suite_runner import SuiteScenario, apply_scenario
-    from optimization.backends.gpu_backend import (
-        _evaluate_gpu_suite_proxies, _GPU_SUITE_METRICS_KEY,
-    )
-    from optimization.gpu.service import MpsMulticoinProxy
+    from optimization.gpu.service import SharedAccountReplay
 
     cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.0, 2)
-    cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ["long", "short"]}
-    cache, scenarios, proxies = {}, [], []
+    set_side_universe_sources(cfg, 'approved_coins', {s: ["BTC", "ETH"] for s in ["long", "short"]})
+    cache, proxies = {}, []
     interrupt_check = lambda: None
     for label, buffer in [("zero", 0.0), ("buffered", 0.0015), ("same_buffer", 0.0015)]:
         scenario = SuiteScenario(
             label=label, start_date=None, end_date=None,
             coins=["BTC", "ETH"], ignored_coins=[],
-            overrides={"backtest.limit_order_fill_buffer_pct": buffer},
+            overrides={"backtest.limit_order_fill_buffer_fraction": buffer},
         )
         effective, _ = apply_scenario(
             deepcopy(cfg), scenario, master_coins=["BTC", "ETH"], master_ignored=[],
             available_exchanges=["bybit"], available_coins={"BTC", "ETH"},
             base_coin_sources={"BTC": "bybit", "ETH": "bybit"},
         )
-        proxy = MpsMulticoinProxy(
+        proxy = SharedAccountReplay(
             config=effective, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
             exchange="bybit", batch_size=8, needed_metrics={"fills_per_day"},
             prepared_data_cache=cache, interrupt_check=interrupt_check,
         )
         proxies.append(proxy)
-        scenarios.append((SimpleNamespace(label=label), [("bybit", proxy)], {}))
     assert proxies[0].data is not proxies[1].data
     assert proxies[1].data is proxies[2].data
     assert proxies[0].suite_batch_key() != proxies[1].suite_batch_key()
     assert proxies[1].suite_batch_key() == proxies[2].suite_batch_key()
 
-    class Suite:
-        @staticmethod
-        def score_scenario_results(results):
-            fills = tuple(result.metrics["stats"]["fills_per_day"]["mean"] for result in results)
-            return dict(objectives=fills, unpenalized_objectives=fills,
-                        constraint_violation=0.0, suite_metrics=fills)
-
-    candidates = [{}, {}]
-    separate = _evaluate_gpu_suite_proxies(
-        Suite(), scenarios, candidates, batch_compatible_scenarios=False,
-    )
-    grouped = _evaluate_gpu_suite_proxies(
-        Suite(), scenarios, candidates, batch_compatible_scenarios=True,
-    )
-    assert grouped == separate
-    for result in grouped:
-        fills = result[_GPU_SUITE_METRICS_KEY]
-        assert fills[0] > 0.0
-        assert fills[1:] == (0.0, 0.0)
-    assert cfg["backtest"]["limit_order_fill_buffer_pct"] == 0.0
+    results = [proxy.evaluate([{}, {}]) for proxy in proxies]
+    assert results[1] == results[2]
+    assert all(row["fills_per_day"] > 0.0 for row in results[0])
+    assert all(row["fills_per_day"] == 0.0 for row in results[1])
+    assert cfg["backtest"]["limit_order_fill_buffer_fraction"] == 0.0
 
 
 @pytest.mark.parametrize("buffer", [0.0, 0.0015])
@@ -263,13 +242,13 @@ def test_gpu_large_buffer_with_representable_prices_matches_rust(side, coin_coun
     if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
         pytest.skip("GPU unavailable")
     from backtest import run_backtest
-    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    from optimization.gpu.service import SharedAccountReplay
     cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.999, coin_count)
     candles[:, :, :3] *= 1000.0
     cfg["backtest"]["starting_balance"] = 1000000.0
-    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    cls = SharedAccountReplay
     for buffer in [0.0, 0.999, np.nextafter(1.0, 0.0)]:
-        cfg["backtest"]["limit_order_fill_buffer_pct"] = buffer
+        cfg["backtest"]["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
                     exchange="bybit", batch_size=1, needed_metrics={"fills_per_day"})
         result = proxy.evaluate([{}])[0]

@@ -101,7 +101,7 @@ def test_backend_failure_survives_cleanup_error(runtime, error, caplog):
     with pytest.raises(error) as caught:
         run()
     assert caught.value is failure
-    assert "CUDA suite cleanup failed" in caplog.text
+    assert "GPU suite cleanup failed" in caplog.text
     assert "cleanup synchronization failed" in caplog.text
     assert current_cuda_residency() is None
     assert not Path(directories[0]).exists()
@@ -185,7 +185,7 @@ def test_activation_failure_survives_cleanup_error(runtime, stage, caplog):
         with pytest.raises(ValueError) as caught:
             manager.activate(owner)
         assert caught.value is failure
-        assert "CUDA suite cleanup failed" in caplog.text
+        assert "GPU suite cleanup failed" in caplog.text
         assert manager._active is None
         assert manager._active_owner is None
         assert owner.runners == {}
@@ -299,6 +299,7 @@ def test_disk_packing_and_activation_preserve_every_eager_array(runtime, hourly,
             values, timestamps, runs=[run, replace(run, first_valid_idx=3, last_valid_idx=count - 3)], markets=[market] * 2,
             include_hourly_ranges=hourly, spill_dir=directory,
             limit_order_fill_buffer_pct=fill_buffer,
+            market_order_slippage_pct=0.0005,
         )
     manager = CudaSuiteResidency()
     try:
@@ -390,10 +391,10 @@ def test_spilled_price_packing_never_allocates_whole_history(runtime, monkeypatc
     market = model.ProxyMarket(.001, .01, .001, 1, 1, .0002)
     original_pack = model._pack_multicoin_price_arrays
     row_counts = []
-    def bounded_pack(chunk, *args):
+    def bounded_pack(chunk, *args, **kwargs):
         row_counts.append(len(chunk))
         assert len(chunk) <= 7
-        return original_pack(chunk, *args)
+        return original_pack(chunk, *args, **kwargs)
     monkeypatch.setattr(residency, "PREPARATION_CHUNK_BYTES", 7 * (3 * 45 + 256))
     monkeypatch.setattr(model, "_pack_multicoin_price_arrays", bounded_pack)
     manager = CudaSuiteResidency()
@@ -402,7 +403,7 @@ def test_spilled_price_packing_never_allocates_whole_history(runtime, monkeypatc
             values, timestamps, [run] * 3, [market] * 3, spill_dir=directory,
         ))
         assert len(row_counts) > 1
-        for name in ("bars", "fill_ticks", "touch_ticks", "hour_log_ranges"):
+        for name in ("bars", "fill_ticks", "touch_ticks", "market_execution_ticks", "hour_log_ranges"):
             assert np.load(data[name]).shape[0] == len(values)
     finally:
         manager.close()
@@ -423,11 +424,86 @@ def test_late_chunk_tick_failure_removes_all_partial_market_files(runtime, monke
     monkeypatch.setattr(residency, "PREPARATION_CHUNK_BYTES", 7 * (2 * 45 + 256))
     manager = CudaSuiteResidency()
     try:
-        with pytest.raises(ValueError, match="touch ticks exceed"):
+        with pytest.raises(ValueError, match="(?:touch ticks exceed|market price count exceeds)"):
             manager.prepare("market", lambda directory: model.build_mps_multicoin_data(
                 values, timestamps, [run] * 2, [market] * 2, spill_dir=directory,
             ))
         assert not uploads
         assert list(Path(manager._directory.name).iterdir()) == []
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("runner_key", ["long", "fused"])
+@pytest.mark.parametrize("eviction", ["dataset", "owner"])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_forward_scratch_owner_releases_state_across_residency_eviction(runtime, runner_key, eviction, automatic):
+    import weakref
+    from optimization.gpu.service import SharedAccountReplay
+
+    # Device transport and runner computation are fakes; residency and replay
+    # construction/estimate retention are the actual production implementations.
+    class Runner:
+        native_factual_hsl = True
+        hsl_scratch_budget_bytes = 70000
+        bars = SimpleNamespace(device=SimpleNamespace(type="cuda"))
+        def __init__(self, *args, **kwargs):
+            self.hsl_fact_capacity = 0
+        def _history_bytes_per_candidate(self):
+            return 256
+        def _history_batch_bytes(self, count):
+            return count * self._history_bytes_per_candidate()
+    manager = CudaSuiteResidency()
+    torch, _uploads = runtime
+    free = [8 * 1024**3]
+    torch.cuda.mem_get_info = lambda: (free[0], 10 * 1024**3)
+    estimates = {}
+    def owner(key, hints):
+        stub = proxy(manager, key, 1)
+        result = object.__new__(SharedAccountReplay)
+        result.data = stub.data
+        result.run = None
+        result.runners = {}
+        result.fused_runner = None
+        result._factual_capacity_hints = hints
+        result._automatic_scratch_budget = automatic
+        result.dispatch_batch_size = 1
+        result._torch = torch
+        result.sides = ["long"]
+        result.shared_account_fused = runner_key == "fused"
+        result._runner_specs = {runner_key: (Runner, {})}
+        manager.register(result)
+        return result
+    def runner(owner):
+        return owner.fused_runner or owner.runners[runner_key]
+    try:
+        first = owner("a", estimates)
+        other = owner("b" if eviction == "dataset" else "a", {})
+        manager.activate(first)
+        learned = runner(first)
+        initial_budget = learned.hsl_scratch_budget_bytes
+        free[0] = 1024**3
+        manager.activate(first)
+        # Memory pressure never resizes a still-active owner.
+        assert runner(first).hsl_scratch_budget_bytes == initial_budget
+        first._remember_factual_capacities()
+        assert learned.hsl_fact_capacity == 0
+        assert not hasattr(learned, "hsl_fact_capacity_learned")
+        old = weakref.ref(learned)
+        del learned
+        assert estimates == {}
+        manager.activate(other)
+        assert old() is None
+        assert not first.runners and first.fused_runner is None
+        manager.activate(first)
+        assert runner(first).hsl_fact_capacity == 0
+        assert not hasattr(runner(first), "hsl_fact_capacity_learned")
+        if automatic:
+            assert runner(first).hsl_scratch_budget_bytes == int(free[0] * .35)
+            assert runner(first).hsl_scratch_budget_bytes < initial_budget
+        else:
+            assert runner(first).hsl_scratch_budget_bytes == initial_budget
+        assert not other.runners and other.fused_runner is None
+        assert estimates == {}
     finally:
         manager.close()

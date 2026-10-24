@@ -3,10 +3,12 @@
 import copy
 
 from config_utils import format_config, get_template_config
+from config.schema import CONFIG_SCHEMA_VERSION
 
 
 def _base_config():
     return {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "base_dir": "backtests",
             "compress_cache": True,
@@ -15,19 +17,19 @@ def _base_config():
             "exchanges": ["binance"],
             "btc_collateral_cap": 1.0,
             "gap_tolerance_ohlcvs_minutes": 120,
-            "max_warmup_minutes": 0,
         },
         "bot": {
-            "long": {"n_positions": 4},
-            "short": {"n_positions": 4},
+            "long": {
+                "risk": {"max_positions": 4},
+                "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
+            },
+            "short": {
+                "risk": {"max_positions": 4},
+                "universe": {"minimum_coin_age_days": 30, "approved_coins": [], "ignored_coins": []},
+            },
+            "portfolio": {"warmup": {"span_multiplier": 0.2, "max_minutes": None}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": [], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-            "minimum_coin_age_days": 30,
-            "warmup_ratio": 0.2,
-            "max_warmup_minutes": 0,
-        },
+        "live": {"account": {}, "candles": {}},
         "optimize": {"bounds": {}, "scoring": []},
     }
 
@@ -46,31 +48,31 @@ def test_format_config_preserves_market_settings_sources():
 def test_enable_archive_candle_fetch_in_template():
     """enable_archive_candle_fetch should be present in live template."""
     template = get_template_config()
-    assert "enable_archive_candle_fetch" in template["live"]
-    assert template["live"]["enable_archive_candle_fetch"] is False
+    assert "enable_archive_candle_fetch" in template["live"].get("candles", {})
+    assert template["live"]["candles"]["enable_archive_candle_fetch"] is False
 
 
 def test_enable_archive_candle_fetch_preserved():
     """enable_archive_candle_fetch should be preserved during format_config."""
     cfg = _base_config()
-    cfg["live"]["enable_archive_candle_fetch"] = True
+    cfg["live"]["candles"]["enable_archive_candle_fetch"] = True
     out = format_config(copy.deepcopy(cfg), verbose=False)
-    assert out["live"]["enable_archive_candle_fetch"] is True
+    assert out["live"]["candles"]["enable_archive_candle_fetch"] is True
 
 
 def test_forager_ws_candle_defaults_in_template():
     template = get_template_config()
-    assert template["live"]["enable_forager_ws_candles"] is True
-    assert template["live"]["forager_ws_candle_rest_audit_minutes"] == 30
+    assert template["live"]["candles"]["enable_forager_ws_candles"] is True
+    assert template["live"]["candles"]["forager_ws_candle_rest_audit_minutes"] == 30
 
 
 def test_margin_mode_preference_in_template():
     template = get_template_config()
-    assert template["live"]["margin_mode_preference"] == "cross"
+    assert template["live"]["account"]["margin_mode_preference"] == "cross"
 
 
 def test_margin_mode_preference_preserved():
     cfg = _base_config()
-    cfg["live"]["margin_mode_preference"] = "cross"
+    cfg["live"]["account"]["margin_mode_preference"] = "cross"
     out = format_config(copy.deepcopy(cfg), verbose=False)
-    assert out["live"]["margin_mode_preference"] == "cross"
+    assert out["live"]["account"]["margin_mode_preference"] == "cross"

@@ -1,3 +1,5 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import asyncio
 import json
 from pathlib import Path
@@ -8,6 +10,7 @@ import pytest
 
 import procedures
 from config_utils import load_config
+from config.schema import CONFIG_SCHEMA_VERSION
 import utils
 from utils import format_approved_ignored_coins, normalize_coins_source
 
@@ -20,15 +23,20 @@ async def test_external_approved_coins_reload(tmp_path: Path):
     approved_file.write_text('["BTC","ETH"]')
 
     config = {
-        "live": {
-            "approved_coins": str(approved_file),
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {"approved_coins": str(approved_file), "ignored_coins": []}
+            },
+            "short": {
+                "universe": {"approved_coins": str(approved_file), "ignored_coins": []}
+            },
+        },
     }
 
     # Initial formatting should read the file once.
     await format_approved_ignored_coins(config, ["binanceusdm"])
-    assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    assert config['bot']["long"]['universe']['approved_coins'] == ["BTC", "ETH"]
 
     # Update the on-disk file and expect a refresh to pick up the change.
     approved_file.write_text('["BTC","XRP"]')
@@ -45,14 +53,19 @@ async def test_external_ignored_coins_reload(tmp_path: Path):
     ignored_file.write_text('["DOGE"]')
 
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
-            "ignored_coins": str(ignored_file),
-        }
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {"approved_coins": ["BTC"], "ignored_coins": str(ignored_file)}
+            },
+            "short": {
+                "universe": {"approved_coins": ["BTC"], "ignored_coins": str(ignored_file)}
+            },
+        },
     }
 
     await format_approved_ignored_coins(config, ["binanceusdm"])
-    assert config["live"]["ignored_coins"]["long"] == ["DOGE"]
+    assert config['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
 
     ignored_file.write_text('["DOGE","SHIB"]')
     refreshed = normalize_coins_source(config["_coins_sources"]["ignored_coins"])
@@ -95,10 +108,11 @@ async def test_unqualified_native_id_collision_across_exchanges_requires_scope(
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
-        "live": {
-            "approved_coins": {"long": ["12345"], "short": ["12345"]},
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["12345"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["12345"], "ignored_coins": []}},
+        },
     }
 
     with pytest.raises(
@@ -274,10 +288,11 @@ async def test_user_plain_alias_remains_plain_when_matching_native_ids(
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
-        "live": {
-            "approved_coins": {"long": ["ABC"], "short": ["ABC"]},
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["ABC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["ABC"], "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget", "bybit"])
@@ -367,15 +382,16 @@ async def test_approved_all_plain_alias_is_not_upgraded_by_coincident_native_id(
         utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["binance", "hyperliquid"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["ABC"],
         "short": ["ABC"],
     }
@@ -436,18 +452,20 @@ async def test_approved_aliases_for_one_market_are_coalesced(tmp_path: Path, mon
 
     assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
     config = {
-        "live": {
-            "approved_coins": {
-                "long": ["BTC", "BTCUSDT"],
-                "short": ["BTCUSDT", "BTC"],
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {"approved_coins": ["BTC", "BTCUSDT"], "ignored_coins": []}
             },
-            "ignored_coins": {"long": [], "short": []},
-        }
+            "short": {
+                "universe": {"approved_coins": ["BTCUSDT", "BTC"], "ignored_coins": []}
+            },
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC"],
         "short": ["BTC"],
     }
@@ -489,12 +507,10 @@ async def test_backtest_approved_aliases_use_source_key_from_override_only_venue
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
         "backtest": {"coin_sources": {"EDGEUSDTM": "kucoin"}},
-        "live": {
-            "approved_coins": {
-                "long": ["EDGE"],
-                "short": ["EDGEUSDTM"],
-            },
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["EDGE"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["EDGEUSDTM"], "ignored_coins": []}},
         },
     }
 
@@ -502,7 +518,7 @@ async def test_backtest_approved_aliases_use_source_key_from_override_only_venue
         config, ["bybit"], prefer_backtest_coin_source_keys=True
     )
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["EDGEUSDTM"],
         "short": ["EDGEUSDTM"],
     }
@@ -516,15 +532,16 @@ async def test_live_approved_alias_ignores_backtest_coin_source(monkeypatch):
     monkeypatch.setattr(utils, "load_markets", unexpected_load_markets)
     config = {
         "backtest": {"coin_sources": {"EDGEUSDTM": "kucoin"}},
-        "live": {
-            "approved_coins": {"long": ["EDGE"], "short": ["EDGE"]},
-            "ignored_coins": {"long": [], "short": []},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["EDGE"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": ["EDGE"], "ignored_coins": []}},
         },
     }
 
     await format_approved_ignored_coins(config, ["bybit"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["EDGE"],
         "short": ["EDGE"],
     }
@@ -556,12 +573,14 @@ async def test_backtest_ignored_alias_resolves_on_source_only_venue(tmp_path, mo
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
         "backtest": {"coin_sources": {"EDGEUSDTM": "kucoin"}},
-        "live": {
-            "approved_coins": {
-                "long": ["EDGEUSDTM"],
-                "short": ["EDGEUSDTM"],
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {"approved_coins": ["EDGEUSDTM"], "ignored_coins": ["EDGE"]}
             },
-            "ignored_coins": {"long": ["EDGE"], "short": ["EDGE"]},
+            "short": {
+                "universe": {"approved_coins": ["EDGEUSDTM"], "ignored_coins": ["EDGE"]}
+            },
         },
     }
 
@@ -569,7 +588,7 @@ async def test_backtest_ignored_alias_resolves_on_source_only_venue(tmp_path, mo
         config, ["bybit"], prefer_backtest_coin_source_keys=True
     )
 
-    assert config["live"]["approved_coins"] == {"long": [], "short": []}
+    assert require_side_universe_sources(config, 'approved_coins') == {"long": [], "short": []}
 
 
 @pytest.mark.asyncio
@@ -593,16 +612,17 @@ async def test_exact_ignored_identifier_removes_matching_approved_alias(
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
-            "ignored_coins": {"long": ["BTCUSDT"], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": ["BTCUSDT"]}},
+            "short": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    assert config["live"]["approved_coins"] == {"long": [], "short": ["BTC"]}
-    assert config["live"]["ignored_coins"] == {"long": ["BTCUSDT"], "short": []}
+    assert require_side_universe_sources(config, 'approved_coins') == {"long": [], "short": ["BTC"]}
+    assert require_side_universe_sources(config, 'ignored_coins') == {"long": ["BTCUSDT"], "short": []}
 
 
 @pytest.mark.asyncio
@@ -624,15 +644,16 @@ async def test_ignored_alias_removes_matching_exact_approval(tmp_path: Path, mon
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTCUSDT"], "short": []},
-            "ignored_coins": {"long": ["BTC"], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTCUSDT"], "ignored_coins": ["BTC"]}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    assert config["live"]["approved_coins"]["long"] == []
+    assert config['bot']["long"]['universe']['approved_coins'] == []
 
 
 @pytest.mark.asyncio
@@ -656,15 +677,18 @@ async def test_ignored_multiplier_alias_removes_matching_canonical_approval(
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
-        "live": {
-            "approved_coins": {"long": ["SHIB"], "short": []},
-            "ignored_coins": {"long": ["1000SHIB"], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {"approved_coins": ["SHIB"], "ignored_coins": ["1000SHIB"]}
+            },
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    assert config["live"]["approved_coins"]["long"] == []
+    assert config['bot']["long"]['universe']['approved_coins'] == []
 
 
 @pytest.mark.asyncio
@@ -695,15 +719,21 @@ async def test_exact_ignored_identifier_does_not_remove_distinct_multiplier_mark
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     config = {
-        "live": {
-            "approved_coins": {"long": ["ABC/USDT:USDT"], "short": []},
-            "ignored_coins": {"long": ["1000ABCUSDT"], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {
+                    "approved_coins": ["ABC/USDT:USDT"],
+                    "ignored_coins": ["1000ABCUSDT"],
+                }
+            },
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    assert config["live"]["approved_coins"]["long"] == ["ABC/USDT:USDT"]
+    assert config['bot']["long"]['universe']['approved_coins'] == ["ABC/USDT:USDT"]
 
 
 @pytest.mark.asyncio
@@ -744,18 +774,21 @@ async def test_scoped_ignore_preserves_other_venues_from_approved_all(
         utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {
-                "long": ["binance::1000SHIBUSDT"],
-                "short": [],
+        "live": {},
+        "bot": {
+            "long": {
+                "universe": {
+                    "approved_coins": "all",
+                    "ignored_coins": ["binance::1000SHIBUSDT"],
+                }
             },
-        }
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["binance", "bybit"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["bybit::SHIB1000USDT"],
         "short": ["SHIB"],
     }
@@ -764,10 +797,11 @@ async def test_scoped_ignore_preserves_other_venues_from_approved_all(
 @pytest.mark.asyncio
 async def test_format_approved_ignored_coins_records_transform():
     config = {
-        "live": {
-            "approved_coins": "BTC,ETH",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "BTC,ETH", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "BTC,ETH", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["binanceusdm"])
@@ -791,53 +825,37 @@ async def test_format_approved_ignored_coins_supports_explicit_per_side_all(monk
     monkeypatch.setattr(utils, "filter_markets", fake_filter_markets)
 
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": "all"},
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["binanceusdm"])
 
-    assert config["live"]["approved_coins"]["long"] == ["BTC"]
-    assert config["live"]["approved_coins"]["short"] == ["BTC", "ETH", "SOL"]
+    assert config['bot']["long"]['universe']['approved_coins'] == ["BTC"]
+    assert config['bot']["short"]['universe']['approved_coins'] == ["BTC", "ETH", "SOL"]
 
 
-def test_load_config_migrates_legacy_global_empty_means_all_approved(tmp_path: Path, caplog):
+def test_load_config_rejects_legacy_global_empty_means_all_approved(tmp_path: Path):
     raw = {
+        "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {},
-        "bot": {"long": {}, "short": {}},
-        "coin_overrides": {},
-        "live": {
-            "approved_coins": [],
-            "ignored_coins": {"long": [], "short": []},
-            "empty_means_all_approved": True,
+        "bot": {
+            "long": {"universe": {"approved_coins": [], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
         },
+        "coin_overrides": {},
+        "live": {"empty_means_all_approved": True},
         "optimize": {"bounds": {}},
     }
     cfg_path = tmp_path / "legacy_empty_means_all.json"
     cfg_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    with caplog.at_level("WARNING"):
-        cfg = load_config(str(cfg_path), live_only=False, verbose=False)
-
-    assert "empty_means_all_approved" not in cfg["live"]
-    assert cfg["live"]["approved_coins"] == {"long": ["all"], "short": ["all"]}
-    assert cfg["_coins_sources"]["approved_coins"] == "all"
-    assert cfg["_raw"]["live"]["empty_means_all_approved"] is True
-    changes = cfg["_transform_log"][-1]["details"]["changes"]
-    assert any(
-        event["action"] == "remove" and event["path"] == "live.empty_means_all_approved"
-        for event in changes
-    )
-    assert any(
-        event["action"] == "update"
-        and event["path"] == "live.approved_coins"
-        and event["new"] == "all"
-        for event in changes
-    )
-    messages = [rec.message for rec in caplog.records]
-    assert any("live.empty_means_all_approved is deprecated" in msg for msg in messages)
+    with pytest.raises(ValueError, match="empty_means_all_approved.*unknown"):
+        load_config(str(cfg_path), live_only=False, verbose=False)
+    assert json.loads(cfg_path.read_text()) == raw
 
 
 @pytest.mark.asyncio
@@ -852,15 +870,16 @@ async def test_format_approved_ignored_coins_supports_migrated_all(monkeypatch):
     monkeypatch.setattr(utils, "filter_markets", fake_filter_markets)
 
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["binanceusdm"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "ETH"],
         "short": ["BTC", "ETH"],
     }
@@ -899,16 +918,17 @@ async def test_format_approved_all_uses_plain_id_for_denomination_variants(monke
     monkeypatch.setattr(utils, "filter_markets", fake_filter_markets)
 
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
     expected = ["ABC", "BTC"]
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": expected,
         "short": expected,
     }
@@ -945,16 +965,17 @@ async def test_format_approved_all_preserves_distinct_numeric_suffix_ticker(
         utils, "filter_markets", lambda loaded, exchange, quote=None: (loaded, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
     expected = ["ABC", "ABC1000"]
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": expected,
         "short": expected,
     }
@@ -992,16 +1013,17 @@ async def test_format_coin_lists_preserves_distinct_exact_identifiers_and_coales
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
     identifiers = ["bitget::ABCUSDT", "1000ABC/USDT:USDT", "ABCUSDT"]
     config = {
-        "live": {
-            "approved_coins": {"long": identifiers, "short": []},
-            "ignored_coins": {"long": [], "short": identifiers},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": identifiers, "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": identifiers}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    assert config["live"]["approved_coins"]["long"] == identifiers[:2]
-    assert config["live"]["ignored_coins"]["short"] == identifiers
+    assert config['bot']["long"]['universe']['approved_coins'] == identifiers[:2]
+    assert config['bot']["short"]['universe']['ignored_coins'] == identifiers
 
 
 @pytest.mark.asyncio
@@ -1051,16 +1073,17 @@ async def test_format_approved_all_selects_one_denomination_per_underlying(monke
         utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bitget", "bybit"])
 
     expected = ["ABC", "BTC"]
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": expected,
         "short": expected,
     }
@@ -1095,16 +1118,17 @@ async def test_format_approved_all_unifies_cross_exchange_scaled_contracts(monke
         utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bybit", "bitget"])
 
     expected = ["ABC"]
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": expected,
         "short": expected,
     }
@@ -1139,15 +1163,16 @@ async def test_format_approved_all_unifies_cross_exchange_quote_variants(monkeyp
         utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["bybit", "hyperliquid"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC"],
         "short": ["BTC"],
     }
@@ -1215,17 +1240,18 @@ async def test_format_approved_all_unifies_exchange_denomination_conventions(
         utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
     )
     config = {
-        "live": {
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(
         config, ["binance", "bybit", "bitget", "hyperliquid", "mexc"]
     )
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["SHIB"],
         "short": ["SHIB"],
     }
@@ -1243,15 +1269,16 @@ async def test_format_approved_ignored_coins_explicit_empty_side_stays_disabled(
     monkeypatch.setattr(utils, "filter_markets", fake_filter_markets)
 
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": [], "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["binanceusdm"])
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC"],
         "short": [],
     }
@@ -1265,33 +1292,33 @@ def test_load_config_preserves_external_coin_sources(tmp_path: Path):
 
     template_path = Path("configs/examples/default_trailing_martingale_long.json")
     data = hjson.loads(template_path.read_text())
-    data["live"]["approved_coins"] = str(approved_file)
-    data["live"]["ignored_coins"] = str(ignored_file)
+    set_side_universe_sources(data, 'approved_coins', str(approved_file))
+    set_side_universe_sources(data, 'ignored_coins', str(ignored_file))
 
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(data))
 
     cfg = load_config(str(cfg_path), live_only=False, verbose=False)
-    assert cfg["_coins_sources"]["approved_coins"] == str(approved_file)
-    assert cfg["_coins_sources"]["ignored_coins"] == str(ignored_file)
-    assert cfg["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
-    assert cfg["live"]["ignored_coins"]["long"] == ["DOGE"]
+    assert cfg["_coins_sources"]["approved_coins"] == {side: str(approved_file) for side in ("long", "short")}
+    assert cfg["_coins_sources"]["ignored_coins"] == {side: str(ignored_file) for side in ("long", "short")}
+    assert cfg['bot']["long"]['universe']['approved_coins'] == ["BTC", "ETH"]
+    assert cfg['bot']["long"]['universe']['ignored_coins'] == ["DOGE"]
 
 
 def test_load_config_preserves_partial_per_side_coin_sources(tmp_path: Path):
     template_path = Path("configs/examples/default_trailing_martingale_long.json")
     data = hjson.loads(template_path.read_text())
-    data["live"]["approved_coins"] = {"long": ["BTC"]}
-    data["live"]["ignored_coins"] = {"long": [], "short": []}
+    set_side_universe_sources(data, 'approved_coins', {"long": ["BTC"]})
+    set_side_universe_sources(data, 'ignored_coins', {"long": [], "short": []})
 
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(data))
 
     cfg = load_config(str(cfg_path), live_only=False, verbose=False)
 
-    assert cfg["_coins_sources"]["approved_coins"] == {"long": ["BTC"]}
-    assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
-    assert cfg["live"]["approved_coins"]["short"] == []
+    assert cfg["_coins_sources"]["approved_coins"] == {"long": ["BTC"], "short": []}
+    assert cfg['bot']["long"]['universe']['approved_coins'] == ["BTC"]
+    assert cfg['bot']["short"]['universe']['approved_coins'] == []
 
 
 @pytest.mark.asyncio
@@ -1350,20 +1377,20 @@ async def test_format_approved_ignored_coins_supports_fake_exchange_all(tmp_path
     )
 
     config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": "all"},
-            "ignored_coins": {"long": [], "short": ["SOL"]},
-            "fake_scenario_path": str(scenario_path),
-        }
+        "live": {"fake_scenario_path": str(scenario_path)},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"], "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": ["SOL"]}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["fake"], quote="USDT")
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC"],
         "short": ["BTC", "ETH", "SOL"],
     }
-    assert config["live"]["ignored_coins"] == {"long": [], "short": ["SOL"]}
+    assert require_side_universe_sources(config, 'ignored_coins') == {"long": [], "short": ["SOL"]}
 
 
 @pytest.mark.asyncio
@@ -1426,16 +1453,16 @@ async def test_format_approved_ignored_coins_supports_fake_exchange_all_via_api_
     )
 
     config = {
-        "live": {
-            "user": "fake_api_keys_user",
-            "approved_coins": "all",
-            "ignored_coins": {"long": [], "short": []},
-        }
+        "live": {"account": {"user": "fake_api_keys_user"}},
+        "bot": {
+            "long": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+            "short": {"universe": {"approved_coins": "all", "ignored_coins": []}},
+        },
     }
 
     await format_approved_ignored_coins(config, ["fake"], quote="USDT")
 
-    assert config["live"]["approved_coins"] == {
+    assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "ETH"],
         "short": ["BTC", "ETH"],
     }

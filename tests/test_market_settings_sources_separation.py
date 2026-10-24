@@ -228,23 +228,19 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         "backtest": {"gap_tolerance_ohlcvs_minutes": 120},
         "bot": {
             "long": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0,
+                "risk": {"max_positions": 1, "total_wallet_exposure_limit": 1.0},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC/USDT:USDT"]},
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC/USDT:USDT"], "short": []},
-            "minimum_coin_age_days": 0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
+        "live": {},
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
 
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -260,7 +256,6 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     assert mss[exact_coin]["exchange"] == "bybit"
@@ -319,29 +314,22 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
     )
 
     config = {
-        "backtest": {
-            "gap_tolerance_ohlcvs_minutes": 120,
-            "volume_normalization": False,
-        },
+        "backtest": {"gap_tolerance_ohlcvs_minutes": 120, "volume_normalization": False},
         "bot": {
             "long": {
-                "n_positions": 2,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 0.5,
+                "risk": {"max_positions": 2, "total_wallet_exposure_limit": 1.0},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC", "ETH"]},
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC", "ETH"], "short": []},
-            "minimum_coin_age_days": 0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
+        "live": {},
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
     om_dict = {"binanceusdm": DummyOM(), "bybit": DummyOM()}
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -357,7 +345,6 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         ohlcv_exchanges=["binanceusdm", "bybit"],
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     assert values["BTC"][:, 3].sum() == pytest.approx(30.0)
@@ -413,29 +400,24 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
     monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch)
 
     config = {
-        "backtest": {
-            "gap_tolerance_ohlcvs_minutes": 120,
-            "volume_normalization": True,
-        },
+        "backtest": {"gap_tolerance_ohlcvs_minutes": 120, "volume_normalization": True},
         "bot": {
             "long": {
                 "n_positions": 3,
                 "total_wallet_exposure_limit": 1.0,
                 "wallet_exposure_limit": 1.0 / 3.0,
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": coins},
             },
             "short": {
-                "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "risk": {"max_positions": 0, "total_wallet_exposure_limit": 0.0},
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": []},
             },
+            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": coins, "short": []},
-            "minimum_coin_age_days": 0,
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0.0,
-        },
+        "live": {},
     }
+    config["bot"]["long"]["enabled"] = True
+    config["bot"]["short"]["enabled"] = False
     om_dict = {
         "binanceusdm": DummyOM("binanceusdm"),
         "bybit": DummyOM("bybit"),
@@ -455,7 +437,6 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
         normalization_candidate_exchanges=["binanceusdm", "bybit"],
         catalog=catalog,
         store=store,
-        legacy_root=None,
     )
 
     assert mss["BTC"]["exchange"] == "bybit"

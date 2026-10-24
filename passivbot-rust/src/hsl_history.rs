@@ -60,7 +60,7 @@ impl Position {
         Ok(())
     }
 
-    fn pnl(&self, size: f64, basis: f64, price: f64) -> f64 {
+    pub(crate) fn pnl(&self, size: f64, basis: f64, price: f64) -> f64 {
         if size == 0.0 || price == basis {
             return 0.0;
         }

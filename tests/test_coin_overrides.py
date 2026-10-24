@@ -4,27 +4,19 @@ import pytest
 import passivbot
 from backtest import _get_backtest_coin_override
 from config_utils import parse_overrides
+from config import prepare_config
+from config.schema import CONFIG_SCHEMA_VERSION
 from passivbot import Passivbot
 
 
 def test_coin_override_forced_mode_manual(monkeypatch):
     base_config = {
         "bot": {"long": {}, "short": {}},
-        "live": {
-            "user": "dummy",
-            "forced_mode_long": "",
-            "forced_mode_short": "",
-        },
-        "coin_overrides": {
-            "DOGEUSDT": {
-                "live": {
-                    "forced_mode_long": "manual",
-                }
-            }
-        },
+        "live": {"account": {"user": "dummy"}, "modes": {"long": None, "short": None}},
+        "coin_overrides": {"DOGEUSDT": {"live": {"modes": {"long": "manual"}}}},
     }
 
-    config = parse_overrides(deepcopy(base_config), verbose=False)
+    config = parse_overrides(prepare_config({"config_version": CONFIG_SCHEMA_VERSION, **base_config}, verbose=False), verbose=False)
     assert "DOGEUSDT" in config["coin_overrides"]
 
     bot = Passivbot.__new__(Passivbot)
@@ -48,8 +40,8 @@ def test_live_coin_overrides_reject_conflicting_aliases_for_one_market():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {
         "coin_overrides": {
-            "BTC": {"live": {"forced_mode_long": "manual"}},
-            "BTCUSDT": {"live": {"forced_mode_long": "panic"}},
+            "BTC": {"live": {"modes": {"long": "manual"}}},
+            "BTCUSDT": {"live": {"modes": {"long": "panic"}}},
         }
     }
     bot.markets_dict = {"BTC/USDT:USDT": {"active": True}}
@@ -61,12 +53,12 @@ def test_live_coin_overrides_reject_conflicting_aliases_for_one_market():
 
 def test_live_coin_overrides_refresh_is_atomic_on_resolution_failure():
     bot = Passivbot.__new__(Passivbot)
-    prior = {"OLD/USDT:USDT": {"live": {"forced_mode_long": "manual"}}}
+    prior = {"OLD/USDT:USDT": {"live": {"modes": {"long": "manual"}}}}
     bot.coin_overrides = deepcopy(prior)
     bot.config = {
         "coin_overrides": {
-            "BTC": {"live": {"forced_mode_long": "panic"}},
-            "BROKEN": {"live": {"forced_mode_long": "manual"}},
+            "BTC": {"live": {"modes": {"long": "panic"}}},
+            "BROKEN": {"live": {"modes": {"long": "manual"}}},
         }
     }
 
@@ -90,8 +82,8 @@ def test_backtest_coin_overrides_reject_conflicting_aliases_for_one_market(
 ):
     config = {
         "coin_overrides": {
-            "BTC": {"live": {"forced_mode_long": "manual"}},
-            "BTCUSDT": {"live": {"forced_mode_long": "panic"}},
+            "BTC": {"live": {"modes": {"long": "manual"}}},
+            "BTCUSDT": {"live": {"modes": {"long": "panic"}}},
         }
     }
     monkeypatch.setattr(
@@ -112,15 +104,11 @@ def test_forced_mode_shorthand_expansion(monkeypatch):
     """Verify shorthand modes ('p', 'gs', 'm') are expanded to full names."""
     base_config = {
         "bot": {"long": {}, "short": {}},
-        "live": {
-            "user": "dummy",
-            "forced_mode_long": "p",  # shorthand for "panic"
-            "forced_mode_short": "gs",  # shorthand for "graceful_stop"
-        },
+        "live": {"account": {"user": "dummy"}, "modes": {"long": "p", "short": "gs"}},
         "coin_overrides": {},
     }
 
-    config = parse_overrides(deepcopy(base_config), verbose=False)
+    config = parse_overrides(prepare_config({"config_version": CONFIG_SCHEMA_VERSION, **base_config}, verbose=False), verbose=False)
 
     bot = Passivbot.__new__(Passivbot)
     bot.config = config

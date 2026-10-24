@@ -287,8 +287,8 @@ class TestCreateCcxtSessionsWebSocketOptional:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        bot.user_info = {"exchange": "paradex", "apiKey": "test"}
-        bot.exchange = "paradex"
+        bot.user_info = {"exchange": "kraken", "apiKey": "test"}
+        bot.exchange = "kraken"
         bot.ws_enabled = True
         bot.endpoint_override = None
         bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
@@ -306,8 +306,8 @@ class TestCreateCcxtSessionsWebSocketOptional:
         ws_ctor.return_value.options = {}
 
         with pytest.MonkeyPatch().context() as m:
-            m.setattr(ccxt_async, "paradex", rest_ctor, raising=False)
-            m.setattr(ccxt_pro, "paradex", ws_ctor, raising=False)
+            m.setattr(ccxt_async, "kraken", rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "kraken", ws_ctor, raising=False)
             bot.create_ccxt_sessions()
 
         rest_ctor.assert_called_once_with({"apiKey": "test"})
@@ -318,8 +318,8 @@ class TestCreateCcxtSessionsWebSocketOptional:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        bot.user_info = {"exchange": "paradex", "apiKey": "test"}
-        bot.exchange = "paradex"
+        bot.user_info = {"exchange": "kraken", "apiKey": "test"}
+        bot.exchange = "kraken"
         bot.ws_enabled = False
         bot.endpoint_override = None
         bot._build_ccxt_options = MagicMock(return_value={})
@@ -333,7 +333,7 @@ class TestCreateCcxtSessionsWebSocketOptional:
         mock_exchange.return_value.options = {}
 
         with pytest.MonkeyPatch().context() as m:
-            m.setattr(ccxt_async, "paradex", mock_exchange, raising=False)
+            m.setattr(ccxt_async, "kraken", mock_exchange, raising=False)
             bot.create_ccxt_sessions()
 
         assert bot.ccp is None
@@ -1120,7 +1120,7 @@ class TestBuildOrderParams:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        bot.config = {"live": {"time_in_force": "post_only"}}
+        bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
         return bot
 
     def test_build_order_params_sets_position_side(self, bot_with_config):
@@ -1153,7 +1153,7 @@ class TestBuildOrderParams:
     def test_build_order_params_sets_gtc_for_limit(self, bot_with_config):
         """_build_order_params should set GTC for limit orders with non-post_only tif."""
         bot = bot_with_config
-        bot.config = {"live": {"time_in_force": "gtc"}}
+        bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
         order = {"type": "limit"}
 
         result = bot._build_order_params(order)

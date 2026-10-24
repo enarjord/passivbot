@@ -7,7 +7,12 @@ import math
 from pathlib import Path
 from typing import Any
 
+from config.field_registry import LIVE_OPERATIONAL_PATHS, live_field_path
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
+from config.risk_memory import (
+    normalize_memory_ema_span_minutes, normalize_risk_bootstrap_max_lookback_minutes,
+    risk_bootstrap_horizon_minutes,
+)
 from live.smoke_report import _user_safe_display_path
 
 DEFAULT_SAMPLE_SIZE = 8
@@ -26,11 +31,9 @@ CACHE_LIVE_KEYS = (
     "max_disk_candles_per_symbol_per_tf",
     "max_memory_candles_per_symbol",
     "max_ohlcv_fetches_per_minute",
-    "max_warmup_minutes",
-    "pnls_max_lookback_days",
+    "risk_bootstrap_max_lookback_minutes",
     "warmup_concurrency",
     "warmup_jitter_seconds",
-    "warmup_ratio",
 )
 CACHE_SETTING_CHECK_KEYS = (
     "defer_broad_candle_warmup",
@@ -41,26 +44,53 @@ CACHE_SETTING_CHECK_KEYS = (
     "max_active_candle_tail_gap_minutes",
     "max_disk_candles_per_symbol_per_tf",
     "max_memory_candles_per_symbol",
-    "max_warmup_minutes",
-    "pnls_max_lookback_days",
-    "warmup_ratio",
+    "risk_bootstrap_max_lookback_minutes",
 )
 FORAGER_LIVE_KEYS = (
-    "forager_score_hysteresis_pct",
     "max_forager_candle_refresh_seconds",
     "max_forager_candle_staleness_minutes",
 )
 DIFF_SETTING_PATHS = (
-    ("identity", "live.user", ("live", "user")),
+    ("identity", "live.account.user", ("live", "account", "user")),
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
-    ("hsl", "live.hsl_signal_mode", ("live", "hsl_signal_mode")),
+    ("hsl", "bot.portfolio.hsl.scope", ("bot", "portfolio", "hsl", "scope")),
+    ("hsl", "bot.portfolio.hsl.enabled", ("bot", "portfolio", "hsl", "enabled")),
+    ("hsl", "bot.global.hsl.enabled", ("bot", "global", "hsl", "enabled")),
     ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
     ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
-    ("forager", "bot.long.risk.n_positions", ("bot", "long", "risk", "n_positions")),
-    ("forager", "bot.short.risk.n_positions", ("bot", "short", "risk", "n_positions")),
-    *(("forager", f"live.{key}", ("live", key)) for key in FORAGER_LIVE_KEYS),
-    *(("cache", f"live.{key}", ("live", key)) for key in CACHE_LIVE_KEYS),
+    ("forager", "bot.global.risk.max_positions", ("bot", "global", "risk", "max_positions")),
+    (
+        "forager",
+        "bot.long.risk.max_positions",
+        ("bot", "long", "risk", "max_positions"),
+    ),
+    (
+        "forager",
+        "bot.short.risk.max_positions",
+        ("bot", "short", "risk", "max_positions"),
+    ),
+    *(
+        ("forager", live_field_path(key), LIVE_OPERATIONAL_PATHS[key])
+        for key in FORAGER_LIVE_KEYS
+    ),
+    *(
+        ("cache", live_field_path(key), LIVE_OPERATIONAL_PATHS[key])
+        for key in CACHE_LIVE_KEYS
+    ),
+    (
+        "forager",
+        "bot.global.forager.score_hysteresis_margin",
+        ("bot", "global", "forager", "score_hysteresis_margin"),
+    ),
+    *(("forager", f"bot.{side}.forager.score_hysteresis_margin",
+       ("bot", side, "forager", "score_hysteresis_margin")) for side in SIDES),
+    (
+        "cache",
+        "bot.portfolio.warmup.max_minutes",
+        ("bot", "portfolio", "warmup", "max_minutes"),
+    ),
+    ("cache", "bot.portfolio.warmup.span_multiplier", ("bot", "portfolio", "warmup", "span_multiplier")),
 )
 
 
@@ -119,6 +149,21 @@ def _setting_value(section: dict[str, Any], key: str) -> Any:
 
 def _setting_display(section: dict[str, Any], key: str) -> dict[str, Any]:
     return _display_value(_setting_value(section, key))
+
+
+def _live_setting_value(live: dict[str, Any], field_id: str) -> Any:
+    return _path_value({"live": live}, LIVE_OPERATIONAL_PATHS[field_id])
+
+
+def _live_setting_display(live: dict[str, Any], field_id: str) -> dict[str, Any]:
+    return _display_value(_live_setting_value(live, field_id))
+
+
+def _selected_live_values(
+    live: dict[str, Any], field_ids: tuple[str, ...]
+) -> dict[str, Any]:
+    values = {field: _live_setting_value(live, field) for field in field_ids}
+    return {field: value for field, value in values.items() if value is not _MISSING}
 
 
 def _path_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
@@ -255,24 +300,66 @@ def _side_coin_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
     return {side: dict(summary) for side in SIDES}
 
 
+def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve policy only; source files and non-bot declarations stay untouched."""
+    from config.bot_inheritance import (
+        get_side_field_catalog, reconciled_bot_policy, resolve_bot_policy,
+    )
+    policy = reconciled_bot_policy(config)
+    if policy is None:
+        policy = resolve_bot_policy(config.get("bot", {}), get_side_field_catalog())
+    effective = {**config, "bot": policy.effective_view()}
+    from config.authored import validate_authored_config
+    from config.access import require_config_value
+    from config.forager_hysteresis import (
+        forager_score_hysteresis, validate_forager_score_hysteresis_margin,
+    )
+    from config.hsl import (
+        _mode, normalize_block, validate_budget_scaling_scope, validate_portfolio_policy_scope,
+    )
+    from config.schema import get_template_config
+
+    # The portfolio is not part of the directional catalog. Keep its existing
+    # authored shape gate before the HSL owner reads the scope/container.
+    validate_authored_config({"bot": {"portfolio": {
+        "hsl": effective["bot"]["portfolio"].get("hsl"),
+    }}}, get_template_config())
+    margin_path = "bot.global.forager.score_hysteresis_margin"
+    validate_forager_score_hysteresis_margin(
+        require_config_value(effective, margin_path), path=margin_path,
+    )
+    forager_score_hysteresis(effective)
+    mode = _mode(effective)
+    effective["bot"]["portfolio"]["hsl"]["scope"] = mode
+    validate_portfolio_policy_scope(effective["bot"]["portfolio"]["hsl"], mode)
+    for side in SIDES:
+        block = effective["bot"][side]["hsl"]
+        normalize_block(block, {}, f"bot.{side}.hsl", active=mode != "portfolio", verbose=False)
+        validate_budget_scaling_scope(block, mode, f"bot.{side}.hsl")
+    if mode == "portfolio":
+        block = effective["bot"]["portfolio"]["hsl"]
+        normalize_block(block, {}, "bot.portfolio.hsl", portfolio=True, verbose=False)
+        validate_budget_scaling_scope(block, mode, "bot.portfolio.hsl")
+    return effective
+
+
 def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     from config.hsl import FIELDS
 
     values = {
-        key: get_grouped_bot_value(side_config, f"hsl_{key}", default=None)
+        key: side_config.get("hsl", {}).get(key)
         for key in FIELDS
     }
     return {"present": any(value is not None for value in values.values()), **values}
 
 
-def _hsl_policy_reports(config):
-    """Only policies active in the configured signal topology."""
-    live = config.get("live")
+def _hsl_policy_reports(config, *, resolved=False):
+    """Only effective policies active in the configured signal topology."""
+    config = config if resolved else _effective_bot_config(config)
     bot = config.get("bot")
-    live = live if isinstance(live, dict) else {}
     bot = bot if isinstance(bot, dict) else {}
-    if _effective_hsl_signal_mode(live) == "unified":
-        return {"portfolio": _hsl_side_report({"hsl": bot.get("hsl", {})})}
+    if _effective_hsl_signal_mode(config) == "portfolio":
+        return {"portfolio": _hsl_side_report({"hsl": bot.get("portfolio", {}).get("hsl", {})})}
     return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
 
 
@@ -280,13 +367,13 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     forager_values = {
         key: get_grouped_bot_value(side_config, flat_key, default=None)
         for key, flat_key in (
-            ("volatility_ema_span_1m", "forager_volatility_ema_span_1m"),
-            ("volume_drop_pct", "forager_volume_drop_pct"),
-            ("volume_ema_span_1m", "forager_volume_ema_span_1m"),
+            ("volatility_ema_span_minutes", "forager_volatility_ema_span_1m"),
+            ("volume_ema_span_minutes", "forager_volume_ema_span_1m"),
         )
     }
+    forager_values["score_hysteresis_margin"] = side_config.get("forager", {}).get("score_hysteresis_margin")
     report = {
-        "n_positions": get_grouped_bot_value(side_config, "n_positions", default=None),
+        "max_positions": side_config.get("risk", {}).get("max_positions"),
         "forager_present": any(value is not None for value in forager_values.values()),
     }
     if report["forager_present"]:
@@ -297,7 +384,7 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _identity_report(config: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
-    user = live.get("user")
+    user = live.get("account", {}).get("user")
     exchange = live.get("exchange")
     user_exchange_hint = None
     if isinstance(user, str) and "_" in user:
@@ -379,11 +466,15 @@ def _balance_override_report(
     *,
     override_value: Any = _MISSING,
 ) -> dict[str, Any]:
-    source = "argument" if override_value is not _MISSING else "live.balance_override"
+    source = (
+        "argument"
+        if override_value is not _MISSING
+        else "live.account.balance_override"
+    )
     raw_value = (
         override_value
         if override_value is not _MISSING
-        else live.get("balance_override", _MISSING)
+        else live.get("account", {}).get("balance_override", _MISSING)
     )
     if raw_value is _MISSING:
         return {"active": False, "source": "none", "present": False}
@@ -434,7 +525,7 @@ def _balance_hysteresis_report(
     live: dict[str, Any],
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    raw_value = live.get("balance_hysteresis_snap_pct", _MISSING)
+    raw_value = live.get("account", {}).get("balance_hysteresis_snap_fraction", _MISSING)
     report: dict[str, Any] = {
         "present": raw_value is not _MISSING,
         "default_value": 0.02,
@@ -455,8 +546,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid_bool",
-                "live.balance_hysteresis_snap_pct should be a non-negative number, not a boolean",
-                path="live.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative number, not a boolean",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -469,8 +560,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -481,8 +572,8 @@ def _balance_hysteresis_report(
             _issue(
                 "warning",
                 "balance_hysteresis_snap_pct_invalid",
-                "live.balance_hysteresis_snap_pct should be a non-negative finite number",
-                path="live.balance_hysteresis_snap_pct",
+                "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
@@ -493,11 +584,9 @@ def _balance_hysteresis_report(
                 "warning",
                 "balance_hysteresis_snap_pct_high",
                 (
-                    "live.balance_hysteresis_snap_pct is above 5%; snapped-balance "
-                    "entry sizing/gating may diverge noticeably from raw-balance "
-                    "exposure repair near risk boundaries"
+                    "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
                 ),
-                path="live.balance_hysteresis_snap_pct",
+                path="live.account.balance_hysteresis_snap_fraction",
             )
         )
     else:
@@ -505,9 +594,9 @@ def _balance_hysteresis_report(
     return report
 
 
-def _effective_hsl_signal_mode(live: dict[str, Any]) -> str:
-    raw = live.get("hsl_signal_mode", DEFAULT_HSL_SIGNAL_MODE)
-    return str(raw)
+def _effective_hsl_signal_mode(config: dict[str, Any]) -> str:
+    raw = _path_value(config, ("bot", "portfolio", "hsl", "scope"))
+    return DEFAULT_HSL_SIGNAL_MODE if raw is _MISSING else str(raw)
 
 
 def _bot_side_config(config: dict[str, Any], side: str) -> dict[str, Any]:
@@ -528,7 +617,7 @@ def _cache_root_hints(identity: dict[str, Any]) -> dict[str, Any]:
             "path": f"caches/fill_events/{exchange}/{user}",
         }
     else:
-        fill_root["reason"] = "live.user or exchange hint unavailable"
+        fill_root["reason"] = "live.account.user or exchange hint unavailable"
     return {
         "default_cache_root": "caches",
         "candle_v2_root": "caches/ohlcvs",
@@ -540,101 +629,105 @@ def _cache_root_hints(identity: dict[str, Any]) -> dict[str, Any]:
 def _cache_readiness_report(
     live: dict[str, Any],
     *,
+    config: dict[str, Any],
     identity: dict[str, Any],
     hsl_sides: dict[str, dict[str, Any]],
     balance_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    checks = {key: _setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
+    checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
+    warmup = config.get("bot", {}).get("portfolio", {}).get("warmup", {})
+    checks.update({f"bot.portfolio.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
 
-    if live.get("force_cold_startup") is True:
+    if live.get("startup", {}).get("force_cold_startup") is True:
         _append_attention(
             candles,
             "force_cold_startup_enabled",
-            "live.force_cold_startup=true disables warm-cache startup reuse",
+            "live.startup.force_cold_startup=true disables warm-cache startup reuse",
         )
-    force_status = _bool_status(_setting_value(live, "force_cold_startup"))
+    force_status = _bool_status(_live_setting_value(live, "force_cold_startup"))
     if force_status == "missing":
         _append_attention(
             candles,
             "force_cold_startup_missing",
-            "live.force_cold_startup is missing; startup cache intent is implicit",
+            "live.startup.force_cold_startup is missing; startup cache intent is implicit",
         )
     elif force_status == "invalid":
         _append_attention(
             candles,
             "force_cold_startup_invalid",
-            "live.force_cold_startup should be boolean when present",
+            "live.startup.force_cold_startup should be boolean when present",
         )
 
-    defer_status = _bool_status(_setting_value(live, "defer_broad_candle_warmup"))
+    defer_status = _bool_status(_live_setting_value(live, "defer_broad_candle_warmup"))
     if defer_status == "missing":
         _append_attention(
             candles,
             "defer_broad_candle_warmup_missing",
-            "live.defer_broad_candle_warmup is missing; broad warmup behavior is implicit",
+            "live.startup.defer_broad_candle_warmup is missing; broad warmup behavior is implicit",
         )
     elif defer_status == "invalid":
         _append_attention(
             candles,
             "defer_broad_candle_warmup_invalid",
-            "live.defer_broad_candle_warmup should be boolean when present",
+            "live.startup.defer_broad_candle_warmup should be boolean when present",
         )
-    elif live.get("defer_broad_candle_warmup") is False:
+    elif live.get("startup", {}).get("defer_broad_candle_warmup") is False:
         _append_attention(
             candles,
             "broad_candle_warmup_blocking",
-            "live.defer_broad_candle_warmup=false keeps broad candle warmup on the startup path",
+            "live.startup.defer_broad_candle_warmup=false keeps broad candle warmup on the startup path",
         )
 
     for key in (
-        "max_warmup_minutes",
         "max_active_candle_tail_gap_minutes",
         "max_disk_candles_per_symbol_per_tf",
         "max_memory_candles_per_symbol",
     ):
-        status = _numeric_status(
-            _setting_value(live, key), allow_zero=key == "max_warmup_minutes"
-        )
+        status = _numeric_status(_live_setting_value(live, key))
         if status == "missing":
             _append_attention(
                 candles,
                 f"{key}_missing",
-                f"live.{key} is missing; candle cache sizing/readiness intent is implicit",
+                f"{live_field_path(key)} is missing; candle cache sizing/readiness intent is implicit",
             )
         elif status != "present":
             _append_attention(
                 candles,
                 f"{key}_{status}",
-                f"live.{key} is {status}; candle cache readiness may be degraded",
+                f"{live_field_path(key)} is {status}; candle cache readiness may be degraded",
             )
 
-    warmup_ratio_status = _numeric_status(
-        _setting_value(live, "warmup_ratio"), allow_zero=True
-    )
+    cap = _setting_value(warmup, "max_minutes")
+    max_minutes_status = "present" if cap is None else _numeric_status(cap)
+    if max_minutes_status != "present":
+        _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
+                          f"bot.portfolio.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
+    warmup_ratio_status = _numeric_status(_setting_value(warmup, "span_multiplier"), allow_zero=True)
     if warmup_ratio_status == "missing":
         _append_attention(
             candles,
             "warmup_ratio_missing",
-            "live.warmup_ratio is missing; EMA warmup buffer intent is implicit",
+            "bot.portfolio.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
         )
     elif warmup_ratio_status != "present":
         _append_attention(
             candles,
             f"warmup_ratio_{warmup_ratio_status}",
-            f"live.warmup_ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"bot.portfolio.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
         )
 
-    archive_status = _bool_status(_setting_value(live, "enable_archive_candle_fetch"))
+    archive_status = _bool_status(
+        _live_setting_value(live, "enable_archive_candle_fetch")
+    )
     if archive_status == "missing":
         candles["evidence"].append(
             {
                 "code": "archive_candle_fetch_default",
                 "message": (
-                    "live.enable_archive_candle_fetch is missing; archive fetch "
-                    "remains defaulted by runtime"
+                    "live.candles.enable_archive_candle_fetch is missing; archive fetch remains defaulted by runtime"
                 ),
             }
         )
@@ -642,13 +735,15 @@ def _cache_readiness_report(
         _append_attention(
             candles,
             "enable_archive_candle_fetch_invalid",
-            "live.enable_archive_candle_fetch should be boolean when present",
+            "live.candles.enable_archive_candle_fetch should be boolean when present",
         )
     else:
         candles["evidence"].append(
             {
                 "code": "archive_candle_fetch_configured",
-                "value": bool(live.get("enable_archive_candle_fetch")),
+                "value": bool(
+                    live.get("candles", {}).get("enable_archive_candle_fetch")
+                ),
             }
         )
     _append_not_proven(
@@ -657,36 +752,53 @@ def _cache_readiness_report(
         "preflight inspects config only; run cache-integrity-doctor to prove local candle coverage",
     )
 
-    lookback_status = _numeric_status(
-        _setting_value(live, "pnls_max_lookback_days"),
-        allow_all=True,
-    )
-    if lookback_status in {"missing", "invalid", "invalid_bool", "negative", "zero"}:
-        _append_attention(
-            fills,
-            f"pnls_max_lookback_days_{lookback_status}",
-            "live.pnls_max_lookback_days must be positive or 'all' for fill/PnL lookback consumers",
-        )
-    else:
-        fills["evidence"].append(
-            {
-                "code": "pnls_max_lookback_days_configured",
-                "value": live.get("pnls_max_lookback_days"),
-            }
-        )
+    lookback_status = "present"
+    for key, path, validator in (
+        (
+            "unstuck_memory_ema_span_minutes",
+            ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
+            normalize_memory_ema_span_minutes,
+        ),
+        (
+            "loss_gate_memory_ema_span_minutes",
+            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
+            normalize_memory_ema_span_minutes,
+        ),
+        (
+            "risk_bootstrap_max_lookback_minutes",
+            ("live", "startup", "risk_bootstrap_max_lookback_minutes"),
+            normalize_risk_bootstrap_max_lookback_minutes,
+        ),
+    ):
+        try:
+            value = validator(_path_value(config, path))
+        except (ValueError, TypeError) as error:
+            lookback_status = "invalid"
+            _append_attention(fills, f"{key}_invalid", str(error))
+        else:
+            fills["evidence"].append({"code": f"{key}_configured", "value": value})
+    if lookback_status == "present":
+        try:
+            horizon, truncated = risk_bootstrap_horizon_minutes(config)
+        except (KeyError, TypeError, ValueError) as error:
+            lookback_status = "invalid"
+            _append_attention(fills, "risk_memory_policy_incomplete", str(error))
+        else:
+            fills["evidence"].append({"code": "risk_bootstrap_horizon",
+                                      "minutes": horizon, "target_truncated": truncated})
     for key in ("fills_recent_overlap_minutes", "fills_confirmation_overlap_minutes"):
-        status = _numeric_status(_setting_value(live, key), allow_zero=True)
+        status = _numeric_status(_live_setting_value(live, key), allow_zero=True)
         if status == "missing":
             _append_attention(
                 fills,
                 f"{key}_missing",
-                f"live.{key} is missing; fill-cache overlap intent is implicit",
+                f"{live_field_path(key)} is missing; fill-cache overlap intent is implicit",
             )
         elif status != "present":
             _append_attention(
                 fills,
                 f"{key}_{status}",
-                f"live.{key} is {status}; fill-cache overlap setting is suspicious",
+                f"{live_field_path(key)} is {status}; fill-cache overlap setting is suspicious",
             )
     _append_not_proven(
         fills,
@@ -695,6 +807,12 @@ def _cache_readiness_report(
     )
 
     if _any_hsl_enabled(hsl_sides):
+        from config.hsl import require_live_runtime_support
+
+        try:
+            require_live_runtime_support(config)
+        except (KeyError, ValueError, TypeError) as error:
+            _append_attention(hsl, "hsl_bootstrap_capability_invalid", str(error))
         hsl["evidence"].append(
             {
                 "code": "hsl_enabled",
@@ -708,15 +826,15 @@ def _cache_readiness_report(
                 "message": (
                     "HSL reconstructs history from exchange state plus config; deposits, "
                     "withdrawals, balance overrides, HSL mode changes, and HSL budget/"
-                    "threshold changes can reinterpret historical drawdown"
+                    "threshold changes require reconstruction; acquisition caps do not define EMA forgetting"
                 ),
             }
         )
-        signal_mode = _effective_hsl_signal_mode(live)
+        signal_mode = _effective_hsl_signal_mode(config)
         if (
             isinstance(balance_override, dict)
             and balance_override.get("active") is True
-            and signal_mode in {"unified", "pside"}
+            and signal_mode in {"portfolio", "position_side"}
         ):
             _append_attention(
                 hsl,
@@ -724,7 +842,7 @@ def _cache_readiness_report(
                 (
                     "HSL account-level history replay is unsafe with an active "
                     "balance override; runtime will fail before replay for "
-                    f"live.hsl_signal_mode={signal_mode!r}"
+                    f"bot.portfolio.hsl.scope={signal_mode!r}"
                 ),
             )
         if lookback_status in {
@@ -737,7 +855,7 @@ def _cache_readiness_report(
             _append_attention(
                 hsl,
                 "hsl_fill_lookback_unready",
-                "HSL is enabled but live.pnls_max_lookback_days is not a usable positive/'all' value",
+                "HSL is enabled but its v9 memory span or bootstrap cap is invalid",
             )
         _append_not_proven(
             hsl,
@@ -793,15 +911,8 @@ def _cache_readiness_report(
 
 
 def _coin_value_for_side(config: dict[str, Any], group_name: str, side: str) -> Any:
-    live = config["live"] if isinstance(config.get("live"), dict) else {}
-    group = (
-        live[group_name]
-        if isinstance(live.get(group_name), dict)
-        else live.get(group_name)
-    )
-    if isinstance(group, dict):
-        return group[side] if side in group else None
-    return group
+    from config.universe import get_side_universe_sources
+    return get_side_universe_sources(config, group_name, {}).get(side)
 
 
 def _universe_diff_changes(
@@ -823,7 +934,7 @@ def _universe_diff_changes(
                 continue
             change = {
                 "category": "universe",
-                "field": f"live.{group_name}.{side}",
+                "field": f"bot.{side}.universe.{group_name}",
                 "before": {
                     "present": before_summary["present"],
                     "mode": before_summary["mode"],
@@ -873,34 +984,55 @@ def build_live_config_diff_report(
             "summary": {"change_count": 0, "category_counts": {}},
         }
 
+    effective = []
+    for label, config in (("baseline", baseline), ("target", target)):
+        try:
+            from config.authored import validate_authored_config
+            from config.schema import get_template_config
+            from config.migrations.v9 import require_v9_runtime_config
+
+            require_v9_runtime_config(config)
+            validate_authored_config(config, get_template_config())
+            effective.append(_effective_bot_config(config))
+        except (ValueError, TypeError, KeyError) as error:
+            issues.append(_issue("error", f"{label}_config_schema_invalid", str(error), path="config"))
+    if issues:
+        return {"ok": False, "baseline_config_path": baseline_display_path,
+                "target_config_path": target_display_path, "issues": issues,
+                "summary": {"change_count": 0, "category_counts": {}}}
+    baseline_effective, target_effective = effective
     changes: list[dict[str, Any]] = []
     for category, field, path in DIFF_SETTING_PATHS:
-        before = _path_value(baseline, path)
-        after = _path_value(target, path)
-        if before != after:
-            changes.append(
-                {
-                    "category": category,
-                    "field": field,
-                    "before": _display_value(before),
-                    "after": _display_value(after),
-                }
-            )
+        authored_before = _path_value(baseline, path)
+        authored_after = _path_value(target, path)
+        before = _path_value(baseline_effective, path) if path[0] == "bot" else authored_before
+        after = _path_value(target_effective, path) if path[0] == "bot" else authored_after
+        if before != after or authored_before != authored_after:
+            change = {"category": category, "field": field,
+                      "before": _display_value(before), "after": _display_value(after)}
+            if path[0] == "bot":
+                change.update(authored_before=_display_value(authored_before),
+                              authored_after=_display_value(authored_after),
+                              effective_changed=before != after,
+                              authored_changed=authored_before != authored_after)
+            changes.append(change)
     changes.extend(_universe_diff_changes(baseline, target, sample_size=sample_size))
     baseline_live = baseline["live"] if isinstance(baseline.get("live"), dict) else {}
     target_live = target["live"] if isinstance(target.get("live"), dict) else {}
-    baseline_hsl_sides = _hsl_policy_reports(baseline)
-    target_hsl_sides = _hsl_policy_reports(target)
+    baseline_hsl_sides = _hsl_policy_reports(baseline_effective, resolved=True)
+    target_hsl_sides = _hsl_policy_reports(target_effective, resolved=True)
     baseline_identity = _identity_report(baseline, baseline_live)
     target_identity = _identity_report(target, target_live)
     baseline_readiness = _cache_readiness_report(
         baseline_live,
+        config=baseline_effective,
         identity=baseline_identity,
         hsl_sides=baseline_hsl_sides,
         balance_override=_balance_override_report(baseline_live),
     )
     target_readiness = _cache_readiness_report(
         target_live,
+        config=target_effective,
         identity=target_identity,
         hsl_sides=target_hsl_sides,
         balance_override=_balance_override_report(target_live),
@@ -936,6 +1068,7 @@ def build_live_config_diff_report(
         },
         "notes": [
             "offline_read_only_config_diff",
+            "bot_diffs_include_effective_values_and_authored_declarations",
             "does_not_load_credentials_or_contact_exchanges",
             "does_not_enforce_live_startup_policy",
         ],
@@ -956,10 +1089,10 @@ def _collect_shape_warnings(
                         "warning",
                         "coin_list_shape_invalid",
                         (
-                            f"live.{group_name}.{side} is not a list, 'all', "
+                            f"bot.{side}.universe.{group_name} is not a list, 'all', "
                             "scalar, or missing"
                         ),
-                        path=f"live.{group_name}.{side}",
+                        path=f"bot.{side}.universe.{group_name}",
                     )
                 )
 
@@ -1018,24 +1151,36 @@ def build_live_config_preflight_report(
 
     live = _section(parsed["live"] if "live" in parsed else None, "live", issues)
     bot = _section(parsed["bot"] if "bot" in parsed else None, "bot", issues)
-    side_configs = {
-        side: bot[side] if isinstance(bot.get(side), dict) else {} for side in SIDES
-    }
-    for side, side_config in side_configs.items():
-        if not side_config and bot:
-            issues.append(
-                _issue(
-                    "warning",
-                    "side_config_missing",
-                    f"bot.{side} is missing or is not an object",
-                    path=f"bot.{side}",
-                )
-            )
+    from config.migrations.v9 import require_v9_runtime_config
+
+    try:
+        require_v9_runtime_config(parsed)
+    except ValueError as error:
+        issues.append(_issue("error", "config_migration_required", str(error), path="config_version"))
+    from config.authored import validate_authored_config
+    from config.schema import get_template_config
+    try:
+        validate_authored_config(parsed, get_template_config())
+    except (ValueError, TypeError, KeyError) as error:
+        issues.append(_issue("error", "config_schema_invalid", str(error), path="config"))
+    effective = None
+    try:
+        effective = _effective_bot_config(parsed)
+    except (ValueError, TypeError, KeyError) as error:
+        if not any(issue["code"] == "config_schema_invalid" for issue in issues):
+            issues.append(_issue("error", "config_schema_invalid", str(error), path="config"))
 
     sample_size = max(0, int(sample_size))
-    approved = _side_coin_summary(live.get("approved_coins"), sample_size=sample_size)
-    ignored = _side_coin_summary(live.get("ignored_coins"), sample_size=sample_size)
+    approved = {side: _coin_list_summary(_coin_value_for_side(parsed, "approved_coins", side), sample_size=sample_size) for side in SIDES}
+    ignored = {side: _coin_list_summary(_coin_value_for_side(parsed, "ignored_coins", side), sample_size=sample_size) for side in SIDES}
     _collect_shape_warnings(approved=approved, ignored=ignored, issues=issues)
+    if effective is None:
+        # An invalid policy has no safe effective disabled-policy projection.
+        counts = Counter(issue["severity"] for issue in issues)
+        return {"ok": False, "config_path": display_path, "config_version": parsed.get("config_version"),
+                "universe": {"approved_coins": approved, "ignored_coins": ignored}, "issues": issues,
+                "summary": {"error_count": counts["error"], "warning_count": counts["warning"]}}
+    side_configs = {side: _bot_side_config(effective, side) for side in SIDES}
 
     forager_by_side = {
         side: _forager_side_report(side_config)
@@ -1043,17 +1188,35 @@ def build_live_config_preflight_report(
     }
     n_positions_values = [
         value
-        for value in (forager_by_side[side]["n_positions"] for side in SIDES)
+        for value in (forager_by_side[side]["max_positions"] for side in SIDES)
         if isinstance(value, (int, float))
     ]
     severity_counts = Counter(issue["severity"] for issue in issues)
     identity_report = _identity_report(parsed, live)
-    hsl_sides = _hsl_policy_reports(parsed)
+    hsl_sides = _hsl_policy_reports(effective, resolved=True)
+    if _any_hsl_enabled(hsl_sides):
+        from config.hsl import require_live_runtime_support
+
+        try:
+            require_live_runtime_support(effective)
+        except KeyError:
+            # A sparse/flat inspection is not a compiled runtime configuration;
+            # missing capability facts remain explicit readiness attention.
+            pass
+        except (ValueError, TypeError) as error:
+            issues.append(
+                _issue(
+                    "error",
+                    "hsl_bootstrap_capability_invalid",
+                    str(error),
+                    path="live.startup.risk_bootstrap_max_lookback_minutes",
+                )
+            )
     balance_override_report = _balance_override_report(
         live, override_value=balance_override
     )
     balance_hysteresis_report = _balance_hysteresis_report(live, issues)
-    hsl_signal_mode = _effective_hsl_signal_mode(live)
+    hsl_signal_mode = _effective_hsl_signal_mode(effective)
     if balance_override_report.get("status") in {"invalid", "invalid_bool"}:
         issues.append(
             _issue(
@@ -1063,29 +1226,29 @@ def build_live_config_preflight_report(
                 path=(
                     "argument.balance_override"
                     if balance_override_report.get("source") == "argument"
-                    else "live.balance_override"
+                    else "live.account.balance_override"
                 ),
             )
         )
     if (
         _any_hsl_enabled(hsl_sides)
         and balance_override_report.get("active") is True
-        and hsl_signal_mode in {"unified", "pside"}
+        and hsl_signal_mode in {"portfolio", "position_side"}
     ):
         issues.append(
             _issue(
                 "error",
                 "hsl_balance_override_account_level_replay_unsafe",
                 (
-                    "HSL signal modes 'unified' and 'pside' reconstruct "
+                    "HSL signal modes 'portfolio' and 'position_side' reconstruct "
                     "account-level equity history and are unsafe with an active "
-                    "balance override; use hsl_signal_mode='coin', remove the "
+                    "balance override; use bot.portfolio.hsl.scope='coin', remove the "
                     "balance override, or disable HSL before live trading"
                 ),
                 path=(
                     "argument.balance_override"
                     if balance_override_report.get("source") == "argument"
-                    else "live.balance_override"
+                    else "live.account.balance_override"
                 ),
             )
         )
@@ -1096,7 +1259,9 @@ def build_live_config_preflight_report(
         "config_version": parsed.get("config_version"),
         "identity": identity_report,
         "hsl": {
-            "signal_mode": live.get("hsl_signal_mode"),
+            "signal_mode": _display_value(
+                _path_value(parsed, ("bot", "portfolio", "hsl", "scope"))
+            ).get("value"),
             "effective_signal_mode": hsl_signal_mode,
             "balance_override": balance_override_report,
             "sides": {
@@ -1110,19 +1275,26 @@ def build_live_config_preflight_report(
             "ignored_coins": ignored,
         },
         "forager": {
-            "live_settings": _selected_values(live, FORAGER_LIVE_KEYS),
+            "live_settings": _selected_live_values(live, FORAGER_LIVE_KEYS),
+            "bot_settings": _selected_values(
+                bot.get("global", {}).get("forager", {}), ("score_hysteresis_margin",)
+            ),
             "sides": forager_by_side,
-            "total_configured_n_positions": sum(
+            "total_configured_max_positions": sum(
                 float(value) for value in n_positions_values
             ),
         },
         "risk": {
-            "balance_hysteresis_snap_pct": balance_hysteresis_report,
+            "balance_hysteresis_snap_fraction": balance_hysteresis_report,
         },
         "cache": {
-            "live_settings": _selected_values(live, CACHE_LIVE_KEYS),
+            "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
+            "bot_settings": _selected_values(
+                bot.get("portfolio", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
+            ),
             "readiness": _cache_readiness_report(
                 live,
+                config=effective,
                 identity=identity_report,
                 hsl_sides=hsl_sides,
                 balance_override=balance_override_report,

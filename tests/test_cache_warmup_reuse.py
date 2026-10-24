@@ -14,6 +14,7 @@ Tests cover:
 - Ratchet-up: smaller warmup reuses cache built with larger warmup
 - Legacy caches (no cache_meta.json) treated as warmup=0
 """
+from config.universe import set_side_universe_sources
 
 import copy
 import asyncio
@@ -54,7 +55,7 @@ def stable_market_identity(monkeypatch):
 
 
 def _base_config(**overrides):
-    """Minimal config sufficient for cache hash computation."""
+    """Synthetic warmup-only caches have no inception facts, so disable age."""
     cfg = {
         "backtest": {
             "base_dir": "backtests",
@@ -66,6 +67,7 @@ def _base_config(**overrides):
         },
         "bot": {
             "long": {
+                "enabled": True,
                 "n_positions": 1,
                 "total_wallet_exposure_limit": 1.0,
                 "wallet_exposure_limit": 1.0,
@@ -74,8 +76,10 @@ def _base_config(**overrides):
                 "forager_volume_ema_span_1m": 2000.0,
                 "forager_volatility_ema_span_1m": 100.0,
                 "entry_volatility_ema_span_1h": 1.0,
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
             "short": {
+                "enabled": False,
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
                 "wallet_exposure_limit": 0.0,
@@ -84,15 +88,11 @@ def _base_config(**overrides):
                 "forager_volume_ema_span_1m": 360.0,
                 "forager_volatility_ema_span_1m": 10.0,
                 "entry_volatility_ema_span_1h": 1.0,
+                "universe": {"minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
             },
+            "portfolio": {"warmup": {"span_multiplier": 0.3, "max_minutes": None}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC/USDT:USDT"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-            "minimum_coin_age_days": 30,
-            "warmup_ratio": 0.3,
-            "max_warmup_minutes": 0,
-        },
+        "live": {},
         "optimize": {"bounds": {}},
     }
     for k, v in overrides.items():
@@ -185,7 +185,7 @@ class TestCacheHashIndependence:
         """Changing warmup_ratio does not change the hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b["live"]["warmup_ratio"] = 10.0
+        cfg_b['bot']["portfolio"]['warmup']['span_multiplier'] = 10.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")
@@ -196,7 +196,7 @@ class TestCacheHashIndependence:
         """Changing approved_coins still produces a different hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b["live"]["approved_coins"]["long"] = ["ETH/USDT:USDT"]
+        cfg_b['bot']["long"]['universe']['approved_coins'] = ["ETH/USDT:USDT"]
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")
@@ -206,13 +206,14 @@ class TestCacheHashIndependence:
     def test_same_coin_union_across_sides_has_same_hash(self):
         cfg_long = _base_config()
         cfg_short = copy.deepcopy(cfg_long)
+        cfg_short["bot"]["short"]["enabled"] = True
         cfg_short["bot"]["long"]["total_wallet_exposure_limit"] = 0.0
         cfg_short["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
         cfg_short["bot"]["short"]["n_positions"] = 1
-        cfg_short["live"]["approved_coins"] = {
+        set_side_universe_sources(cfg_short, 'approved_coins', {
             "long": [],
             "short": ["BTC/USDT:USDT"],
-        }
+        })
 
         assert get_cache_hash(cfg_long, "binance") == get_cache_hash(
             cfg_short, "binance"
@@ -774,7 +775,7 @@ class TestSavePersistsWarmupMetadata:
             "SOL/USDT:USDT",
             "DOGE/USDT:USDT",
         ]
-        cfg["live"]["approved_coins"]["long"] = list(coins)
+        cfg['bot']["long"]['universe']['approved_coins'] = list(coins)
         hlcvs = np.zeros((10, len(coins), 4), dtype=np.float64)
         mss = {coin: {} for coin in coins}
         btc_usd = np.ones(10, dtype=np.float64)

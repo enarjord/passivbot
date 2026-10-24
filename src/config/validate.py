@@ -18,7 +18,7 @@ from .strategy import (
     normalize_strategy_kind,
 )
 
-_STARTUP_BUDGET_KEYS = frozenset({"elapsed_ms", "since_previous_ms"})
+_STARTUP_BUDGET_KEYS = frozenset({"elapsed_milliseconds", "since_previous_milliseconds"})
 
 
 def _validate_fixed_runtime_overrides(config: dict) -> None:
@@ -34,7 +34,14 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
             raise TypeError(
                 "config.optimize.fixed_runtime_overrides keys must be dotted strings"
             )
+        if dotted_path == "optimize.prefilter" or dotted_path.startswith("optimize.prefilter."):
+            raise ValueError("prefilter policy belongs in optimize.prefilter, not runtime overrides")
         resolved = require_existing_config_path(config, dotted_path)
+        if resolved in (("backtest", "organillo_csv"), ("backtest", "organillo_sha256")):
+            raise ValueError(
+                "Organillo is a prepared dataset input; configure backtest.organillo_csv "
+                "or a scenario override before preparation, rather than optimize.fixed_runtime_overrides"
+            )
         prior = resolved_sources.get(resolved)
         if prior is not None:
             raise ValueError(
@@ -54,16 +61,17 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
 
 
 def _validate_startup_phase_budgets(live_config: dict) -> None:
-    budgets = live_config.get("startup_phase_budgets")
+    budgets = live_config.get("startup", {}).get("startup_phase_budgets")
     if not isinstance(budgets, dict):
-        raise TypeError("config.live.startup_phase_budgets must be a dict")
+        raise TypeError("config.live.startup.startup_phase_budgets must be a dict")
     for phase, phase_budgets in budgets.items():
         if phase not in STARTUP_TIMING_PHASES:
             allowed = ", ".join(sorted(STARTUP_TIMING_PHASES))
             raise ValueError(
-                "config.live.startup_phase_budgets phase must be one of: " + allowed
+                "config.live.startup.startup_phase_budgets phase must be one of: "
+                + allowed
             )
-        path = f"config.live.startup_phase_budgets.{phase}"
+        path = f"config.live.startup.startup_phase_budgets.{phase}"
         if not isinstance(phase_budgets, dict):
             raise TypeError(f"{path} must be a dict")
         unknown = sorted(set(phase_budgets) - _STARTUP_BUDGET_KEYS)
@@ -87,7 +95,7 @@ def validate_limit_order_fill_buffer_pct(value) -> float:
         or not 0.0 <= value < 1.0
     ):
         raise ValueError(
-            "backtest.limit_order_fill_buffer_pct must be finite and in [0, 1)"
+            "backtest.limit_order_fill_buffer_fraction must be finite and in [0, 1)"
         )
     return float(value)
 
@@ -97,37 +105,60 @@ def validate_config(
 ) -> None:
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
+    from .prefilter import resolve_prefilter, prefilter_enabled
+    from .policy import validate_shared_bot_policy
+    from .control_sentinels import normalize_control_values
+
+    normalize_control_values(config)
+    validate_shared_bot_policy(config)
+
+    backend = str(config["optimize"]["backend"] or "pymoo").strip().lower()
+    if backend not in {"pymoo", "gpu"}:
+        raise ValueError("optimize.backend must be one of ['pymoo', 'gpu']")
+    config["optimize"]["backend"] = backend
+    policy = resolve_prefilter(config["optimize"].get("prefilter"))
+    if prefilter_enabled(policy) and config['bot']["portfolio"]['strategy_kind'] != "trailing_martingale":
+        raise ValueError("enabled config prefilters currently require trailing_martingale")
 
     from .hsl import normalize_hsl
-    from .schema import get_template_config
+    from .schema import get_expanded_config_prototype
 
-    normalize_hsl(config, get_template_config(), verbose=verbose)
+    normalize_hsl(config, get_expanded_config_prototype(), verbose=verbose)
     if not isinstance(config["backtest"]["hsl_detailed_report"], bool):
         raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
     validate_limit_order_fill_buffer_pct(
-        config["backtest"]["limit_order_fill_buffer_pct"]
+        config["backtest"]["limit_order_fill_buffer_fraction"]
     )
+    from .ew import validate_ew_config
+
+    validate_ew_config(config)
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
     fixed_runtime = {
         require_existing_config_path(config, key): value
         for key, value in config["optimize"]["fixed_runtime_overrides"].items()
     }
-    strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(config["bot"]["portfolio"].get("strategy_kind"))
     optimize_bounds = (
         raw_optimize.get("bounds")
         if isinstance(raw_optimize, dict)
         and isinstance(raw_optimize.get("bounds"), dict)
         else config.get("optimize", {}).get("bounds", {})
     )
-    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     validate_bot_config(config)
+    from .entry_cooldown import validate_entry_cooldown
+
+    for pside in BOT_POSITION_SIDES:
+        validate_entry_cooldown(
+            config["bot"][pside]["entry_cooldown"], path=f"bot.{pside}.entry_cooldown"
+        )
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
-        span = bot_side["forager"]["unilateralness_ema_span_1m"]
+        span = bot_side["forager"]["unilateralness_ema_span_minutes"]
         if (
             isinstance(span, bool)
             or not isinstance(span, (int, float))
@@ -135,11 +166,8 @@ def validate_config(
             or not 1 <= span <= 100_000
         ):
             raise ValueError(
-                f"bot.{pside}.forager.unilateralness_ema_span_1m must be between 1 and 100000"
+                f"bot.{pside}.forager.unilateralness_ema_span_minutes must be between 1 and 100000"
             )
-        from .entry_cooldown import validate_entry_cooldown
-
-        validate_entry_cooldown(bot_side["entry_cooldown"], path=f"bot.{pside}.entry_cooldown")
         from .optimize_bounds import flatten_optimize_bounds
         from optimization.bounds import Bound
 
@@ -178,7 +206,7 @@ def validate_config(
             raise ValueError(f"bot.{pside}.entry_cooldown.base_duration_minutes must be >= 0.0")
         normalize_twel_enforcer_policy(
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
-            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+            path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
         active_strategy = get_active_strategy_side(
             bot_side, strategy_kind=strategy_kind, pside=pside
@@ -187,32 +215,39 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
             )
-    normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
+    normalize_hsl_signal_mode(config["bot"]["portfolio"]["hsl"]["scope"])
+    if config["live"]["modes"]["disapproved_position"] not in {
+        "graceful_stop",
+        "manual",
+    }:
+        raise ValueError(
+            "live.modes.disapproved_position must be graceful_stop or manual"
+        )
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
-        config["live"].get("market_snapshot_ticker_strategy", "auto")
+        config["live"].get("api", {}).get("market_snapshot_ticker_strategy", "auto")
     ).lower()
     if ticker_strategy not in {"auto", "bulk", "symbols"}:
         raise ValueError(
-            "config.live.market_snapshot_ticker_strategy must be one of: auto, bulk, symbols"
+            "config.live.api.market_snapshot_ticker_strategy must be one of: auto, bulk, symbols"
         )
     try:
-        hysteresis_pct = float(config["live"]["forager_score_hysteresis_pct"])
+        hysteresis_pct = float(config['bot']['global']['forager']['score_hysteresis_margin'])
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.forager_score_hysteresis_pct must be numeric"
+            "config.bot.global.forager.score_hysteresis_margin must be numeric"
         ) from exc
     if not math.isfinite(hysteresis_pct) or hysteresis_pct < 0.0:
         raise ValueError(
-            "config.live.forager_score_hysteresis_pct must be finite and >= 0.0"
+            "config.bot.global.forager.score_hysteresis_margin must be finite and >= 0.0"
         )
     try:
         limit_order_market_dist = float(
-            config["live"]["limit_order_create_max_market_dist_pct"]
+            config["live"]["execution"]["limit_order_create_max_market_distance_fraction"]
         )
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.limit_order_create_max_market_dist_pct must be numeric"
+            "config.live.execution.limit_order_create_max_market_distance_fraction must be numeric"
         ) from exc
     if (
         not math.isfinite(limit_order_market_dist)
@@ -220,17 +255,18 @@ def validate_config(
         or limit_order_market_dist >= 1.0
     ):
         raise ValueError(
-            "config.live.limit_order_create_max_market_dist_pct must be "
-            "finite and >= 0.0 and < 1.0"
+            "config.live.execution.limit_order_create_max_market_distance_fraction must be finite and >= 0.0 and < 1.0"
         )
-    order_match_tolerance_raw = config["live"]["order_match_tolerance_pct"]
+    order_match_tolerance_raw = config["live"]["execution"]["order_match_tolerance_fraction"]
     if isinstance(order_match_tolerance_raw, bool):
-        raise TypeError("config.live.order_match_tolerance_pct must be numeric")
+        raise TypeError(
+            "config.live.execution.order_match_tolerance_fraction must be numeric"
+        )
     try:
         order_match_tolerance = float(order_match_tolerance_raw)
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.order_match_tolerance_pct must be numeric"
+            "config.live.execution.order_match_tolerance_fraction must be numeric"
         ) from exc
     if (
         not math.isfinite(order_match_tolerance)
@@ -238,40 +274,39 @@ def validate_config(
         or order_match_tolerance > 0.01
     ):
         raise ValueError(
-            "config.live.order_match_tolerance_pct must be finite and between "
-            "0.0 and 0.01 inclusive"
+            "config.live.execution.order_match_tolerance_fraction must be finite and between 0.0 and 0.01 inclusive"
         )
     try:
         active_tail_gap_minutes = float(
-            config["live"]["max_active_candle_tail_gap_minutes"]
+            config["live"]["candles"]["max_active_candle_tail_gap_minutes"]
         )
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.max_active_candle_tail_gap_minutes must be numeric"
+            "config.live.candles.max_active_candle_tail_gap_minutes must be numeric"
         ) from exc
     if not math.isfinite(active_tail_gap_minutes) or active_tail_gap_minutes <= 0.0:
         raise ValueError(
-            "config.live.max_active_candle_tail_gap_minutes must be finite and > 0.0"
+            "config.live.candles.max_active_candle_tail_gap_minutes must be finite and > 0.0"
         )
     try:
         forager_refresh_seconds = float(
-            config["live"]["max_forager_candle_refresh_seconds"]
+            config["live"]["candles"]["max_forager_candle_refresh_seconds"]
         )
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.max_forager_candle_refresh_seconds must be numeric"
+            "config.live.candles.max_forager_candle_refresh_seconds must be numeric"
         ) from exc
     if not math.isfinite(forager_refresh_seconds) or forager_refresh_seconds <= 0.0:
         raise ValueError(
-            "config.live.max_forager_candle_refresh_seconds must be finite and > 0.0"
+            "config.live.candles.max_forager_candle_refresh_seconds must be finite and > 0.0"
         )
     try:
         ws_candle_audit_minutes = float(
-            config["live"]["forager_ws_candle_rest_audit_minutes"]
+            config["live"]["candles"]["forager_ws_candle_rest_audit_minutes"]
         )
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.forager_ws_candle_rest_audit_minutes must be numeric"
+            "config.live.candles.forager_ws_candle_rest_audit_minutes must be numeric"
         ) from exc
     if (
         not math.isfinite(ws_candle_audit_minutes)
@@ -279,102 +314,110 @@ def validate_config(
         or ws_candle_audit_minutes > 60.0
     ):
         raise ValueError(
-            "config.live.forager_ws_candle_rest_audit_minutes must be finite, "
-            "> 0.0 and <= 60.0"
+            "config.live.candles.forager_ws_candle_rest_audit_minutes must be finite, > 0.0 and <= 60.0"
         )
-    if not isinstance(config["live"]["enable_forager_ws_candles"], bool):
-        raise TypeError("config.live.enable_forager_ws_candles must be a boolean")
-    for key in ("fee_pct_fallback", "fee_pct_sanity_abs_max"):
+    if not isinstance(config["live"]["candles"]["enable_forager_ws_candles"], bool):
+        raise TypeError(
+            "config.live.candles.enable_forager_ws_candles must be a boolean"
+        )
+    for key in ("fallback_fee_fraction", "max_abs_fee_fraction"):
         try:
-            value = float(config["live"][key])
+            value = float(config["live"]["fills"][key])
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"config.live.{key} must be numeric") from exc
+            raise TypeError(f"config.live.fills.{key} must be numeric") from exc
         if not math.isfinite(value) or value < 0.0:
-            raise ValueError(f"config.live.{key} must be finite and >= 0.0")
-    fee_conversion_max_age_ms_raw = config["live"]["fee_conversion_max_age_ms"]
+            raise ValueError(f"config.live.fills.{key} must be finite and >= 0.0")
+    fee_conversion_max_age_ms_raw = config["live"]["fills"]["fee_conversion_max_age_milliseconds"]
     if isinstance(fee_conversion_max_age_ms_raw, bool) or isinstance(
         fee_conversion_max_age_ms_raw, float
     ):
-        raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
+        raise TypeError(
+            "config.live.fills.fee_conversion_max_age_milliseconds must be an integer"
+        )
     try:
         fee_conversion_max_age_ms = int(fee_conversion_max_age_ms_raw)
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.fee_conversion_max_age_ms must be an integer"
+            "config.live.fills.fee_conversion_max_age_milliseconds must be an integer"
         ) from exc
     if str(fee_conversion_max_age_ms_raw).strip() != str(fee_conversion_max_age_ms):
-        raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
+        raise TypeError(
+            "config.live.fills.fee_conversion_max_age_milliseconds must be an integer"
+        )
     if fee_conversion_max_age_ms < 0:
-        raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
-    exchange_symbol_cooldown_raw = config["live"][
+        raise ValueError("config.live.fills.fee_conversion_max_age_milliseconds must be >= 0")
+    exchange_symbol_cooldown_raw = config["live"]["recovery"][
         "exchange_symbol_unavailable_cooldown_hours"
     ]
     if isinstance(exchange_symbol_cooldown_raw, bool):
         raise TypeError(
-            "config.live.exchange_symbol_unavailable_cooldown_hours must be numeric"
+            "config.live.recovery.exchange_symbol_unavailable_cooldown_hours must be numeric"
         )
     try:
         exchange_symbol_cooldown_hours = float(exchange_symbol_cooldown_raw)
     except (TypeError, ValueError) as exc:
         raise TypeError(
-            "config.live.exchange_symbol_unavailable_cooldown_hours must be numeric"
+            "config.live.recovery.exchange_symbol_unavailable_cooldown_hours must be numeric"
         ) from exc
     if not math.isfinite(exchange_symbol_cooldown_hours):
         raise ValueError(
-            "config.live.exchange_symbol_unavailable_cooldown_hours must be finite"
+            "config.live.recovery.exchange_symbol_unavailable_cooldown_hours must be finite"
         )
     if exchange_symbol_cooldown_hours < 0.0:
         raise ValueError(
-            "config.live.exchange_symbol_unavailable_cooldown_hours must be >= 0"
+            "config.live.recovery.exchange_symbol_unavailable_cooldown_hours must be >= 0"
         )
     if exchange_symbol_cooldown_hours > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS:
         raise ValueError(
-            "config.live.exchange_symbol_unavailable_cooldown_hours must be <= "
+            "config.live.recovery.exchange_symbol_unavailable_cooldown_hours must be <= "
             f"{MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS:g}"
         )
-    activation_raw = config["live"]["order_replacement_churn_gate_activation_count"]
+    activation_raw = config["live"]["execution"][
+        "order_replacement_churn_gate_activation_count"
+    ]
     if isinstance(activation_raw, bool) or not isinstance(activation_raw, int):
         raise TypeError(
-            "config.live.order_replacement_churn_gate_activation_count must be an integer"
+            "config.live.execution.order_replacement_churn_gate_activation_count must be an integer"
         )
     if activation_raw < 0:
         raise ValueError(
-            "config.live.order_replacement_churn_gate_activation_count must be >= 0"
+            "config.live.execution.order_replacement_churn_gate_activation_count must be >= 0"
         )
     churn_numeric = {}
     for key in (
         "order_replacement_churn_gate_window_minutes",
         "order_replacement_churn_gate_stability_minutes",
-        "order_replacement_churn_gate_market_dist_pct",
+        "order_replacement_churn_gate_market_distance_fraction",
     ):
         try:
-            value = float(config["live"][key])
+            value = float(config["live"]["execution"][key])
         except (TypeError, ValueError) as exc:
-            raise TypeError(f"config.live.{key} must be numeric") from exc
+            raise TypeError(f"config.live.execution.{key} must be numeric") from exc
         if not math.isfinite(value):
-            raise ValueError(f"config.live.{key} must be finite")
+            raise ValueError(f"config.live.execution.{key} must be finite")
         churn_numeric[key] = value
     window = churn_numeric["order_replacement_churn_gate_window_minutes"]
     stability = churn_numeric["order_replacement_churn_gate_stability_minutes"]
-    distance = churn_numeric["order_replacement_churn_gate_market_dist_pct"]
+    distance = churn_numeric["order_replacement_churn_gate_market_distance_fraction"]
     if activation_raw > 0 and window <= 0.0:
         raise ValueError(
-            "config.live.order_replacement_churn_gate_window_minutes must be > 0 when enabled"
+            "config.live.execution.order_replacement_churn_gate_window_minutes must be > 0 when enabled"
         )
     if activation_raw > 0 and (stability <= 0.0 or stability > window):
         raise ValueError(
-            "config.live.order_replacement_churn_gate_stability_minutes must be > 0 and <= window_minutes when enabled"
+            "config.live.execution.order_replacement_churn_gate_stability_minutes must be > 0 and <= window_minutes when enabled"
         )
     if distance < 0.0 or distance >= 1.0:
         raise ValueError(
-            "config.live.order_replacement_churn_gate_market_dist_pct must be >= 0 and < 1"
+            "config.live.execution.order_replacement_churn_gate_market_distance_fraction must be >= 0 and < 1"
         )
-    max_cancellations = int(config["live"]["max_n_cancellations_per_batch"])
-    max_creations = int(config["live"]["max_n_creations_per_batch"])
+    max_cancellations = int(
+        config["live"]["execution"]["max_n_cancellations_per_batch"]
+    )
+    max_creations = int(config["live"]["execution"]["max_n_creations_per_batch"])
     if max_cancellations <= max_creations:
         raise ValueError(
-            "config.live.max_n_cancellations_per_batch must be greater than "
-            "config.live.max_n_creations_per_batch"
+            "config.live.execution.max_n_cancellations_per_batch must be greater than config.live.execution.max_n_creations_per_batch"
         )
     monitor_cfg = require_config_dict(config, "monitor")
     if not str(monitor_cfg["root_dir"]).strip():

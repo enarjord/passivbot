@@ -36,8 +36,12 @@ def get_optional_config_value(config: dict, dotted_path: str, default=None):
 
 
 def require_live_value(config: dict, key: str):
-    return require_config_value(config, f"live.{key}")
+    from .field_registry import live_field_path
+
+    return require_config_value(config, live_field_path(key))
 
 
 def get_optional_live_value(config: dict, key: str, default=None):
-    return get_optional_config_value(config, f"live.{key}", default)
+    from .field_registry import live_field_path
+
+    return get_optional_config_value(config, live_field_path(key), default)

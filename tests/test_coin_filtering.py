@@ -79,7 +79,9 @@ class CoinFilterHarness(Passivbot):
         self._live_flags = {"filter_by_min_effective_cost": filter_min_cost_flag}
         self.warn_triggered = False
         self.positions = {}
-        self.config = {"live": {}}
+        self.config = {"bot": {side: {"universe": {
+            "filter_by_min_effective_cost": filter_min_cost_flag,
+        }} for side in ("long", "short")}}
 
     # ---- overrides for get_filtered_coins dependencies ----
 
@@ -100,7 +102,7 @@ class CoinFilterHarness(Passivbot):
 
     def bot_value(self, pside, key):
         if key == "filter_volume_drop_pct":
-            return self._clip_pct
+            raise AssertionError("retired volume filter must never be read")
         if key == "filter_volatility_drop_pct":
             return self._volatility_drop_pct
         if key == "n_positions":
@@ -144,7 +146,7 @@ async def test_forager_prefers_highest_volatility():
 
 
 @pytest.mark.asyncio
-async def test_volume_clip_applied_before_volatility_sort():
+async def test_volume_does_not_drop_candidates_before_volatility_sort():
     approved = {"long": ["AAA", "BBB", "CCC", "DDD"], "short": []}
     volumes = {"AAA": 100.0, "BBB": 80.0, "CCC": 10.0, "DDD": 5.0}
     log_ranges = {"AAA": 0.3, "BBB": 0.2, "CCC": 0.9, "DDD": 0.8}
@@ -155,9 +157,9 @@ async def test_volume_clip_applied_before_volatility_sort():
         max_positions={"long": 2, "short": 0},
         clip_pct=0.5,
     )
-    # clip removes bottom 50% by volume -> keep AAA,BBB
+    # Low-volume candidates remain eligible for the configured volatility ranking.
     coins = await bot.get_filtered_coins("long")
-    assert coins == ["AAA", "BBB"]
+    assert coins == ["CCC", "DDD"]
 
 
 @pytest.mark.asyncio
@@ -268,7 +270,7 @@ class _CMStaleCacheStub:
 @pytest.mark.asyncio
 async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"portfolio": {"warmup": {"max_minutes": None}}}}
     bot.cm = _CMColdCacheOnlyStub()
     bot.open_orders = {}
     bot.positions = {}
@@ -291,7 +293,7 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
 @pytest.mark.asyncio
 async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_symbols():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"portfolio": {"warmup": {"max_minutes": None}}}}
     bot.cm = _CMColdCacheOnlyStub()
     bot.open_orders = {}
     bot.positions = {}
@@ -315,7 +317,7 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
 @pytest.mark.asyncio
 async def test_calc_volumes_and_log_ranges_carries_cached_values_for_stale_symbols():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
+    bot.config = {"live": {}, "bot": {"portfolio": {"warmup": {"max_minutes": None}}}}
     bot.cm = _CMStaleCacheStub()
     bot.open_orders = {}
     bot.positions = {}
@@ -407,7 +409,7 @@ def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
     assert "projected_initial_cost=1.473263" in seen[0]
     assert "required_effective_min_cost=10.100000" in seen[0]
     assert "balance=51.154957" in seen[0]
-    assert "live.filter_by_min_effective_cost=false" in seen[0]
+    assert "bot.long.universe.filter_by_min_effective_cost=false" in seen[0]
     assert "override_may_create_exchange-min-sized_entries" in seen[0]
 
 
@@ -700,3 +702,27 @@ def test_log_min_effective_cost_blocks_throttles_symbol_across_set_changes(monke
     assert sum("BTC long" in line for line in seen) == 1
     assert sum("LINK long" in line for line in seen) == 1
     assert sum("BCH long" in line for line in seen) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filtered_side", ["long", "short"])
+async def test_live_selection_uses_each_side_flag_even_with_simulation_override(filtered_side):
+    bot = CoinFilterHarness(
+        approved_by_side={"long": ["AAA", "BBB"], "short": ["AAA", "BBB"]},
+        volumes={"AAA": 10.0, "BBB": 5.0}, log_ranges={"AAA": 0.2, "BBB": 0.1},
+        max_positions={"long": 2, "short": 2}, forager=False,
+    )
+    from types import MethodType
+    bot.effective_min_cost_is_low_enough = MethodType(Passivbot.effective_min_cost_is_low_enough, bot)
+    bot.get_wallet_exposure_limit = lambda *args: 1.0
+    bot.bp = lambda *args: 0.0
+    bot._strategy_initial_sizing_fraction = lambda *args: 0.001
+    bot.get_hysteresis_snapped_balance = lambda: 1000.0
+    bot.effective_min_cost = {"AAA": 5.0, "BBB": 0.5}
+    for side in ("long", "short"):
+        bot.config["bot"][side]["universe"]["filter_by_min_effective_cost"] = side == filtered_side
+    # Live selection must not read a simulation override, even if present.
+    bot.config["backtest"] = {"filter_by_min_effective_cost": False}
+    for side in ("long", "short"):
+        selected = await bot.get_filtered_coins(side)
+        assert selected == (["BBB"] if side == filtered_side else ["AAA", "BBB"])

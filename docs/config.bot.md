@@ -1,5 +1,26 @@
 # Bot Configuration Deep Dive
 
+Account-wide strategy selection, hedge mode, execution, warmup, HSL scope and portfolio policy,
+loss-gate policy, and unstuck realized memory live under `bot.portfolio`. `bot.global` supplies
+defaults for registered inheritable directional leaves, including the active strategy, local risk,
+universe, forager, HSL and unstuck parameters. Sparse `bot.long`/`bot.short` objects override
+individual leaves; omission inherits and explicit equal values remain pins. HSL, unstuck, and
+loss-gate memories remain independent. Portfolio HSL policy is
+explicit and is never inferred from directional policies.
+Optimizer bounds mirror these scopes. A global bound is one coordinate for inheriting sides;
+a side bound creates its own coordinate, while an explicit side value without a side bound
+stays fixed. Omitted domains never open recommended ranges. Exposure limits remain per side,
+including when both sides use one common value.
+
+Side activation is explicit and never inherits: `bot.long.enabled` and `bot.short.enabled`
+each default to false; only an explicit true enables a side. Omitted or empty side objects stay
+disabled. `bot.global.enabled` is unsupported and rejected with a corrective error. Nested feature
+switches such as `bot.global.unstuck.enabled` still inherit. Both-disabled configs remain valid for
+held-position management. Disabled sides cannot open or DCA, even in forced-normal mode; capacity, approvals and readiness still gate enabled
+sides. Held closes and protection keep their existing sizing, risk and operational gates.
+Zero capacity does not set manual mode or fabricate a replacement budget. Numeric optimizer
+bounds do not grant boolean activation; fixed/scenario declarations retain their precedence.
+
 This note explains how the parameters under `config.bot.{long,short}` are consumed by
 Passivbot’s Rust core.  For brevity we omit rounding to exchange precision, guard rails,
 and boolean checks; the pseudo-code below mirrors the algebra in
@@ -9,13 +30,13 @@ Throughout:
 
 * `pside ∈ {long, short}`
 * `EMA_low, EMA_high` are the minima / maxima of the three EMA spans
-  (`ema_span_0`, `ema_span_1`, `sqrt(ema_span_0 * ema_span_1)`).
-  Strategy logic uses the active strategy's spans; auto-unstuck uses `unstuck.ema_span_0/1`.
+  (`ema_span_0_minutes`, `ema_span_1_minutes`, `sqrt(ema_span_0_minutes * ema_span_1_minutes)`).
+  Strategy logic uses the active strategy's spans; auto-unstuck uses `unstuck.ema_span_0_minutes` and `unstuck.ema_span_1_minutes`.
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
-  In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
+  In live mode this is derived from a fixed denominator (`max_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 * Excess allowance is always bounded:
   `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
@@ -28,19 +49,32 @@ Throughout:
   An authored base WEL already above TWEL receives no excess headroom; the headroom
   clamp does not reduce that authored base itself.
 
+Age admission is side-owned at `bot.long.universe.minimum_coin_age_days` and the corresponding
+short path. Both default to `60.0` days. Rust applies this fixed initial-entry gate in static,
+Forager and forced-normal selection. Fractional days are preserved; zero bypasses the gate,
+positive thresholds require factual inception, and equality admits the side. Held-position
+management and indicator warmup are independent of this gate.
+Unresolved inception remains retryable in live operation and automatic prepared caches. Live
+lookup runs in a bounded background task; missing facts block new initial entries without delaying
+held-position planning. Automatic caches request facts only for enabled positive-age sides and
+their approved, non-ignored markets. Optimizer preparation includes enabled sides whose candidate
+capacity bounds can permit entries. Suite contexts freeze source memberships once and request only their applicable
+coins; a zero-age scenario does not make unrelated coins require inception. A supplied
+dataset override remains an immutable input; missing inception in that dataset keeps positive age
+gates closed.
+
 ## Trailing Martingale Entries
 
-Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0`
-and `entry.ema_span_1`. They govern entry gating, forager entry readiness, and the one-way
+Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0_minutes`
+and `entry.ema_span_1_minutes`. They govern entry gating, forager entry readiness, and the one-way
 entry tie-break. Ordinary closes do not consume this band. The shared
-`volatility_ema_span_1m/1h` remain at strategy level because both entries and closes use them.
+`volatility_ema_span_minutes` and `volatility_ema_span_1h_candles` remain at strategy level because both entries and closes use them.
 
-Schema v8.4.0 moves the old strategy-root spans into `entry`, including optimizer bounds
-and coin/scenario overrides. Values and floating-point precision are preserved. Within one
-source, explicit new paths win over conflicting old paths with a warning; normal file/inline
-coin precedence is preserved. Old CLI paths and dotted optimizer selectors still work.
-Selecting `long.strategy.entry` now includes the entry EMA horizons. Other strategies retain
-their existing schema. `couple_unstuck_ema_spans` continues to derive unstuck horizons from
+The explicit released-v8 converter moves old strategy-root spans into canonical `entry`
+paths across values, bounds and overrides, preserving floating-point precision and rejecting
+conflicting aliases. Normal v9 loading accepts the final paths only. Selecting
+`long.strategy.entry` includes the entry EMA horizons. `couple_unstuck_ema_spans` continues
+to derive unstuck horizons from
 each coin's effective entry spans during optimization.
 
 ```text
@@ -70,10 +104,10 @@ initial_qty(balance) =
         balance * wel_allowed * entry_initial_qty_pct / initial_price)
 
 effective_entry_threshold =
-    entry.threshold_base_pct * entry_threshold_multiplier
+    entry.threshold_base_fraction * entry_threshold_multiplier
 
 effective_entry_retracement =
-    max(0, entry.retracement_base_pct) * entry_retracement_multiplier
+    max(0, entry.retracement_base_fraction) * entry_retracement_multiplier
 
 next_entry_price(pside) =
     long  : pos.price * (1 - effective_entry_threshold)
@@ -92,8 +126,8 @@ next_entry_qty(last_fill_qty) =
 * `entry.double_down_factor > 0` multiplies each successive re-entry quantity; values
   `< 1` still increase size if the preceding fill was larger than the remaining gap to the
   exposure cap.
-* When `entry.retracement_base_pct <= 0`, re-entries are passive recursive limit orders.
-* When `entry.retracement_base_pct > 0`, the threshold condition must be reached first and the
+* When `entry.retracement_base_fraction <= 0`, re-entries are passive recursive limit orders.
+* When `entry.retracement_base_fraction > 0`, the threshold condition must be reached first and the
   order is emitted after retracement confirmation.
 * Re-entries are only normal or cropped. Near the effective exposure cap, the bot keeps the
   current order literal instead of pulling future size forward into an inflated terminal step.
@@ -110,7 +144,7 @@ state from 1m OHLCVs and does not use exchange-native trailing order types.
 
 ```text
 close_threshold =
-    close.threshold_base_pct
+    close.threshold_base_fraction
   + (wel / wel_base) * close.threshold_we_weight
   + volatility_ema_1h * close.threshold_volatility_1h_weight
   + volatility_ema_1m * close.threshold_volatility_1m_weight
@@ -122,11 +156,11 @@ close_retracement_multiplier =
       + volatility_ema_1m * close.retracement_volatility_1m_weight)
 
 close_retracement =
-    max(0, close.retracement_base_pct) * close_retracement_multiplier
+    max(0, close.retracement_base_fraction) * close_retracement_multiplier
 ```
 
 ```text
-if close.retracement_base_pct <= 0:
+if close.retracement_base_fraction <= 0:
     close_price(long)  = max(best_bid, pos.price * (1 + close_threshold))
     close_price(short) = min(best_ask, pos.price * (1 - close_threshold))
 else:
@@ -137,8 +171,8 @@ else:
 ```
 
 Close orders are recursive when `close.threshold_we_weight != 0`: compute a slice up to
-`close.qty_pct`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
-exhausted or the close ladder is complete. If `close.retracement_base_pct <= 0` and
+`close.qty_fraction`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
+exhausted or the close ladder is complete. If `close.retracement_base_fraction <= 0` and
 `close.threshold_we_weight == 0`, all recursive closes would have the same price, so Rust emits one
 full-position close instead of redundant same-price slices. The removed v7
 `close_grid_markup_start` / `close_grid_markup_end` linear TP grid is intentionally not part of the
@@ -154,20 +188,21 @@ auto-unstuck. It defaults to `true`. When false, auto-unstuck may trigger withou
 still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 The field may be overridden for an individual coin+side through `coin_overrides`.
 
-`bot.<side>.unstuck.ema_span_0` and `ema_span_1` are positive floating-point EMA spans in
+`bot.<side>.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` are positive floating-point EMA spans in
 minutes, independent of the active strategy spans. The band contains these two close-price EMAs
 and the EMA at their geometric-mean span. Long unstucking requires price at or above the upper
-band times `1 + ema_dist` (rounded up to the price tick); short unstucking requires price at or
-below the lower band times `1 - ema_dist` (rounded down). These are eligibility gates; the other
+band times `1 + ema_distance_fraction` (rounded up to the price tick); short unstucking requires price at or
+below the lower band times `1 - ema_distance_fraction` (rounded down). These are eligibility gates; the other
 unstuck conditions and account-wide candidate selection still apply.
 
 Both spans support coin overrides and optimizer bounds under
 `optimize.bounds.<side>.unstuck`. For a composed portfolio with a shared unstucker, set global
 unstuck spans and leave these leaves out of the coin overrides.
 
-When loading an older config, missing spans are copied from each side's effective active strategy,
-including individual coin strategy overrides and file/inline precedence. This preserves the saved
-trading behavior; saving the normalized config makes the independent spans explicit. Explicit new
+During explicit released-v8 conversion, missing spans are copied from each side's effective active strategy,
+including individual coin strategy overrides and file/inline precedence. The converter preserves
+the starting band horizons and saves the independent spans explicitly. Normal loading rejects old
+schemas. Explicit new
 unstuck spans always win. An inactive legacy side with zero strategy spans receives positive
 strategy defaults with a warning to review them before enabling the side.
 
@@ -182,27 +217,38 @@ Apple MPS screening supports independent unstuck horizons and bounds for both su
 including per-coin overrides and candle-interval scaling. Start a fresh GPU run after upgrading;
 older screening checkpoints use a different parameter layout.
 
-Auto-unstuck requires a positive remaining realized-loss allowance. It does not wait for equity
-to fall below a loss floor. The allowance is reconstructed from the account-wide realized-PnL
-window configured by `live.pnls_max_lookback_days`:
+Auto-unstuck requires a positive remaining realized-loss allowance. It uses one continuous
+account-wide net-realized-PnL drawdown memory, with its global
+`bot.portfolio.unstuck.memory_ema_span_minutes` span. This memory includes ordinary/HSL closes, entry/exit
+fees and signed rebates; it excludes unrealized PnL and does not reset at HSL episode
+boundaries. For each elapsed minute and then each ordered realized event:
 
 ```text
-balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)
-loss_fraction = unstuck.loss_allowance_pct * total_wallet_exposure_limit
-remaining_allowance = max(0, balance - balance_peak * (1 - loss_fraction))
+alpha = 2 / (bot.portfolio.unstuck.memory_ema_span_minutes + 1)
+D_realized = (1 - alpha) * D_realized
+D_realized = max(0, D_realized - net_realized_PnL)
+p = unstuck.loss_allowance_fraction * applicable_total_wallet_exposure_limit
+remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
 
-If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
-coin+side uses the override percentage in this same account-wide allowance formula.
+Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
+create no negative loss credit. The global `bot.portfolio.loss_gate` consumes the same ordered net fills with its own
+`memory_ema_span_minutes` and separate drawdown accumulator. Its allowance uses
+`p = max_drawdown_ratio`, without TWEL multiplication. Each enabled filter consumes a fill
+once while the economic ledger records it once. Old rolling windows and loss percentages require
+explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
+
+If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_fraction` is set, that
+coin+side uses the override fraction in this same account-wide allowance formula.
 The override does not create a per-slot budget or separate per-coin realized-PnL tracking.
 
-With auto-unstuck enabled and positive `loss_allowance_pct`, `close_pct`, `threshold` and side
+With auto-unstuck enabled and positive `loss_allowance_fraction`, `close_fraction`, `exposure_trigger_ratio` and side
 TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
 
 ```text
 effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)
 wallet_exposure = abs(position_size) * position_price * c_mult / balance
-eligible_exposure = wallet_exposure / effective_wel > unstuck.threshold
+eligible_exposure = wallet_exposure / effective_wel > unstuck.exposure_trigger_ratio
 ```
 
 Here `position_price` is average entry price. The threshold is an eligibility trigger only;
@@ -213,7 +259,7 @@ For the selected candidate, Rust uses current price rounded up to the price tick
 close or down for a short close. Before quantity rounding and other constraints:
 
 ```text
-close_qty_abs = balance * effective_wel * unstuck.close_pct / (close_price * c_mult)
+close_qty_abs = balance * effective_wel * unstuck.close_fraction / (close_price * c_mult)
 ```
 
 This sizes a fraction of the effective exposure budget at the close price, not a fraction of
@@ -223,8 +269,8 @@ Minimum sizing can exceed the remaining allowance; see the
 [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
 
 At unchanged balance and effective WEL, the nominal reduction in `wallet_exposure / effective_wel`
-is `close_pct * position_price / close_price`, before rounding and other constraints. For example,
-a long at 100% of effective WEL with `threshold = 0.90`, `close_pct = 0.12`, entry price 110 and
+is `close_fraction * position_price / close_price`, before rounding and other constraints. For example,
+a long at 100% of effective WEL with `threshold = 0.90`, `close_fraction = 0.12`, entry price 110 and
 close price 100 would fall to about 86.8%, not 90%. Realized losses, fees or other balance changes
 also change the denominator of the post-fill exposure ratio.
 
@@ -235,13 +281,30 @@ When multiple positions are eligible, auto-unstuck chooses the least stuck
 position first, defined as the lowest pside-aware relative distance between
 position price and market price. TWEL enforcer uses the same selector.
 
-`unstuck_ema_dist` must keep the EMA-derived trigger price positive:
-- `bot.long.unstuck.ema_dist > -1.0`
-- `bot.short.unstuck.ema_dist < 1.0`
+`unstuck.ema_distance_fraction` must keep the EMA-derived trigger price positive:
+- `bot.long.unstuck.ema_distance_fraction > -1.0`
+- `bot.short.unstuck.ema_distance_fraction < 1.0`
 
 Configs that cross those boundaries now hard-fail during validation instead of silently
 disabling auto-unstuck. For near-always-on EMA triggering on either side, use a value like
 `-0.99`, not `-1.0`.
+
+## Exposure enforcer objects
+
+Each side groups its control flag and numeric policy together:
+
+```json
+"risk": {
+  "position_exposure_enforcer": {"enabled": true, "threshold_ratio": 1.0},
+  "total_exposure_enforcer": {
+    "enabled": true, "threshold_ratio": 1.0, "policy": "reduce_overweight"
+  }
+}
+```
+
+Optimizer bounds follow the same path, for example
+`optimize.bounds.long.risk.position_exposure_enforcer.threshold_ratio`. The thresholds
+retain their existing units and denominators; this grouping does not rescale values.
 
 ## Position Exposure Enforcer
 
@@ -249,11 +312,11 @@ The position exposure enforcer trims individual bot-managed positions whenever
 their exposure rises above the allowance-adjusted per-position cap:
 
 ```text
-if not position_exposure_enforcer_enabled:
+if not position_exposure_enforcer.enabled:
     disabled
 
 allowed_i    = wel_base_i * (1 + we_excess_effective_i)
-target_i     = allowed_i * position_exposure_enforcer_threshold
+target_i     = allowed_i * position_exposure_enforcer.threshold_ratio
 ```
 
 If `exposure_i > target_i`, the bot submits a reduce-only order sized just large
@@ -261,13 +324,13 @@ enough (with step rounding and minimum-qty guards) to bring the position back to
 `target_i`. These orders are emitted as `CloseAutoReduceWel{Long,Short}` and are
 returned directly from `calc_next_close_*`/`calc_closes_*`.
 
-Setting `position_exposure_enforcer_enabled = false` disables this enforcer. When
-it is enabled, `position_exposure_enforcer_threshold` must be finite and greater
+Setting `position_exposure_enforcer.enabled = false` disables this enforcer. When
+it is enabled, `position_exposure_enforcer.threshold_ratio` must be finite and greater
 than zero. Values below `1.0` force continuous trimming; values above `1.0`
 create an additional grace margin.
 
 This is both a risk control and a possible strategy mechanism. For example, a
-user may deliberately set `position_exposure_enforcer_threshold = 0.95` with
+user may deliberately set `position_exposure_enforcer.threshold_ratio = 0.95` with
 aggressive entries. The strategy can refill toward the per-position limit, and
 the enforcer can repeatedly trim back to `95%` of that limit. Unlike auto
 unstuck, this trim is not gated by EMA distance or loss allowance.
@@ -276,18 +339,18 @@ unstuck, this trim is not gated by EMA distance or loss allowance.
 
 The total exposure enforcer repairs same-side portfolio exposure when the sum of
 all open same-side exchange positions exceeds
-`total_wallet_exposure_limit * total_exposure_enforcer_threshold`. Manual and
+`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`. Manual and
 panic positions count toward this same-side exposure measurement, but they are
 not repair candidates and never receive TWEL auto-reduce orders. For each
 position:
 
 ```text
-if not total_exposure_enforcer_enabled:
+if not total_exposure_enforcer.enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
-overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer_threshold
-                     / n_positions
+overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio
+                     / max_positions
 overweight_psize_i = overweight_i * balance / (price_i * c_mult_i)
 ```
 
@@ -322,8 +385,8 @@ managed position below that target when needed to bring same-side TWE back to th
 repair target. Exchange min-qty, min-cost, rounding, or a lack of managed
 candidates can leave the account above target.
 
-Setting `total_exposure_enforcer_enabled = false` disables this enforcer. When it
-is enabled, `total_exposure_enforcer_threshold` must be finite and greater than
+Setting `total_exposure_enforcer.enabled = false` disables this enforcer. When it
+is enabled, `total_exposure_enforcer.threshold_ratio` must be finite and greater than
 zero.
 
 Manual and panic positions are outside normal bot management: the bot does not
@@ -369,12 +432,12 @@ intervention:
 | `strategy.<kind>.ema_span_*`                    | Defines the strategy's price EMA band                      | `EMA_low`, `EMA_high` |
 | `unstuck.ema_span_*`                            | Defines the independent auto-unstuck EMA band              | `EMA_low`, `EMA_high` |
 | `entry_grid_spacing_*`, `entry_grid_double_down_factor` | Controls grid spacing and growth of re-entry quantities | `next_grid_price`, `next_grid_qty` |
-| `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `threshold`, `retracement` |
+| `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `exposure_trigger_ratio`, `retracement` |
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
-| `position_exposure_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
-| `total_exposure_enforcer_threshold`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |
+| `position_exposure_enforcer.threshold_ratio`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
+| `total_exposure_enforcer.threshold_ratio`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.

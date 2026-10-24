@@ -1,28 +1,89 @@
 # Strategy Runtime Contracts
 
+Public scale-one shares and relative price offsets use `_fraction`; these names do not rescale
+values. Strategy metadata is copied before public path projection, while Rust parameter names,
+optimizer IDs, defaults and native transport keys remain Rust-owned. Runtime builders lower the
+merged public strategy exactly once at the native boundary. Normal loading accepts one public
+spelling; explicit released-v8 conversion reports path changes across all authored layers.
+
+Fraction denominators are declared in the generated configuration reference. In particular,
+Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
+position entry price, plus any over-budget remainder, rounded and capped by the actual position.
+Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
+is an absolute normalized-score gap, without an incumbent-relative denominator.
+
+## Inherited Directional Defaults
+
+The paired directional field registry defines inheritability; side activation is excluded. Resolve
+schema fallback, authored `bot.global`, explicit side leaf pins and permitted coin patches before
+runtime hydration.
+False, zero, empty lists and equal values retain explicit side authority; approval null inherits
+and ignored null clears. Whole-side omission equals an empty side object. One portfolio strategy
+kind selects the engine; new directional numerical fallbacks deliberately share the former long
+starter profile. Budgets remain per side, not an implicitly divided portfolio allocation.
+
+`bot.portfolio` owns account-wide settings/state, including unstuck realized memory. Typed source,
+normalized execution values, explicit optimizer derivations and frozen source memberships remain
+separate. JSON metadata and hydration cannot create source pins. Reusable exports retain common
+defaults and declared pins; expanded effective inspection is a separate view. Candidate results
+materialize necessary derived leaves for ordinary replay, while resume retains validated source
+and binding authority separately.
+
+## Explicit Side Activation
+
+`bot.long.enabled` and `bot.short.enabled` are strict booleans, each defaulting to false.
+Activation never inherits: only an explicit true enables the corresponding side, and omitted or
+empty side objects stay disabled. Reject `bot.global.enabled` with an actionable error; do not
+ignore or migrate it. Other nested feature switches remain inheritable. Both-disabled policy is
+valid for held-position management. Activation is fixed policy, separate from capacity, selection
+and operational modes.
+Simulation entry points require a runnable effective universe: at least one explicitly enabled
+side with positive exposure/position capacity and approved coins remaining after resolution.
+Apply CLI, fixed optimizer policy, reachable optimizer capacity, and scenario overrides before
+checking their respective execution views. Reject known empty runs before candle acquisition with
+an actionable configuration error and a nonzero exit; this does not invalidate both-disabled live
+position management or change schema defaults.
+
+The native `side_activation` packet requires exactly long/short booleans. Disabled sides cannot
+generate or fill initial entries or DCA, including forced-normal selection and one-way arbitration.
+Held closes, reducers, trailing state, fills and HSL continue under their existing inputs, sizing
+and risk gates. Do not infer Manual from zero capacity or fabricate a positive sizing budget.
+Explicit Manual and ordinary TpOnly retain their standing-order ownership at reconciliation.
+
+Prepared activation declarations share the immutable typed bot-policy authority on the exact
+prepared mapping. JSON metadata cannot grant that authority. Actual fixed/scenario/CLI patch owners
+record equal-value declarations and parent replacement; changed direct effective values survive
+reprepare. Authored projection retains omission; full effective JSON is a resolved policy snapshot.
+Optimizer boolean reachability follows fixed/scenario declarations while numeric ranges remain
+unable to grant activation. Released-v8 conversion explicitly enables both sides and retains the
+frozen released numeric defaults and ranges.
+
+GPU activation uses appended directional slot 15 and fused long/short slots 18/19; existing
+minimum-cost, factual-HSL and age slots remain unchanged. Replay/evaluation identities include
+activation and reject incompatible cached policy.
+
+## Side-Specific Minimum-Cost Admission
+
+`bot.long.universe.filter_by_min_effective_cost` and its short counterpart are independent booleans,
+both defaulting to true. Live uses the authored side flag. A null scalar
+`backtest.filter_by_min_effective_cost` inherits each respective flag; an explicit boolean overrides
+both. Native packets require the complete `{long: bool, short: bool}` pair. CPU and supported GPU
+selection, flat initial-entry checks and one-way arbitration apply the corresponding flag, without
+combining sides. Held positions retain ordinary management; disabling the filter never relaxes
+exchange minimum quantity/notional rules. Evaluation and replay identities include both flags.
+Explicit released-v8 conversion copies a shared policy to both sides and reports the change;
+a global default now inherits through the same registered field contract as other directional leaves.
+
 ## Canonical And Legacy Strategy Schemas
 
 The canonical strategy kind is `trailing_martingale`. The released v7 `trailing_grid` schema is not
 aliased to it. Do not add compatibility migrations, duplicate strategy names, or silent shims for
 removed fields unless the user explicitly asks for released-version compatibility.
 
-`trailing_grid_v7` is the explicit compatibility exception. It is a normal Rust strategy kind,
-deprecated from introduction, and exists only for configs converted by
-`passivbot tool migrate-config-v7`. Keep its v7-only fields under
-`bot.<side>.strategy.trailing_grid_v7`; do not add them to `trailing_martingale` or shared
-`BotParams` unless a shared runtime function truly requires it.
-
-The legacy pre-V8 `pb_multi` root shape (`TWE_long`, `TWE_short`,
-`universal_live_config`, and related top-level fields) is not a supported V8 config input or
-migration contract. Residual flavor detection, formatter code, and narrow unit fixtures are stale
-internal compatibility surfaces: ignore them when adding current config fields, and do not infer
-production or live support from their presence. The only supported pre-V8 strategy migration path
-is the explicit `passivbot tool migrate-config-v7` workflow for normalized V7 trailing-grid input.
-
-With an effective entry cooldown of zero, `trailing_grid_v7` preserves v7's simultaneous grid-entry
-ladder even when a later trailing leg uses retracement. Its recursive generator stops expansion
-before stacking retracement-dependent trailing orders. Positive entry cooldowns still stage at
-most one position-adding order and apply their configured post-fill delay.
+Only `trailing_martingale` and `ema_anchor` are supported. The v7 strategy, dedicated migration
+command and `pb_multi` compatibility path are removed. Normal loading accepts the final v9
+schema only. Released v8 conversion is explicit and reported; conflicting aliases and unknown
+fields fail before hydration. Do not infer runtime compatibility from historical release notes.
 
 Removed v7 trailing-grid concepts:
 
@@ -39,7 +100,7 @@ Canonical config path:
 bot.<side>.strategy.trailing_martingale
 ```
 
-Deprecated v7 compatibility config path:
+Removed v7 config path (rejected by normal loading):
 
 ```text
 bot.<side>.strategy.trailing_grid_v7
@@ -52,8 +113,10 @@ Optimizer selector contract:
 - Selectors match path segments by prefix or suffix, not partial substring. Use `long.strategy`
   to match the whole active strategy subtree, `long.strategy.close` to match only
   `bot.long.strategy.<active_strategy>.close.*`, or a leaf selector such as
-  `we_excess_allowance_pct` to match every bound ending with that parameter name.
+  `we_excess_allowance_fraction` to match every bound ending with that parameter name.
 - `*` is allowed as a one-segment wildcard, for example `*.strategy.close`.
+- Authored `fixed_runtime_overrides` and scenario patches use literal full canonical paths;
+  optimizer selector shorthand does not authorize alternate configuration spellings.
 - Do not use flattened underscore selector names such as `long_entry_*` in current user-facing docs
   or agent instructions.
 - When `--fine_tune_params` is combined with `--start`, the starting configs are anchor configs:
@@ -63,28 +126,61 @@ Optimizer selector contract:
   `optimize.bounds` are clamped into bounds with aggregated source/key logging. Without
   `--fine_tune_params`, `--start` remains seed-only.
 
+Approval source authority:
+
+- `bot.global.universe.approved_coins` is the common source. Side omission/null inherits;
+  an explicit side source replaces it, and `[]` approves nothing. Ignored sources also inherit
+  from global on omission; null explicitly clears them. Global approval null is invalid.
+- Source restoration precedes scenario/fixed edits and reloadable export. Explicit equal lists
+  remain pins. Provenance metadata never grants membership; live refresh rereads actual sources.
+- Prepared datasets retain source policy for identity/results and a separate immutable per-side
+  membership snapshot for execution. Both participate in matching; candidate replay does not
+  reread mutable files or weaken explicit-pin equality.
+
 Seed evaluation contract:
 
-- Shared ingestion normalizes, clamps, quantizes, and deduplicates starting configs before each
-  backend applies its seed policy. GPU preparation and proxy setup use the bounds-clamped
-  input seed after fixed runtime and optimizer overrides. Bounds may change its enabled
-  sides relative to the input bot values; enabledness must remain fixed across the search.
-- CPU optimization exact-Rust evaluates every deduplicated seed before population trimming.
-- GPU `seed_bootstrap.mode=auto` exact-evaluates small pools and full-history proxy-screens pools
-  larger than `max_exact`. Screened pools exact-Rust validate a capped, constraint-aware diverse
-  proxy set; only that subset enters the authoritative exact archive.
-- Seed-bootstrap exact evaluations are recorded separately from the GPU evolutionary
-  `optimize.iters` budget. Exact fitness seeds the archive and vector-only initial sampling; exact
-  and proxy fitness must never share an NSGA objective matrix.
-- An incomplete bootstrap checkpoint owns its normalized seed plan. Resume does not depend on the
-  original seed files, including for anchored fine-tuning, and must recover any exact seed result
-  already flushed to durable history.
+- Shared ingestion normalizes, clamps, quantizes and deduplicates starting configs.
+  Canonical CPU preparation resolves bounds, anchors, fixed/runtime/scenario overrides and
+  effective side-enable views before compact GPU request encoding.
+- CPU optimizers evaluate every deduplicated seed with Rust CPU backtests. GPU optimization
+  evaluates every deduplicated seed and initial parent with its authoritative CUDA service.
+  Seed work is additional to the evolutionary `optimize.iters` budget.
+- Explicitly enabled `optimize.prefilter` checks may instead complete a seed or offspring with
+  a graded constraint and signed numerical penalty defaults, without replay. Such records carry
+  `backtest_performed=false`; they are terminal optimizer evaluations, not simulator evidence.
+  Disabled checks perform no strategy probing. Rust owns hypothetical geometry and grid sizing;
+  Python owns normalized policy violations and ordinary evolutionary F/G transport.
+- Partial scenario-screening observations may select later offspring for full-suite evaluation;
+  they must never supply complete fitness, result records or Pareto membership.
+- Incomplete GPU checkpoints own normalized CPU search/cohort state and anchors, without
+  device handles or borrowed-memory names. Resume does not require original seed files.
 
-Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
-for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example
-`volatility_ema_span_1m`, `volatility_ema_span_1h`, `forager_volume_ema_span_1m`, and
-`forager_volatility_ema_span_1m`. Generic strategy EMA spans such as `ema_span_0` and `ema_span_1`
-remain unsuffixed because their timeframe comes from the strategy's base candle stream.
+Public price, unstuck and base-stream volatility/volume EMA horizons use `_minutes`, including
+`ema_span_0_minutes`, `ema_span_1_minutes` and `forager.volume_ema_span_minutes`. Backtests divide
+these floating minute horizons by `candle_interval_minutes` to obtain sample spans; longer base
+candles do not reinterpret the configured horizon as a larger number of minutes. Unilateralness
+also uses minutes and requires completed one-minute candles. Hourly volatility indicators use
+`volatility_ema_span_1h_candles` or `offset_volatility_ema_span_1h_candles`: these are floating
+counts of calendar-hour candle samples, independent of the base candle interval. Renaming does
+not rescale values, round derived spans or change native parameter IDs.
+
+## Side Age Admission
+
+`bot.<side>.universe.minimum_coin_age_days` is fixed, finite nonnegative policy, with float
+values preserved. Rust owns the initial-entry predicate: zero bypasses it; otherwise inception
+must be known, positive, not in the future, and elapsed factual time must be at least the
+configured days. Apply admission before static/Forager/forced-normal selection and one-way
+side arbitration. It must not mark a whole symbol nontradable or disapprove an existing
+position; held DCA, closes and risk protection retain their existing gates. Pre-eligibility
+history may warm indicators. Backtest and GPU preparation transport inception separately from
+shared candle validity and warmup. GPU side admission indices are derived by the same Rust
+predicate on the native decision clock and must have an exact integer representation.
+
+Live inception acquisition is an owned, bounded background maintainer and must not await network
+lookup on the protective planning path. Automatic cache fact demand is the enabled positive-age
+side's prepared approved-minus-ignored membership; optimizer preparation supplies reachable-side
+sizing. Suite acquisition unions only assigned contexts, preserving their once-resolved source
+memberships through execution. This volatile acquisition context grants no trading permission.
 
 ## Forager Readiness Stages
 
@@ -115,17 +211,18 @@ shared span cannot leak a projected strategy value into coin ranking.
 
 ## Trailing Martingale Semantics
 
-Trailing-martingale price spans belong to `entry.ema_span_0/1`. Schema v8.4.0 migrates
-old strategy-root leaves before hydration and before file/inline override merges; explicit
-new leaves win with warnings on conflicting values. Public optimizer bounds share the nested
-paths; internal optimizer keys and Metal columns retain `ema_span_0/1`. Entry subtree selectors
-include the horizons. EMA-anchor and trailing-grid-v7 paths are unchanged. Volatility horizons
-remain shared by entries and closes.
+Trailing-martingale price spans belong to `entry.ema_span_0_minutes` and `entry.ema_span_1_minutes`.
+Final v9 loading rejects the old
+strategy-root leaves. The explicit released-v8 converter moves them before independently
+authored file/inline patches merge and rejects conflicting values within one authored layer.
+Public optimizer bounds share the nested paths; internal optimizer keys and Metal columns retain
+`ema_span_0/1`. Entry subtree selectors include the horizons. EMA-anchor price spans retain their
+strategy-root paths. Volatility horizons remain shared by entries and closes.
 
 Entries and closes use threshold/retracement fields.
 
-- `retracement_base_pct <= 0.0`: trailing disabled, use passive recursive limit-order behavior.
-- `retracement_base_pct > 0.0`: threshold is the required excursion, retracement is the confirmation move.
+- `retracement_base_fraction <= 0.0`: trailing disabled, use passive recursive limit-order behavior.
+- `retracement_base_fraction > 0.0`: threshold is the required excursion, retracement is the confirmation move.
 - Trailing extrema reset after any fill for the same coin+pside.
 - Passivbot tracks trailing state itself from candle inputs; exchange-native trailing order types are not part of the core contract.
 
@@ -198,8 +295,26 @@ Auto-unstuck has its own EMA trigger toggle:
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
 threshold, close sizing, and valid market/exchange inputs.
 
-`bot.<side>.unstuck.ema_span_0` and `ema_span_1` independently define the unstuck price EMA
-band, using the same base candle stream and unrounded geometric-mean third span as the strategy
+V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
+`bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
+ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
+order. UPNL and external balance changes do not. HSL episode transitions never reset it.
+Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
+graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
+exposure thresholds and close sizing retain their existing policies. The global
+`bot.portfolio.loss_gate` consumes the same ordered facts using its independently configured
+`memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_ratio`,
+without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
+configs still produce gate memory. Each enabled filter consumes each fill once and the
+economic ledger records it once.
+Config schema v9.0.0 retires its separate rolling window. Active old-schema gates
+require explicit semantic migration; zero and all-history windows are not EMA spans.
+Live realized-memory bootstrap discloses an unknown prefix and residual attenuation;
+a finite suffix is not proof of infinite-tail equality. Required malformed or missing
+realized facts are fatal/deferred at their owning boundary, never an invented zero D.
+
+`bot.<side>.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` independently define the unstuck price EMA
+band, using the same minute-horizon conversion and unrounded geometric-mean third span as the strategy
 band. Long eligibility uses the upper band; short eligibility uses the lower band. Strategy EMA
 changes must not change the unstuck band. Missing required unstuck EMAs follow the existing scoped
 input-unavailable contract; disabled gating does not require them or extend warmup. Live loading
@@ -208,12 +323,12 @@ unstuck horizon is unavailable. Live warmup uses that same held/static eligibili
 expand flat forager candidates to an unused unstuck horizon. Monitor bands are independently
 available for each consumer.
 
-Schema v8.3.0 materializes missing unstuck spans from the effective active strategy before default
-hydration, including coin overrides and external-file/inline precedence. Explicit unstuck spans
-win. New optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
+Explicit released-v8 conversion materializes missing unstuck price spans from the effective active
+strategy before default hydration, including coin overrides and external-file/inline precedence.
+Explicit unstuck spans win. Converted optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
 varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
 the old coupled search. New defaults expose tunable spans.
-Apple MPS models a separate price EMA band for unstuck in all directional and multicoin kernels.
+Supported shared-account Metal kernels model a separate price EMA band for unstuck.
 It uses the same seeded recurrence, floating horizons and candle-interval scaling as exact Rust.
 Coin overrides win over candidate globals, and temporal replay persists the independent band.
 
@@ -225,7 +340,7 @@ pins. This is optimizer configuration finalization, not a live/backtest coupling
 
 ## Backtest Limit Fill Buffer
 
-`backtest.limit_order_fill_buffer_pct` is a simulation-only ratio, defaulting to `0.0`.
+`backtest.limit_order_fill_buffer_fraction` is a simulation-only ratio, defaulting to `0.0`.
 Limit buys require `low < price * (1 - buffer)` and limit sells require
 `high > price * (1 + buffer)`. Equality never fills. The buffer changes eligibility only:
 filled limit orders retain the original order price and maker fees. Market execution bypasses it.
@@ -245,25 +360,40 @@ values or ratios outside `[0, 1)` before order construction.
 
 ## Live/Backtest Market Slippage Boundary
 
-`backtest.market_order_slippage_pct` is a backtest simulation knob only. Live orchestrator input
-must not read or forward it; live callers intentionally omit `market_order_slippage_pct` and rely
+`backtest.market_order_slippage_fraction` is a backtest simulation knob only. Live orchestrator input
+must not read or forward it; live callers intentionally omit `market_order_slippage_fraction` and rely
 on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
-current bid/ask snapshot plus exchange-side behavior, controlled by `live.market_orders_allowed`
-and `live.market_order_near_touch_threshold`.
+current bid/ask snapshot plus exchange-side behavior, controlled by `bot.portfolio.execution.market_orders_allowed`
+and `bot.portfolio.execution.market_order_near_touch_fraction`.
 
 ## Close Recursion Contract
 
 Close orders are computed recursively when the close threshold depends on wallet exposure:
 
 1. Compute the next close from current position exposure.
-2. Size it up to `close.qty_pct`.
+2. Size it up to `close.qty_fraction`.
 3. Simulate that close as filled.
 4. Recompute wallet-exposure ratio.
 5. Repeat until the position is exhausted or the ladder is complete.
 
-If `close.retracement_base_pct <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
-have the same price. Rust intentionally emits one full-position close in that case; `close.qty_pct`
+If `close.retracement_base_fraction <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
+have the same price. Rust intentionally emits one full-position close in that case; `close.qty_fraction`
 is effectively moot because multiple same-price slices would be redundant.
+
+## GPU Market Execution Price Preparation
+
+Native GPU preparation asks Rust to choose market SELL and BUY tick counts from the original
+f64 candle closes, f64 slippage and venue price steps before packing replay inputs as f32.
+The helper uses the CPU market-price rounding and minimum-price rules. Every active result
+must prove a unique positive int32 tick count at the canonical decimal step; ambiguous or
+out-of-range results fail preparation. Zero is reserved for inactive candle/coin cells and
+must never become an active execution price.
+
+Shared Metal/CUDA replay consumes those immutable counts for ordinary market fills, HSL
+panic fills and delisting closes at their declared execution indices. Touch eligibility,
+quantity sizing, marking and fee policy retain their existing inputs. GPU state and decoded
+physical prices remain f32, so matching tick decisions do not establish exact financial
+trajectory equality for every configuration.
 
 ## Close Reducer Compatibility
 
@@ -285,7 +415,7 @@ shared batch allowance on final reducer quantities largest-first rather than in 
 order. It then evaluates ordinary closes after the selected reducers. Live reconciliation reapplies
 the same aggregate cap against current exchange position size, still trimming ordinary closes
 before the reducer if the position shrank after planning.
-This contract is shared by every strategy kind, including `trailing_grid_v7`.
+This contract is shared by both supported strategy kinds.
 
 ## Source Of Truth
 
@@ -298,7 +428,8 @@ behavior patches.
 - Rust unit tests cover strategy dispatch, entries, closes, recursion, risk, and unstuck behavior.
 - Python tests use the verified real extension when asserting Rust output.
 - Live/backtest parity tests compare optimized behavior with a simple reference contract.
-- Config migration/schema tests reject removed fields outside `trailing_grid_v7`.
+- Config schema tests reject removed fields and strategy kinds before hydration; released-v8
+  conversion tests cover explicit transformations, conflicts and file/inline precedence.
 - Behaviorally relevant changes include a bounded real backtest smoke.
 
 ## Key Code And Tests
@@ -314,7 +445,7 @@ behavior patches.
 
 Rust owns signed RMS directionality, its use as a lower-is-better Forager component,
 and additive cooldown minutes. The shared side-level float span lives under
-`forager.unilateralness_ema_span_1m`. Both runtimes use the same last
+`forager.unilateralness_ema_span_minutes`. Both runtimes use the same last
 `ceil(20 * span) + 1` completed one-minute closes with zero-seeded exponential weights.
 Live replays the window. CPU uses rolling aggregate stacks with amortized constant
 work per candle, agreeing with replay within floating-point roundoff; all-flat windows
@@ -325,12 +456,36 @@ not request RMS history, allocate CPU trackers, or restrict candle intervals. Op
 dataset preflight checks finalized per-coin eligibility and overrides across reachable
 boundary configs. Entry-ineligible sides do not restrict intervals or RMS activation.
 
-Canonical loading and cleaning expose missing unilateralness weight/span and
-adaptive cooldown weight/minimum-duration optimizer bounds as fixed ranges at
-the side's configured values (using normalized Forager weights). A missing maximum
-duration bound is hydrated only for a finite ceiling; null remains unbounded.
-Explicit bounds retain their authority. Visibility must not open a search range or
-change optimizer candidate normalization or warmup for unchanged configurations.
+Canonical runtime binding plans represent omitted numeric dimensions as fixed effective values;
+reusable exports retain authored domains. A side bound wins, else a side value is fixed, else a
+global bound owns one coordinate fanning out to inheriting targets, else the effective value is
+fixed. Portfolio domains own one coordinate. Source/binding identities distinguish equal-valued
+pins and canonically order prepared source entries. A selector matching an inheriting side fixes
+the shared coordinate; incompatible anchor target values require explicit side bounds. The lean
+starter has no ranges; maintained examples and the explicit recommended preset declare domains.
+A missing maximum-duration bound is hydrated only for a finite ceiling; null remains
+unbounded. Released-v8 conversion materializes its inherited mandatory domains from
+frozen released defaults while retaining previously optional adaptive freezing.
+
+Authored `enable_overrides` remain explicit derivation policy after gene assignment. Mirrored
+short parameters, coupled unstuck spans and the lossless-close threshold may therefore move with
+their source parameters despite omitted/fixed target genes. A fixed target domain or selector
+constrains the independent genome, not the result of an authored derivation. Preserve existing
+transformation and runtime/scenario precedence; describe derived targets separately from fixed genes.
+
+Forager normalization may not move an omitted, constant, selector-fixed, runtime-pinned, scenario-pinned,
+or anchor-fixed positive weight while siblings vary. Such partial searches fail before
+evaluation; require explicit authority for every participating positive coordinate or
+freeze the entire group. An omitted zero may remain zero only when the reachable all-zero
+fallback does not activate that coordinate while siblings vary. Full-group search retains shared normalization.
+Fixing every raw weight to zero preserves those independent genes; it does not disable ranking.
+Rust retains its existing all-zero fallback to EMA-readiness-only ranking. An active canonical
+reload can display `ema_readiness=1.0` while retaining the same authored bounds and pins and
+native economic behavior. Result cleaning preserves raw bot values; validate a detached,
+normalized effective view without rewriting candidate genes or optimizer authority in place.
+Validate root and active scenario pin authority in application order before market/data preparation,
+including scenarios supplied externally. A complete atomic weight-object pin freezes the group;
+an incomplete replacement fails rather than inheriting missing coordinates.
 
 Forager may carry a complete cached observation only within the existing candidate
 age budget, without feeding invented flat returns. Cooldown requires a current

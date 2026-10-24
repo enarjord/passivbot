@@ -35,7 +35,7 @@ The `wallet_exposure_limit` acts as a ceiling. If a position's exposure reaches 
 
 In a multi-coin setup, the limits are derived from the total limit:
 * **Total Limit:** User sets `total_wallet_exposure_limit`.
-* **Per-Position Limit:** `total_wallet_exposure_limit / n_positions`.
+* **Per-Position Limit:** `total_wallet_exposure_limit / max_positions`.
 
 ---
 
@@ -68,20 +68,20 @@ Instead of a traditional stop-loss that closes the entire position at a massive 
 Auto-unstuck works best when running multiple coins:
 * **Prioritization:** It prioritizes unstucking the **least underwater** coin first, quickly returning it to profitability.
 * **Profit Offsetting:** While one coin realizes losses to unstuck, the other active coins continue generating profit, smoothing out the equity curve.
-* **Loss Pacing:** A realized-loss allowance limits how quickly auto-unstuck takes losses relative to a reconstructed balance peak. Exchange minimum sizing can exceed the remaining allowance; later realized profits can rebuild it, as described below.
+* **Loss Pacing:** A continuous realized-loss allowance limits how quickly auto-unstuck takes losses. Exchange minimum sizing can exceed the remaining allowance; later realized profits or exponential decay can replenish it, as described below.
 
 #### Weakness of Auto-Unstuck
 Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and other causes of prolonged unilateral price movement) may cause the auto-unstuck mechanism to keep taking losses and re-entering continually on an adversely moving coin. The only realistic solution to these edge cases is **human intervention** as the final backstop.
 
 #### Auto-Unstuck Threshold And Close Size
 
-`bot.<side>.unstuck.threshold` is an eligibility trigger: the position's wallet exposure divided
+`bot.<side>.unstuck.exposure_trigger_ratio` is an eligibility trigger: the position's wallet exposure divided
 by its effective WEL must be strictly greater than the threshold. It does not specify a target
 remaining position or prevent a close from crossing below that threshold.
 
-`unstuck.close_pct` sizes each chunk from `balance * effective_wel` at the close order's price,
+`unstuck.close_fraction` sizes each chunk from `balance * effective_wel` at the close order's price,
 while wallet exposure uses average entry price. The chunk can therefore reduce the exposure ratio
-by more or less than `close_pct`, before accounting for rounding, exchange minimums, loss allowance
+by more or less than `close_fraction`, before accounting for rounding, exchange minimums, loss allowance
 and balance changes. See the [auto-unstuck formulas](config.bot.md#auto-unstucking) for details.
 
 #### Auto-Unstuck Loss-Allowance Contract
@@ -90,12 +90,12 @@ Auto-unstuck loss allowance is a pacing budget, not an exact per-order loss
 cap. The bot may need to snap an unstuck close to the exchange's minimum
 quantity or minimum cost. If the remaining allowance is smaller than that
 minimum executable close, the close may exceed the remaining allowance. Further
-unstucking is then blocked until later realized profits rebuild positive
+unstucking is then blocked until later realized profits or loss-memory decay rebuild positive
 allowance.
 
-The global realized-loss gate remains separate. `live.max_realized_loss_pct`
-can still block a non-panic unstuck close if the projected fill would breach
-that realized-loss floor.
+The global realized-loss gate has its own threshold, `bot.portfolio.loss_gate.max_drawdown_ratio`,
+and consumes the same account-wide ordered net fills with its own span and accumulator. It can still block a
+non-panic unstuck close if the projected loss exceeds its remaining allowance.
 
 Auto-unstuck may be emitted in the same ideal-order batch as compatible ordinary
 grid, trailing, or EMA-anchor closes for that position. Passivbot keeps only one
@@ -109,23 +109,24 @@ evaluates reducer candidates largest-first across the shared batch allowance
 before ordinary closes, and live reconciliation reapplies the cap against the
 latest position without consuming reducer quantity first.
 
-Auto-unstuck allowance is reconstructed from the configured
-`live.pnls_max_lookback_days` fill/PnL window. Enabling auto-unstuck on an
-account with existing history can therefore inherit prior profits or losses
-inside that window; this is intentional stateless behavior, not a local bot
-memory file.
+Auto-unstuck uses one continuous account-wide net-realized loss memory, controlled
+by `bot.portfolio.unstuck.memory_ema_span_minutes`. Every ordered fill updates each enabled memory, including
+fees and signed rebates; profits repay remembered loss and elapsed minutes decay it.
+HSL episode boundaries do not reset it. Live bootstrap uses available fill coverage
+and discloses its unknown prefix; a finite suffix is not proof of the infinite past.
+See the [v9 risk model](v9_risk_model.md) for the exact allowance and sampling rules.
 
 ### B. Exposure Enforcers
 While exposure limits prevent *new* orders, it is still possible for existing positions to swell beyond their limits (e.g., the account holds BTC as collateral and the BTC/USD price drops, the user withdraws funds while positions are maxed out, or the account realizes significant losses). To handle this, Passivbot provides three parameters that control how aggressively to cap and trim exposure.
 
 These parameters function on top of the base limits:
-* `position_exposure_enforcer_threshold` (The Position Trimmer)
-* `risk_we_excess_allowance_pct` (The Buffer)
-* `total_exposure_enforcer_threshold` (The Portfolio Trimmer)
+* `position_exposure_enforcer.threshold_ratio` (The Position Trimmer)
+* `risk.we_excess_allowance_fraction` (The Buffer)
+* `total_exposure_enforcer.threshold_ratio` (The Portfolio Trimmer)
 
-#### Position Exposure Enforcer (`position_exposure_enforcer_threshold`)
+#### Position Exposure Enforcer (`position_exposure_enforcer.threshold_ratio`)
 This controls **per-position** trimming. If a single position's exposure exceeds:
-`effective_limit * position_exposure_enforcer_threshold`
+`effective_limit * position_exposure_enforcer.threshold_ratio`
 The bot issues a reduce-only order to trim it back down.
 
 Examples:
@@ -133,7 +134,7 @@ Examples:
 * `1.0`: **Strict limit.** Trims immediately if the position exceeds the allowance.
 * `1.05`: **Buffer zone.** Trims only if the position becomes greater than 5% of its allowance.
 
-Set `position_exposure_enforcer_enabled = false` to disable this control. The
+Set `position_exposure_enforcer.enabled = false` to disable this control. The
 threshold must be finite and greater than zero when enabled.
 
 This enforcer can also be used deliberately as an aggressive strategy mechanism:
@@ -141,8 +142,8 @@ with aggressive entries and a threshold such as `0.95`, the bot may refill towar
 the position limit and repeatedly trim back to 95% without waiting for auto
 unstuck's EMA gate or loss allowance.
 
-#### Excess Allowance (`risk_we_excess_allowance_pct`)
-In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk_we_excess_allowance_pct > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
+#### Excess Allowance (`risk.we_excess_allowance_fraction`)
+In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk.we_excess_allowance_fraction > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
 
 The excess allowance is always bounded. The raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
 
@@ -163,10 +164,10 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 * **Motivation:** In a multi-coin setup, this lets the bot boost performance on active positions by utilizing the unused capacity of inactive positions.
 
 > **Comprehensive Calculation Example:**
-> Given a **$2000 balance**, `TWEL=1.0`, `excess_allowance=0.5`, `n_positions=4`, `unstuck_threshold=0.48`:
+> Given a **$2000 balance**, `TWEL=1.0`, `excess_allowance=0.5`, `max_positions=4`, `unstuck_threshold=0.48`:
 >
 > 1.  **Base WEL:**
->     `base_wel = twel / n_positions`
+>     `base_wel = twel / max_positions`
 >     `1.0 / 4 == 0.25`
 >
 > 2.  **Effective excess allowance:**
@@ -186,7 +187,7 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 >
 > Since `0.375 * 4 > 1.0`, the bot will allow filling up the first positions' effective limits, but will gate new entries when filling those entries would lead to `twe > twel`.
 >
-> With `n_positions=1`, the effective excess is capped at `0.0`: `min(1 - 1, excess_allowance)`. The single position's per-position allowance therefore remains `TWEL`; raw excess does not increase it.
+> With `max_positions=1`, the effective excess is capped at `0.0`: `min(1 - 1, excess_allowance)`. The single position's per-position allowance therefore remains `TWEL`; raw excess does not increase it.
 >
 > **Auto-Unstuck Trigger:**
 > The exposure eligibility boundary is `effective_we_limit * unstuck_threshold`:
@@ -196,32 +197,30 @@ to `false`; see [HSL budgets](equity_hard_stop_loss.md#signals-and-scopes).
 
 
 * **Edge Case:**
-    * *Scenario:* `TWEL = 1.0`, `n_positions = 10`, `excess_allowance = 0.5`.
+    * *Scenario:* `TWEL = 1.0`, `max_positions = 10`, `excess_allowance = 0.5`.
     * *Base WEL:* `1.0 / 10 = 0.10`.
     * *Effective excess allowance:* `min(0.5, 1.0 / 0.10 - 1) = 0.5`.
     * *Effective per-position limit:* `0.10 * 1.5 = 0.15`.
     * If there is a market crash and 6 positions fill to their effective limit, the total exposure is `6 * 0.15 = 0.9`.
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
-    * Since `1.05 > 1.0` (the TWEL), the bot will gate any new bot-generated entries for that 7th position when `total_exposure_entry_gate_enabled = true`, effectively blocking the "excess" allowance for the last few positions.
+    * Since `1.05 > 1.0` (the TWEL), the bot will gate any new bot-generated entries for that 7th position under the unconditional entry cap, effectively blocking the "excess" allowance for the last few positions.
 
-#### Total Exposure Enforcer (`total_exposure_enforcer_threshold`)
+#### Total Exposure Enforcer (`total_exposure_enforcer.threshold_ratio`)
 This controls **total portfolio** trimming. It monitors the sum of all same-side long or short
 exchange exposure, including manual and panic positions. If the raw-balance total exceeds:
-`total_wallet_exposure_limit * total_exposure_enforcer_threshold`
-The bot reduces positions according to `total_exposure_enforcer_policy`.
+`total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio`
+The bot reduces positions according to `total_exposure_enforcer.policy`.
 
 * `0.95`: Trims the portfolio when it reaches 95% of the total limit.
 * `1.0`: Strictly enforces the total limit.
 * `> 1.0`: Allows some overflow (e.g., during extreme volatility) before forced reduction occurs.
 
-`total_exposure_entry_gate_enabled` is separate from auto-reduce. When enabled, bot-generated
+The unconditional entry cap is separate from auto-reduce. Bot-generated
 entries are blocked or cropped before projected snapped-balance TWE, including existing same-side
 exchange positions, can exceed
-`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`.
-When disabled, positive excess allowance can let bot entries push TWE above raw TWEL; this is an
-explicit opt-out from the portfolio entry cap.
+`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer.threshold_ratio)`.
 
-Set `total_exposure_enforcer_enabled = false` to disable TWEL auto-reduce. The threshold must be
+Set `total_exposure_enforcer.enabled = false` to disable TWEL auto-reduce. The threshold must be
 finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.
 
 This portfolio trimming mechanism pairs well with the excess allowance. When same-side raw-balance
@@ -232,57 +231,65 @@ reductions, with stable symbol tie-breaks, and stop once projected TWE reaches t
 
 `normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
 panic exposure contributes to the same-side TWE measurement, but those positions remain outside
-TWEL auto-reduce management. TWEL auto-reduce is still subject to `max_realized_loss_pct`; only
+TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.portfolio.loss_gate.max_drawdown_ratio`; only
 panic close orders bypass the realized-loss gate.
 
-### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
+### C. Realized-Loss Gate (`bot.portfolio.loss_gate.max_drawdown_ratio`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
 
-The gate is anchored to the net realized PnL peak reconstructed from fill history
-(`pnl + fee_paid`):
+The gate consumes the same ordered account-wide net-realized facts as auto-unstuck,
+using its own drawdown D and elapsed-minute decay from `bot.portfolio.loss_gate.memory_ema_span_minutes` and per-fill clipping.
+All actual fills contribute net PnL and signed fees once, even when HSL and unstuck
+are disabled. UPNL and external balance changes do not change D.
 
-`balance_peak = current_balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`
+With raw balance B and fraction r=`max_drawdown_ratio`, Rust computes:
 
-`balance_floor = balance_peak * (1 - max_realized_loss_pct)`
+`remaining_allowance = max(0, r * (B + D) - D)`
 
-For each candidate close order, the bot projects realized PnL if filled and blocks the order when:
-
-`projected_balance_after_fill < balance_floor`
+The exact float32/FMA graph follows the [v9 risk model](v9_risk_model.md). TWEL does
+not multiply r. A candidate close whose projected loss exceeds the remaining
+allowance is blocked; fills and decay replenish or consume that allowance.
 
 Behavior by value:
-* `max_realized_loss_pct <= 0.0`: block all lossy closes.
-* `0.0 < max_realized_loss_pct < 1.0`: allow losses only down to the configured fraction below peak balance.
-* `max_realized_loss_pct >= 1.0`: disabled.
+* `max_drawdown_ratio == 0.0`: block all lossy closes; negative or nonfinite values are invalid.
+* `0.0 < max_drawdown_ratio < 1.0`: allow losses within the remaining gate-memory allowance.
+* `max_drawdown_ratio >= 1.0`: disabled.
 
 Operational notes:
 * The shipped default is `1.0`, which keeps the gate disabled until you opt in explicitly.
 * Live bot logs visible warnings whenever an order is blocked by this gate.
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
-* The gate uses fill/PnL history from `live.pnls_max_lookback_days`; it is not
-  limited to fills created by the current bot process.
+* The old `live.realized_loss_gate_lookback_minutes` window is removed in config
+  schema v9.0.0. Active old-schema gates need explicit migration acknowledgment;
+  zero and all-history windows have no equivalent EMA span.
+* Restart reconstructs a declared bounded authoritative suffix from a fixed origin.
+  An unknown-prefix zero initializer and its residual attenuation are disclosed;
+  a finite suffix does not prove exact infinite-history memory.
 
 ### D. Equity Hard Stop Loss
 
-HSL uses one Rust evaluator in live trading, backtesting and optimization. Coin mode
-uses one signal per coin and position side; pside mode uses one per active side;
-unified mode uses one explicit portfolio policy under `bot.hsl`.
+HSL uses one Rust forward risk model in live trading, backtesting and optimization. Coin mode
+uses one signal per coin and position side; position_side mode uses one per active side;
+portfolio mode uses one explicit policy under `bot.portfolio.hsl`.
 
-The current signal is the minimum of raw episode-equity drawdown and its EMA.
-Equity history anchors to the current scope balance budget plus current unrealized
-PnL. Only a current threshold breach authorizes panic orders; recovery immediately
-retires them. The episode ends when its whole scope becomes flat. Cooldown depends
-on the last episode's terminal signal, expires within the configured lookback, and
-clears immediately if exposure returns.
+HSL maintains slowly decaying currency drawdown and an independent fast EMA of its
+contemporaneous drawdown ratio. The minimum of the raw ratio and ratio EMA must
+strictly exceed the threshold for RED; finite nonpositive current equity is RED
+immediately. Current recovery retires unfinished panic intent. A final close starts
+a fixed finite cooldown when its latest causal pre-fill assessment or final accounting
+assessment is RED. Flat queries and later balance changes do not renew or cancel
+that deadline. New exposure clears it.
 
 Current account facts and acted-on marks must be valid and fresh. Missing or damaged
 historical fills/candles instead use the documented best-effort Rust reconstruction,
 with visible approximation diagnostics. A local journal never preserves a past
-panic decision. Config or balance changes can change the reconstructed current
-signal and cooldown; assess them as risk-policy changes.
+panic decision. Historical ratios retain supported contemporaneous budgets;
+later balance changes do not rebase them. Corrected facts or changed risk policy
+require reconstruction from the same retained factual initializer.
 
 See [Equity Hard Stop Loss](equity_hard_stop_loss.md) for formulas, scope budgets,
-configuration migration, restart policies, execution and diagnostics.
+configuration migration, finite cooldown, execution and diagnostics.
 
 ---
 

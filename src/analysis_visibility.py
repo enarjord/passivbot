@@ -9,6 +9,7 @@ from config.metrics import (
     SHARED_METRICS,
     canonical_metric_name,
     metric_aliases,
+    reject_retired_metric,
 )
 from config.scoring import extract_objective_specs
 from utils import trim_analysis_aliases
@@ -112,6 +113,7 @@ def _normalize_visible_metrics_config(value) -> list[str]:
     for item in value:
         if not isinstance(item, str) or not item.strip():
             raise ValueError("backtest.visible_metrics entries must be non-empty strings")
+        reject_retired_metric(item, path="backtest.visible_metrics")
         normalized.append(canonical_metric_name(item.strip()))
     return normalized
 

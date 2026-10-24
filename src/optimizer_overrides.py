@@ -1,11 +1,10 @@
 from copy import deepcopy
+from functools import wraps
 import math
 
 from config.access import require_config_value
 from config.shared_bot import BOT_SHARED_GROUPS
 from config.strategy import DEFAULT_STRATEGY_KIND, normalize_strategy_kind
-
-TRAILING_GRID_V7_STRATEGY_KIND = "trailing_grid_v7"
 
 COUPLED_UNSTUCK_EMA_BOUND_KEYS = frozenset(
     f"{side}_unstuck_ema_span_{i}" for side in ("long", "short") for i in (0, 1)
@@ -13,32 +12,83 @@ COUPLED_UNSTUCK_EMA_BOUND_KEYS = frozenset(
 
 KNOWN_OPTIMIZER_OVERRIDES = frozenset(
     {
-        "backward_tp_grid",
-        "forward_tp_grid",
         "lossless_close_trailing",
         "mirror_short_from_long",
         "couple_unstuck_ema_spans",
     }
 )
 
+_MIRROR_SIDE_SOURCES = {"short": "long"}
 
-def _mirror_short_from_long(config):
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+
+def optimizer_numeric_group_source_side(
+    config, target_side, group_name, *, overrides_list=None
+):
+    """Return the gene side supplying a mirrored shared group's numeric fields.
+
+    This does not describe directional universe or forager.always_include lists.
+    An explicit override list, including an empty list, owns finalization policy.
+    """
+    enabled = (config.get("optimize", {}).get("enable_overrides", [])
+               if overrides_list is None else overrides_list)
+    source_side = _MIRROR_SIDE_SOURCES.get(target_side)
+    if (source_side is None or group_name not in BOT_SHARED_GROUPS
+            or "mirror_short_from_long" not in (enabled or [])):
+        return target_side
+    bot = config.get("bot", {})
+    source, target = bot.get(source_side), bot.get(target_side)
+    if (not isinstance(source, dict) or not isinstance(target, dict)
+            or group_name not in source):
+        return target_side
+    return source_side
+
+
+from config.access import get_optional_config_value
+
+def _trace_copy(trace, name, value, target, source):
+    """Describe actual writes without adding provenance to runtime configs."""
+    if trace is None:
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _trace_copy(trace, name, child, (*target, key), (*source, key))
+    else:
+        trace(name, target, (source,), value, "copy")
+
+
+def _mirror_short_from_long(config, *, trace=None):
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
 
     bot_cfg = config.get("bot", {})
-    long_side = bot_cfg.get("long")
+    long_side = bot_cfg.get(_MIRROR_SIDE_SOURCES["short"])
     short_side = bot_cfg.get("short")
     if not isinstance(long_side, dict) or not isinstance(short_side, dict):
         return config
 
+    selection = {
+        key: deepcopy(value) for key, value in short_side.get("forager", {}).items()
+        if key == "always_include"
+    }
     for group_name in BOT_SHARED_GROUPS:
         if group_name in long_side:
             short_side[group_name] = deepcopy(long_side[group_name])
+            if group_name == "forager":
+                # Selection sources remain directional, like the universe.
+                # Mirroring strategy parameters must not select another coin.
+                short_side[group_name].pop("always_include", None)
+                short_side[group_name].update(selection)
+            copied = {key: value for key, value in long_side[group_name].items()
+                      if group_name != "forager" or key != "always_include"}
+            _trace_copy(trace, "mirror_short_from_long", copied,
+                        ("bot", "short", group_name), ("bot", "long", group_name))
 
     long_strategy = long_side.get("strategy")
     if isinstance(long_strategy, dict) and strategy_kind in long_strategy:
         short_strategy = short_side.setdefault("strategy", {})
         short_strategy[strategy_kind] = deepcopy(long_strategy[strategy_kind])
+        _trace_copy(trace, "mirror_short_from_long", long_strategy[strategy_kind],
+                    ("bot", "short", "strategy", strategy_kind),
+                    ("bot", "long", "strategy", strategy_kind))
 
     return config
 
@@ -49,13 +99,49 @@ def unstuck_ema_spans_coupled(config):
     )
 
 
-def couple_unstuck_ema_spans(config, pside):
+def _typed_derived_owner(function):
+    """Retain the transform owner's actual writes as effective overlays.
+
+    Trace paths describe these existing computations; they never authorize a
+    new source field or a search coordinate. Candidate exports materialize the
+    overlays explicitly, while reusable sources retain their original pins.
+    """
+    @wraps(function)
+    def apply(*args, **kwargs):
+        from config.bot_inheritance import (
+            get_bot_policy, apply_bot_policy_patch, install_bot_policy,
+        )
+        position = 1 if function.__name__ == "optimizer_overrides" else 0
+        config = args[position] if len(args) > position else kwargs["config"]
+        policy = get_bot_policy(config)
+        if policy is None:
+            return function(*args, **kwargs)
+        writes = {}
+        caller_trace = kwargs.get("trace")
+        def trace(name, target, dependencies, value, operation):
+            target = tuple(target)
+            if (len(target) > 2 and target[:1] == ("bot",) and target[1] in ("long", "short")
+                    and policy.catalog.find(target[2:]) is not None):
+                writes[".".join(target)] = deepcopy(value)
+            if caller_trace is not None:
+                caller_trace(name, target, dependencies, value, operation)
+        kwargs["trace"] = trace
+        result = function(*args, **kwargs)
+        if writes:
+            derived = apply_bot_policy_patch(policy, writes, channel="derived")
+            install_bot_policy(result, derived, effective_bot=result["bot"])
+        return result
+    return apply
+
+
+@_typed_derived_owner
+def couple_unstuck_ema_spans(config, pside, *, trace=None):
     """Materialize the effective strategy horizons, including each coin's patches.
 
     This is optimizer finalization only. Saved candidates contain ordinary explicit
     unstuck parameters and require no live/backtest coupling mode.
     """
-    kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     if any(
         patch.get("override_config_path")
         for patch in (config.get("coin_overrides") or {}).values()
@@ -69,30 +155,40 @@ def couple_unstuck_ema_spans(config, pside):
     strategy = base["strategy"][kind]
     if kind == DEFAULT_STRATEGY_KIND:
         strategy = strategy["entry"]
-    targets = [("global", base, strategy)]
+    strategy_path = ("bot", pside, "strategy", kind)
+    if kind == DEFAULT_STRATEGY_KIND:
+        strategy_path += ("entry",)
+    targets = [("global", base, strategy, ("bot", pside), set())]
     for coin, patch in (config.get("coin_overrides") or {}).items():
         side_patch = patch.setdefault("bot", {}).setdefault(pside, {})
         patch_strategy = side_patch.get("strategy", {}).get(kind, {})
         if kind == DEFAULT_STRATEGY_KIND:
             patch_strategy = patch_strategy.get("entry", {})
         effective = {**strategy, **patch_strategy}
-        targets.append((coin, side_patch, effective))
-    for coin, target, source in targets:
-        for key in ("ema_span_0", "ema_span_1"):
+        targets.append((coin, side_patch, effective,
+                        ("coin_overrides", coin, "bot", pside), set(patch_strategy)))
+    for coin, target, source, target_path, patched_spans in targets:
+        for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
             value = source[key]
             if not math.isfinite(float(value)) or float(value) <= 0:
                 raise ValueError(
                     f"couple_unstuck_ema_spans requires positive finite strategy spans: {coin} {pside}.{key}={value!r}"
                 )
             target.setdefault("unstuck", {})[key] = value
+            if trace is not None:
+                source_path = (*strategy_path, key)
+                if key in patched_spans:
+                    source_path = ("coin_overrides", coin, *source_path)
+                trace("couple_unstuck_ema_spans", (*target_path, "unstuck", key),
+                      (source_path,), value, "copy")
             # Refresh transport aliases only when this config already carries them.
-            alias = f"unstuck_{key}"
+            alias = f"unstuck_{key.removesuffix('_minutes')}"
             if alias in target:
                 target[alias] = value
     return config
 
 
-def apply_coupled_unstuck_ema_spans(config):
+def apply_coupled_unstuck_ema_spans(config, *, trace=None):
     """Apply coupling after scenario overrides without replaying other overrides."""
     if unstuck_ema_spans_coupled(config):
         from config.overrides import parse_overrides
@@ -101,7 +197,7 @@ def apply_coupled_unstuck_ema_spans(config):
             "coin_overrides"
         ]
         for side in ("long", "short"):
-            couple_unstuck_ema_spans(config, side)
+            couple_unstuck_ema_spans(config, side, trace=trace)
     return config
 
 
@@ -115,6 +211,21 @@ def materialize_coupled_scenario_spans(config):
 
     for scenario in config.get("backtest", {}).get("scenarios", []) or []:
         effective = deepcopy(config)
+        from config.bot_inheritance import (
+            get_bot_policy, install_bot_policy, resolve_bot_policy,
+            with_normalized_bot_values, with_prepared_bot_sources,
+        )
+
+        policy = get_bot_policy(effective)
+        if policy is not None:
+            # Scenario overrides apply after candidate transforms. Freeze only
+            # this disposable candidate snapshot so an authored scenario patch
+            # cannot discard the already-computed mirrored numeric values.
+            # The reusable candidate retains its original source authority.
+            snapshot = resolve_bot_policy(policy.candidate_view(), policy.catalog)
+            snapshot = with_prepared_bot_sources(snapshot, effective["bot"])
+            snapshot = with_normalized_bot_values(snapshot, effective["bot"])
+            install_bot_policy(effective, snapshot, effective_bot=effective["bot"])
         overrides = {
             ".".join(resolve_dotted_config_path(effective, key)): value
             for key, value in _normalize_scenario_overrides(
@@ -133,7 +244,7 @@ def materialize_coupled_scenario_spans(config):
         if "coin_overrides" in effective:
             saved["coin_overrides"] = effective["coin_overrides"]
         for side in ("long", "short"):
-            for key in ("ema_span_0", "ema_span_1"):
+            for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
                 saved[f"bot.{side}.unstuck.{key}"] = effective["bot"][side]["unstuck"][
                     key
                 ]
@@ -153,10 +264,10 @@ def validate_optimizer_overrides(overrides_list):
 
 
 def _require_trailing_martingale_side(config, pside):
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     if strategy_kind != DEFAULT_STRATEGY_KIND:
         raise ValueError(
-            f"optimizer override requires live.strategy_kind = {DEFAULT_STRATEGY_KIND!r}; got {strategy_kind!r}"
+            f"optimizer override requires bot.portfolio.strategy_kind = {DEFAULT_STRATEGY_KIND!r}; got {strategy_kind!r}"
         )
     strategy_cfg = require_config_value(config, f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}")
     if not isinstance(strategy_cfg, dict):
@@ -166,44 +277,8 @@ def _require_trailing_martingale_side(config, pside):
     return strategy_cfg
 
 
-def _require_trailing_grid_v7_side(config, pside):
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    if strategy_kind != TRAILING_GRID_V7_STRATEGY_KIND:
-        raise ValueError(
-            "optimizer override requires live.strategy_kind = "
-            f"{TRAILING_GRID_V7_STRATEGY_KIND!r}; got {strategy_kind!r}"
-        )
-    strategy_cfg = require_config_value(
-        config,
-        f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND}",
-    )
-    if not isinstance(strategy_cfg, dict):
-        raise TypeError(
-            f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND} must be a dict; "
-            f"got {type(strategy_cfg).__name__}"
-        )
-    return strategy_cfg
-
-
-def _set_trailing_grid_v7_tp_grid_order(config, pside, *, forward: bool):
-    strategy_cfg = _require_trailing_grid_v7_side(config, pside)
-    start = require_config_value(
-        config,
-        f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND}.close.grid_markup_start",
-    )
-    end = require_config_value(
-        config,
-        f"bot.{pside}.strategy.{TRAILING_GRID_V7_STRATEGY_KIND}.close.grid_markup_end",
-    )
-    lower = min(start, end)
-    upper = max(start, end)
-    close_cfg = strategy_cfg.setdefault("close", {})
-    close_cfg["grid_markup_start"] = lower if forward else upper
-    close_cfg["grid_markup_end"] = upper if forward else lower
-    return config
-
-
-def optimizer_overrides(overrides_list, config, pside=None):
+@_typed_derived_owner
+def optimizer_overrides(overrides_list, config, pside=None, *, trace=None):
     if not overrides_list:
         # No overrides to apply
         return config
@@ -213,31 +288,29 @@ def optimizer_overrides(overrides_list, config, pside=None):
     for override in overrides_list:
         if override == "mirror_short_from_long":
             if pside is None:
-                config = _mirror_short_from_long(config)
+                config = _mirror_short_from_long(config, trace=trace)
             continue
 
         if pside is None:
             continue
 
         if override == "couple_unstuck_ema_spans":
-            config = couple_unstuck_ema_spans(config, pside)
+            config = couple_unstuck_ema_spans(config, pside, trace=trace)
 
         elif override == "lossless_close_trailing":
             strategy_cfg = _require_trailing_martingale_side(config, pside)
             threshold = require_config_value(
                 config,
-                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.threshold_base_pct",
+                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.threshold_base_fraction",
             )
             retracement = require_config_value(
                 config,
-                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.retracement_base_pct",
+                f"bot.{pside}.strategy.{DEFAULT_STRATEGY_KIND}.close.retracement_base_fraction",
             )
-            strategy_cfg.setdefault("close", {})["threshold_base_pct"] = max(threshold, retracement)
-
-        elif override == "forward_tp_grid":
-            config = _set_trailing_grid_v7_tp_grid_order(config, pside, forward=True)
-
-        elif override == "backward_tp_grid":
-            config = _set_trailing_grid_v7_tp_grid_order(config, pside, forward=False)
+            strategy_cfg.setdefault("close", {})["threshold_base_fraction"] = max(threshold, retracement)
+            if trace is not None:
+                target = ("bot", pside, "strategy", DEFAULT_STRATEGY_KIND, "close", "threshold_base_fraction")
+                dependency = (*target[:-1], "retracement_base_fraction")
+                trace(override, target, (target, dependency), max(threshold, retracement), "max")
 
     return config

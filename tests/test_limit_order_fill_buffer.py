@@ -1,3 +1,5 @@
+from config.schema import get_expanded_config_prototype
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 
 import pytest
@@ -10,9 +12,9 @@ from config_utils import get_template_config
 @pytest.mark.parametrize('buffer', [0.0, 0.0001, 0.001, 0.999])
 def test_buffer_survives_config_and_backtest_payload(buffer):
     raw = get_template_config()
-    raw['backtest']['limit_order_fill_buffer_pct'] = buffer
+    raw['backtest']["limit_order_fill_buffer_fraction"] = buffer
     cfg = prepare_config(raw, verbose=False)
-    assert cfg['backtest']['limit_order_fill_buffer_pct'] == buffer
+    assert cfg['backtest']["limit_order_fill_buffer_fraction"] == buffer
     cfg['backtest']['coins'] = {'binance': ['BTC']}
     mss = {'BTC': dict(maker=0.0002, taker=0.00055, qty_step=0.001,
                        price_step=0.1, min_qty=0.001, min_cost=10.0, c_mult=1.0)}
@@ -22,17 +24,17 @@ def test_buffer_survives_config_and_backtest_payload(buffer):
 
 def test_older_configs_receive_zero_default():
     cfg = get_template_config()
-    del cfg['backtest']['limit_order_fill_buffer_pct']
-    assert prepare_config(cfg, verbose=False)['backtest']['limit_order_fill_buffer_pct'] == 0.0
+    del cfg['backtest']["limit_order_fill_buffer_fraction"]
+    assert prepare_config(cfg, verbose=False)['backtest']["limit_order_fill_buffer_fraction"] == 0.0
 
 
 @pytest.mark.parametrize('buffer', [-0.0001, 1.0, 2.0, float('nan'), float('inf'), -float('inf'), None, True, 'invalid'])
 def test_invalid_buffer_rejected_by_config_and_runtime(buffer):
     cfg = get_template_config()
-    cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
-    with pytest.raises((ValueError, TypeError), match='limit_order_fill_buffer_pct'):
+    cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
+    with pytest.raises((ValueError, TypeError), match='limit_order_fill_buffer_fraction'):
         prepare_config(cfg, verbose=False)
-    with pytest.raises((ValueError, TypeError), match='limit_order_fill_buffer_pct'):
+    with pytest.raises((ValueError, TypeError), match='limit_order_fill_buffer_fraction'):
         get_backtest_execution_settings(cfg)
 
 
@@ -43,46 +45,53 @@ def test_resume_requires_same_fill_assumption():
     from optimization.evaluation_contract import build_evaluation_contract
     prior["optimizer_evaluation_contract"] = build_evaluation_contract(cfg)
     assert _resume_config_mismatches(prior, cfg) == []
-    cfg['backtest']['limit_order_fill_buffer_pct'] = 0.0001
-    assert any('limit_order_fill_buffer_pct' in x for x in _resume_config_mismatches(prior, cfg))
-    del prior['backtest']['limit_order_fill_buffer_pct']
-    assert any('limit_order_fill_buffer_pct' in x for x in _resume_config_mismatches(prior, cfg))
-    cfg['backtest']['limit_order_fill_buffer_pct'] = 0.0
+    cfg['backtest']["limit_order_fill_buffer_fraction"] = 0.0001
+    assert any('limit_order_fill_buffer_fraction' in x for x in _resume_config_mismatches(prior, cfg))
+    del prior['backtest']["limit_order_fill_buffer_fraction"]
+    assert any('limit_order_fill_buffer_fraction' in x for x in _resume_config_mismatches(prior, cfg))
+    cfg['backtest']["limit_order_fill_buffer_fraction"] = 0.0
     assert _resume_config_mismatches(prior, cfg) == []
 
 
 @pytest.mark.parametrize("buffer", [0.0, 0.0001, 0.0015])
 def test_gpu_accepts_valid_buffer_before_preparing_data(buffer):
-    from optimization.backends.gpu_backend import _validate_gpu_static_scope
+    from config.gpu import validate_gpu_backtest_config
     cfg = get_template_config()
-    cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
-    _validate_gpu_static_scope(cfg)
+    cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
+    validate_gpu_backtest_config(cfg)
 
 
 @pytest.mark.parametrize("buffer", [-0.1, 1.0, float("nan"), float("inf"), True])
 def test_gpu_rejects_invalid_buffer_before_preparing_data(buffer):
-    from optimization.backends.gpu_backend import _validate_gpu_static_scope
+    from config.gpu import validate_gpu_backtest_config
     cfg = get_template_config()
-    cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
-    with pytest.raises(ValueError, match="limit_order_fill_buffer_pct"):
-        _validate_gpu_static_scope(cfg)
+    cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
+    with pytest.raises(ValueError, match="limit_order_fill_buffer_fraction"):
+        validate_gpu_backtest_config(cfg)
 
 
 def _native_args():
     import numpy as np
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg['backtest']['coins'] = {'binance': ['BTC']}
     cfg['backtest']['btc_collateral_cap'] = 0.0
     cfg['backtest']['starting_balance'] = 1000.0
-    cfg['live']['approved_coins'] = {'long': ['BTC'], 'short': []}
-    cfg['live']['market_orders_allowed'] = False
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': []})
+    cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = False
     for side in ['long', 'short']:
+        cfg['bot'][side]['enabled'] = side == 'long'
+        # This synthetic replay isolates fill rules, without inception metadata.
+        cfg['bot'][side]['universe']['minimum_coin_age_days'] = 0.0
         cfg['bot'][side]['hsl']['enabled'] = False
         cfg['bot'][side]['unstuck']['enabled'] = False
-        cfg['bot'][side]['risk']['n_positions'] = 1
+        cfg['bot'][side]['risk']['max_positions'] = 1
         cfg['bot'][side]['risk']['total_wallet_exposure_limit'] = 1.0 if side == 'long' else 0.0
         cfg['bot'][side]['strategy']['trailing_martingale']['entry']['ema_gate_mode'] = 'disabled'
+        # This short fixture tests fill admission, not hourly indicators.
+        for leg in ['entry', 'close']:
+            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['threshold_volatility_1h_weight'] = 0.0
+            cfg['bot'][side]['strategy']['trailing_martingale'][leg]['retracement_volatility_1h_weight'] = 0.0
     mss = {'BTC': dict(maker=0.0002, taker=0.00055, qty_step=0.001,
                        price_step=0.01, min_qty=0.001, min_cost=1.0, c_mult=1.0)}
     bot, strategy, exchange, params = prep_backtest_args(cfg, mss, 'binance')
@@ -125,13 +134,13 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
     from suite_runner import SuiteScenario, apply_scenario
 
     cfg = get_template_config()
-    cfg['live']['approved_coins'] = {'long': ['BTC'], 'short': ['BTC']}
-    cfg['live']['ignored_coins'] = {'long': [], 'short': []}
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['BTC'], 'short': ['BTC']})
+    set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
     cfg['backtest']['exchanges'] = ['binance']
     scenario = SuiteScenario(
         label='strict_fills', start_date=None, end_date=None,
         coins=['BTC'], ignored_coins=[],
-        overrides={'backtest.limit_order_fill_buffer_pct': 0.0001},
+        overrides={"backtest.limit_order_fill_buffer_fraction": 0.0001},
     )
     changed, _ = apply_scenario(
         cfg, scenario, master_coins=['BTC'], master_ignored=[],
@@ -139,7 +148,7 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
         base_coin_sources={'BTC': 'binance'},
     )
     assert get_backtest_execution_settings(changed).limit_order_fill_buffer_pct == 0.0001
-    assert cfg['backtest']['limit_order_fill_buffer_pct'] == 0.0
+    assert cfg['backtest']["limit_order_fill_buffer_fraction"] == 0.0
 
 
 @pytest.mark.parametrize("use_bundle", [False, True])

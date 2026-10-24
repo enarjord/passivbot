@@ -5,10 +5,36 @@ from __future__ import annotations
 import json
 
 import hjson
+from config.ew import EW_METRICS
+
+EXPONENTIAL_EQUITY_METRICS = EW_METRICS
+EXPONENTIAL_RAW_EQUITY_METRICS = frozenset(
+    name for name in EW_METRICS if name.endswith("_strategy_eq_ew")
+)
+EXPONENTIAL_BTC_EQUITY_METRICS = frozenset(
+    name for name in EW_METRICS if name.endswith("_ew_btc")
+)
 
 # Metric-name groups that toggle opt-in MPS proxy features. Keep this metadata
 # Torch-free so backend preflight and ordinary CPU-only installs can prove the
 # dispatch contract without importing the optional GPU runtime.
+RAW_STRATEGY_RISK_METRICS = frozenset({
+    "drawdown_worst_strategy_eq",
+    "drawdown_worst_mean_1pct_strategy_eq",
+    "strategy_eq_underwater_pct_mean",
+})
+
+RAW_STRATEGY_EQUITY_METRICS = frozenset({
+    f"{stem}_strategy_eq" for stem in (
+        "adg", "mdg", "sharpe_ratio", "sortino_ratio", "omega_ratio",
+        "calmar_ratio", "sterling_ratio", "expected_shortfall_1pct",
+        "adg_rolling_hmean", "adg_time_integrated", "positive_gain_participation",
+    )
+}) | EXPONENTIAL_RAW_EQUITY_METRICS
+RAW_STRATEGY_DRAWDOWN_CONSUMERS = RAW_STRATEGY_RISK_METRICS | frozenset({
+    "calmar_ratio_strategy_eq", "sterling_ratio_strategy_eq",
+})
+
 BTC_INTRADAY_RISK_METRICS = frozenset(
     {
         "calmar_ratio_btc",
@@ -52,7 +78,6 @@ ENTRY_INTERVAL_METRICS = frozenset(
 GPU_EXACT_ONLY_METRICS = frozenset(
     {
         "adg_pnl",
-        "adg_pnl_w",
         "equity_balance_diff_pos_max_btc",
         "equity_balance_diff_pos_max_usd",
         "equity_balance_diff_pos_mean_btc",
@@ -92,7 +117,6 @@ GPU_EXACT_ONLY_METRICS = frozenset(
         "hard_stop_triggers_long",
         "hard_stop_triggers_short",
         "mdg_pnl",
-        "mdg_pnl_w",
         "peak_recovery_days_equity_btc",
         "peak_recovery_days_equity_usd",
         "peak_recovery_days_pnl",
@@ -102,9 +126,7 @@ GPU_EXACT_ONLY_METRICS = frozenset(
         "peak_recovery_hours_pnl",
         "peak_recovery_hours_strategy_eq",
         "sharpe_ratio_pnl",
-        "sharpe_ratio_pnl_w",
         "sortino_ratio_pnl",
-        "sortino_ratio_pnl_w",
         "strategy_eq_underwater_pct_median",
         *{
             f"high_exposure_{unit}_{stat}_{side}"

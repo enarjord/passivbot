@@ -387,7 +387,7 @@ async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkey
     }
 
     def config_get(path, *, symbol=None):
-        if path == ["live", "leverage"]:
+        if path == ["live", "account", "leverage"]:
             return leverage_cfg[symbol]
         raise KeyError(path)
 

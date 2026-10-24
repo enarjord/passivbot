@@ -11,6 +11,7 @@ from shared_arrays import attach_shared_array
 
 
 PREPARED_DATASET_KEY = "_optimizer_prepared_dataset_identity"
+PREPARED_DATASET_VERSION = 3
 _HASH_BUFFER_BYTES = 1024 * 1024
 
 # These are prepared market/bundle fields consumed by backtest payload construction,
@@ -21,6 +22,7 @@ _MARKET_FIELDS = (
     "qty_step", "price_step", "min_qty", "min_cost", "c_mult",
     "maker", "maker_fee", "taker", "taker_fee",
     "first_valid_index", "last_valid_index", "warmup_minutes", "trade_start_index",
+    "inception_timestamp_ms",
 )
 _BUNDLE_FIELDS = (
     "data_interval_minutes", "candle_interval_offset_bars",
@@ -122,13 +124,26 @@ def build_prepared_dataset_identity(
         indices = list(range(len(coins))) if indices is None else list(indices)
         if len(coins) != len(indices) or not coins:
             raise ValueError(f"Prepared coin mapping is incomplete for optimizer exchange {ex}")
-        return {
+        from config.universe import runtime_universe_snapshot, universe_snapshot_signature
+        universe = runtime_universe_snapshot(run_config, available_coins=coins, available_exchanges=(ex,))
+        result = {
             "coins": coins,
+            "universe": {field: {entry.side: list(entry.members) for entry in universe if entry.field == field}
+                         for field in ("approved_coins", "ignored_coins")},
+            "universe_acquisition": universe_snapshot_signature(universe),
             "hlcvs": [array_hash(hlcv_spec, time_slice, int(index)) for index in indices],
             "btc_usd": array_hash(btc_spec, time_slice),
             "timestamps": _array_identity(ts),
             "market_settings_sha256": _metadata_identity(mss, coins),
         }
+
+        if run_config["backtest"].get("organillo_csv") is not None:
+            from organillo import prepare_selection
+            selection = prepare_selection(run_config, coins, ts)
+            result["organillo"] = {"sha256": selection.sha256,
+                                   "values": _array_identity(selection.values),
+                                   "rows": _array_identity(selection.rows), "contract": 1}
+        return result
 
     try:
         scenarios = []
@@ -157,7 +172,7 @@ def build_prepared_dataset_identity(
             if not exchanges:
                 raise ValueError("Missing prepared optimizer datasets")
             scenarios.append({"exchanges": exchanges})
-        return {"version": 1, "scenarios": scenarios}
+        return {"version": PREPARED_DATASET_VERSION, "scenarios": scenarios}
     finally:
         for attachment in attachments.values():
             attachment.close()

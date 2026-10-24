@@ -1,49 +1,69 @@
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import json
 
 import pytest
 
-from config_utils import clean_config, get_template_config
+from config import prepare_config
+from config.schema import get_expanded_config_prototype
+from config_utils import clean_config
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY
 
 
 def _config():
-    config = clean_config(get_template_config())
+    config = get_expanded_config_prototype()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-10"
-    return config
+    return prepare_config(config, verbose=False)
 
 
 def _record(config):
-    return {**deepcopy(config), CONTRACT_KEY: build_evaluation_contract(config)}
+    return {**clean_config(config), CONTRACT_KEY: build_evaluation_contract(config)}
 
 
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("hsl_signal_mode", "pside"),
         ("hedge_mode", True),
         ("market_orders_allowed", True),
         ("market_order_near_touch_threshold", 0.03),
-        ("max_realized_loss_pct", 0.17),
-        ("pnls_max_lookback_days", 17),
         ("warmup_ratio", 0.7),
         ("max_warmup_minutes", 200),
         ("minimum_coin_age_days", 17),
         ("forager_score_hysteresis_pct", 0.07),
     ],
 )
-def test_resume_rejects_changed_fixed_live_simulation_inputs(key, value):
+def test_resume_rejects_changed_shared_bot_simulation_inputs(key, value):
     from optimize import _resume_config_mismatches
 
     config = _config()
     old = _record(config)
-    assert config["live"][key] != value
-    config["live"][key] = value
+    from config.migrations.shared_policy import LIVE_POLICY_PATHS
+    node = config
+    parts = ("bot.long.universe.minimum_coin_age_days" if key == "minimum_coin_age_days" else LIVE_POLICY_PATHS[key]).split(".")
+    for part in parts[:-1]:
+        node = node[part]
+    assert node[parts[-1]] != value
+    node[parts[-1]] = value
     assert any(
-        "evaluation.live" in item for item in _resume_config_mismatches(old, config)
+        "evaluation.bot" in item for item in _resume_config_mismatches(old, config)
     )
+
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_resume_rejects_changed_independent_hysteresis_margin(side):
+    from optimize import _resume_config_mismatches
+
+    config = _config()
+    old = _record(config)
+    config["bot"][side]["forager"]["score_hysteresis_margin"] = 0.07
+    policy = build_evaluation_contract(config)["forager_hysteresis"]["policy"]
+    assert policy[side] == 0.07
+    other = "short" if side == "long" else "long"
+    assert policy[other] == old[CONTRACT_KEY]["forager_hysteresis"]["policy"][other]
+    assert any("evaluation.forager_hysteresis" in item for item in _resume_config_mismatches(old, config))
 
 
 def test_resume_ignores_candidate_values_but_rejects_fixed_bot_policy():
@@ -66,17 +86,17 @@ def test_resume_compares_resolved_coin_override_values_not_file_paths(tmp_path):
 
     config = _config()
     config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"risk": {"entry_cooldown_minutes": 5.0}}}}
+        "BTC": {"bot": {"long": {"entry_cooldown": {"base_duration_minutes": 5.0}}}}
     }
     old = _record(config)
     path = tmp_path / "override.json"
     path.write_text(
-        json.dumps({"bot": {"long": {"risk": {"entry_cooldown_minutes": 5.0}}}})
+        json.dumps({"bot": {"long": {"entry_cooldown": {"base_duration_minutes": 5.0}}}})
     )
     config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
     assert _resume_config_mismatches(old, config) == []
     path.write_text(
-        json.dumps({"bot": {"long": {"risk": {"entry_cooldown_minutes": 9.0}}}})
+        json.dumps({"bot": {"long": {"entry_cooldown": {"base_duration_minutes": 9.0}}}})
     )
     assert any(
         "evaluation.coin_overrides" in item
@@ -91,16 +111,55 @@ def test_resume_ignores_machine_settings_and_overridden_source_values():
     config["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": False}
     old = _record(config)
     config["bot"]["long"]["hsl"]["enabled"] = True
-    config["live"]["execution_delay_seconds"] = 17
+    config["live"]["execution"]["execution_delay_seconds"] = 17
     config["optimize"]["n_cpus"] += 1
     assert _resume_config_mismatches(old, config) == []
+
+
+@pytest.mark.parametrize("path,value", [
+    ("bot.long.hsl.drawdown_ratio_threshold", 0.123),
+    ("bot.long.risk.max_positions", 3),
+    ("bot.portfolio.unstuck.memory_ema_span_minutes", 1000.5),
+    ("bot.portfolio.loss_gate.memory_ema_span_minutes", 2000.5),
+])
+def test_fixed_canonical_override_builds_contract_without_lowering_public_config(path, value):
+    from config.migrations.v9 import require_v9_runtime_config
+    from optimization.warmup import _apply_config_overrides
+
+    config = _config()
+    config["optimize"]["fixed_runtime_overrides"] = {path: value}
+    original = deepcopy(config)
+    contract = build_evaluation_contract(config)
+    assert contract["version"] >= 5
+    assert config == original
+    _apply_config_overrides(config, {path: value})
+    require_v9_runtime_config(config)
+    assert "n_positions" not in config["bot"]["long"]
+    policy = config
+    for key in path.split("."):
+        policy = policy[key]
+    assert policy == value
+
+
+def test_optimizer_data_config_remains_public_canonical_for_suite_preparation():
+    from config_utils import format_config
+    from optimization.warmup import build_optimizer_data_config
+
+    config = _config()
+    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.max_positions": 2}
+    original = deepcopy(config)
+    data = build_optimizer_data_config(config)
+    assert "n_positions" not in data["bot"]["long"]
+    prepared = format_config(data, verbose=False)
+    assert prepared["bot"]["long"]["risk"]["max_positions"] == 2
+    assert config == original
 
 
 def test_resume_validates_all_anchor_fixed_values_and_rejects_unprovable_legacy():
     from optimize import _resume_config_mismatches
 
     config = _config()
-    path = ["bot", "long", "strategy", "trailing_martingale", "entry_initial_ema_dist"]
+    path = ["bot", "long", "strategy", "trailing_martingale", "entry", "initial_ema_distance_fraction"]
     config[ANCHOR_PLAN_KEY] = {
         "anchors": [
             {"source": "first.json", "fixed_values": [{"path": path, "value": 0.01}]},
@@ -110,7 +169,7 @@ def test_resume_validates_all_anchor_fixed_values_and_rejects_unprovable_legacy(
     }
     old = _record(config)
     old["optimizer_anchor"] = {"id": 0}
-    old.pop(ANCHOR_PLAN_KEY)
+    assert ANCHOR_PLAN_KEY not in old
     assert _resume_config_mismatches(old, config) == []
     config[ANCHOR_PLAN_KEY]["anchors"][1]["source"] = "moved.json"
     assert _resume_config_mismatches(old, config) == []
@@ -132,13 +191,29 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
     old = _record(config)
     old["metrics"] = {"objectives": {"w_0": -1.0}}
     (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
-    config["live"]["hsl_signal_mode"] = "pside"
+    config["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
     with pytest.raises(ValueError, match="critical parameters have changed"):
         _validate_resume_results(str(tmp_path), config)
 
 
-@pytest.mark.parametrize("backend", ["deap", "pymoo"])
-@pytest.mark.parametrize("mode", ["legacy", "coin", "pside", "unified"])
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_pre_shared_gate_contract_version_cannot_reuse_saved_fitness(tmp_path, version):
+    import msgpack
+    from optimize import _resume_config_mismatches, _validate_resume_results
+
+    config = _config()
+    old = _record(config)
+    old[CONTRACT_KEY]["version"] = version
+    old[CONTRACT_KEY].pop("risk_model", None)
+    old["metrics"] = {"objectives": {"w_0": -1.0}}
+    assert any("unsupported or malformed" in item for item in _resume_config_mismatches(old, config))
+    (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
+    with pytest.raises(ValueError, match="critical parameters have changed"):
+        _validate_resume_results(str(tmp_path), config)
+
+
+@pytest.mark.parametrize("backend", ["pymoo"])
+@pytest.mark.parametrize("mode", ["disabled", "coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("suite", [False, True])
 def test_result_writers_persist_contract_before_candidate_projection(
     backend, mode, suite, monkeypatch
@@ -148,10 +223,10 @@ def test_result_writers_persist_contract_before_candidate_projection(
     from optimization.callback import build_pymoo_record_entry
 
     config = _config()
-    if mode != "legacy":
+    if mode != "disabled":
         from config.hsl import generated_template
 
-        config = generated_template(config, mode)
+        config = prepare_config(generated_template(clean_config(config), mode), verbose=False)
     config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
     metrics = {"suite_metrics": {"scenario": {}}} if suite else {}
     candidate = deepcopy(config)
@@ -220,7 +295,7 @@ def test_new_fixed_runtime_override_cannot_evade_legacy_key_comparison():
     old["optimize"].pop("fixed_runtime_overrides", None)
     new = deepcopy(old)
     new["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.risk.entry_cooldown_minutes": 17.0,
+        "bot.long.entry_cooldown.base_duration_minutes": 17.0,
     }
     assert any(
         "optimize.fixed_runtime_overrides" in item
@@ -240,7 +315,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
         "strategy",
         "trailing_martingale",
         "entry",
-        "threshold_base_pct",
+        "threshold_base_fraction",
     ]
     config[ANCHOR_PLAN_KEY] = {
         "anchors": [
@@ -248,7 +323,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
             {"fixed_values": [{"path": fixed_path, "value": 0.02}]},
         ],
         "key_paths": [["bot", "long", "entry_cooldown", "base_duration_minutes"]],
-        "tunable_keys": ["long_entry_cooldown_minutes"],
+        "tunable_keys": ["bot.long.entry_cooldown.base_duration_minutes"],
     }
     entry = build_pymoo_record_entry(
         vector=[1.0, 37.0],
@@ -260,7 +335,7 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
     assert entry["optimizer_anchor"]["id"] == 1
     assert (
         entry["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-            "threshold_base_pct"
+            "threshold_base_fraction"
         ]
         == 0.02
     )
@@ -311,29 +386,13 @@ def test_gpu_runtime_settings_retain_documented_strict_resume_comparison():
     config = _config()
     config["optimize"]["backend"] = "gpu"
     old = _record(config)
-    config["optimize"]["gpu"]["exact_workers"] = 987
+    config["optimize"]["gpu"]["batch_size"] = 987
     assert any("gpu" in item for item in _resume_config_mismatches(old, config))
 
 
-@pytest.mark.parametrize("legacy_halt", [0.6, 0.8])
-def test_gpu_resume_accepts_missing_additive_drift_defaults(legacy_halt):
-    from optimize import _resume_config_mismatches
-
-    config = _config()
-    config["optimize"]["backend"] = "gpu"
-    config["optimize"]["gpu"]["drift_halt"] = legacy_halt
-    old = _record(config)
-    del old["optimize"]["gpu"]["drift_rank_halt"]
-    del old["optimize"]["gpu"]["drift_objective_tolerance"]
-    assert _resume_config_mismatches(old, config) == []
-    assert "drift_rank_halt" not in old["optimize"]["gpu"]
-    for key, value in (("drift_rank_halt", 0.5), ("drift_objective_tolerance", 0.1)):
-        changed = deepcopy(config)
-        changed["optimize"]["gpu"][key] = value
-        assert any("gpu" in item for item in _resume_config_mismatches(old, changed))
 
 
-@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("backend", ["pymoo"])
 @pytest.mark.parametrize("token", ["now", "today", "", None])
 def test_prepared_dynamic_end_date_rollover_rejects_saved_fitness(
     monkeypatch, backend, token
@@ -366,7 +425,7 @@ def test_prepared_dynamic_end_date_rollover_rejects_saved_fitness(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("backend", ["pymoo"])
 async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload(
     tmp_path, monkeypatch, backend
 ):
@@ -374,14 +433,15 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
     import optimize
 
     config = _config()
+    config["bot"]["long"]["enabled"] = True
     config["optimize"].update(backend=backend, limits=[])
     config["backtest"].update(exchanges=["binance"], filter_by_min_effective_cost=False)
-    config["live"].update(approved_coins={"long": ["BTC"], "short": []})
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
     config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
     (tmp_path / "coin.json").write_text(
         json.dumps(
             {
-                "bot": {"long": {"risk": {"entry_cooldown_minutes": 37.0}}},
+                "bot": {"long": {"entry_cooldown": {"base_duration_minutes": 37.0}}},
             }
         )
     )
@@ -437,6 +497,10 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
         vector = optimize.config_to_individual(run_config, evaluator.bounds)
         evaluator.evaluate(vector, [])
 
+    async def metadata(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(optimize, "load_markets", metadata)
     monkeypatch.setattr(optimize, "execute_backtest", execute_and_capture)
     monkeypatch.setattr(
         optimize, "format_approved_ignored_coins", evaluate_before_data_download
@@ -446,7 +510,7 @@ async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload
     assert len(observed) == 1
 
 
-@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("backend", ["pymoo"])
 @pytest.mark.parametrize("token", ["now", "today"])
 def test_prepared_cpu_suite_date_rollover_rejects_saved_fitness(
     monkeypatch, backend, token
@@ -479,6 +543,8 @@ def test_prepared_cpu_suite_date_rollover_rejects_saved_fitness(
         raw, _ = apply_scenario(
             run, scenarios[0], ["BTC"], [], ["binance"], {"BTC"}, quiet=True
         )
+        for key in ("coins", "cache_dir"):
+            raw["backtest"].pop(key, None)
         prepared = prepare_config(raw, verbose=False)
         metadata = {
             f"requested_{key}": prepared["backtest"][key]
@@ -503,7 +569,7 @@ def test_prepared_cpu_suite_date_rollover_rejects_saved_fitness(
     )
 
 
-@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("backend", ["pymoo"])
 @pytest.mark.parametrize("file_present", [False, True])
 def test_legacy_file_override_results_require_historical_policy_evidence(
     tmp_path, backend, file_present
@@ -514,7 +580,7 @@ def test_legacy_file_override_results_require_historical_policy_evidence(
 
     config = _config()
     config["optimize"]["backend"] = backend
-    patch = {"bot": {"long": {"risk": {"entry_cooldown_minutes": 37.0}}}}
+    patch = {"bot": {"long": {"entry_cooldown": {"base_duration_minutes": 37.0}}}}
     path = tmp_path / "coin.json"
     if file_present:
         path.write_text(json.dumps(patch))
@@ -576,8 +642,8 @@ def test_resume_checks_each_reconstructed_record_contract(tmp_path, change):
     first = _record(config)
     second = deepcopy(first)
     if change == "fixed_policy":
-        second["live"]["hsl_signal_mode"] = "pside"
-        second[CONTRACT_KEY] = build_evaluation_contract(second)
+        second["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
+        second[CONTRACT_KEY] = build_evaluation_contract(prepare_config(clean_config(second), verbose=False))
     elif change == "implementation":
         second[CONTRACT_KEY]["implementation"][
             "rust_artifact_sha256"
@@ -617,6 +683,7 @@ def test_uniform_compressed_contract_history_allows_candidate_changes(tmp_path):
 def test_empty_gpu_seed_scores_require_the_same_evaluation_identity(tmp_path, change):
     import pickle
     from optimize import _validate_resume_results
+    from optimization.native_checkpoint import CHECKPOINT_VERSION
 
     config = _config()
     config["optimize"]["backend"] = "gpu"
@@ -630,19 +697,10 @@ def test_empty_gpu_seed_scores_require_the_same_evaluation_identity(tmp_path, ch
         stored["prepared_data"] = {"version": 1, "digest": "older-data"}
     checkpoint = {
         CONTRACT_KEY: stored,
-        "seed_bootstrap_complete": False,
-        "seed_exact_done": 0,
-        "exact_done": 0,
-        "seed_bootstrap_contract": {"version": 1},
-        "seed_bootstrap_plan": {
-            "effective_mode": "screened",
-            "starting_vectors": [[0.1]],
-            "screen_complete": True,
-            "proxy_objectives": [[0.5]],
-        },
+        "backend": "gpu", "version": CHECKPOINT_VERSION, "completed": 0,
     }
     (tmp_path / "all_results.bin").write_bytes(b"")
     path = tmp_path / "checkpoint.pkl"
     path.write_bytes(pickle.dumps(checkpoint))
-    with pytest.raises(ValueError, match="historical evaluation contract"):
+    with pytest.raises(ValueError, match="checkpoint evaluation contract changed"):
         _validate_resume_results(str(tmp_path), config, checkpoint_path=str(path))

@@ -7,7 +7,7 @@ from typing import Any, Iterable, Sequence
 from .access import require_config_dict
 from .limits import resolve_reducer_mode
 from .log_output import log_config_message
-from .metrics import canonicalize_metric_name
+from .metrics import canonicalize_metric_name, reject_retired_metric
 from .reducers import REDUCER_ALIASES, normalize_reducer, reducer_from_aliases
 
 OBJECTIVE_GOALS = ("min", "max")
@@ -19,9 +19,16 @@ class ScenarioSelection(Enum):
 
 
 DEFAULT_OBJECTIVE_GOALS = {
+    "adg_ew": "max",
+    "sharpe_ratio_ew": "max",
+    "sortino_ratio_ew": "max",
+    "omega_ratio_ew": "max",
+    "adg_strategy_eq_ew": "max",
+    "sharpe_ratio_strategy_eq_ew": "max",
+    "sortino_ratio_strategy_eq_ew": "max",
+    "omega_ratio_strategy_eq_ew": "max",
     "n_days": "max",
     "positions_held_per_day": "min",
-    "positions_held_per_day_w": "min",
     "position_held_time_weighted_mean_hours": "min",
     "position_held_hours_mean": "min",
     "position_held_hours_max": "min",
@@ -61,7 +68,6 @@ DEFAULT_OBJECTIVE_GOALS = {
     "high_exposure_hours_mean_short": "min",
     "high_exposure_hours_max_short": "min",
     "adg_pnl": "max",
-    "adg_pnl_w": "max",
     "gain_strategy_eq": "max",
     "adg_strategy_eq": "max",
     "adg_rolling_hmean_strategy_eq": "max",
@@ -74,13 +80,6 @@ DEFAULT_OBJECTIVE_GOALS = {
     "expected_shortfall_1pct_strategy_eq": "min",
     "calmar_ratio_strategy_eq": "max",
     "sterling_ratio_strategy_eq": "max",
-    "adg_strategy_eq_w": "max",
-    "mdg_strategy_eq_w": "max",
-    "sharpe_ratio_strategy_eq_w": "max",
-    "sortino_ratio_strategy_eq_w": "max",
-    "omega_ratio_strategy_eq_w": "max",
-    "calmar_ratio_strategy_eq_w": "max",
-    "sterling_ratio_strategy_eq_w": "max",
     "drawdown_worst_strategy_eq": "min",
     "drawdown_worst_strategy_eq_long": "min",
     "drawdown_worst_strategy_eq_short": "min",
@@ -108,19 +107,12 @@ DEFAULT_OBJECTIVE_GOALS = {
     "peak_recovery_days_strategy_eq_long": "min",
     "peak_recovery_days_strategy_eq_short": "min",
     "mdg_pnl": "max",
-    "mdg_pnl_w": "max",
     "sharpe_ratio_pnl": "max",
-    "sharpe_ratio_pnl_w": "max",
     "sortino_ratio_pnl": "max",
-    "sortino_ratio_pnl_w": "max",
     "adg": "max",
     "adg_per_exposure_long": "max",
     "adg_per_exposure_short": "max",
-    "adg_w": "max",
-    "adg_w_per_exposure_long": "max",
-    "adg_w_per_exposure_short": "max",
     "calmar_ratio": "max",
-    "calmar_ratio_w": "max",
     "drawdown_worst": "min",
     "drawdown_worst_mean_1pct": "min",
     "equity_balance_diff_neg_max": "min",
@@ -132,41 +124,32 @@ DEFAULT_OBJECTIVE_GOALS = {
     "exposure_ratio": "max",
     "exposure_mean_ratio": "max",
     "equity_choppiness": "min",
-    "equity_choppiness_w": "min",
     "equity_jerkiness": "min",
-    "equity_jerkiness_w": "min",
     "peak_recovery_hours_equity": "min",
     "expected_shortfall_1pct": "min",
     "exponential_fit_error": "min",
-    "exponential_fit_error_w": "min",
     "gain": "max",
     "gain_per_exposure_long": "max",
     "gain_per_exposure_short": "max",
     "loss_profit_ratio": "min",
-    "loss_profit_ratio_w": "min",
     "mdg": "max",
     "mdg_per_exposure_long": "max",
     "mdg_per_exposure_short": "max",
-    "mdg_w": "max",
-    "mdg_w_per_exposure_long": "max",
-    "mdg_w_per_exposure_short": "max",
     "omega_ratio": "max",
-    "omega_ratio_w": "max",
     "sharpe_ratio": "max",
-    "sharpe_ratio_w": "max",
     "sortino_ratio": "max",
-    "sortino_ratio_w": "max",
     "sterling_ratio": "max",
-    "sterling_ratio_w": "max",
-    "paper_loss_ratio_w": "max",
-    "paper_loss_mean_ratio_w": "max",
-    "exposure_ratio_w": "max",
-    "exposure_mean_ratio_w": "max",
     "total_wallet_exposure_max": "min",
     "total_wallet_exposure_mean": "min",
+    "total_wallet_exposure_rms_long": "min",
+    "total_wallet_exposure_rms_short": "min",
+    "total_wallet_exposure_rms_gross": "min",
+    "total_wallet_exposure_utilization_rms_long": "min",
+    "total_wallet_exposure_utilization_rms_short": "min",
+    "position_exposure_utilization_rms_long": "min",
+    "position_exposure_utilization_rms_short": "min",
     "total_wallet_exposure_median": "min",
     "volume_pct_per_day_avg": "max",
-    "volume_pct_per_day_avg_w": "max",
     "entry_initial_balance_pct_long": "max",
     "entry_initial_balance_pct_short": "max",
 }
@@ -237,6 +220,7 @@ def _normalize_spec(
     unknown_goal: str,
 ) -> tuple[ObjectiveSpec, bool]:
     if isinstance(item, ObjectiveSpec):
+        reject_retired_metric(item.metric, path=f"config.optimize.scoring[{index}].metric")
         scenario = item.scenario
         if scenario is not ScenarioSelection.INHERIT:
             scenario = _normalize_scenario(
@@ -260,6 +244,7 @@ def _normalize_spec(
         return spec, False
 
     if isinstance(item, str):
+        reject_retired_metric(item, path=f"config.optimize.scoring[{index}]")
         metric = canonicalize_metric_name(item.strip())
         if not metric:
             raise ValueError(f"config.optimize.scoring[{index}] must be a non-empty metric name")
@@ -280,6 +265,7 @@ def _normalize_spec(
                 f"config.optimize.scoring[{index}] has unknown field(s): "
                 f"{', '.join(unknown_fields)}"
             )
+        reject_retired_metric(item.get("metric", ""), path=f"config.optimize.scoring[{index}].metric")
         metric = canonicalize_metric_name(str(item.get("metric", "")).strip())
         if not metric:
             raise ValueError(f"config.optimize.scoring[{index}].metric must be a non-empty string")
@@ -338,14 +324,16 @@ def normalize_scoring_entries(
         )
     normalized: list[ObjectiveSpec] = []
     changed = False
-    seen_metrics: set[str] = set()
+    seen_metrics: dict[str, ObjectiveSpec] = {}
     for idx, item in enumerate(scoring):
         spec, converted_legacy = _normalize_spec(item, index=idx, unknown_goal=unknown_goal)
         changed = changed or converted_legacy or not isinstance(item, ObjectiveSpec)
         if dedupe and spec.metric in seen_metrics:
+            if spec != seen_metrics[spec.metric]:
+                raise ValueError(f"config.optimize.scoring[{idx}] conflicts with another objective for {spec.metric!r}")
             continue
         normalized.append(spec)
-        seen_metrics.add(spec.metric)
+        seen_metrics[spec.metric] = spec
     return normalized, changed
 
 
@@ -419,16 +407,6 @@ def to_engine_value(spec: ObjectiveSpec, raw_value: float) -> float:
 
 def from_engine_value(spec: ObjectiveSpec, engine_value: float) -> float:
     return float(engine_value) * spec.engine_sign
-
-
-def engine_space_fitness_weights(config_or_scoring: Any) -> tuple[float, ...]:
-    """
-    Shared optimizer fitness weights for engine-space objectives.
-
-    Engine-space values are already normalized so that lower is better for every
-    objective, regardless of the original raw metric goal.
-    """
-    return tuple(-1.0 for _ in extract_objective_specs(config_or_scoring))
 
 
 def dominates_objectives(

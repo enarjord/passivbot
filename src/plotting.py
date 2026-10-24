@@ -29,7 +29,6 @@ except ImportError:  # pragma: no cover
     Fore = _Dummy()
 from prettytable import PrettyTable
 from config.shared_bot import flatten_shared_bot_side
-from config.pnl_lookback import parse_pnls_max_lookback_days
 from config_utils import dump_config
 from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
@@ -131,13 +130,6 @@ def make_table(result_):
             )
             for title, key, precision, mul, suffix in [
                 ("ADG per exposure", f"adg_per_exposure_{side}", 3, 100, "%"),
-                (
-                    "ADG weighted per exposure",
-                    f"adg_weighted_per_exposure_{side}",
-                    3,
-                    100,
-                    "%",
-                ),
                 ("Max drawdown", f"drawdown_max_{side}", 5, 100, "%"),
                 (
                     "Drawdown mean of 1% worst (hourly)",
@@ -161,7 +153,6 @@ def make_table(result_):
                 ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
                 ("Net Total gain", f"gain_{side}", 4, 100, "%"),
                 ("Average daily gain", f"adg_{side}", 3, 100, "%"),
-                ("Average daily gain weighted", f"adg_weighted_{side}", 3, 100, "%"),
                 ("Exposure ratios mean", f"exposure_ratios_mean_{side}", 5, 1, ""),
                 ("Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
                 ("Price action distance std", f"pa_distance_std_{side}", 6, 1, ""),

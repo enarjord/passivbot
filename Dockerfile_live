@@ -22,6 +22,8 @@ WORKDIR /app
 # Copy only files needed to build the live package wheel
 COPY pyproject.toml pyproject.toml
 COPY setup.py setup.py
+COPY MANIFEST.in MANIFEST.in
+COPY schemas/config-v9.schema.json schemas/config-v9.schema.json
 COPY requirements-dev.txt requirements-dev.txt
 COPY requirements-full.txt requirements-full.txt
 COPY requirements-live.txt requirements-live.txt

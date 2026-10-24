@@ -850,16 +850,19 @@ def _forced_normal_overrides(
     live_payload: dict[str, str] = {}
     if force_normal == "adverse":
         if direction == "up":
-            live_payload["forced_mode_long"] = "manual"
-            live_payload["forced_mode_short"] = "normal"
+            live_payload["long"] = "manual"
+            live_payload["short"] = "normal"
         else:
-            live_payload["forced_mode_long"] = "normal"
-            live_payload["forced_mode_short"] = "manual"
+            live_payload["long"] = "normal"
+            live_payload["short"] = "manual"
     if force_normal in {"long", "both"}:
-        live_payload["forced_mode_long"] = "normal"
+        live_payload["long"] = "normal"
     if force_normal in {"short", "both"}:
-        live_payload["forced_mode_short"] = "normal"
-    return {coin: {"live": dict(live_payload)} for coin in sorted(dict.fromkeys(coins))}
+        live_payload["short"] = "normal"
+    return {
+        coin: {"live": {"modes": dict(live_payload)}}
+        for coin in sorted(dict.fromkeys(coins))
+    }
 
 
 def _write_csv(path: Path, rows: Sequence[dict[str, Any]], fieldnames: Sequence[str]) -> None:

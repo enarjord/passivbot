@@ -89,6 +89,8 @@ def default_snapshot_path(base_dir: str | Path, exchange: str, label: str) -> Pa
 
 def get_bot_class(exchange: str):
     exchange = str(exchange).lower()
+    if exchange in {"defx", "paradex"}:
+        raise ValueError(f"Exchange {exchange!r} was retired in v9")
     if exchange == "binance":
         from exchanges.binance import BinanceBot
 
@@ -105,10 +107,6 @@ def get_bot_class(exchange: str):
         from exchanges.bybit import BybitBot
 
         return BybitBot
-    if exchange == "defx":
-        from exchanges.defx import DefxBot
-
-        return DefxBot
     if exchange == "gateio":
         from exchanges.gateio import GateIOBot
 
@@ -133,10 +131,6 @@ def get_bot_class(exchange: str):
         from exchanges.weex import WeexBot
 
         return WeexBot
-    if exchange == "paradex":
-        from exchanges.paradex import ParadexBot
-
-        return ParadexBot
     from exchanges.ccxt_bot import CCXTBot
 
     return CCXTBot
@@ -149,12 +143,11 @@ def build_contract_bot(exchange: str, quote: str = "USDT"):
     bot.user = "ccxt-contracts"
     bot.quote = quote
     bot.config = {
+        "bot": {"portfolio": {"hedge_mode": True}},
         "live": {
-            "time_in_force": "gtc",
-            "margin_mode_preference": "cross",
-            "leverage": 3,
-            "hedge_mode": True,
-        }
+            "execution": {"time_in_force": "gtc"},
+            "account": {"margin_mode_preference": "cross", "leverage": 3},
+        },
     }
     bot.coin_overrides = {}
     bot.user_info = {"exchange": bot.exchange}
@@ -283,7 +276,7 @@ def diff_snapshots(
 
 def prepare_live_config_for_user(user: str) -> dict:
     config = get_template_config()
-    config["live"]["user"] = user
+    config["live"]["account"]["user"] = user
     return prepare_config(
         config,
         live_only=True,

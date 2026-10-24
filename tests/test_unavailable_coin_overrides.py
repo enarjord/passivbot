@@ -13,8 +13,11 @@ def make_bot(overrides):
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
     bot.config = {
+        "bot": {"long": {"enabled": True, "risk": {
+            "max_positions": 1, "total_wallet_exposure_limit": 1.0,
+        }}, "short": {"enabled": False}},
         "coin_overrides": overrides,
-        "live": {"forced_mode_long": "", "forced_mode_short": ""},
+        "live": {"modes": {"long": None, "short": None}},
     }
     bot.markets_dict = {"AAA/USDT:USDT": {"active": True}}
     bot.positions = {}
@@ -26,7 +29,7 @@ def make_bot(overrides):
 
 
 def test_unavailable_overrides_do_not_reach_startup_mode_lookup(caplog):
-    bot = make_bot({"AAA": {}, "UNLISTED": {"live": {"forced_mode_long": "normal"}}})
+    bot = make_bot({"AAA": {}, "UNLISTED": {"live": {"modes": {"long": "normal"}}}})
     original = deepcopy(bot.config)
     with caplog.at_level(logging.INFO):
         bot.init_coin_overrides()
@@ -62,7 +65,7 @@ def test_unknown_exact_identifier_is_skipped_but_ambiguity_propagates():
 
 
 def test_market_refresh_reconsiders_original_overrides(caplog):
-    bot = make_bot({"AAA": {}, "UNLISTED": {"live": {"forced_mode_long": "manual"}}})
+    bot = make_bot({"AAA": {}, "UNLISTED": {"live": {"modes": {"long": "manual"}}}})
     with caplog.at_level(logging.INFO):
         bot.init_coin_overrides()
         bot.markets_dict["UNLISTED/USDT:USDT"] = {"active": True}

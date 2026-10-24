@@ -3007,7 +3007,6 @@ def _emit_forager_selection_event_unchecked(
     selected_symbols: list[str] | tuple[str, ...],
     slots_open: bool,
     max_n_positions: int | None,
-    clip_pct: float | None,
     volatility_drop_pct: float | None,
     max_age_ms: int | None,
     fetch_budget: int | None,
@@ -3036,7 +3035,6 @@ def _emit_forager_selection_event_unchecked(
             int(max_n_positions) if max_n_positions is not None else None
         ),
         "slots_to_fill": int(slots_to_fill) if slots_to_fill is not None else None,
-        "clip_pct": float(clip_pct) if clip_pct is not None else None,
         "volatility_drop_pct": (
             float(volatility_drop_pct) if volatility_drop_pct is not None else None
         ),

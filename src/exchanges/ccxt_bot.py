@@ -770,7 +770,7 @@ class CCXTBot(Passivbot):
         return self.cca.has.get("setMarginMode", False)
 
     def _get_margin_mode_preference(self) -> str:
-        """Return normalized live.margin_mode_preference.
+        """Return normalized live.account.margin_mode_preference.
 
         Isolated-margin entry support is intentionally disabled for now. Existing live
         isolated positions/orders are still preserved and manageable after restart.
@@ -794,7 +794,7 @@ class CCXTBot(Passivbot):
         if normalized == "isolated_disabled":
             if not getattr(self, "_margin_mode_preference_warned", False):
                 logging.warning(
-                    "live.margin_mode_preference=%r requested isolated margin, but isolated entry support is currently disabled; using cross-only behavior",
+                    "live.account.margin_mode_preference=%r requested isolated margin, but isolated entry support is currently disabled; using cross-only behavior",
                     raw,
                 )
                 self._margin_mode_preference_warned = True
@@ -803,7 +803,7 @@ class CCXTBot(Passivbot):
             return "cross"
         if not getattr(self, "_margin_mode_preference_warned", False):
             logging.warning(
-                "Invalid live.margin_mode_preference=%r; using cross-only behavior",
+                "Invalid live.account.margin_mode_preference=%r; using cross-only behavior",
                 raw,
             )
             self._margin_mode_preference_warned = True
@@ -1000,7 +1000,9 @@ class CCXTBot(Passivbot):
         Returns:
             Leverage to use (capped by max_leverage for the symbol)
         """
-        configured = int(self.config_get(["live", "leverage"], symbol=symbol))
+        configured = int(
+            self.config_get(["live", "account", "leverage"], symbol=symbol)
+        )
         raw_max_lev = (getattr(self, "max_leverage", {}) or {}).get(symbol)
         if raw_max_lev is None:
             warned = getattr(self, "_missing_max_leverage_warned", set())

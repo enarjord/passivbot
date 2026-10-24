@@ -84,7 +84,6 @@ def test_due_persistent_gap_remains_visible_to_planner(tmp_path):
     )
     plan = plan_local_symbol_range(
         catalog=catalog,
-        legacy_root=None,
         exchange="binance",
         timeframe="1m",
         symbol="ETH/USDT:USDT",

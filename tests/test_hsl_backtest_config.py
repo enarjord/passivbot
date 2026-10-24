@@ -1,5 +1,8 @@
 """Canonical policy transport into the real native simulator; no network I/O."""
 
+from config.universe import set_side_universe_sources
+from hsl_fixture import set_risk_memory_spans
+
 from copy import deepcopy
 
 import numpy as np
@@ -8,7 +11,7 @@ import pytest
 from backtest import prep_backtest_args, build_backtest_payload
 from config import prepare_config
 from config.hsl import generated_template
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype
 
 
 @pytest.fixture(autouse=True)
@@ -19,25 +22,29 @@ def real_extension():
 
 
 def inputs(mode="coin"):
-    cfg = generated_template(get_template_config(), mode)
-    cfg["live"].update(
-        approved_coins={"long": ["AAA"], "short": []},
-        ignored_coins={"long": [], "short": []},
-        pnls_max_lookback_days=1,
-    )
-    cfg["backtest"]["coins"] = {"binance": ["AAA"]}
+    cfg = generated_template(get_expanded_config_prototype(), mode)
+    set_side_universe_sources(cfg, 'approved_coins', {'long': ['AAA'], 'short': []})
+    set_side_universe_sources(cfg, 'ignored_coins', {'long': [], 'short': []})
+    set_risk_memory_spans(cfg, 1440.0)
     cfg["backtest"]["starting_balance"] = 1000.0
     cfg["backtest"]["btc_collateral_cap"] = 0.0
     for side in ("long", "short"):
-        cfg["bot"][side]["hsl"].update(enabled=False, restart_after_red_policy=None)
-        cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1)
-    active = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+        cfg["bot"][side]["enabled"] = True
+        cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
+        cfg["bot"][side]["hsl"].update(enabled=False)
+        cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1)
+        # This minute-scale HSL fixture starts trading before an hourly candle
+        # exists. Its strategy does not consume hourly volatility.
+        strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
+        for branch in ("entry", "close"):
+            strategy[branch]["threshold_volatility_1h_weight"] = 0.0
+            strategy[branch]["retracement_volatility_1h_weight"] = 0.0
+    active = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     active.update(
         enabled=True,
-        red_threshold=0.01,
-        ema_span_minutes=1.5,
-        cooldown_minutes_after_red=10,
-        restart_after_red_policy="always",
+        drawdown_ratio_threshold=0.01,
+        drawdown_ratio_ema_span_minutes=1.5,
+        cooldown_after_red_minutes=10,
         panic_close_order_type="market",
     )
     cfg = prepare_config(cfg, verbose=False, target="canonical", runtime=None)
@@ -84,13 +91,18 @@ def run(args):
     return passivbot_rust.run_backtest(*args)
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_native_hsl_transport_and_report(mode):
     args = payload(mode)
     hsl = args[-1]["equity_hard_stop_loss"]
-    selected = hsl["portfolio"] if mode == "unified" else hsl["sides"][0]
-    assert selected["ema_span_minutes"] == 1.5
-    assert hsl["sides"][1]["restart_after_red_policy"] is None
+    selected = hsl["portfolio"] if mode == "portfolio" else hsl["sides"][0]
+    assert selected["drawdown_ratio_ema_span_minutes"] == 1.5
+    assert all("restart_after_red_policy" not in policy for policy in hsl["sides"])
+    assert selected["memory_ema_span_minutes"] == 1440.0
+    assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
+    assert args[-1]["loss_gate_memory_ema_span_minutes"] == 1440.0
+    assert "lookback_ema_span_minutes" not in args[-1]
+    assert "realized_loss_gate_lookback_minutes" not in args[-1]
     assert not any(
         key.startswith("hsl_")
         for pair in args[2]
@@ -99,7 +111,7 @@ def test_native_hsl_transport_and_report(mode):
     )
     full = run(args)
     report = full[4]["hsl"]
-    assert report["mode"] == mode
+    assert report["mode"] == ("pside" if mode == "position_side" else mode)
     assert report["summary"]["triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert any("panic" in str(fill[13]) for fill in full[0])
@@ -129,8 +141,8 @@ def test_effective_coin_override_has_single_authority():
             "bot": {
                 "long": {
                     "hsl": {
-                        "ema_span_minutes": 2.75,
-                        "red_threshold": 0.4,
+                        "drawdown_ratio_ema_span_minutes": 2.75,
+                        "drawdown_ratio_threshold": 0.4,
                         "panic_close_order_type": "limit",
                     }
                 }
@@ -139,8 +151,8 @@ def test_effective_coin_override_has_single_authority():
     }
     args = payload(cfg=cfg, mss=mss)
     hsl = args[-1]["equity_hard_stop_loss"]
-    assert hsl["sides"][0]["ema_span_minutes"] == 1.5
-    assert hsl["coins"]["AAA"][0]["ema_span_minutes"] == 2.75
+    assert hsl["sides"][0]["drawdown_ratio_ema_span_minutes"] == 1.5
+    assert hsl["coins"]["AAA"][0]["drawdown_ratio_ema_span_minutes"] == 2.75
     assert hsl["coins"]["AAA"][0]["panic_close_order_type"] == "limit"
 
 
@@ -154,11 +166,11 @@ def test_effective_coin_override_has_single_authority():
         (lambda p: p.update(sides=[]), "exactly long and short"),
         (
             lambda p: p["coins"]["AAA"][0].update(restart_after_red_policy=None),
-            "explicit",
+            "unknown HSL field",
         ),
         (
-            lambda p: p["coins"]["AAA"][0].update(ema_span_minutes=float("nan")),
-            "numeric",
+            lambda p: p["coins"]["AAA"][0].update(drawdown_ratio_ema_span_minutes=float("nan")),
+            "finite v9 risk domain",
         ),
         (
             lambda p: p["coins"]["AAA"][0].update(panic_close_order_type="bad"),
@@ -179,19 +191,22 @@ def test_native_rejects_invalid_config_before_simulation(change, match):
 
 @pytest.mark.parametrize(
     "key,value,match",
-    [("pnls_max_lookback_days", 0, "lookback"), ("candle_interval_minutes", 15, "1m")],
+    [("memory_ema_span_minutes", 0, "span"), ("candle_interval_minutes", 15, "1m")],
 )
 def test_native_requires_enabled_scope_temporal_contract(key, value, match):
     args = payload()
-    args[-1][key] = value
+    if key == "memory_ema_span_minutes":
+        args[-1]["equity_hard_stop_loss"]["coins"]["AAA"][0][key] = value
+    else:
+        args[-1][key] = value
     with pytest.raises(ValueError, match=match):
         run(args)
 
 
-def test_unified_never_infers_policy_from_sides():
-    args = payload("unified")
+def test_portfolio_never_infers_policy_from_sides():
+    args = payload("portfolio")
     args[-1]["equity_hard_stop_loss"]["portfolio"] = None
-    with pytest.raises(ValueError, match="explicit hsl portfolio"):
+    with pytest.raises(ValueError, match="explicit portfolio HSL"):
         run(args)
 
 
@@ -211,26 +226,66 @@ def test_coin_override_controls_actual_execution():
     assert not any("panic" in str(fill[13]) for fill in result[0])
 
 
-def test_unified_ignores_conflicting_inactive_side_policies():
-    args = payload("unified")
+def test_portfolio_ignores_conflicting_inactive_side_policies():
+    args = payload("portfolio")
     expected = run(args)
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
-        policy.update(
-            enabled=True, restart_after_red_policy="threshold", red_threshold=0.9
-        )
+        policy.update(enabled=True, red_threshold=0.9)
     actual = run(args)
     np.testing.assert_array_equal(actual[0], expected[0])
     assert actual[4]["hsl"] == expected[4]["hsl"]
 
 
-def test_disabled_scopes_keep_null_restart_without_policy_hydration():
-    args = payload("pside")
+def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
+    args = payload("position_side")
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
-        policy.update(enabled=False, restart_after_red_policy=None)
-    args[-1]["pnls_max_lookback_days"] = 0
+        policy.update(enabled=False)
+    args[-1]["max_realized_loss_pct"] = 0.1
     result = run(args)
     assert result[4]["hsl"]["summary"]["triggers"] == 0
     assert result[4]["hsl"]["samples"] == []
+
+
+def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
+    cfg, markets, _ = inputs()
+    cfg["bot"]["long"]["unstuck"]["enabled"] = False
+    cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=.03, drawdown_ratio_ema_span_minutes=1.0)
+    cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
+        initial_qty_fraction=1.0, initial_ema_distance_fraction=0.0,
+        ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
+    counts = []
+    for span in (1.0, 1440.0):
+        cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
+        args = payload(cfg=cfg, mss=markets)
+        assert args[-1]["equity_hard_stop_loss"]["coins"]["AAA"][0]["memory_ema_span_minutes"] == span
+        assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
+        assert args[-1]["loss_gate_memory_ema_span_minutes"] == 1440.0
+        assert "realized_loss_gate_lookback_minutes" not in args[-1]
+        counts.append(run(args)[2]["hard_stop_triggers"])
+    # At span1 each new minute forgets earlier currency loss. The same gradual
+    # decline crosses RED only when the independently selected slow span retains
+    # its accumulated loss. This is not the former finite-window boundary rule.
+    assert counts[0] == 0 and counts[1] > 0
+
+
+def test_fractional_finite_cooldown_deadline_survives_flat_green_observations():
+    cfg, markets, _ = inputs()
+    cooldown_minutes = 2.5
+    cfg["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = cooldown_minutes
+    args = payload(cfg=cfg, mss=markets)
+    args[-1]["hsl_detailed_report"] = True
+    report = run(args)[4]["hsl"]
+    flat_at = None
+    checked = 0
+    for row in report["events"]:
+        if row["kind"] == "flat":
+            flat_at = row["observed_at"]
+        elif row["kind"] == "restart":
+            assert flat_at is not None
+            deadline = flat_at + int(cooldown_minutes * 60000)
+            assert deadline <= row["observed_at"] < deadline + 60000
+            checked += 1
+    assert checked > 0
 
 
 def test_cached_payload_cannot_change_effective_policy():
@@ -248,7 +303,7 @@ def test_cached_payload_cannot_change_effective_policy():
 def test_hsl_artifact_never_substitutes_btc_collateral_equity_for_strategy():
     from backtest import process_forager_fills
 
-    args = list(payload("unified"))
+    args = list(payload("portfolio"))
     args[-1]["btc_collateral_cap"] = 0.5
     args[1] = np.linspace(50000.0, 90000.0, len(args[0]))
     result = run(args)
@@ -272,7 +327,7 @@ def test_hsl_artifact_never_substitutes_btc_collateral_equity_for_strategy():
 
 
 def test_strategy_equity_statistics_exclude_btc_collateral_even_without_fills():
-    args = list(payload("unified"))
+    args = list(payload("portfolio"))
     args[-1]["btc_collateral_cap"] = 0.5
     args[1] = np.linspace(50000.0, 90000.0, len(args[0]))
     args[0][:] = [100.0, 100.0, 100.0, 1000.0]
@@ -289,7 +344,7 @@ def test_strategy_equity_statistics_exclude_btc_collateral_even_without_fills():
 def test_general_strategy_metrics_survive_disabled_hsl():
     args = payload()
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
-        policy.update(enabled=False, restart_after_red_policy=None)
+        policy.update(enabled=False)
     result = run(args)
     assert result[2]["hard_stop_triggers"] == 0
     assert result[2]["drawdown_worst_strategy_eq"] > 0
@@ -336,8 +391,8 @@ def prepared_payload(args):
 def test_execute_backtest_preserves_hsl_report_and_shared_metrics(compact):
     from backtest import execute_backtest
 
-    cfg, _, _ = inputs("unified")
-    args = payload("unified")
+    cfg, _, _ = inputs("portfolio")
+    args = payload("portfolio")
     args[-1]["metrics_only"] = compact
     prepared = prepared_payload(args)
     _, _, analysis = execute_backtest(prepared, cfg)
@@ -443,16 +498,16 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
     cfg, markets, _ = inputs()
     cfg["backtest"]["dynamic_wel_by_tradability"] = False
     cfg["bot"]["long"]["risk"].update(
-        n_positions=slots,
+        max_positions=slots,
         total_wallet_exposure_limit=2.5,
-        we_excess_allowance_pct=0.44,
+        we_excess_allowance_fraction=0.44,
     )
-    cfg["bot"]["long"]["hsl"].update(red_threshold=0.2, ema_span_minutes=1)
+    cfg["bot"]["long"]["hsl"].update(drawdown_ratio_threshold=0.2, drawdown_ratio_ema_span_minutes=1)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
-        initial_qty_pct=1,
-        initial_ema_dist=0,
-        ema_span_0=2,
-        ema_span_1=3,
+        initial_qty_fraction=1,
+        initial_ema_distance_fraction=0,
+        ema_span_0_minutes=2,
+        ema_span_1_minutes=3,
     )
     if slots > 1:
         cfg["coin_overrides"] = {

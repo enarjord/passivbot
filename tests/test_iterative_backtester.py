@@ -1,4 +1,6 @@
+from config.schema import get_expanded_config_prototype
 import asyncio
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -44,9 +46,8 @@ def test_dataset_reload_allocates_new_session_without_overwriting_old_runs(
     from copy import deepcopy
     from types import SimpleNamespace
     import numpy as np
-    from config_utils import get_template_config
 
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["backtest"].update(
         base_dir=str(tmp_path),
         exchanges=["binance"],
@@ -144,8 +145,8 @@ def test_apply_cli_overrides_updates_nested_config_paths():
     config = {
         "backtest": {"start_date": "2023-01-01", "end_date": "2024-01-01"},
         "bot": {
-            "long": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset": 0.003}}},
-            "short": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset": 0.003}}},
+            "long": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset_fraction": 0.003}}},
+            "short": {"risk": {"n_positions": 1}, "strategy": {"ema_anchor": {"offset_fraction": 0.003}}},
         },
     }
 
@@ -154,14 +155,14 @@ def test_apply_cli_overrides_updates_nested_config_paths():
         [
             "backtest.start_date=2022-01-01",
             "backtest.end_date=now",
-            "bot.long.strategy.ema_anchor.offset=0.01",
+            "bot.long.strategy.ema_anchor.offset_fraction=0.01",
             "bot.short.risk.n_positions=0",
         ],
     )
 
     assert overridden["backtest"]["start_date"] == "2022-01-01"
     assert overridden["backtest"]["end_date"] == "now"
-    assert overridden["bot"]["long"]["strategy"]["ema_anchor"]["offset"] == pytest.approx(0.01)
+    assert overridden["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] == pytest.approx(0.01)
     assert overridden["bot"]["short"]["risk"]["n_positions"] == 0
     assert config["backtest"]["start_date"] == "2023-01-01"
 
@@ -169,7 +170,11 @@ def test_apply_cli_overrides_updates_nested_config_paths():
 def test_apply_cli_overrides_uses_backtest_cli_type_parsing_for_known_fields():
     config = {
         "backtest": {"exchanges": ["binance"], "combine_ohlcvs": True},
-        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "live": {},
+        "bot": {
+            "long": {"universe": {"approved_coins": ["BTC"]}},
+            "short": {"universe": {"approved_coins": []}},
+        },
     }
 
     overridden = ib.apply_cli_overrides(
@@ -258,33 +263,32 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             "long": {
                 "strategy": {
                     "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.003,
+                        "ema_span_0_minutes": 48,
+                        "ema_span_1_minutes": 60,
+                        "offset_volatility_ema_span_1h_candles": 12,
+                        "offset_fraction": 0.003,
                     }
-                }
+                },
+                "universe": {"minimum_coin_age_days": 365, "approved_coins": ["BTC"]},
             },
             "short": {
                 "strategy": {
                     "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.003,
+                        "ema_span_0_minutes": 48,
+                        "ema_span_1_minutes": 60,
+                        "offset_volatility_ema_span_1h_candles": 12,
+                        "offset_fraction": 0.003,
                     }
-                }
+                },
+                "universe": {"minimum_coin_age_days": 365, "approved_coins": []},
             },
+            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"span_multiplier": 1.0, "max_minutes": None}}, "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "strategy_kind": "ema_anchor",
-            "warmup_ratio": 1.0,
-            "max_warmup_minutes": 0,
-            "minimum_coin_age_days": 365,
-        },
+        "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
+    base["bot"]["long"]["enabled"] = True
+    base["bot"]["short"]["enabled"] = False
 
     same = {
         **base,
@@ -295,39 +299,12 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
             "cache_dir": {"combined": "x"},
         },
     }
-    warmup_changed = {
-        **base,
-        "live": {**base["live"], "max_warmup_minutes": 720},
-    }
-    bot_quote_changed = {
-        **base,
-        "bot": {
-            "long": {
-                "strategy": {
-                    "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.01,
-                    }
-                }
-            },
-            "short": {
-                "strategy": {
-                    "ema_anchor": {
-                        "ema_span_0": 48,
-                        "ema_span_1": 60,
-                        "offset_volatility_ema_span_1h": 12,
-                        "offset": 0.003,
-                    }
-                }
-            },
-        },
-    }
-    live_changed = {
-        **base,
-        "live": {**base["live"], "approved_coins": {"long": ["BTC", "SOL"], "short": []}},
-    }
+    warmup_changed = deepcopy(base)
+    warmup_changed["bot"]["portfolio"]["warmup"]["max_minutes"] = 720
+    bot_quote_changed = deepcopy(base)
+    bot_quote_changed["bot"]["long"]["strategy"]["ema_anchor"]["offset_fraction"] = 0.01
+    universe_changed = deepcopy(base)
+    universe_changed["bot"]["long"]["universe"]["approved_coins"] = ["BTC", "SOL"]
     optimize_changed = {
         **base,
         "optimize": {"scoring": [{"metric": "sharpe_ratio_usd", "goal": "max"}]},
@@ -340,22 +317,27 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(same)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(warmup_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(bot_quote_changed)
-    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(live_changed)
+    assert ib.make_dataset_signature(base) != ib.make_dataset_signature(universe_changed)
     assert ib.make_dataset_signature(base) == ib.make_dataset_signature(optimize_changed)
     assert ib.make_dataset_signature(base) != ib.make_dataset_signature(source_dir_changed)
 
 
 def test_run_signature_changes_for_optimize_changes():
     base = {
-        "backtest": {"start_date": "2023-01-01", "coins": {"combined": ["BTC"]}, "cache_dir": {}},
-        "bot": {"long": {"strategy": {"ema_anchor": {"ema_span_0": 48}}}},
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "strategy_kind": "ema_anchor",
-            "warmup_ratio": 0.0,
-            "max_warmup_minutes": 0,
-            "minimum_coin_age_days": 365,
+        "backtest": {
+            "start_date": "2023-01-01",
+            "coins": {"combined": ["BTC"]},
+            "cache_dir": {},
         },
+        "bot": {
+            "long": {
+                "strategy": {"ema_anchor": {"ema_span_0_minutes": 48}},
+                "universe": {"minimum_coin_age_days": 365, "approved_coins": ["BTC"]},
+            },
+            "short": {"universe": {"minimum_coin_age_days": 365, "approved_coins": []}},
+            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+        },
+        "live": {},
         "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
     }
     optimize_changed = {

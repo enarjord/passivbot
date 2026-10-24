@@ -128,10 +128,16 @@ def iter_starting_snapshot(stream):
 def effective_setup_config(config, *, optimize=False) -> dict:
     """Project execution inputs; never hash helper state or machine-local paths."""
     from config_utils import clean_config
-    from optimization.evaluation_contract import BACKTEST_LIVE_KEYS
+    from config.policy import effective_minimum_cost_filters
     from optimization.fine_tune_anchors import get_anchor_plan
 
+    # Source export intentionally makes directional policy sparse. Resolve the
+    # simulation inheritance from the prepared execution view before projecting.
     effective = clean_config(config)
+    from config.bot_inheritance import get_bot_policy, get_side_field_catalog, resolve_bot_policy
+    runtime = (config if get_bot_policy(config) is not None else
+               {**effective, "bot": resolve_bot_policy(effective["bot"], get_side_field_catalog()).effective_view()})
+    filters = effective_minimum_cost_filters(runtime)
     backtest = deepcopy(effective["backtest"])
     for key in (
         "base_dir",
@@ -147,13 +153,9 @@ def effective_setup_config(config, *, optimize=False) -> dict:
         "compress_cache",
     ):
         backtest.pop(key, None)
+    backtest["filter_by_min_effective_cost"] = filters
     result = {
         "bot": effective["bot"],
-        "live": {
-            key: effective["live"][key]
-            for key in sorted(BACKTEST_LIVE_KEYS)
-            if key in effective["live"]
-        },
         "backtest": backtest,
         "coin_overrides": effective.get("coin_overrides", {}),
     }

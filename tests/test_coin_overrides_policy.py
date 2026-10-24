@@ -1,4 +1,7 @@
 from copy import deepcopy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -8,20 +11,28 @@ from config.overrides import (
     allowed_flat_bot_side_modification_keys,
     parse_overrides,
 )
-from config.schema import get_template_config
+from config.schema import get_expanded_config_prototype, get_template_config
 
 
 def _parse(overrides, *, loaded=None):
-    source = get_template_config()
-    source["live"]["user"] = "tester"
-    source["coin_overrides"] = deepcopy(overrides)
-    prepared = prepare_config(source, verbose=False, log_config_transforms=False)
-    return parse_overrides(
-        prepared,
-        verbose=False,
-        override_loader=lambda config, coin: deepcopy(loaded or {}),
-        symbol_normalizer=lambda coin: coin,
-    )
+    with TemporaryDirectory() as directory:
+        overrides = deepcopy(overrides)
+        for patch in overrides.values():
+            if "override_config_path" in patch:
+                path = Path(directory) / "override.json"
+                path.write_text(json.dumps(loaded or {}))
+                patch["override_config_path"] = str(path)
+        source = get_template_config()
+        source["live"]["account"]["user"] = "tester"
+        source["coin_overrides"] = deepcopy(overrides)
+        prepared = prepare_config(source, verbose=False, log_config_transforms=False)
+        return parse_overrides(
+            prepared,
+            verbose=False,
+            override_loader=lambda config, coin: deepcopy(loaded or {}),
+            symbol_normalizer=lambda coin: coin,
+        )
+
 
 
 @pytest.mark.parametrize("pside", ["long", "short"])
@@ -30,7 +41,7 @@ def _parse(overrides, *, loaded=None):
     [
         ("entry_cooldown", "base_duration_minutes", 2.5),
         ("unstuck", "ema_gating_enabled", False),
-        ("unstuck", "loss_allowance_pct", 0.027),
+        ("unstuck", "loss_allowance_fraction", 0.027),
     ],
 )
 def test_added_and_retained_canonical_policy_paths_are_allowed(
@@ -44,7 +55,7 @@ def test_added_and_retained_canonical_policy_paths_are_allowed(
 def test_policy_registry_and_legacy_aliases_are_derived_consistently():
     assert "entry_cooldown.base_duration_minutes" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "unstuck.ema_gating_enabled" in OVERRIDABLE_SHARED_BOT_PATHS
-    assert "unstuck.loss_allowance_pct" in OVERRIDABLE_SHARED_BOT_PATHS
+    assert "unstuck.loss_allowance_fraction" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "risk.we_excess_allowance_mode" not in OVERRIDABLE_SHARED_BOT_PATHS
 
     flat = allowed_flat_bot_side_modification_keys()
@@ -64,21 +75,20 @@ def test_removed_allowance_mode_has_actionable_inline_error(pside, spelling):
     )
     with pytest.raises(
         ValueError,
-        match=rf"coin_overrides.BTC.bot.{pside}.*no longer supported.*re-backtest",
+        match=rf"coin_overrides.BTC.bot.{pside}.*we_excess_allowance_mode.*not overridable",
     ):
         _parse({"BTC": {"bot": {pside: side}}})
 
 
 
 def test_removed_raw_allowance_in_full_file_is_not_silently_ignored(caplog):
-    with pytest.raises(ValueError, match="legacy_raw.*no longer supported"):
+    with pytest.raises(ValueError, match="we_excess_allowance_mode.*unknown configuration field"):
         _parse(
             {"BTC": {"override_config_path": "unused-by-test.json"}},
             loaded={
                 "bot": {"long": {"risk": {"we_excess_allowance_mode": "legacy_raw"}}}
             },
         )
-    assert "re-backtest" in caplog.text
 
 
 
@@ -88,11 +98,11 @@ def test_file_then_inline_precedence_and_long_short_independence():
             "BTC": {
                 "override_config_path": "unused-by-test.json",
                 "bot": {
-                    "long": {"risk_entry_cooldown_minutes": 0.05},
+                    "long": {"entry_cooldown": {"base_duration_minutes": 0.05}},
                     "short": {
                         "unstuck": {
                             "ema_gating_enabled": True,
-                            "loss_allowance_pct": 0.031,
+                            "loss_allowance_fraction": 0.031,
                         }
                     },
                 },
@@ -101,14 +111,14 @@ def test_file_then_inline_precedence_and_long_short_independence():
         loaded={
             "bot": {
                 "long": {
-                    "risk": {"entry_cooldown_minutes": 3.0},
+                    "entry_cooldown": {"base_duration_minutes": 3.0},
                     "unstuck": {"ema_gating_enabled": False},
                 },
                 "short": {
-                    "risk": {"entry_cooldown_minutes": 7.0},
+                    "entry_cooldown": {"base_duration_minutes": 7.0},
                     "unstuck": {
                         "ema_gating_enabled": False,
-                        "loss_allowance_pct": 0.029,
+                        "loss_allowance_fraction": 0.029,
                     },
                 },
             }
@@ -120,7 +130,7 @@ def test_file_then_inline_precedence_and_long_short_independence():
     assert bot["long"]["unstuck"]["ema_gating_enabled"] is False
     assert bot["short"]["entry_cooldown"]["base_duration_minutes"] == 7.0
     assert bot["short"]["unstuck"]["ema_gating_enabled"] is True
-    assert bot["short"]["unstuck"]["loss_allowance_pct"] == 0.031
+    assert bot["short"]["unstuck"]["loss_allowance_fraction"] == 0.031
 
 
 def test_new_policy_fields_use_effective_config_and_type_validation():
@@ -128,7 +138,7 @@ def test_new_policy_fields_use_effective_config_and_type_validation():
         ValueError,
         match=r"coin_overrides\.BTC produces an invalid config.*base_duration_minutes",
     ):
-        _parse({"BTC": {"bot": {"long": {"risk": {"entry_cooldown_minutes": -0.1}}}}})
+        _parse({"BTC": {"bot": {"long": {"entry_cooldown": {"base_duration_minutes": -0.1}}}}})
 
     with pytest.raises(TypeError, match=r"ema_gating_enabled.*numeric or boolean"):
         _parse(
@@ -139,16 +149,16 @@ def test_new_policy_fields_use_effective_config_and_type_validation():
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("source", ["inline", "file"])
 def test_unilateralness_forager_weight_is_not_a_coin_pin(side, source):
-    cfg = get_template_config()
+    cfg = get_expanded_config_prototype()
     cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-    cfg["optimize"]["bounds"][f"{side}_forager_score_weights_unilateralness"] = [0.0, 1.0]
+    cfg["optimize"]["bounds"][side]["forager"]["score_weights"]["unilateralness"] = [0.0, 1.0]
     cfg = prepare_config(cfg, verbose=False)
     if source == "inline":
         cfg["coin_overrides"] = {"BTC": {"bot": {side: {"forager": {"score_weights": {"unilateralness": 0.0}}}}}}
         with pytest.raises(ValueError, match="forager.*(not|unsupported|allow)|not.*forager"):
             parse_overrides(cfg, verbose=False)
     else:
-        loaded = get_template_config()
+        loaded = get_expanded_config_prototype()
         loaded["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0.0
         cfg["coin_overrides"] = {"BTC": {"override_config_path": "example.json"}}
         parsed = parse_overrides(cfg, verbose=False, override_loader=lambda config, coin: loaded)

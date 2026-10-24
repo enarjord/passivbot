@@ -377,7 +377,9 @@ def _verify_array_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) ->
     return actual
 
 
-def _verify_json_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> None:
+def _verify_json_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> Any:
+    if not isinstance(entry, dict):
+        raise HlcvsManifestError(f"HLCV manifest file entry {name!r} must be an object")
     rel_path = entry.get("path")
     if not rel_path:
         raise HlcvsManifestError(f"HLCV manifest file entry {name!r} is missing path")
@@ -398,25 +400,29 @@ def _verify_json_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> 
         raise HlcvsManifestError(
             f"HLCV manifest hash mismatch for {name}: expected {entry.get('sha256')} got {actual_hash}"
         )
+    return value
 
 
-def verify_hlcvs_manifest(
+def verify_hlcvs_manifest_metadata(
     cache_dir: Path,
     manifest: dict[str, Any] | None = None,
-    out_arrays: dict[str, np.ndarray] | None = None,
+    *,
+    expected_cache_hash: str | None = None,
+    expected_exchange: str | None = None,
 ) -> dict[str, Any]:
-    """Verify all manifest artifacts against their recorded hashes.
-
-    When ``out_arrays`` is passed, the decompressed array artifacts are stored in
-    it under their manifest names so callers can reuse them instead of paying a
-    second decompression of multi-GB files.
-    """
-    start = time.perf_counter()
+    """Return verified small JSON artifacts without materializing candle arrays."""
     manifest = load_hlcvs_manifest(cache_dir) if manifest is None else manifest
     if manifest is None:
         raise HlcvsManifestError(f"HLCV manifest missing from {cache_dir}")
     if not manifest_has_required_schema(manifest):
         raise HlcvsManifestError(f"HLCV manifest schema is missing or unsupported in {cache_dir}")
+    if expected_cache_hash is not None and manifest.get("config_hash") != expected_cache_hash:
+        raise HlcvsManifestError(f"HLCV manifest cache identity differs in {cache_dir}")
+    requested = manifest.get("requested")
+    if expected_exchange is not None and (
+        not isinstance(requested, dict) or requested.get("exchange") != expected_exchange
+    ):
+        raise HlcvsManifestError(f"HLCV manifest exchange identity differs in {cache_dir}")
     files = manifest.get("files")
     if not isinstance(files, dict):
         raise HlcvsManifestError(f"HLCV manifest files section is missing in {cache_dir}")
@@ -425,13 +431,33 @@ def verify_hlcvs_manifest(
         raise HlcvsManifestError(
             f"HLCV manifest is missing required file entries in {cache_dir}: {missing}"
         )
+    metadata = {
+        name: _verify_json_artifact(cache_dir, name, files[name])
+        for name in ("coins", "market_specific_settings", "candidate_report")
+        if name in files
+    }
+    coins, mss = metadata["coins"], metadata["market_specific_settings"]
+    if not isinstance(coins, list) or any(not isinstance(coin, str) for coin in coins):
+        raise HlcvsManifestError(f"HLCV coins metadata must be a list of strings in {cache_dir}")
+    if not isinstance(mss, dict) or any(not isinstance(mss.get(coin), dict) for coin in coins):
+        raise HlcvsManifestError(f"HLCV market metadata must contain settings for every coin in {cache_dir}")
+    return metadata
+
+
+def verify_hlcvs_manifest(
+    cache_dir: Path,
+    manifest: dict[str, Any] | None = None,
+    out_arrays: dict[str, np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Verify every artifact; optionally retain arrays to avoid decompression twice."""
+    start = time.perf_counter()
+    manifest = load_hlcvs_manifest(cache_dir) if manifest is None else manifest
+    verify_hlcvs_manifest_metadata(cache_dir, manifest)
+    files = manifest["files"]
     for name in ("hlcvs", "btc_usd_prices", "timestamps"):
         array = _verify_array_artifact(cache_dir, name, files[name])
         if out_arrays is not None:
             out_arrays[name] = array
-    for name in ("coins", "market_specific_settings", "candidate_report"):
-        if name in files:
-            _verify_json_artifact(cache_dir, name, files[name])
     logging.info(
         "[hlcvs] verified manifest for %s in %.2fs",
         cache_dir,

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -640,8 +641,8 @@ def test_live_restart_smoke_plan_can_override_incident_bundle_output(tmp_path, c
     )
 
     report = json.loads(capsys.readouterr().out)
-    assert report["inputs"]["incident_bundle_output"] == str(output_path)
-    assert report["incident_bundle"]["output_path"] == str(output_path)
+    assert Path(report["inputs"]["incident_bundle_output"]).expanduser() == output_path
+    assert Path(report["incident_bundle"]["output_path"]).expanduser() == output_path
     assert f"--output {output_path}" in report["incident_bundle"]["command"]
 
 

@@ -11,7 +11,7 @@ normative. Superseded discussion remains in git history and `case_studies/`.
 | Decisions are restart-reproducible | Local history must not silently change post-restart trading behavior | `principles.md` |
 | Exchange fetch methods propagate failures | Caller policy needs complete error context for retry, defer, or restart | `error_contract.md` |
 | Bybit closed-PnL uses hybrid pagination | Cursor-only and broad time windows can each lose coverage | `features/exchange_integrations.md`, `features/fill_events_manager.md` |
-| Rolling PnL lookback matches the naive live contract | Optimized peak/current bookkeeping previously drifted after the window moved | `case_studies/debugging.md`, `features/strategy_runtime.md` |
+| Auto-unstuck and the realized-loss gate share continuous realized memory | One ordered net-fill producer supplies D; each consumer keeps its own restrictions, their allowances are not summed, and the gate fraction has no TWEL multiplier | `features/strategy_runtime.md`, `../v9_risk_model.md` |
 | Canonical strategy schema does not silently accept removed legacy fields | Development-branch aliases hide migration errors and split behavior | `features/strategy_runtime.md` |
 
 Add an entry only when the rationale materially prevents a likely future reversal. Do not duplicate

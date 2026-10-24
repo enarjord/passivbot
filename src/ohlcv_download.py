@@ -51,34 +51,37 @@ async def main() -> None:
     parser.add_argument(
         "--symbols",
         "-s",
-        dest="live.approved_coins",
+        dest="approved_coins",
         type=str,
         default=None,
         metavar="CSV_OR_PATH",
         help=(
             "Approved coins. Use CSV like BTC,ETH,XRP, the literal 'all', a path to a JSON "
             "coin list file, or a JSON/HJSON per-side object like "
-            '{"long":["BTC"],"short":"all"}. Use coin tickers, not exchange symbols.'
+            '{"long":["BTC"],"short":"all"}. An empty value approves nothing; null in a per-side object inherits the shared approval source. Undirected null is invalid.'
         ),
     )
     parser.add_argument(
         "--ignored-coins",
         "-ic",
-        dest="live.ignored_coins",
+        dest="ignored_coins",
         type=str,
         default=None,
         metavar="CSV_OR_PATH",
-        help="Ignored coins. Comma-separated coins or path to a JSON coin list file.",
+        help="Ignored coins. CSV, a JSON/HJSON per-side object or a JSON coin list file. An empty value or null clears ignores, including null in a per-side object.",
     )
-    parser.add_argument(
-        "--minimum-coin-age-days",
-        "-mcad",
-        dest="live.minimum_coin_age_days",
-        type=float,
-        default=None,
-        metavar="FLOAT",
-        help="Minimum coin age in days required before a coin is eligible to trade.",
-    )
+    for side in ("long", "short"):
+        parser.add_argument(
+            f"--bot.{side}.universe.minimum_coin_age_days", type=float,
+            default=None, metavar="FLOAT", help=f"Minimum {side} initial-entry age in days.",
+        )
+    side_source_keys = {
+        f"bot.{side}.universe.{field}"
+        for side in ("long", "short") for field in ("approved_coins", "ignored_coins")
+    }
+    side_source_keys.add("bot.global.universe.approved_coins")
+    for key in sorted(side_source_keys):
+        parser.add_argument(f"--{key}", dest=key, type=str, default=argparse.SUPPRESS, metavar="CSV_OR_PATH")
     parser.add_argument(
         "--exchanges",
         "-e",
@@ -112,9 +115,11 @@ async def main() -> None:
         source_config,
         args,
         allowed_keys={
-            "live.approved_coins",
-            "live.ignored_coins",
-            "live.minimum_coin_age_days",
+            *side_source_keys,
+            "approved_coins",
+            "ignored_coins",
+            'bot.long.universe.minimum_coin_age_days',
+            'bot.short.universe.minimum_coin_age_days',
             "backtest.exchanges",
             "backtest.start_date",
             "backtest.end_date",

@@ -4,7 +4,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from config_utils import clean_config, get_template_config
+from config.load import prepare_config
+from config.schema import get_expanded_config_prototype
+from config.universe import materialize_side_universe_sources
 from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
 from optimization.prepared_dataset_identity import (
     PREPARED_DATASET_KEY,
@@ -20,7 +22,7 @@ def prepared():
     candles = np.arange(8 * 3 * 4, dtype=np.float64).reshape(8, 3, 4) + 100
     spec, shared = manager.create_from(candles)
     btc_spec, btc = manager.create_from(np.arange(8, dtype=np.float64) + 60_000)
-    config = clean_config(get_template_config())
+    config = prepare_config(get_expanded_config_prototype(), verbose=False)
     config["backtest"].update(
         coins={"combined": ["A", "B", "C"]},
         start_date="2024-01-01", end_date="2024-01-10",
@@ -63,10 +65,10 @@ def _suite_context(prepared, *, label="slice", time_slice=(1, 6), indices=(2, 0)
     )
 
 
-@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+@pytest.mark.parametrize("backend", ["pymoo", "gpu"])
 @pytest.mark.parametrize("suite", [False, True])
 @pytest.mark.parametrize(
-    "changed", ["candle", "btc", "fee", "source", "ohlcv_source", "btc_source", "valid_tail", "timestamps"]
+    "changed", ["candle", "btc", "fee", "source", "ohlcv_source", "btc_source", "valid_tail", "timestamps", "universe"]
 )
 def test_resume_rejects_changed_actual_prepared_inputs(prepared, backend, suite, changed):
     from optimize import _resume_config_mismatches
@@ -81,7 +83,12 @@ def test_resume_rejects_changed_actual_prepared_inputs(prepared, backend, suite,
     old = {**deepcopy(config), CONTRACT_KEY: build_evaluation_contract(config)}
     assert _resume_config_mismatches(old, config) == []
     mss = contexts[0].msss["combined"] if suite else kwargs["msss"]["combined"]
-    if changed == "candle":
+    if changed == "universe":
+        selected = contexts[0].config if suite else config
+        materialize_side_universe_sources(selected, "approved_coins", {
+            "long": ["A"], "short": ["B", "C"],
+        })
+    elif changed == "candle":
         prepared.shared[3, 0, 2] += 1
     elif changed == "btc":
         prepared.btc[3] += 1

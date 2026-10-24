@@ -24,13 +24,21 @@ def _config(base_dir: str, compress: bool) -> dict:
             "start_date": "2025-01-01",
         },
         "bot": {
-            "long": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
-            "short": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+            "long": {
+                "enabled": True,
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
+            },
+            "short": {
+                "enabled": True,
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
+            },
+            "global": {"universe": {}},
         },
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
-            "minimum_coin_age_days": 0,
-        },
+        "live": {},
     }
 
 

@@ -76,6 +76,13 @@ def _prepared_client() -> BitunixClient:
     return client
 
 
+def _snapshot_bot() -> BitunixBot:
+    bot = build_contract_bot("bitunix")
+    bot.ws_enabled = True
+    bot.config["live"]["api"] = {}
+    return bot
+
+
 def _kline_payload(
     market_id: str = "BTCUSDT",
     *,
@@ -2539,7 +2546,7 @@ def test_build_fetcher_for_bitunix():
 def test_setup_bot_bitunix_uses_native_adapter():
     from passivbot import setup_bot
 
-    config = {"live": {"user": "bitunix_01"}}
+    config = {"live": {"account": {"user": "bitunix_01"}}}
     with patch("passivbot.load_user_info", return_value={"exchange": "bitunix"}):
         with patch("exchanges.bitunix.BitunixBot") as mock_cls:
             result = setup_bot(config)
@@ -2554,12 +2561,11 @@ def test_setup_bot_bitunix_uses_native_adapter():
 def test_bitunix_snapshot_default_is_scoped_but_preserves_override(
     configured, expected
 ):
-    bot = build_contract_bot("bitunix")
-    bot.ws_enabled = True
+    bot = _snapshot_bot()
     if configured is None:
-        bot.config["live"].pop("market_snapshot_ticker_strategy", None)
+        bot.config["live"].get("api", {}).pop("market_snapshot_ticker_strategy", None)
     else:
-        bot.config["live"]["market_snapshot_ticker_strategy"] = configured
+        bot.config["live"]["api"]["market_snapshot_ticker_strategy"] = configured
     assert bot._market_snapshot_ticker_strategy() == expected
 
 
@@ -2588,9 +2594,8 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
     )
     clock = [1_000_000]
     monkeypatch.setattr(snapshots, "utc_ms", lambda: clock[0])
-    bot = build_contract_bot("bitunix")
-    bot.ws_enabled = True
-    bot.config["live"]["market_snapshot_ticker_strategy"] = "auto"
+    bot = _snapshot_bot()
+    bot.config["live"]["api"]["market_snapshot_ticker_strategy"] = "auto"
     bot.cca = client
     bot.markets_dict = client.markets
     provider = MarketSnapshotProvider(

@@ -65,9 +65,12 @@ class CandleSourceReader:
     actual capture time is recorded for Rust's causal availability checks.
     """
 
-    def __init__(self, manager, *, max_pending_reads=8, observation_clock=None):
+    def __init__(self, manager, *, max_pending_reads=8, observation_clock=None,
+                 receipt_observer=None):
         if type(max_pending_reads) is not int or max_pending_reads < 1:
             raise ValueError("max_pending_reads must be a positive integer")
+        if receipt_observer is not None and not callable(receipt_observer):
+            raise ValueError("receipt_observer must be callable")
         self.manager = manager
         # Query timestamps belong to the manager/exchange timeline. Acquisition
         # timestamps belong to the caller's observation clock; live uses UTC even
@@ -77,6 +80,7 @@ class CandleSourceReader:
             if observation_clock is None
             else observation_clock
         )
+        self.receipt_observer = receipt_observer
         self.max_pending_reads = max_pending_reads
         self._pending = {}
         self._fatal = None
@@ -226,12 +230,12 @@ async def _acquire_sources(
                 return None, failures
         # Keep parsing outside the I/O exception boundary. Invalid producer shape
         # is a bug; missing historical numeric components are handled by capture.
-        return (
-            capture_candles(
-                rows, minutes=minutes, observed_at=reader.observation_clock()
-            ),
-            failures,
+        tape = capture_candles(
+            rows, minutes=minutes, observed_at=reader.observation_clock()
         )
+        if reader.receipt_observer is not None:
+            reader.receipt_observer(tape)
+        return tape, failures
 
     tasks = [asyncio.create_task(one(tf, minutes)) for tf, minutes in ladder]
     try:

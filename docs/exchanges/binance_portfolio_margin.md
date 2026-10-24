@@ -14,7 +14,7 @@ with activity outside the supported domain.
 
 Set `"exchange": "binance"` and `"account_type": "portfolio_margin"` in the
 account entry in `api-keys.json`; `"pm"` is also accepted. Select that account with
-`live.user`. Account type belongs to the account definition, not strategy config.
+`live.account.user`. Account type belongs to the account definition, not strategy config.
 Without the PM selector, the existing Binance connector is used.
 
 ## Balance and account truth

@@ -246,7 +246,7 @@ class MonitorPublisher:
             retain_price_ticks=bool(config["retain_price_ticks"]),
             retain_candles=bool(config["retain_candles"]),
             retain_fills=bool(config["retain_fills"]),
-            price_tick_min_interval_ms=int(config["price_tick_min_interval_ms"]),
+            price_tick_min_interval_ms=int(config["price_tick_min_interval_milliseconds"]),
             emit_completed_candles=bool(config["emit_completed_candles"]),
             include_raw_fill_payloads=bool(config["include_raw_fill_payloads"]),
             runtime_identity=runtime_identity,

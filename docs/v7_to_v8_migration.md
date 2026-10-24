@@ -1,5 +1,8 @@
 # Migrating v7 trailing-grid configs to v8
 
+> Historical v8 guide. The v7 strategy and `migrate-config-v7` command are removed from v9.
+> Use retained strategies and the [released-v8 to v9 guide](v8_to_v9_migration.md) for this revision.
+
 V8 is a breaking release. The migration helper preserves the shape and parameters of the v7
 trailing-grid strategy through the deprecated `trailing_grid_v7` compatibility strategy. It does
 not convert the strategy into `trailing_martingale`, and it does not promise identical fills or

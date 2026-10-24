@@ -1,0 +1,442 @@
+"""Canonical CPU candidate preparation for a registered backtest service.
+
+No device, replay, selection or simulation work belongs here. Fixed optimizer
+policies and exact-last scenario overrides are materialized by the existing CPU
+helpers before the transport adapter encodes effective scalar values.
+"""
+
+from dataclasses import dataclass
+import hashlib
+import json
+import math
+import sys
+from types import MappingProxyType
+
+from config.param_paths import iter_optimizer_key_paths
+from config.strategy_spec import get_strategy_param_keys, get_strategy_spec, get_supported_strategy_kinds
+from config_utils import clean_config
+from optimization.bounds import enforce_bounds
+from optimization.gpu.datasets import PreparedGpuDataset
+from optimization.gpu.executor import BacktestRequest
+from optimization.gpu.model import gpu_side_enabled
+from optimization.gpu.parameters import prepare_candidate_parameters
+from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
+from optimizer_overrides import unstuck_ema_spans_coupled
+from config.prefilter import prefilter_enabled
+from optimization.prefilter import prefilter_candidate, build_prefilter_payload, prefilter_config_for_exchange
+
+
+def _remove_path(config, path):
+    node = config
+    for part in path[:-1]:
+        if not isinstance(node, dict) or part not in node:
+            return
+        node = node[part]
+    if isinstance(node, dict):
+        node.pop(path[-1], None)
+
+
+def _request_owned_paths(config):
+    """Paths removed from execution identity, independent of searched bounds."""
+    from config.bot_inheritance import get_bot_policy
+    policy = get_bot_policy(config)
+    if policy is not None:
+        for field in policy.catalog.fields:
+            if field.optimizable:
+                yield ("bot", "global", *field.suffix)
+    kind = config['bot']["portfolio"]['strategy_kind']
+    dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
+    for side in ("long", "short"):
+        for key in get_strategy_param_keys(kind):
+            yield ("bot", side, "strategy", kind, *key.split("."))
+        dynamic_keys = (
+            "n_positions", "total_wallet_exposure_limit", "risk_entry_cooldown_minutes",
+            "risk_we_excess_allowance_pct", "risk_twel_enforcer_threshold", "risk_wel_enforcer_threshold",
+            "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m",
+            "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
+            "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
+            "unstuck_close_pct", "unstuck_ema_dist", "unstuck_loss_allowance_pct", "unstuck_threshold",
+            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_red_threshold", "hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes",
+            "hsl_cooldown_minutes_after_red",
+            *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
+        )
+        dynamic_bound_keys.extend(f"{side}_{key}" for key in dynamic_keys)
+    for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
+        if path is not None:
+            yield path
+    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
+        yield ("bot", "portfolio", "hsl", key)
+
+
+def _static_contract(config):
+    """Leave every execution value not represented by a dynamic request in place.
+
+    Feature enablement, execution modes and coin overrides stay dataset-owned.
+    Changing one requires another prepared dataset, never silently ignoring it.
+    """
+    from config.universe import anchored_universe_source_view, runtime_universe_snapshot, universe_snapshot_signature
+    policy = {key: value for key, value in config.items()
+              if not isinstance(key, str) or not key.startswith("_")}
+    cleaned = clean_config(anchored_universe_source_view(policy))
+    result = {key: cleaned[key] for key in ("bot", "live", "backtest", "coin_overrides") if key in cleaned}
+    # Numeric exposure/position values are dynamic, but their side enablement
+    # chooses the registered replay's directional/fused kernel topology.
+    result["enabled_sides"] = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
+    available = sorted({coin for coins in config["backtest"]["coins"].values() for coin in coins})
+    result["prepared_universe"] = universe_snapshot_signature(runtime_universe_snapshot(
+        config, available_coins=available, available_exchanges=tuple(config["backtest"]["coins"])))
+    result["backtest"]["coins"] = config["backtest"]["coins"]
+    # The standalone simulation consumes the materialized scenario, not the
+    # optimizer's saved suite recipe or its candidate-dependent derived patches.
+    for key in ("scenarios", "suite_enabled", "suite_reducers", "cache_dir", "base_dir"):
+        result["backtest"].pop(key, None)
+    kind = config['bot']["portfolio"]['strategy_kind']
+    dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
+    for side in ("long", "short"):
+        for key in get_strategy_param_keys(kind):
+            _remove_path(result, ("bot", side, "strategy", kind, *key.split(".")))
+        dynamic_keys = (
+            "n_positions", "total_wallet_exposure_limit", "risk_entry_cooldown_minutes",
+            "risk_we_excess_allowance_pct", "risk_twel_enforcer_threshold", "risk_wel_enforcer_threshold",
+            "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m",
+            "unilateralness_ema_span_1m", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
+            "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
+            "unstuck_close_pct", "unstuck_ema_dist", "unstuck_loss_allowance_pct", "unstuck_threshold",
+            "unstuck_ema_span_0", "unstuck_ema_span_1", "hsl_red_threshold", "hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes",
+            "hsl_cooldown_minutes_after_red",
+            *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "volatility", "unilateralness")),
+        )
+        dynamic_bound_keys.extend(f"{side}_{key}" for key in dynamic_keys)
+    for _, path in iter_optimizer_key_paths(config, dynamic_bound_keys):
+        if path is not None:
+            _remove_path(result, path)
+    for key in ("drawdown_ratio_threshold", "memory_ema_span_minutes", "drawdown_ratio_ema_span_minutes", "cooldown_after_red_minutes"):
+        _remove_path(result, ("bot", "portfolio", "hsl", key))
+    for path in _request_owned_paths(config):
+        _remove_path(result, path)
+    from config.inherited_bounds import get_bound_plan
+    bound_plan = get_bound_plan(config)
+    if bound_plan is not None:
+        result["bot_binding_plan"] = bound_plan.identity()
+    coupled = unstuck_ema_spans_coupled(config)
+    # CPU worker views lower coupled unstuck spans to ordinary request inheritance.
+    # Strategy coin pins remain static; their derived unstuck copies must not
+    # split otherwise identical execution views.
+    result["coupled_unstuck_emas"] = coupled
+    if coupled:
+        for patch in result.get("coin_overrides", {}).values():
+            for side in ("long", "short"):
+                for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
+                    _remove_path(patch, ("bot", side, "unstuck", name))
+                    _remove_path(patch, ("bot", side, f"unstuck_{name.removesuffix('_minutes')}"))
+    return result
+
+
+def _finite_projection_number(value):
+    # Plain finite transport values only; bool and numeric subclasses must use
+    # the original cleaner. Comparing huge integers avoids float overflow here.
+    return ((type(value) is float and math.isfinite(value)) or
+            (type(value) is int and -sys.float_info.max <= value <= sys.float_info.max))
+
+
+def _compile_projection_guard(value, numeric_paths, path=(), ancestors=(), *, integer_paths=frozenset()):
+    """Compile an exact input comparison, permitting selected numeric leaves."""
+    if path in numeric_paths and value is not None:
+        if not _finite_projection_number(value):
+            return None
+        if path in integer_paths:
+            if not float(value).is_integer():
+                return None
+            return lambda current: (_finite_projection_number(current)
+                                    and float(current).is_integer())
+        if "score_weights" in path:
+            # The cleaner normalizes a copy only to hydrate discarded bounds.
+            # Finite nonnegative inputs, including all-zero weights, cannot fail
+            # that normalization. Negative/malformed values retain full cleaning.
+            if value < 0.0:
+                return None
+            return lambda current: _finite_projection_number(current) and current >= 0.0
+        return _finite_projection_number
+    from config.universe import ResolvedCoinList
+    from config.activation import ActivationSource, PreparedActivationBot
+    from config.bot_inheritance import BotPolicy, PreparedBotPolicy
+    from config.inherited_bounds import BoundPlan, PreparedOptimizationBounds
+    kind = type(value)
+    if kind in (dict, list, tuple, ResolvedCoinList, PreparedActivationBot, PreparedBotPolicy, PreparedOptimizationBounds):
+        # Ignored metadata can contain cycles or arbitrarily deep containers.
+        # It remains valid for the legacy cleaner; decline this optional guard.
+        if len(path) > 32 or id(value) in ancestors:
+            return None
+        ancestors = (*ancestors, id(value))
+    if kind in (dict, PreparedActivationBot, PreparedBotPolicy, PreparedOptimizationBounds):
+        source_guard = None
+        if kind is PreparedActivationBot:
+            if path != ("bot",) or type(value._activation_source) is not ActivationSource:
+                return None
+            source = value._activation_source
+            if any(flag is not None and type(flag) is not bool
+                   for flag in (source.long, source.short)):
+                return None
+            source_guard = lambda current: (type(current._activation_source) is ActivationSource
+                                             and current._activation_source == source)
+        if kind is PreparedBotPolicy:
+            if path != ("bot",) or type(value._bot_policy) is not BotPolicy:
+                return None
+            policy = value._bot_policy
+            runtime_aliases = value._runtime_aliases
+            from config.field_registry import FieldType
+            integer_paths = integer_paths | frozenset(
+                (*path, scope, *field.suffix)
+                for field in policy.catalog.fields if FieldType.INTEGER in field.types
+                for scope in ("global", "long", "short")
+            )
+            authored_guard = _compile_projection_guard(policy.source_view(include_defaults=True),
+                numeric_paths, path, ancestors, integer_paths=integer_paths)
+            if authored_guard is None:
+                return None
+            def source_guard(current):
+                candidate = current._bot_policy
+                return (type(candidate) is BotPolicy and candidate.catalog == policy.catalog
+                        and current._runtime_aliases == runtime_aliases
+                        and candidate._prepared == policy._prepared
+                        and candidate._genes == policy._genes
+                        and authored_guard(candidate.source_view(include_defaults=True)))
+        if kind is PreparedOptimizationBounds:
+            if path != ("optimize", "bounds") or type(value._bound_plan) is not BoundPlan:
+                return None
+            plan_identity = value._bound_plan.identity()
+            authored = value._authored_bounds
+            baseline = value._runtime_baseline
+            source_guard = lambda current: (type(current._bound_plan) is BoundPlan
+                and current._bound_plan.identity() == plan_identity
+                and current._authored_bounds == authored and current._runtime_baseline == baseline)
+        if any(type(key) is not str for key in value):
+            return None
+        children = tuple((key, _compile_projection_guard(child, numeric_paths, (*path, key), ancestors,
+                                                        integer_paths=integer_paths))
+                         for key, child in value.items())
+        if any(guard is None for _key, guard in children):
+            return None
+        return lambda current: (type(current) is kind and len(current) == len(children)
+                                and (source_guard is None or source_guard(current))
+                                and all(type(key) is str for key in current)
+                                and all(key in current and guard(current[key]) for key, guard in children))
+    if kind is ResolvedCoinList:
+        from config.universe import PreparedMarketAliases
+
+        # Only the validated internal view is supported. Equal membership is
+        # insufficient: changing a source or inheritance must use full matching.
+        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors,
+                                                    integer_paths=integer_paths)
+                         for index, child in enumerate(value))
+        source_guard = _compile_projection_guard(value.source, (), (*path, "source"), ancestors)
+        shared_guard = _compile_projection_guard(value.shared_source, (), (*path, "shared_source"), ancestors)
+        acquired_guard = _compile_projection_guard(value.acquired_members, (), (*path, "acquired_members"), ancestors)
+        available_guard = _compile_projection_guard(value.available_members, (), (*path, "available_members"), ancestors)
+        if (type(value.source_present) is not bool or type(value.acquired_members) is not tuple
+                or value.market_aliases is not None and type(value.market_aliases) is not PreparedMarketAliases
+                or source_guard is None
+                or shared_guard is None or acquired_guard is None or available_guard is None
+                or any(guard is None for guard in children)):
+            return None
+        source_present = value.source_present
+        aliases = value.market_aliases
+        return lambda current: (type(current) is ResolvedCoinList and len(current) == len(children)
+                                and type(current.source_present) is bool and current.source_present == source_present
+                                and source_guard(current.source) and shared_guard(current.shared_source)
+                                and acquired_guard(current.acquired_members)
+                                and current.market_aliases is aliases and available_guard(current.available_members)
+                                and all(guard(child) for guard, child in zip(children, current)))
+    if kind in (list, tuple):
+        children = tuple(_compile_projection_guard(child, numeric_paths, (*path, index), ancestors,
+                                                    integer_paths=integer_paths)
+                         for index, child in enumerate(value))
+        if any(guard is None for guard in children):
+            return None
+        return lambda current: (type(current) is kind and len(current) == len(children)
+                                and all(guard(child) for guard, child in zip(children, current)))
+    if kind is float:
+        if not math.isfinite(value):
+            return None
+        encoded = value.hex()  # Preserve signed zero and exact JSON float values.
+        return lambda current: type(current) is float and current.hex() == encoded
+    if kind in (str, int, bool, type(None)):
+        return lambda current: type(current) is kind and current == value
+    return None
+
+
+class _ExecutionProjection:
+    """One validated input shape per planner scenario/exchange, never persisted.
+
+    Every other input value and key is compared, including optimizer policies and
+    metadata which the cleaner may inspect. Changed/unsupported inputs fall back
+    to execution_key. Finite request-owned numbers cannot change cleaned static
+    content; weights additionally require nonnegative values, so their joint
+    normalization succeeds and changes only discarded optimizer bounds.
+    Template selection depends on unchanged shape/scope/bounds. Adaptive bound
+    hydration changes only discarded optimizer content; its duration check still
+    requires finite values. Retired-key/string checks see unchanged keys/strings.
+    """
+
+    def __init__(self, config, key):
+        self.key = key
+        self.cleaner = clean_config
+        self.guard = None
+        # Decline unsupported inputs before metadata helpers inspect containers
+        # with potentially overridden methods. This check runs only at creation.
+        if _compile_projection_guard(config, ()) is None:
+            return
+        # The request-owned gate selector is a string, so compare it exactly.
+        numeric_paths = {path for path in _request_owned_paths(config) if path[-1] != "ema_gate_mode"}
+        if unstuck_ema_spans_coupled(config):
+            for coin in config.get("coin_overrides", {}):
+                for side in ("long", "short"):
+                    for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
+                        numeric_paths.add(("coin_overrides", coin, "bot", side, "unstuck", name))
+                        numeric_paths.add(("coin_overrides", coin, "bot", side, f"unstuck_{name.removesuffix('_minutes')}"))
+        self.guard = _compile_projection_guard(config, numeric_paths)
+        self.specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
+        self.sides = tuple(side for side in ("long", "short") if gpu_side_enabled(config, side))
+
+    def matches(self, config):
+        if self.cleaner is not clean_config or self.guard is None or not self.guard(config):
+            return False
+        specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())
+        return (len(self.specs) == len(specs) and all(a is b for a, b in zip(self.specs, specs)) and
+                self.sides == tuple(side for side in ("long", "short") if gpu_side_enabled(config, side)))
+
+
+@dataclass(frozen=True)
+class ScenarioBinding:
+    scenario: str
+    dataset_id: str
+    dataset: PreparedGpuDataset
+
+
+@dataclass(frozen=True)
+class CandidatePlan:
+    candidate_id: str
+    vector: tuple[float, ...]
+    effective_key: str
+    stage: str
+    requests: tuple[BacktestRequest, ...]
+    slots: tuple[ResultSlot, ...]
+    prefilter_payload: dict | None = None
+    record_config: dict | None = None
+
+    def collector(self, scorer):
+        return CandidateEvaluation(self.candidate_id, self.vector, self.slots, scorer, stage=self.stage)
+
+
+class NativeCandidatePlanner:
+    def __init__(self, evaluator, bindings, *, overrides_list=None):
+        self.scorer = CanonicalResultScorer(evaluator)
+        self.base = self.scorer.base
+        self.overrides = tuple(overrides_list if overrides_list is not None else
+                               self.base.config["optimize"].get("enable_overrides", []))
+        self.bindings = tuple(bindings)
+        self._variants = {}
+        self._execution_projections = {}
+        self._projection_eligible = {}
+        for binding in self.bindings:
+            pair = (binding.scenario, binding.dataset.exchange)
+            variants = self._variants.setdefault(pair, {})
+            config = binding.dataset.policy_config()
+            key = execution_key(config)
+            if key in variants:
+                raise ValueError("scenario/exchange execution variants must be unique")
+            variants[key] = binding
+            # Preparation cadence affects request grouping. Limit reuse to
+            # single-coin views; source arrays may contain more coins.
+            # Every variant in a pair must qualify independently.
+            self._projection_eligible[pair] = (
+                self._projection_eligible.get(pair, True)
+                and len(binding.dataset.coin_indices) == 1
+            )
+        self.scorer.validate_coverage(list(self._variants), "full")
+        if len({binding.dataset_id for binding in self.bindings}) != len(self.bindings):
+            raise ValueError("prepared dataset identities must be unique")
+
+    def _execution_key(self, pair, config):
+        if not self._projection_eligible.get(pair, False):
+            return execution_key(config)
+        projection = self._execution_projections.get(pair)
+        if projection is not None and projection.matches(config):
+            return projection.key
+        key = execution_key(config)
+        if pair not in self._execution_projections:
+            # Only configs freshly owned by prepare reach this boundary. Public
+            # execution_key callers always retain the full cleaner/validation.
+            self._execution_projections[pair] = _ExecutionProjection(config, key)
+        return key
+
+    def prepare(self, candidate_id, vector, *, scenarios=None):
+        from optimize import _canonicalize_optimizer_individual
+        from config.universe import runtime_universe_snapshot
+
+        # Registration already acquired these facts. Validate the current
+        # source bindings before a gene write could restore an older policy;
+        # this owner never acquires a replacement source during replay.
+        columns = sorted({coin for coins in self.base.config["backtest"]["coins"].values() for coin in coins})
+        runtime_universe_snapshot(self.base.config, available_coins=columns)
+        values = [float(value) for value in vector]
+        if len(values) != len(self.base.bounds) or any(not math.isfinite(value) for value in values):
+            raise ValueError("candidate must have a complete finite optimizer vector")
+        values = enforce_bounds(values, self.base.bounds, self.base.sig_digits)
+        config = _canonicalize_optimizer_individual(
+            values, self.base.config, self.base.bounds, self.base.sig_digits,
+            self.base.key_paths, self.overrides,
+        )
+        configs = {"base": config}
+        if self.scorer.suite:
+            configs = {ctx.label: self.scorer.evaluator.build_scenario_candidate_config(config, ctx)
+                       for ctx in self.scorer.evaluator.contexts}
+        selected = set(configs) if scenarios is None else set(scenarios)
+        if not selected or selected - configs.keys():
+            raise ValueError("screening must select nonempty known scenario labels")
+        stage = "full" if selected == set(configs) else "screening"
+        requests, slots, identity = [], [], []
+        policy = self.base.config["optimize"].get("prefilter")
+        probe_configs = {}
+        for index, (pair, variants) in enumerate(self._variants.items()):
+            scenario, exchange = pair
+            effective = configs[scenario]
+            if self._projection_eligible[pair]:
+                key = self._execution_key(pair, effective)
+            else:
+                key = execution_key(effective)
+            binding = variants.get(key)
+            if binding is None:
+                raise ValueError(f"candidate changes dataset-owned execution inputs for scenario {scenario!r}; "
+                                 "prepare a compatible dataset before submitting it")
+            parameters = prepare_candidate_parameters(
+                effective, json.loads(binding.dataset.markets_json), binding.dataset.exchange,
+            )
+            if prefilter_enabled(policy):
+                probe_configs.setdefault(scenario, []).append(prefilter_config_for_exchange(
+                    effective, json.loads(binding.dataset.markets_json), exchange,
+                ))
+            identity.append((binding.dataset_id, parameters))
+            if binding.scenario in selected:
+                slot = ResultSlot(f"{candidate_id}:{index}", binding.dataset_id, binding.scenario,
+                                  binding.dataset.exchange, binding.dataset.metrics)
+                slots.append(slot)
+                requests.append(BacktestRequest(slot.request_id, slot.dataset_id, MappingProxyType(parameters)))
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        plan = CandidatePlan(candidate_id, tuple(values), key, stage, tuple(requests), tuple(slots),
+                             record_config=config if stage == "full" else None)
+        # Validate the selected stage and requested metric surface before device work.
+        plan.collector(self.scorer)
+        if prefilter_enabled(policy):
+            constraint, findings = prefilter_candidate(probe_configs, policy)
+            if constraint > 0:
+                payload = build_prefilter_payload(self.base, values, constraint, findings,
+                                                 suite=self.scorer.suite,
+                                                 scenario_labels=tuple(configs) if self.scorer.suite else ())
+                plan = CandidatePlan(candidate_id, tuple(values), key, stage,
+                                     tuple(requests), tuple(slots), payload, config)
+        return plan
+
+
+def execution_key(config):
+    return json.dumps(_static_contract(config), sort_keys=True, allow_nan=False)

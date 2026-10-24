@@ -262,7 +262,7 @@ async def test_live_market_age_discovery_uses_lighter_daily_history(
 @pytest.mark.parametrize("tif", ["gtc", "post_only"])
 async def test_actual_ccxt_signing_request(side, pside, reduce_only, tif):
     b = bot()
-    b.config["live"]["time_in_force"] = tif
+    b.config["live"]["execution"]["time_in_force"] = tif
     order = {
         "side": side,
         "position_side": pside,

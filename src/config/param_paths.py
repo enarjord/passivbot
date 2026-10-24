@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from .shared_bot import canonical_shared_bot_path_for_flat_key, resolve_shared_bot_path
 from .strategy_spec import (
@@ -11,115 +11,14 @@ from .strategy_spec import (
     strategy_optimize_key_path_map,
 )
 
-OPTIMIZABLE_BOT_KEY_PATHS = {
-    "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
-    "long_filter_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
-    "long_forager_volatility_ema_span_1m": (
-        "bot",
-        "long",
-        "forager",
-        "volatility_ema_span_1m",
-    ),
-    "long_filter_volatility_ema_span_1m": (
-        "bot",
-        "long",
-        "forager",
-        "volatility_ema_span_1m",
-    ),
-    "long_forager_score_weights_volume": (
-        "bot",
-        "long",
-        "forager",
-        "score_weights",
-        "volume",
-    ),
-    "long_forager_score_weights_ema_readiness": (
-        "bot",
-        "long",
-        "forager",
-        "score_weights",
-        "ema_readiness",
-    ),
-    "long_forager_score_weights_volatility": (
-        "bot",
-        "long",
-        "forager",
-        "score_weights",
-        "volatility",
-    ),
-    "short_forager_score_weights_volume": (
-        "bot",
-        "short",
-        "forager",
-        "score_weights",
-        "volume",
-    ),
-    "short_forager_score_weights_ema_readiness": (
-        "bot",
-        "short",
-        "forager",
-        "score_weights",
-        "ema_readiness",
-    ),
-    "short_forager_score_weights_volatility": (
-        "bot",
-        "short",
-        "forager",
-        "score_weights",
-        "volatility",
-    ),
-    "short_forager_volume_ema_span_1m": (
-        "bot",
-        "short",
-        "forager",
-        "volume_ema_span_1m",
-    ),
-    "short_filter_volume_ema_span_1m": (
-        "bot",
-        "short",
-        "forager",
-        "volume_ema_span_1m",
-    ),
-    "short_forager_volatility_ema_span_1m": (
-        "bot",
-        "short",
-        "forager",
-        "volatility_ema_span_1m",
-    ),
-    "short_filter_volatility_ema_span_1m": (
-        "bot",
-        "short",
-        "forager",
-        "volatility_ema_span_1m",
-    ),
-}
+# Keep the historical special-validation set exact; other shared numeric fields
+# still pass through the ordinary optimizer value/domain validators.
+from .field_registry import get_special_optimizer_bindings
 
-for _side in BOT_POSITION_SIDES:
-    for _key, _path in {
-        "forager_score_weights_unilateralness": ("forager", "score_weights", "unilateralness"),
-        "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_1m"),
-        # The fixed ceiling may be null even when its search endpoints are numeric.
-        "entry_cooldown_max_duration_minutes": ("entry_cooldown", "max_duration_minutes"),
-        "entry_cooldown_weights_minutes_exposure_ratio": (
-            "entry_cooldown",
-            "weights_minutes",
-            "exposure_ratio",
-        ),
-        "entry_cooldown_weights_minutes_adverse_directionality": (
-            "entry_cooldown",
-            "weights_minutes",
-            "adverse_directionality",
-        ),
-    }.items():
-        OPTIMIZABLE_BOT_KEY_PATHS[f"{_side}_{_key}"] = ("bot", _side, *_path)
+OPTIMIZABLE_BOT_KEY_PATHS = get_special_optimizer_bindings()
 
 
-DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
-    "long_filter_volume_ema_span_1m": "long_forager_volume_ema_span_1m",
-    "long_filter_volatility_ema_span_1m": "long_forager_volatility_ema_span_1m",
-    "short_filter_volume_ema_span_1m": "short_forager_volume_ema_span_1m",
-    "short_filter_volatility_ema_span_1m": "short_forager_volatility_ema_span_1m",
-}
+DEPRECATED_OPTIMIZE_BOUND_ALIASES = {}
 
 
 def canonical_optimizer_key(key: str) -> str:
@@ -127,8 +26,8 @@ def canonical_optimizer_key(key: str) -> str:
 
 
 def active_strategy_kind(config: dict) -> str:
-    live_cfg = config.get("live")
-    raw_kind = live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
+    portfolio_cfg = config.get("bot", {}).get("portfolio", {})
+    raw_kind = portfolio_cfg.get("strategy_kind")
     return normalize_strategy_kind(raw_kind)
 
 
@@ -138,17 +37,40 @@ def _strategy_path_map_for_config(config: dict) -> dict[str, tuple[str, ...]]:
 
 def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None:
     canonical_key = canonical_optimizer_key(key)
+    return _resolve_optimizer_key_path(config, canonical_key, None)
+
+
+def iter_optimizer_key_paths(
+    config: dict, keys: Iterable[str]
+) -> Iterator[tuple[str, tuple[str, ...] | None]]:
+    """Resolve an operation's keys with one local strategy metadata projection.
+
+    The config must remain unchanged while iterating. No config-dependent paths
+    survive this operation; a later call observes current modes and bot shape.
+    HSL-only and empty operations do not request strategy metadata.
+    """
+    strategy_path_map = None
+    for key in keys:
+        canonical_key = canonical_optimizer_key(key)
+        if not canonical_key.startswith("hsl_") and strategy_path_map is None:
+            strategy_path_map = _strategy_path_map_for_config(config)
+        yield key, _resolve_optimizer_key_path(config, canonical_key, strategy_path_map)
+
+
+def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
-        if config.get("live", {}).get("hsl_signal_mode") == "unified":
-            field = canonical_key.removeprefix("hsl_")
-            if field in {
-                "red_threshold",
-                "ema_span_minutes",
-                "cooldown_minutes_after_red",
-            }:
-                return ("bot", "hsl", field)
+        if config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope") == "portfolio":
+            field = {
+                "red_threshold": "drawdown_ratio_threshold",
+                "drawdown_ratio_ema_span_minutes": "drawdown_ratio_ema_span_minutes",
+                "memory_ema_span_minutes": "memory_ema_span_minutes",
+                "cooldown_minutes_after_red": "cooldown_after_red_minutes",
+            }.get(canonical_key.removeprefix("hsl_"))
+            if field is not None:
+                return ("bot", "portfolio", "hsl", field)
         return None
-    strategy_path_map = _strategy_path_map_for_config(config)
+    if strategy_path_map is None:
+        strategy_path_map = _strategy_path_map_for_config(config)
     if canonical_key in strategy_path_map:
         return strategy_path_map[canonical_key]
     if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
@@ -159,7 +81,11 @@ def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None
         return None
     if pside not in BOT_POSITION_SIDES:
         return None
+    if flat_key in {"hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes"}:
+        return ("bot", pside, "hsl", flat_key.removeprefix("hsl_"))
     bot_side = config.get("bot", {}).get(pside, {})
+    if flat_key == "hsl_ema_span_minutes":
+        return None
     return resolve_shared_bot_path(bot_side, pside, flat_key) or (
         "bot",
         pside,
@@ -212,12 +138,6 @@ def resolve_dotted_config_path(
         parts = ("bot", *raw_parts)
     else:
         parts = raw_parts
-    if len(parts) == 3 and parts[0] == "bot" and parts[1] in BOT_POSITION_SIDES:
-        canonical_path = canonical_path_for_bot_side_flat_key(
-            config, parts[1], parts[2]
-        )
-        if canonical_path is not None:
-            return canonical_path
     if (
         len(parts) >= 4
         and parts[0] == "bot"
@@ -227,23 +147,6 @@ def resolve_dotted_config_path(
         and parts[3] != "*"
     ):
         parts = (*parts[:3], active_strategy_kind(config), *parts[3:])
-    if (
-        len(parts) >= 2
-        and (
-            parts[-2] == "trailing_martingale"
-            or (
-                len(parts) >= 3
-                and parts[-3:-1] == ("strategy", "*")
-                and active_strategy_kind(config) == "trailing_martingale"
-            )
-        )
-        and parts[-1] in ("ema_span_0", "ema_span_1")
-    ):
-        parts = (*parts[:-1], "entry", parts[-1])
-    if parts[-2:] == ("risk", "entry_cooldown_minutes"):
-        parts = (*parts[:-2], "entry_cooldown", "base_duration_minutes")
-    elif parts == ("entry_cooldown_minutes",):
-        parts = ("entry_cooldown", "base_duration_minutes")
     return tuple(parts)
 
 
@@ -251,6 +154,9 @@ def require_existing_config_path(
     config: dict, selector_or_path: str
 ) -> tuple[str, ...]:
     resolved = resolve_dotted_config_path(config, selector_or_path)
+    if resolved is not None and resolved[:3] == ("bot", "global", "enabled"):
+        from .activation import GLOBAL_ACTIVATION_ERROR
+        raise ValueError(GLOBAL_ACTIVATION_ERROR)
     if resolved is None or not resolved or any(part == "" for part in resolved):
         raise ValueError("Override paths must not be empty")
 
@@ -306,18 +212,6 @@ def bound_path_matches_selector(path: tuple[str, ...], selector_path: tuple[str,
         path, selector_path
     ):
         return True
-    if path[-2:] == ("entry_cooldown", "base_duration_minutes"):
-        # Match the old leaf as well, including risk.* and side-qualified wildcards.
-        # Only the migrated base duration belonged to the historical risk group.
-        legacy_path = (*path[:-2], "risk", "entry_cooldown_minutes")
-        return (
-            path_matches_selector(legacy_path, selector_path)
-            or path_suffix_matches_selector(legacy_path, selector_path)
-            or (
-                selector_path[-1:] == ("risk",)
-                and path_suffix_matches_selector(legacy_path[:-1], selector_path)
-            )
-        )
     return False
 
 

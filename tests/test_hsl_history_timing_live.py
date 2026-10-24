@@ -1,5 +1,7 @@
 """Offline production-owner regression for historical flat-boundary read skew."""
 
+from hsl_fixture import set_risk_memory_spans, mutable_runtime_fixture
+
 import argparse
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -17,7 +19,7 @@ import tools.run_fake_live as runner
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("current_size", [1.0, 2.0, 0.5])
 async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fills(
@@ -28,23 +30,22 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
-    cfg = generated_template(legacy, mode)
+    cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            n_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit=0.0
         )
-    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"][side]["hsl"]
+    policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
     policy.update(
         enabled=True,
-        red_threshold=0.9,
-        ema_span_minutes=1.0,
-        cooldown_minutes_after_red=1.0,
-        restart_after_red_policy="always",
+        drawdown_ratio_threshold=0.9,
+        drawdown_ratio_ema_span_minutes=1.0,
+        cooldown_after_red_minutes=1.0,
         panic_close_order_type="market",
     )
-    cfg["live"]["pnls_max_lookback_days"] = 1.0
+    set_risk_memory_spans(cfg, 288.0)
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})
@@ -97,11 +98,11 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         hsl_live.owner(bot).cancel_inputs()
         await asyncio.sleep(0.01)
         policy = (
-            bot.config["bot"]["hsl"]
-            if mode == "unified"
+            bot.config["bot"]["portfolio"]["hsl"]
+            if mode == "portfolio"
             else bot.config["bot"][side]["hsl"]
         )
-        policy["red_threshold"] = 0.05
+        policy["drawdown_ratio_threshold"] = 0.05
         await bot.update_pnls()
         # Real account reads happen after the same fill receipt. Each fresh owner
         # must still reconstruct the completed cooldown, without a saved RED flag.
@@ -117,7 +118,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
             )
             assert abs(bot.positions[symbol][side]["size"]) == current_size
         # A genuine new loss still reaches the real reduce-only connector.
-        policy["red_threshold"] = 0.03
+        policy["drawdown_ratio_threshold"] = 0.03
         bot.cca.get_current_step()["prices"][symbol] = 10.0 if side == "long" else 190.0
         bot.market_snapshot_provider._cache.clear()
         await bot.refresh_protective_authoritative_state()

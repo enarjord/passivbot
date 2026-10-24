@@ -6,6 +6,8 @@ from typing import Any
 
 import passivbot_rust as pbr
 
+from .strategy_paths import project_strategy_spec
+
 
 BOT_POSITION_SIDES = ("long", "short")
 DEFAULT_STRATEGY_KIND = "trailing_martingale"
@@ -70,7 +72,7 @@ def get_strategy_spec(strategy_kind: str = DEFAULT_STRATEGY_KIND) -> dict:
             f"Rust strategy metadata for {normalized_kind!r} must be a dict; "
             f"got {type(spec).__name__}"
         )
-    return spec
+    return project_strategy_spec(normalized_kind, spec)
 
 
 def _strategy_leaf_path(param: dict) -> tuple[str, ...] | None:
@@ -123,6 +125,21 @@ def get_all_strategy_defaults() -> dict:
     }
 
 
+def get_common_strategy_defaults() -> dict:
+    """Read the deliberately common native metadata, never choose a profile.
+
+    Metadata still supplies directional records for stable native IDs. Their
+    common defaults must agree before one authored global profile is emitted.
+    """
+    result = {}
+    for kind in get_supported_strategy_kinds():
+        defaults = get_strategy_defaults(kind)
+        if defaults["long"] != defaults["short"]:
+            raise RuntimeError(f"{kind} metadata must declare identical common side defaults")
+        result[kind] = deepcopy(defaults["long"])
+    return result
+
+
 def get_strategy_optimize_bounds(strategy_kind: str) -> dict:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     spec = get_strategy_spec(normalized_kind)
@@ -154,9 +171,15 @@ def get_all_strategy_optimize_bounds() -> dict:
     }
 
 
+_optimize_path_cache = {}
+
+
 def strategy_optimize_key_path_map(strategy_kind: str) -> dict[str, tuple[str, ...]]:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     spec = get_strategy_spec(normalized_kind)
+    cached = _optimize_path_cache.get(normalized_kind)
+    if cached is not None and cached[0] is spec:
+        return dict(cached[1])
     mapping: dict[str, tuple[str, ...]] = {}
     for param in spec.get("parameters", []):
         if not isinstance(param, dict):
@@ -173,6 +196,8 @@ def strategy_optimize_key_path_map(strategy_kind: str) -> dict[str, tuple[str, .
                 normalized_kind,
                 *(str(part) for part in config_path[2:]),
             )
+    # Immutable paths may be reused; callers still own each returned mapping.
+    _optimize_path_cache[normalized_kind] = (spec, tuple(mapping.items()))
     return mapping
 
 

@@ -1,22 +1,25 @@
+mod age_admission;
 mod analysis;
 mod backtest;
 mod closes;
 mod coin_selection;
+mod config_prefilter;
 mod constants;
 mod dynamic;
 mod entries;
 mod entry_cooldown;
+mod ew;
+mod exposure_rms;
 mod gpu;
-mod hsl;
-mod hsl_candle_free;
-mod hsl_controller;
-mod hsl_evaluator;
+mod hsl_decay;
 mod hsl_history;
+mod hsl_intent;
 mod hsl_json;
 mod hsl_prices;
 mod hsl_snapshot;
 mod hsl_sum;
-mod hsl_trace;
+mod hsl_support;
+mod hsl_v9_live;
 mod limit_fills;
 mod orchestrator;
 mod python;
@@ -35,6 +38,78 @@ use python::*;
 use utils::*;
 
 #[pyfunction]
+#[pyo3(signature = (now_ms, inception_ms, minimum_days))]
+fn coin_age_eligible(
+    now_ms: &PyAny,
+    inception_ms: Option<&PyAny>,
+    minimum_days: &PyAny,
+) -> PyResult<bool> {
+    let minimum_days = python::minimum_age_days_from_py(minimum_days)?;
+    let now_ms = python::age_timestamp_from_py(now_ms)?;
+    let inception_ms = inception_ms
+        .map(python::age_timestamp_from_py)
+        .transpose()?;
+    Ok(age_admission::eligible(now_ms, inception_ms, minimum_days))
+}
+
+#[pyfunction]
+#[pyo3(signature = (timestamps, inception_ms, minimum_days))]
+fn coin_age_first_eligible_index(
+    timestamps: Vec<&PyAny>,
+    inception_ms: Option<&PyAny>,
+    minimum_days: &PyAny,
+) -> PyResult<usize> {
+    let minimum_days = python::minimum_age_days_from_py(minimum_days)?;
+    let timestamps: Vec<u64> = timestamps
+        .into_iter()
+        .map(python::age_timestamp_from_py)
+        .collect::<PyResult<_>>()?;
+    let inception_ms = inception_ms
+        .map(python::age_timestamp_from_py)
+        .transpose()?;
+    if timestamps.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "age admission requires increasing timestamps",
+        ));
+    }
+    Ok(age_admission::first_eligible_index(
+        &timestamps,
+        inception_ms,
+        minimum_days,
+    ))
+}
+
+#[pyfunction]
+fn gpu_ema_bootstrap_counts_py<'py>(
+    py: Python<'py>,
+    spans: numpy::PyReadonlyArray2<'py, f64>,
+    interval_minutes: f64,
+    available: u64,
+) -> PyResult<Bound<'py, numpy::PyArray2<i32>>> {
+    use numpy::IntoPyArray;
+    let spans = spans.as_array();
+    if spans.ncols() != 8 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "GPU EMA bootstrap requires eight original-f64 span columns",
+        ));
+    }
+    let mut counts =
+        numpy::ndarray::Array2::zeros((spans.nrows(), gpu::MARKET_EMA_BOOTSTRAP_COUNT_COLS));
+    for (mut output, input) in counts.outer_iter_mut().zip(spans.outer_iter()) {
+        let row = gpu::market_ema_bootstrap_counts(
+            std::array::from_fn(|i| input[i]),
+            interval_minutes,
+            available,
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        for (value, count) in output.iter_mut().zip(row) {
+            *value = count;
+        }
+    }
+    Ok(counts.into_pyarray_bound(py))
+}
+
+#[pyfunction]
 fn runtime_build_info(py: Python<'_>) -> PyResult<PyObject> {
     let info = PyDict::new_bound(py);
     info.set_item("crate_version", env!("CARGO_PKG_VERSION"))?;
@@ -46,21 +121,6 @@ fn runtime_build_info(py: Python<'_>) -> PyResult<PyObject> {
 }
 
 #[pyfunction]
-fn mps_ema_anchor_source_py() -> &'static str {
-    gpu::mps_ema_anchor_source()
-}
-
-#[pyfunction]
-fn mps_ema_anchor_long_no_hsl_source_py() -> &'static str {
-    gpu::mps_ema_anchor_long_no_hsl_source()
-}
-
-#[pyfunction]
-fn mps_ema_anchor_short_no_hsl_source_py() -> &'static str {
-    gpu::mps_ema_anchor_short_no_hsl_source()
-}
-
-#[pyfunction]
 fn mps_ema_anchor_multicoin_source_py() -> &'static str {
     gpu::mps_ema_anchor_multicoin_source()
 }
@@ -68,31 +128,6 @@ fn mps_ema_anchor_multicoin_source_py() -> &'static str {
 #[pyfunction]
 fn mps_ema_anchor_multicoin_long_source_py() -> &'static str {
     gpu::mps_ema_anchor_multicoin_long_source()
-}
-
-#[pyfunction]
-fn mps_trailing_martingale_source_py() -> &'static str {
-    gpu::mps_trailing_martingale_source()
-}
-
-#[pyfunction]
-fn mps_trailing_martingale_long_hsl_source_py() -> &'static str {
-    gpu::mps_trailing_martingale_long_hsl_source()
-}
-
-#[pyfunction]
-fn mps_trailing_martingale_short_hsl_source_py() -> &'static str {
-    gpu::mps_trailing_martingale_short_hsl_source()
-}
-
-#[pyfunction]
-fn mps_trailing_martingale_long_no_hsl_source_py() -> &'static str {
-    gpu::mps_trailing_martingale_long_no_hsl_source()
-}
-
-#[pyfunction]
-fn mps_trailing_martingale_short_no_hsl_source_py() -> &'static str {
-    gpu::mps_trailing_martingale_short_no_hsl_source()
 }
 
 #[pyfunction]
@@ -108,6 +143,12 @@ fn mps_strategy_eq_recovery_distribution_source_py() -> &'static str {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(coin_age_eligible, m)?)?;
+    m.add_function(wrap_pyfunction!(coin_age_first_eligible_index, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        config_prefilter::config_prefilter_metrics_json,
+        m
+    )?)?;
     m.add_class::<HlcvsBundlePy>()?;
     m.add_function(wrap_pyfunction!(
         unilateralness::calc_signed_unilateralness,
@@ -118,11 +159,16 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl::signal_py, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_controller::hsl_controller, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_trace::hsl_trace, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_evaluator::hsl_evaluate, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_evaluator::hsl_evaluate_grids, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_ew_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate_grids, m)?)?;
+    m.add_class::<hsl_v9_live::HslV9Replay>()?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::realized_memory_v9, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_v9_live::realized_memories_v9, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        hsl_v9_live::calc_auto_unstuck_allowance_v9,
+        m
+    )?)?;
     m.add_class::<hsl_prices::HslPriceGrid>()?;
     m.add_class::<hsl_prices::HslCandleSource>()?;
     m.add_function(wrap_pyfunction!(hsl_prices::hsl_native_price_grid, m)?)?;
@@ -130,30 +176,9 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hsl_prices::hsl_prices, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_prices::hsl_price_grid, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_snapshot::hsl_snapshot, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_candle_free::hsl_candle_free, m)?)?;
-    m.add_function(wrap_pyfunction!(mps_ema_anchor_source_py, m)?)?;
-    m.add_function(wrap_pyfunction!(mps_ema_anchor_long_no_hsl_source_py, m)?)?;
-    m.add_function(wrap_pyfunction!(mps_ema_anchor_short_no_hsl_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_multicoin_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(
         mps_ema_anchor_multicoin_long_source_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(mps_trailing_martingale_source_py, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        mps_trailing_martingale_long_hsl_source_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        mps_trailing_martingale_short_hsl_source_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        mps_trailing_martingale_long_no_hsl_source_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        mps_trailing_martingale_short_no_hsl_source_py,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
@@ -165,6 +190,16 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(utils::gpu_decimal_metadata_py, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_ema_bootstrap_counts_py, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_gpu_market_execution_ticks, m)?)?;
+    m.add(
+        "GPU_MARKET_EXECUTION_SELL_LANE",
+        GPU_MARKET_EXECUTION_SELL_LANE,
+    )?;
+    m.add(
+        "GPU_MARKET_EXECUTION_BUY_LANE",
+        GPU_MARKET_EXECUTION_BUY_LANE,
+    )?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;
@@ -179,7 +214,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_wallet_exposure, m)?)?;
     m.add_function(wrap_pyfunction!(calc_new_psize_pprice, m)?)?;
     m.add_function(wrap_pyfunction!(calc_next_entry_long_py, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_trailing_grid_v7_diagnostic_py, m)?)?;
     m.add_function(wrap_pyfunction!(
         calc_trailing_martingale_close_diagnostic_py,
         m
@@ -194,7 +228,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_twel_enforcer_orders_py, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest_bundle, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_auto_unstuck_allowance, m)?)?;
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;

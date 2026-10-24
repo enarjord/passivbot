@@ -341,7 +341,7 @@ def hsl_case(index):
     now = 1_800_000 + [0, 1, 12_345, 59_999][index % 4]
     start = [0, 1, 59_999][(index // 4) % 3]
     short = bool(index & 16); side = 'short' if short else 'long'; sign = -1 if short else 1
-    mode = ['coin','pside','unified'][(index//32)%3]
+    mode = ['coin','pside','portfolio'][(index//32)%3]
     flat = bool(index & 128)
     first = start + (60_000-start%60_000)%60_000
     prices = {str(t): float([100,120,80,105][(t//60000+index)%4])
@@ -372,12 +372,14 @@ def hsl_case(index):
                 fills=fills,prices=prices,revisions=[0,0,0,0])
     snapshot = dict(now=now,start=start,balance=[1000,250,100][index%3],balance_at=now,
                     config_at=now,max_current_age_ms=10000,mode=mode,pairs=[pair])
-    if mode != 'unified':snapshot['pside']=side
+    if mode != 'portfolio':snapshot['pside']=side
     if mode == 'coin':snapshot['symbol']=SYMBOL
     return dict(snapshot=snapshot,slots=0 if index%17==0 else 1,
-                span=[1,2.5,703][index%3],threshold=[.01,.2,.5][index%3],
-                cooldown_ms=[0,60000,3600000][index%3],
-                restart='never' if index&32 else 'always')
+                scale_budget_with_excess_allowance=False, exposure_budget=None,
+                memory_ema_span_minutes=[1,2.5,703][index%3],
+                drawdown_ratio_ema_span_minutes=[1,2.5,703][index%3],
+                threshold=[.01,.2,.5][index%3],
+                cooldown_ms=[0,60000,3600000][index%3], budget_observations=[])
 
 
 @pytest.mark.parametrize('index', range(64))
@@ -391,13 +393,21 @@ def test_real_native_binding_matches_json_reference(index):
             for ts,price in pair['prices'].items() if int(ts)%60000 == 0]
     grid = pbr.HslCandleSource(rows).project(snap['start'],snap['now'])[0]
     pair['prices'] = grid.values()
-    expected = json.loads(pbr.hsl_evaluate(json.dumps(value)))
+    if snap['mode'] == 'coin' and value['slots'] == 0:
+        with pytest.raises(ValueError, match='held enabled HSL scope has zero configured slots'):
+            pbr.hsl_v9_evaluate(json.dumps(value))
+        pair['prices'] = {}
+        with pytest.raises(ValueError, match='held enabled HSL scope has zero configured slots'):
+            pbr.hsl_v9_evaluate_grids(json.dumps(value), [grid])
+        return
+    expected = json.loads(pbr.hsl_v9_evaluate(json.dumps(value)))
+    assert expected['risk'] is not None
     pair['prices'] = {}
-    assert expected == json.loads(pbr.hsl_evaluate_grids(json.dumps(value),[grid]))
+    assert expected == json.loads(pbr.hsl_v9_evaluate_grids(json.dumps(value),[grid]))
     # Reuse the factual grid, but re-evaluate changed current account/market facts.
     snap['balance'] *= .5
     pair['position']['mark'] *= .75
     pair['prices'] = grid.values()
-    expected = json.loads(pbr.hsl_evaluate(json.dumps(value)))
+    expected = json.loads(pbr.hsl_v9_evaluate(json.dumps(value)))
     pair['prices'] = {}
-    assert expected == json.loads(pbr.hsl_evaluate_grids(json.dumps(value),[grid]))
+    assert expected == json.loads(pbr.hsl_v9_evaluate_grids(json.dumps(value),[grid]))

@@ -137,7 +137,7 @@ Compare a base config against a small number of targeted runtime overrides:
       {
         "label": "npos_5",
         "overrides": {
-          "bot.long.risk.n_positions": 5
+          "bot.long.risk.max_positions": 5
         }
       }
     ]

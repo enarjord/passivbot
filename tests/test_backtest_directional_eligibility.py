@@ -1,3 +1,4 @@
+from config.universe import set_side_universe_sources
 from collections import Counter
 
 import numpy as np
@@ -15,17 +16,13 @@ def require_real_passivbot_rust_module():
         pytest.fail("directional eligibility requires the real passivbot_rust extension")
 
 
-def _ema_anchor_config(hedge_mode: bool) -> dict:
+def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dict:
     config = load_config("configs/examples/ema_anchor.json", verbose=False)
-    config["live"].update(
-        {
-            "approved_coins": {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]},
-            "ignored_coins": {"long": [], "short": []},
-            "hedge_mode": hedge_mode,
-            "warmup_ratio": 1.0,
-            "max_warmup_minutes": 10,
-        }
-    )
+    set_side_universe_sources(config, 'approved_coins', {'long': ['LONGCOIN'], 'short': ['SHORTCOIN']})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    config['bot']["portfolio"]['hedge_mode'] = hedge_mode
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 10
     config["backtest"].update(
         {
             "exchanges": ["binance"],
@@ -39,26 +36,27 @@ def _ema_anchor_config(hedge_mode: bool) -> dict:
         }
     )
     for pside in ("long", "short"):
+        # Directional masks are independent of age in this synthetic history.
+        config["bot"][pside]["universe"]["minimum_coin_age_days"] = 0.0
         config["bot"][pside]["risk"].update(
-            {"n_positions": 1, "total_wallet_exposure_limit": 1.5}
+            {"max_positions": 1, "total_wallet_exposure_limit": 1.5}
         )
         config["bot"][pside]["forager"].update(
             {
-                "volume_ema_span_1m": 2,
-                "volatility_ema_span_1m": 2,
-                "volume_drop_pct": 0.0,
+                "volume_ema_span_minutes": 2,
+                "volatility_ema_span_minutes": 2,
             }
         )
         config["bot"][pside]["strategy"]["ema_anchor"].update(
             {
-                "ema_span_0": 2.0,
-                "ema_span_1": 3.0,
-                "base_qty_pct": 0.2,
-                "offset": 0.001,
+                "ema_span_0_minutes": 2.0,
+                "ema_span_1_minutes": 3.0,
+                "base_qty_fraction": 0.2,
+                "offset_fraction": 0.001,
                 "offset_psize_weight": 0.0,
                 "entry_double_down_factor": 0.0,
-                "offset_volatility_ema_span_1m": 2.0,
-                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_minutes": 2.0,
+                "offset_volatility_ema_span_1h_candles": 2.0,
                 "offset_volatility_1m_weight": 0.0,
                 "offset_volatility_1h_weight": 0.0,
             }
@@ -75,6 +73,8 @@ def _ema_anchor_config(hedge_mode: bool) -> dict:
         "volatility": 0.0,
         "volume": 1.0,
     }
+    if not include_dataset:
+        config["backtest"].pop("coins")
     return config
 
 

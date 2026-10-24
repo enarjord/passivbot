@@ -162,7 +162,7 @@ def test_build_fetcher_unsupported_exchange_reports_live_fill_events(exchange):
 def test_setup_bot_fake_uses_fake_bot():
     from passivbot import setup_bot
 
-    config = {"live": {"user": "test_user"}}
+    config = {"live": {"account": {"user": "test_user"}}}
     mock_user_info = {"exchange": "fake", "quote": "USDT", "fake_scenario_path": "scenario.hjson"}
 
     with patch("passivbot.load_user_info", return_value=mock_user_info):

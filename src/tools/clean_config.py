@@ -19,7 +19,7 @@ if str(SRC_DIR) not in sys.path:
 
 from json_utils import json_dumps_streamlined, reformat_json_text
 
-MODES = ("full", "live", "backtest", "optimize", "format")
+MODES = ("full", "live", "backtest", "optimize", "compact", "resolved", "format")
 
 
 def _unique_object(pairs):
@@ -37,46 +37,119 @@ def _reject_constant(value):
     raise ValueError(f"{value} is not a valid JSON number")
 
 
+def normalize_export_numbers(config: dict) -> dict:
+    """Use declared numeric types without rounding or hydrating sparse patches."""
+    from config.field_registry import get_field_registry
+    from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
+    from config.param_paths import resolve_dotted_config_path, resolve_optimizer_key_path
+    registry = get_field_registry()
+
+    def numeric_type_at(path):
+        # Dotted override paths may address a sparse coin patch. Its leaf types
+        # are the same as those of the corresponding root config fields.
+        if path[:1] == ("coin_overrides",):
+            patch_field = registry.find(path)
+            if patch_field is not None:
+                return patch_field.numeric_type
+            path = path[2:]
+        if path and path[0] == "bot" and all(
+            isinstance(part, str) for part in path
+        ):
+            path = resolve_dotted_config_path(config, ".".join(path))
+        field = registry.find(path)
+        return field.numeric_type if field is not None else None
+
+    def normalize(value, path=()):
+        if isinstance(value, dict):
+            if path == ("coin_overrides",):
+                return {coin: normalize(patch, (*path, coin)) for coin, patch in value.items()}
+            if path == ("optimize", "fixed_runtime_overrides") or (
+                len(path) == 4
+                and path[:2] == ("backtest", "scenarios")
+                and path[-1] == "overrides"
+            ):
+                return {
+                    key: normalize(item, resolve_dotted_config_path(config, key))
+                    for key, item in value.items()
+                }
+            return {
+                key: normalize(item, (*path, key)) for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [normalize(item, (*path, index)) for index, item in enumerate(value)]
+        numeric_type = numeric_type_at(path)
+        if path[:2] == ("optimize", "bounds") and isinstance(path[-1], int):
+            parameter_path = ("bot", *path[2:-1])
+            if len(path) == 6 and path[2] in {"long", "short"}:
+                flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(path[3], {}).get(path[4])
+                if flat_key is not None:
+                    parameter_path = resolve_optimizer_key_path(config, f"{path[2]}_{flat_key}")
+            numeric_type = numeric_type_at(parameter_path) if parameter_path is not None else None
+        if numeric_type is float and type(value) is int:
+            try:
+                converted = float(value)
+            except OverflowError as exc:
+                raise ValueError(
+                    f"{'.'.join(map(str, path))} is too large to export as a float"
+                ) from exc
+            if converted != value:
+                raise ValueError(
+                    f"{'.'.join(map(str, path))} cannot be exported as a float without losing precision"
+                )
+            return converted
+        if numeric_type is int and type(value) is float and value.is_integer():
+            return int(value)
+        return value
+
+    return normalize(config)
+
+
 def cleanup_config(
-    source: dict, *, mode: str = "full", base_config_path: str = ""
+    source: dict, *, mode: str = "full", base_config_path: str = "", _allow_sparse: bool = False
 ) -> dict:
     """Reuse canonical normalization without resolving dates or coin-list sources.
 
     Exporting is not runtime compilation or strategy migration. In particular,
     never apply optimizer fixed runtime overrides to the authored bot values.
     """
+    if mode in {"compact", "resolved"}:
+        from config.authoring import compact_config, resolved_config
+
+        export = compact_config if mode == "compact" else resolved_config
+        return export(source, base_config_path=base_config_path)
     from config.load import prepare_config
     from config.hydrate import (
         normalize_backtest_coin_sources,
         normalize_optimizer_settings,
     )
     from config.project import project_config
-    from config_utils import sanitize_prepared_config_for_dump, strip_config_metadata
+    from config.schema import get_template_config
+    from config.authored import validate_authored_config
+    from config.result_records import extract_result_config
+    from config.migrations.v9 import require_v9_runtime_config
+    from config_utils import sanitize_prepared_config_for_dump
 
     if mode not in MODES[:-1]:
         raise ValueError(f"unsupported config cleanup mode: {mode}")
-    if not isinstance(source, dict):
-        raise TypeError("config root must be an object")
-    payload = source
-    if "bot" not in payload and isinstance(payload.get("config"), dict):
-        payload = payload["config"]
-    if not isinstance(payload.get("bot"), dict) or not isinstance(
+    from config.universe import universe_source_view
+    payload = universe_source_view(extract_result_config(source, allow_unmarked_wrapper=True))
+    if not _allow_sparse and (not isinstance(payload.get("bot"), dict) or not isinstance(
         payload.get("live"), dict
-    ):
+    )):
         raise ValueError(
-            "expected a V8 config with bot and live objects (possibly inside config)"
+            "expected a v9 config with bot and live objects (possibly inside config)"
         )
-    # Ignore result envelopes and validate only the sections relevant to this
-    # export. Missing pipeline sections are hydrated by the shared loader.
-    from config.migrations.excess_allowance import retire_excess_allowance_mode
-
-    payload = deepcopy(payload)
-    retire_excess_allowance_mode(payload)
-    target = "canonical" if mode == "full" else mode
-    payload = strip_config_metadata(project_config(payload, target, record_step=False))
+    for key in ("_raw", "_raw_effective", "_transform_log", "_coins_sources"):
+        payload.pop(key, None)
     for section, value in payload.items():
         if section != "config_version" and not isinstance(value, dict):
             raise TypeError(f"config.{section} must be an object")
+    # Validate authored structure before a lossy projection can hide mistakes or
+    # retired authority. Value normalization remains specific to the export.
+    require_v9_runtime_config(payload)
+    validate_authored_config(payload, get_template_config())
+    target = "canonical" if mode == "full" else mode
+    payload = project_config(payload, target, record_step=False)
     prepared = prepare_config(
         deepcopy(payload),
         base_config_path=base_config_path,
@@ -100,9 +173,18 @@ def cleanup_config(
     # These schema leaves accept mappings, lists, sentinel strings and file
     # references. Template-shaped cleaning alone would replace a string/list
     # with the default mapping, even though live normalization preserves it.
-    for key in ("approved_coins", "ignored_coins"):
-        cleaned["live"][key] = deepcopy(prepared["live"][key])
-    # null means inherit the live setting, rather than the schema's false.
+    from config.bot_inheritance import bot_policy_source_view
+    from config.universe import COIN_SOURCE_FIELDS
+    declared = universe_source_view(bot_policy_source_view(prepared, include_defaults=True))
+    for scope in ("global", "long", "short"):
+        sources = declared.get("bot", {}).get(scope, {}).get("universe", {})
+        target_sources = cleaned.get("bot", {}).get(scope, {}).get("universe", {})
+        for key in COIN_SOURCE_FIELDS:
+            if key in sources:
+                cleaned.setdefault("bot", {}).setdefault(scope, {}).setdefault("universe", {})[key] = deepcopy(sources[key])
+            else:
+                target_sources.pop(key, None)
+    # Preserve null as explicit inheritance of the shared bot policy.
     cleaned["backtest"]["filter_by_min_effective_cost"] = prepared["backtest"][
         "filter_by_min_effective_cost"
     ]
@@ -118,6 +200,7 @@ def render_source(
     indent: int = 4,
     max_inline: int = 72,
     sort_keys: bool = False,
+    destination: Path | None = None,
 ) -> str:
     is_hjson = input_format == "hjson" or (
         input_format == "auto" and source.suffix.lower() == ".hjson"
@@ -146,10 +229,19 @@ def render_source(
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
-    cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
+    if mode == "compact":
+        from config.authoring import compact_config
+
+        cleaned = compact_config(payload, base_config_path=str(source),
+                                 destination_path=str(destination) if destination else "")
+    else:
+        cleaned = cleanup_config(payload, mode=mode, base_config_path=str(source))
+        if destination is not None and mode != "resolved":
+            from config.authoring import _rebase_override_files
+            _rebase_override_files(cleaned, str(source), str(destination))
     return (
         json_dumps_streamlined(
-            cleaned,
+            normalize_export_numbers(cleaned),
             indent=indent,
             max_inline=max_inline,
             sort_keys=True,
@@ -278,6 +370,7 @@ def plan_files(args) -> list[PlannedFile]:
                 indent=args.indent,
                 max_inline=args.max_inline,
                 sort_keys=args.sort_keys,
+                destination=target,
             ).encode("utf-8")
         except (OSError, ValueError, TypeError, KeyError) as exc:
             raise ValueError(f"{path}: {exc}") from exc
@@ -335,7 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=MODES,
         default="full",
-        help="full (default), live, backtest, optimize, or format only",
+        help="full (default), live, backtest, optimize, compact authored settings, resolved local snapshot, or lossless format",
     )
     parser.add_argument(
         "--in-place", action="store_true", help="Explicitly replace source files"

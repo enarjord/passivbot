@@ -12,46 +12,44 @@ BOT_GROUP_FIELD_MAP = {
         "weights_minutes": "entry_cooldown_weights_minutes",
     },
     "risk": {
-        "n_positions": "n_positions",
+        "max_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
-        "total_exposure_entry_gate_enabled": "risk_twel_entry_gate_enabled",
-        "total_exposure_enforcer_enabled": "risk_twel_enforcer_enabled",
-        "total_exposure_enforcer_policy": "risk_twel_enforcer_policy",
-        "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
-        "position_exposure_enforcer_enabled": "risk_wel_enforcer_enabled",
-        "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
+        "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
+        "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
+        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
+        "position_exposure_enforcer.enabled": "risk_wel_enforcer_enabled",
+        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold",
     },
     "forager": {
         "score_weights": "forager_score_weights",
-        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
-        "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-        "volume_drop_pct": "forager_volume_drop_pct",
-        "volume_ema_span_1m": "forager_volume_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
+        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
-        "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
-        "ema_span_minutes": "hsl_ema_span_minutes",
+        "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
+        "drawdown_ratio_ema_span_minutes": "hsl_ema_span_minutes",
+        "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "enabled": "hsl_enabled",
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
-        "red_threshold": "hsl_red_threshold",
-        "restart_after_red_policy": "hsl_restart_after_red_policy",
+        "drawdown_ratio_threshold": "hsl_red_threshold",
     },
     "unstuck": {
-        "close_pct": "unstuck_close_pct",
-        "ema_dist": "unstuck_ema_dist",
-        "ema_span_0": "unstuck_ema_span_0",
-        "ema_span_1": "unstuck_ema_span_1",
+        "close_fraction": "unstuck_close_pct",
+        "ema_distance_fraction": "unstuck_ema_dist",
+        "ema_span_0_minutes": "unstuck_ema_span_0",
+        "ema_span_1_minutes": "unstuck_ema_span_1",
         "ema_gating_enabled": "unstuck_ema_gating_enabled",
         "enabled": "unstuck_enabled",
-        "loss_allowance_pct": "unstuck_loss_allowance_pct",
-        "threshold": "unstuck_threshold",
+        "loss_allowance_fraction": "unstuck_loss_allowance_pct",
+        "exposure_trigger_ratio": "unstuck_threshold",
     },
 }
 
 FLAT_BOT_KEY_TO_GROUP_PATH = {
-    flat_key: (group_name, local_key)
+    flat_key: (group_name, *local_key.split("."))
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
@@ -80,10 +78,9 @@ def get_grouped_bot_value(
         return bot_side[flat_key]
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is not None:
-        group_name, local_key = group_path
-        group = get_bot_group(bot_side, group_name)
-        if local_key in group:
-            return group[local_key]
+        value = get_grouped_path(bot_side, group_path, default=_MISSING)
+        if value is not _MISSING:
+            return value
     if flat_key in bot_side:
         return bot_side[flat_key]
     return default
@@ -126,7 +123,7 @@ def flatten_shared_bot_side(bot_side: dict | None) -> dict:
         ):
             result[flat_key] = deepcopy(value)
     for key, value in bot_side.items():
-        if key in result or key in BOT_SHARED_GROUPS or key == "strategy":
+        if key in result or key in BOT_SHARED_GROUPS or key in {"strategy", "universe"}:
             continue
         result[key] = deepcopy(value)
     return result
@@ -145,19 +142,39 @@ def canonical_shared_bot_path_for_flat_key(
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is None:
         return None
-    group_name, local_key = group_path
-    return ("bot", pside, group_name, local_key)
+    return ("bot", pside, *group_path)
+
+
+def get_grouped_path(node: dict, path: tuple[str, ...], *, default=None):
+    """Read an exact internal binding without adding configuration authority."""
+    for part in path:
+        if not isinstance(node, dict) or part not in node:
+            return default
+        node = node[part]
+    return node
+
+
+def set_grouped_bot_value(bot_side: dict, flat_key: str, value) -> None:
+    """Write through a canonical shared-field binding, or a native flat view."""
+    path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if path is None or not isinstance(bot_side.get(path[0]), dict):
+        bot_side[flat_key] = value
+        return
+    target = bot_side
+    for part in path[:-1]:
+        target = target.setdefault(part, {})
+        if not isinstance(target, dict):
+            raise TypeError(f"{'.'.join(path[:-1])} must be a dict")
+    target[path[-1]] = value
 
 
 def resolve_shared_bot_path(
     bot_side: dict | None, pside: str, flat_key: str
 ) -> tuple[str, ...] | None:
-    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
-    if isinstance(bot_side, dict) and group_path is not None:
-        group_name, local_key = group_path
-        group_cfg = bot_side.get(group_name)
-        if isinstance(group_cfg, dict) and local_key in group_cfg:
-            return ("bot", pside, group_name, local_key)
+    path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if isinstance(bot_side, dict) and path is not None:
+        if get_grouped_path(bot_side, path, default=_MISSING) is not _MISSING:
+            return ("bot", pside, *path)
     if isinstance(bot_side, dict) and flat_key in bot_side:
         return ("bot", pside, flat_key)
     return canonical_shared_bot_path_for_flat_key(pside, flat_key)
@@ -185,31 +202,29 @@ def canonicalize_shared_bot_side(
                 f"{'.'.join(path_prefix + (group_name,))} must be a dict; "
                 f"got {type(group_cfg).__name__}"
             )
-    for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+    for flat_key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in bot_side:
             continue
         moved_value = bot_side.pop(flat_key)
-        group_cfg = bot_side.get(group_name)
-        if group_cfg is None:
-            group_cfg = {}
-            bot_side[group_name] = group_cfg
+        target = bot_side
+        for index, part in enumerate(path[:-1]):
+            if part not in target:
+                target[part] = {}
+                if tracker is not None:
+                    tracker.add([*path_prefix, *path[:index + 1]], {})
+            target = target[part]
+            if not isinstance(target, dict):
+                raise TypeError(f"{'.'.join((*path_prefix, *path[:-1]))} must be a dict")
+        leaf = path[-1]
+        if leaf not in target:
+            target[leaf] = moved_value
             if tracker is not None:
-                tracker.add([*path_prefix, group_name], {})
-        if local_key not in group_cfg:
-            group_cfg[local_key] = moved_value
+                tracker.rename([*path_prefix, flat_key], [*path_prefix, *path], moved_value)
+        elif target[leaf] != moved_value:
+            old_value = target[leaf]
+            target[leaf] = moved_value
             if tracker is not None:
-                tracker.rename(
-                    [*path_prefix, flat_key],
-                    [*path_prefix, group_name, local_key],
-                    moved_value,
-                )
-        elif group_cfg[local_key] != moved_value:
-            old_value = group_cfg[local_key]
-            group_cfg[local_key] = moved_value
-            if tracker is not None:
-                tracker.update(
-                    [*path_prefix, group_name, local_key], old_value, moved_value
-                )
+                tracker.update([*path_prefix, *path], old_value, moved_value)
                 tracker.remove([*path_prefix, flat_key], moved_value)
         elif tracker is not None:
             tracker.remove([*path_prefix, flat_key], moved_value)

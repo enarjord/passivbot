@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 
 import pytest
 
@@ -104,7 +105,7 @@ async def test_active_candle_refresh_only_fetches_urgent_symbols(monkeypatch):
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
         active_symbols = [
             "POS/USDT:USDT",
             "OO/USDT:USDT",
@@ -207,7 +208,7 @@ async def test_active_candle_refresh_ignores_broad_graceful_stop_universe(monkey
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
         active_symbols = [
             "POS/USDT:USDT",
             "FRESH/USDT:USDT",
@@ -303,7 +304,7 @@ async def test_active_candle_refresh_does_not_block_planning_when_rate_limited(m
             }
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
         active_symbols = ["POS/USDT:USDT"]
         PB_modes = {"long": {}, "short": {}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
@@ -345,7 +346,7 @@ async def test_execute_to_exchange_schedules_forager_candidates_after_planning(
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
         debug_mode = True
         stop_signal_received = False
 
@@ -633,9 +634,12 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 12,
-                "max_forager_candle_refresh_seconds": 0,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 12,
+                    "max_forager_candle_refresh_seconds": 0,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
@@ -750,9 +754,12 @@ async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 12,
-                "max_forager_candle_refresh_seconds": 0,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 12,
+                    "max_forager_candle_refresh_seconds": 0,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -844,10 +851,13 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
     class FakeBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 10,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -969,10 +979,13 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
     class FakeBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 10,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
@@ -1076,10 +1089,13 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
     class FakeBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 10,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {}
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
@@ -1209,11 +1225,14 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
     class FakeBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 10,
-                "strategy_kind": "trailing_martingale",
-            }
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
+            },
+            "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
@@ -1421,11 +1440,14 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
     class FakeBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 10,
-                "strategy_kind": "trailing_martingale",
-            }
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
+            },
+            "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}},
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {
             symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}
             for symbol in symbols
@@ -1619,7 +1641,8 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
             return 1.0
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -1800,10 +1823,13 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
     class FakeBot:
         config = {
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 5,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 5,
+                }
             }
         }
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -1919,7 +1945,8 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
             return 1.0
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 30}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 30}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -2036,7 +2063,8 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
             return 1.0
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 30}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 30}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -2144,7 +2172,8 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
             return 1.0
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": 4}}}
+        config["bot"] = {"long": {"enabled": True}, "short": {"enabled": True}}
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -2229,7 +2258,10 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
         pass
 
     class FakeBot:
-        config = {"live": {"warmup_ratio": 0.0}}
+        config = {
+            "live": {},
+            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+        }
         cm = FakeCM()
         approved_coins_minus_ignored_coins = {
             "long": {"BTC/USDT:USDT"},
@@ -2274,8 +2306,10 @@ def test_forager_target_staleness_obeys_configured_cap():
     class FakeBot:
         config = {
             "live": {
-                "max_active_candle_tail_gap_minutes": 10,
-                "max_forager_candle_staleness_minutes": 10,
+                "candles": {
+                    "max_active_candle_tail_gap_minutes": 10,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
             }
         }
         inactive_coin_candle_ttl_ms = 600_000
@@ -2292,8 +2326,10 @@ def test_forager_target_staleness_does_not_derive_below_active_tail_grace():
     class FakeBot:
         config = {
             "live": {
-                "max_active_candle_tail_gap_minutes": 10,
-                "max_forager_candle_staleness_minutes": None,
+                "candles": {
+                    "max_active_candle_tail_gap_minutes": 10,
+                    "max_forager_candle_staleness_minutes": None,
+                }
             }
         }
         inactive_coin_candle_ttl_ms = 600_000
@@ -2310,8 +2346,10 @@ def test_forager_target_staleness_explicit_cap_may_shorten_active_tail_grace():
     class FakeBot:
         config = {
             "live": {
-                "max_active_candle_tail_gap_minutes": 10,
-                "max_forager_candle_staleness_minutes": 5,
+                "candles": {
+                    "max_active_candle_tail_gap_minutes": 10,
+                    "max_forager_candle_staleness_minutes": 5,
+                }
             }
         }
         inactive_coin_candle_ttl_ms = 600_000
@@ -2331,7 +2369,7 @@ def test_required_candle_health_window_failures_are_bounded_and_keep_other_side_
 
     class FakeBot:
         cm = FakeCM()
-        config = {"live": {}}
+        config = {"live": {}, "bot": {"portfolio": {"warmup": {"max_minutes": None}}}}
 
         def get_max_n_positions(self, pside):
             if pside == "long":
@@ -2519,7 +2557,7 @@ def test_warmup_candle_cache_decision_rejects_stale_or_forced_cache(monkeypatch)
     assert stale["reason_code"] == "stale_refresh"
     assert stale["cold_path_required"] is True
 
-    bot.config = {"live": {"force_cold_startup": True}}
+    bot.config = {"live": {"startup": {"force_cold_startup": True}}}
     forced = pb_mod.Passivbot._warmup_candle_cache_decision(
         bot,
         "STALE/USDT:USDT",
@@ -2595,7 +2633,10 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
             return []
 
     class FakeBot:
-        config = {"live": {"force_cold_startup": False}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "live": {"startup": {"force_cold_startup": False}},
+        }
         exchange = "bybit"
         user = "test_user"
         approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
@@ -2653,7 +2694,9 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     assert warmup_records
     assert all(record.levelno == logging.DEBUG for record in warmup_records)
     assert any("trading-ready warmup" in record.message for record in warmup_records)
-    assert any("target" in record.message for record in warmup_records)
+    target = next(record.message for record in warmup_records if "target" in record.message)
+    assert "span_multiplier=" in target and "max_minutes=" in target
+    assert "warmup_ratio=" not in target and "max_warmup_minutes=" not in target
     assert any("slot view" in record.message for record in warmup_records)
     assert any("windows" in record.message for record in warmup_records)
     assert any("candles:" in record.message for record in warmup_records)
@@ -2794,9 +2837,9 @@ async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
             "live": {
-                "force_cold_startup": True,
-                "warmup_jitter_seconds": 30.0,
+                "startup": {"force_cold_startup": True, "warmup_jitter_seconds": 30.0}
             }
         }
         exchange = "bybit"
@@ -2961,7 +3004,10 @@ async def test_forager_candidate_refresh_rotates_by_completed_candle_staleness(
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
+        }
         approved_coins_minus_ignored_coins = {
             "long": {"FRESH/USDT:USDT", "STALE/USDT:USDT", "OLDER/USDT:USDT"},
             "short": set(),
@@ -3055,7 +3101,10 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
+        }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
         positions = {}
@@ -3110,7 +3159,11 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
 
 
 @pytest.mark.asyncio
-async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeypatch):
+@pytest.mark.parametrize("cap,span,expected", [
+    (60, 500.0, 60), (5.5, 500.0, 6), (1.0, 500.0, 1), (0.5, 500.0, 1),
+    (None, 500.0, 500), (5.5, 3.25, 4), (60, 3.25, 4), (None, 3.25, 120),
+])
+async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeypatch, cap, span, expected):
     import passivbot as pb_mod
 
     now_ms = 12 * 60 * 60_000
@@ -3144,10 +3197,8 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
 
     class FakeBot:
         config = {
-            "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_warmup_minutes": 60,
-            }
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
+            "bot": {"portfolio": {"warmup": {"max_minutes": cap}}},
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
@@ -3172,7 +3223,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
 
         def bp(self, _pside, key, _symbol):
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
-                return 500.0
+                return span
             return 0.0
 
         _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
@@ -3186,7 +3237,7 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
     assert len(bot.cm.calls) == 1
     _, kwargs = bot.cm.calls[0]
     assert kwargs["timeframe"] == "1m"
-    assert kwargs["max_lookback_candles"] == 60
+    assert kwargs["max_lookback_candles"] == expected
 
 
 @pytest.mark.asyncio
@@ -3210,7 +3261,7 @@ async def test_forager_candidate_refresh_skips_warmup_when_budget_is_zero(
     )
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": max_calls}}
+        config = {"live": {"candles": {"max_ohlcv_fetches_per_minute": max_calls}}}
         approved_coins_minus_ignored_coins = {
             "long": {"IDLE/USDT:USDT"},
             "short": set(),
@@ -3277,7 +3328,10 @@ async def test_forager_candidate_refresh_does_not_charge_healthy_scan(monkeypatc
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
+        }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
         active_symbols = []
         positions = {}
@@ -3362,7 +3416,10 @@ async def test_forager_candidate_refresh_skips_unused_native_h1_surface(monkeypa
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
+        }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
         positions = {}
@@ -3439,9 +3496,12 @@ async def test_forager_candidate_refresh_tolerates_tail_within_target_age(monkey
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 4,
-                "max_forager_candle_staleness_minutes": 10,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 4,
+                    "max_forager_candle_staleness_minutes": 10,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -3517,7 +3577,10 @@ async def test_forager_candidate_refresh_bounds_and_rotates_health_scans(monkeyp
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
+        }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
         active_symbols = []
         positions = {}
@@ -3598,7 +3661,10 @@ async def test_forager_candidate_refresh_keeps_unfetched_stale_surfaces_pending(
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
+        }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
         active_symbols = []
         positions = {}
@@ -3679,7 +3745,10 @@ async def test_forager_candidate_staleness_counts_only_refreshable_surfaces(monk
             }
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
+        }
         approved_coins_minus_ignored_coins = {
             "long": urgent | {inactive},
             "short": set(),
@@ -3762,7 +3831,10 @@ async def test_forager_candidate_refresh_prioritizes_cold_1m_before_1h(monkeypat
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
+        }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
         active_symbols = []
         positions = {}
@@ -3855,7 +3927,10 @@ async def test_forager_candidate_refresh_interleaves_h1_health_scans(monkeypatch
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 1}},
+        }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
         active_symbols = []
         positions = {}
@@ -3978,7 +4053,10 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
+        }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
         positions = {}
@@ -4105,7 +4183,10 @@ async def test_forager_candidate_refresh_does_not_back_off_empty_h1_result(monke
             return [] if len(self.fetch_calls) == 1 else [object()]
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 4}},
+        }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         active_symbols = []
         positions = {}
@@ -4182,9 +4263,12 @@ async def test_forager_candidate_refresh_success_detail_is_debug(monkeypatch, ca
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 8,
-                "max_forager_candle_refresh_seconds": 45,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 8,
+                    "max_forager_candle_refresh_seconds": 45,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
@@ -4268,7 +4352,10 @@ async def test_forager_candidate_refresh_skips_only_urgent_symbols(monkeypatch):
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 8}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 8}},
+        }
         approved_coins_minus_ignored_coins = {
             "long": {
                 "POS/USDT:USDT",
@@ -4358,7 +4445,10 @@ async def test_forager_candidate_refresh_caps_accumulated_budget(monkeypatch):
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 30}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 30}},
+        }
         approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
         active_symbols = []
         positions = {}
@@ -4428,9 +4518,12 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 30,
-                "max_forager_candle_refresh_seconds": 45,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 30,
+                    "max_forager_candle_refresh_seconds": 45,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
@@ -4544,9 +4637,12 @@ async def test_forager_candidate_refresh_shares_wall_time_across_surfaces(
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 8,
-                "max_forager_candle_refresh_seconds": 0.1,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 8,
+                    "max_forager_candle_refresh_seconds": 0.1,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
@@ -4647,9 +4743,12 @@ async def test_forager_candidate_refresh_cancels_child_fetch_with_parent(
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 1,
-                "max_forager_candle_refresh_seconds": 1.0,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 1,
+                    "max_forager_candle_refresh_seconds": 1.0,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
@@ -4723,9 +4822,12 @@ async def test_forager_candidate_refresh_sleep_respects_wall_time_cap(monkeypatc
 
     class FakeBot:
         config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
             "live": {
-                "max_ohlcv_fetches_per_minute": 30,
-                "max_forager_candle_refresh_seconds": 15,
+                "candles": {
+                    "max_ohlcv_fetches_per_minute": 30,
+                    "max_forager_candle_refresh_seconds": 15,
+                }
             }
         }
         approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
@@ -4794,7 +4896,10 @@ async def test_forager_candidate_refresh_skips_latest_final_candles(monkeypatch)
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 30}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 30}},
+        }
         approved_coins_minus_ignored_coins = {
             "long": {"FRESH/USDT:USDT"},
             "short": set(),
@@ -4876,7 +4981,10 @@ async def test_forager_candidate_refresh_skips_non_refreshable_sparse_gap(monkey
             return []
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 30}}
+        config = {
+            "bot": {"portfolio": {"warmup": {"max_minutes": None}}},
+            "live": {"candles": {"max_ohlcv_fetches_per_minute": 30}},
+        }
         approved_coins_minus_ignored_coins = {
             "long": {"SPARSE/USDT:USDT"},
             "short": set(),
@@ -4951,7 +5059,7 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, 
             }
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_active_candle_tail_gap_minutes": 10}}}
     bot.cm = FakeCM()
 
     with caplog.at_level(logging.INFO):
@@ -5068,7 +5176,7 @@ def test_completed_candle_tail_gap_fallback_repeats_at_debug(monkeypatch, caplog
             }
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_active_candle_tail_gap_minutes": 10}}}
     bot.cm = FakeCM()
 
     with caplog.at_level(logging.DEBUG):
@@ -5113,7 +5221,7 @@ def test_completed_candle_tail_gap_fallback_warns_near_cap(monkeypatch, caplog):
             }
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_active_candle_tail_gap_minutes": 10}}}
     bot.cm = FakeCM()
 
     with caplog.at_level(logging.WARNING):
@@ -5156,7 +5264,7 @@ def test_completed_candle_freshness_allows_real_cm_bounded_active_tail_gap(
     )
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_active_candle_tail_gap_minutes": 10}}}
     bot.cm = cm
 
     signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
@@ -5204,7 +5312,7 @@ def test_completed_candle_freshness_blocks_excessive_active_tail_gap(monkeypatch
             }
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_active_candle_tail_gap_minutes": 10}}}
     bot.cm = FakeCM()
 
     signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
@@ -5248,7 +5356,7 @@ def test_completed_candle_freshness_blocks_bounded_gap_plus_tail(monkeypatch):
             }
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
-    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.config = {"live": {"candles": {"max_active_candle_tail_gap_minutes": 10}}}
     bot.cm = FakeCM()
 
     signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
@@ -5908,8 +6016,12 @@ async def test_projected_open_tail_ema_seeds_when_tail_exceeds_span(tmp_path, mo
     )
 
     assert projected["close"][2.0] == pytest.approx(100.0)
-    assert projected["qv"][2.0] == pytest.approx(0.0)
-    assert projected["log_range"][2.0] == pytest.approx(0.0)
+    # At the first usable boundary the normalized four-row bootstrap contains
+    # the source row followed by three completed zero-activity preview candles.
+    beta = 1.0 - 2.0 / 3.0
+    source_weight = beta**3 / sum(beta**i for i in range(4))
+    assert projected["qv"][2.0] == pytest.approx(200.0 * source_weight)
+    assert projected["log_range"][2.0] == pytest.approx(math.log(101.0 / 99.0) * source_weight)
     assert np.array_equal(cm._cache[symbol], seed)
     assert cm._ema_cache.get(symbol, {}) == {}
     assert cm._synthetic_timestamps.get(symbol, set()) == set()

@@ -80,7 +80,7 @@ class DiagnosticEvent:
         if bot is not None:
             exchange = getattr(bot, "exchange", None)
             try:
-                user = bot.config_get(["live", "user"])
+                user = bot.config_get(["live", "account", "user"])
             except Exception:
                 user = getattr(bot, "user", None)
             bot_id = getattr(bot, "bot_id", None)

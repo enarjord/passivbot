@@ -388,15 +388,15 @@ config = {
             {
                 "label": "pure_grid",
                 "overrides": {
-                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0,
-                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_fraction": 0,
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_fraction": 0
                 }
             },
             {
                 "label": "pure_trailing",
                 "overrides": {
-                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0.005,
-                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.005
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_fraction": 0.005,
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_fraction": 0.005
                 }
             }
         ]
@@ -411,9 +411,9 @@ config = {
     "backtest": {
         "exchanges": ["binance"],
         "scenarios": [
-            {"label": "n3", "overrides": {"bot.long.risk.n_positions": 3}},
-            {"label": "n5", "overrides": {"bot.long.risk.n_positions": 5}},
-            {"label": "n10", "overrides": {"bot.long.risk.n_positions": 10}}
+            {"label": "n3", "overrides": {"bot.long.risk.max_positions": 3}},
+            {"label": "n5", "overrides": {"bot.long.risk.max_positions": 5}},
+            {"label": "n10", "overrides": {"bot.long.risk.max_positions": 10}}
         ]
     }
 }

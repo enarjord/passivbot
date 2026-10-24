@@ -4,6 +4,8 @@ from copy import deepcopy
 import json
 
 import pytest
+
+from config.schema import get_expanded_config_prototype
 from config.load import prepare_config
 from config.schema import get_template_config
 from config.overrides import parse_overrides
@@ -14,10 +16,10 @@ from risk_limits import (
 
 @pytest.mark.parametrize("location", ["root", "coin", "fixed", "scenario", "wrapper"])
 @pytest.mark.parametrize("mode", [" BOUNDED ", " LEGACY_RAW "])
-def test_retired_mode_is_removed_or_fails_with_actionable_context(
-    location, mode, caplog
+def test_current_schema_rejects_retired_mode_on_all_authored_surfaces(
+    location, mode
 ):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     risk = {"we_excess_allowance_mode": mode}
     if location == "root":
         source["bot"]["long"]["risk"].update(risk)
@@ -30,7 +32,7 @@ def test_retired_mode_is_removed_or_fails_with_actionable_context(
     elif location == "scenario":
         source["backtest"]["scenarios"] = [
             {
-                "name": "old",
+                "label": "old",
                 "overrides": {"bot.long.risk.we_excess_allowance_mode": mode},
             }
         ]
@@ -38,17 +40,9 @@ def test_retired_mode_is_removed_or_fails_with_actionable_context(
         source["bot"]["long"]["risk"].update(risk)
         source = {"config": source}
     original = deepcopy(source)
-    if "LEGACY_RAW" in mode:
-        with pytest.raises(
-            ValueError,
-            match="no longer supported.*re-backtest.*cannot be preserved automatically",
-        ):
-            prepare_config(source, verbose=False)
-        assert "we_excess_allowance_mode" in caplog.text
-    else:
-        result = prepare_config(source, verbose=False)
-        assert "we_excess_allowance_mode" not in result["bot"]["long"]["risk"]
-        assert "Removed obsolete" in caplog.text
+    match = "config_version.*explicit migration" if location == "wrapper" else "we_excess_allowance_mode"
+    with pytest.raises(ValueError, match=match):
+        prepare_config(source, verbose=False)
     assert source == original
 
 
@@ -71,14 +65,8 @@ def test_external_config_cannot_hide_removed_raw_policy(tmp_path, mode):
     )
     source = get_template_config()
     source["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
-    if mode == "legacy_raw":
-        with pytest.raises(ValueError, match="legacy_raw.*no longer supported"):
-            parse_overrides(prepare_config(source, verbose=False), verbose=False)
-    else:
-        result = parse_overrides(prepare_config(source, verbose=False), verbose=False)
-        assert result["coin_overrides"]["BTC"]["bot"]["long"]["risk"] == {
-            "we_excess_allowance_pct": 0.5
-        }
+    with pytest.raises(ValueError, match=r"coin_overrides\.BTC\.override_config_path.*config\.bot\.long\.risk\.we_excess_allowance_mode is an unknown configuration field"):
+        parse_overrides(prepare_config(source, verbose=False), verbose=False)
     assert (
         json.loads(path.read_text())["bot"]["long"]["risk"]["we_excess_allowance_mode"]
         == mode
@@ -87,7 +75,7 @@ def test_external_config_cannot_hide_removed_raw_policy(tmp_path, mode):
 
 @pytest.mark.parametrize("value", [True, False, "true", 1, None])
 def test_scaling_is_strict_boolean_and_defaults_off(value):
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     assert source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is False
     source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = value
     if type(value) is bool:
@@ -96,24 +84,27 @@ def test_scaling_is_strict_boolean_and_defaults_off(value):
             result["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is value
         )
     else:
-        with pytest.raises(TypeError, match="must be a boolean"):
+        with pytest.raises(TypeError, match="scale_budget_with_excess_allowance"):
             prepare_config(source, verbose=False)
 
 
-def test_coin_scaling_switch_is_global_per_side():
+def test_coin_scaling_switch_is_local_and_preserves_base_policy():
     source = get_template_config()
     source["coin_overrides"] = {
         "BTC": {"bot": {"long": {"hsl": {"scale_budget_with_excess_allowance": True}}}}
     }
-    with pytest.raises(ValueError, match="global per-side"):
-        prepare_config(source, verbose=False)
+    original = deepcopy(source)
+    prepared = prepare_config(source, verbose=False)
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is True
+    assert prepared["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is False
+    assert source == original
 
 
-@pytest.mark.parametrize("mode", ["pside", "unified"])
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_scaling_rejects_aggregate_scopes(mode):
     from config.hsl import generated_template
 
-    source = generated_template(get_template_config(), mode)
+    source = generated_template(get_expanded_config_prototype(), mode)
     source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
     with pytest.raises(ValueError, match="requires coin HSL mode"):
         prepare_config(source, verbose=False)
@@ -140,11 +131,11 @@ def test_python_admission_matches_bounded_rust_contract(base, total, expected):
 
 @pytest.mark.parametrize("surface", ["helper", "full", "live", "backtest", "optimize"])
 @pytest.mark.parametrize("old_value", ["bounded", "legacy_raw"])
-def test_cleanup_cannot_drop_a_raw_policy_before_validation(surface, old_value):
+def test_authored_cleanup_and_internal_cleaner_reject_removed_policy(surface, old_value):
     from config_utils import clean_config
     from tools.clean_config import cleanup_config
 
-    source = get_template_config()
+    source = get_expanded_config_prototype()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = old_value
     original = deepcopy(source)
     clean = (
@@ -152,9 +143,35 @@ def test_cleanup_cannot_drop_a_raw_policy_before_validation(surface, old_value):
         if surface == "helper"
         else (lambda: cleanup_config(source, mode=surface))
     )
-    if old_value == "legacy_raw":
-        with pytest.raises(ValueError, match="no longer supported.*re-backtest"):
-            clean()
-    else:
-        assert "we_excess_allowance_mode" not in clean()["bot"]["long"]["risk"]
+    # Internal metadata cleanup does not authorize retired public policy.
+    with pytest.raises(ValueError, match="we_excess_allowance_mode"):
+        clean()
+    assert source == original
+
+
+@pytest.mark.parametrize("mode", ["bounded", "legacy_raw"])
+def test_released_v8_requires_explicit_selector_removal_before_conversion(mode):
+    from tools.migrate_config_v9 import migrate as migrate_config_v9
+
+    source = {
+        "config_version": "v8.4.0",
+        "live": {"strategy_kind": "trailing_martingale", "pnls_max_lookback_days": 30.0},
+        "bot": {
+            "long": {"risk": {"n_positions": 1.0, "total_wallet_exposure_limit": 1.0,
+                                "we_excess_allowance_pct": 0.5, "we_excess_allowance_mode": mode},
+                     "hsl": {"enabled": False}},
+            "short": {"risk": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                      "hsl": {"enabled": False}},
+        },
+        "optimize": {"backend": "pymoo", "bounds": {}},
+    }
+    original = deepcopy(source)
+    with pytest.raises(ValueError, match="we_excess_allowance_mode"):
+        migrate_config_v9(source, memory_span_minutes=43200.0)
+    reviewed = deepcopy(source)
+    reviewed["bot"]["long"]["risk"].pop("we_excess_allowance_mode")
+    converted = migrate_config_v9(reviewed, memory_span_minutes=43200.0).config
+    prepared = prepare_config(converted, verbose=False)
+    assert prepared["bot"]["long"]["risk"]["we_excess_allowance_fraction"] == 0.5
+    assert "we_excess_allowance_mode" not in prepared["bot"]["long"]["risk"]
     assert source == original

@@ -29,41 +29,55 @@ socket.socket.connect = deny_network
 socket.getaddrinfo = deny_network
 
 import passivbot
-from config import get_template_config, prepare_config, compile_runtime_config
+from config import prepare_config, compile_runtime_config
+from config.schema import get_expanded_config_prototype
 from config.overrides import parse_overrides
 
 legacy, with_scenarios = (arg == "True" for arg in sys.argv[1:])
-config = get_template_config()
+config = get_expanded_config_prototype()
 for side in ("long", "short"):
     bot = config["bot"][side]
     bot["entry_cooldown"]["base_duration_minutes"] = 7.5
-    bot["strategy"]["trailing_martingale"]["entry"].update(ema_span_0=123.75, ema_span_1=567.25)
+    bot["strategy"]["trailing_martingale"]["entry"].update(ema_span_0_minutes=123.75, ema_span_1_minutes=567.25)
     if legacy:
         bot["risk"]["entry_cooldown_minutes"] = bot.pop("entry_cooldown")["base_duration_minutes"]
         strategy = bot["strategy"]["trailing_martingale"]
-        for key in ("ema_span_0", "ema_span_1"):
-            strategy[key] = strategy["entry"].pop(key)
+        for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
+            strategy[key.removesuffix("_minutes")] = strategy["entry"].pop(key)
 config["backtest"]["scenarios"] = []
 if with_scenarios:
     config["backtest"]["scenarios"] = [{
-        "label": "legacy",
+        "label": "canonical",
         "overrides": {"bot": {"long": {
-            "risk": {"entry_cooldown_minutes": 3.5},
-            "strategy": {"trailing_martingale": {"ema_span_0": 234.5}},
+            "entry_cooldown": {"base_duration_minutes": 3.5},
+            "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 234.5}}},
         }}},
     }]
+
+if legacy:
+    try:
+        prepare_config(config, live_only=True, verbose=False)
+    except ValueError as exc:
+        assert "config.bot.long.risk.entry_cooldown_minutes" in str(exc), str(exc)
+        assert "unknown configuration field" in str(exc), str(exc)
+    else:
+        raise AssertionError("runtime accepted a retired configuration layout")
+    assert not any(name in sys.modules for name in blocked)
+    raise SystemExit(0)
 
 canonical = prepare_config(config, live_only=True, verbose=False)
 if with_scenarios:
     assert canonical["backtest"]["scenarios"][0]["overrides"] == {
-        "bot.long.entry_cooldown.base_duration_minutes": 3.5,
-        "bot.long.strategy.trailing_martingale.entry.ema_span_0": 234.5,
+        "bot": {"long": {
+            "entry_cooldown": {"base_duration_minutes": 3.5},
+            "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 234.5}}},
+        }},
     }
 live = prepare_config(config, live_only=True, verbose=False, target="live")
 live = compile_runtime_config(parse_overrides(live, verbose=False), runtime="live")
 for side in ("long", "short"):
     assert live["bot"][side]["risk_entry_cooldown_minutes"] == 7.5
-    assert live["bot"][side]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] == 123.75
+    assert live["bot"][side]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"] == 123.75
 assert not any(name in sys.modules for name in blocked)
 """
 

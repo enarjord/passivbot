@@ -1,3 +1,4 @@
+from config.schema import get_expanded_config_prototype
 from copy import deepcopy
 import json
 from types import SimpleNamespace
@@ -5,17 +6,17 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from config_utils import get_template_config
 import suite_runner as suite
 
 
 @pytest.fixture
 def prepared():
-    config = get_template_config()
+    config = get_expanded_config_prototype()
     config["backtest"].update(
         start_date="2026-01-01", end_date="2026-01-02", coins={}, cache_dir={}
     )
-    config["live"].update(warmup_ratio=0, max_warmup_minutes=0)
+    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = None
     coins = ["BTC", "XMR"]
     dataset = suite.ExchangeDataset(
         exchange="combined",

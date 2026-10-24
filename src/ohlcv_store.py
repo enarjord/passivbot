@@ -216,7 +216,11 @@ class OhlcvStore:
         *,
         status: str = "open",
         clear_valid_range_ms: tuple[int, int] | None = None,
-    ) -> None:
+        preserve_existing: bool = False,
+    ) -> int:
+        """Write rows; explicit imports can preserve current valid rows under the lock."""
+        if preserve_existing and clear_valid_range_ms is not None:
+            raise ValueError("preserving existing rows cannot clear a valid range")
         ts_arr = np.asarray(timestamps_ms, dtype=np.int64)
         val_arr = np.asarray(values, dtype=np.float32)
         if ts_arr.ndim != 1:
@@ -226,7 +230,7 @@ class OhlcvStore:
         if len(ts_arr) != len(val_arr):
             raise ValueError("timestamps_ms and values must have the same length")
         if len(ts_arr) == 0:
-            return
+            return 0
         if np.any(np.diff(ts_arr) < 0):
             raise ValueError("timestamps_ms must be sorted ascending")
         interval_ms = timeframe_to_interval_ms(timeframe)
@@ -246,10 +250,21 @@ class OhlcvStore:
         for idx, ts_ms in enumerate(ts_arr):
             grouped.setdefault(month_key_for_ts(int(ts_ms)), []).append(idx)
 
+        written_rows = 0
         for (year, month), indices in grouped.items():
             paths = self.month_paths(exchange, timeframe, symbol, year, month)
             with self._chunk_write_lock(paths):
-                self._ensure_month_unlocked(exchange, timeframe, symbol, year, month, status=status)
+                if preserve_existing:
+                    existing = self.catalog.list_chunks(
+                        exchange, timeframe, symbol,
+                        month_start_ts(year, month), month_end_ts(year, month, timeframe),
+                    )
+                    for chunk in existing:
+                        self._verify_chunk_checksum_unlocked(chunk, paths)
+                    if not existing and (paths.body_path.exists() or paths.valid_path.exists()):
+                        raise ValueError("uncatalogued current OHLCV chunk; repair the catalog before import")
+                if not preserve_existing or not existing:
+                    self._ensure_month_unlocked(exchange, timeframe, symbol, year, month, status=status)
                 self._invalidate_verified_checksum_cache(paths.body_path)
                 body = np.load(paths.body_path, mmap_mode="r+")
                 valid = np.load(paths.valid_path, mmap_mode="r+")
@@ -279,6 +294,14 @@ class OhlcvStore:
                         raise ValueError(
                             f"timestamps out of month bounds for {year:04d}-{month:02d}"
                         )
+                    if preserve_existing:
+                        missing = ~np.asarray(valid[offsets], dtype=np.bool_)
+                        idx_arr = idx_arr[missing]
+                        offsets = offsets[missing]
+                        indices = list(idx_arr)
+                        if len(offsets) == 0:
+                            continue
+                    written_rows += len(offsets)
                     if len(np.unique(offsets)) != len(offsets):
                         for src_idx in indices:
                             offset = month_offset(int(ts_arr[src_idx]), year, month, timeframe)
@@ -308,7 +331,9 @@ class OhlcvStore:
                     checksum=checksum,
                 )
 
-        self.catalog.upsert_symbol_bounds(exchange, timeframe, symbol, int(ts_arr.min()), int(ts_arr.max()))
+        if written_rows:
+            self.catalog.upsert_symbol_bounds(exchange, timeframe, symbol, int(ts_arr.min()), int(ts_arr.max()))
+        return written_rows
 
     def read_range(
         self, exchange: str, timeframe: str, symbol: str, start_ts: int, end_ts: int

@@ -26,18 +26,18 @@ requires_extension = pytest.mark.skipif(
 
 def _ema_anchor_config() -> dict:
     return {
-        "live": {"strategy_kind": "ema_anchor"},
+        "live": {},
         "bot": {
             "long": {
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": 0.01,
-                        "ema_span_0": 2.0,
-                        "ema_span_1": 6.0,
-                        "offset": 0.01,
-                        "offset_volatility_ema_span_1m": 2.0,
+                        "base_qty_fraction": 0.01,
+                        "ema_span_0_minutes": 2.0,
+                        "ema_span_1_minutes": 6.0,
+                        "offset_fraction": 0.01,
+                        "offset_volatility_ema_span_minutes": 2.0,
                         "offset_volatility_1m_weight": 0.5,
-                        "offset_volatility_ema_span_1h": 2.0,
+                        "offset_volatility_ema_span_1h_candles": 2.0,
                         "offset_volatility_1h_weight": 0.25,
                         "offset_psize_weight": 0.2,
                     }
@@ -46,18 +46,19 @@ def _ema_anchor_config() -> dict:
             "short": {
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": 0.01,
-                        "ema_span_0": 2.0,
-                        "ema_span_1": 6.0,
-                        "offset": 0.02,
-                        "offset_volatility_ema_span_1m": 2.0,
+                        "base_qty_fraction": 0.01,
+                        "ema_span_0_minutes": 2.0,
+                        "ema_span_1_minutes": 6.0,
+                        "offset_fraction": 0.02,
+                        "offset_volatility_ema_span_minutes": 2.0,
                         "offset_volatility_1m_weight": 0.5,
-                        "offset_volatility_ema_span_1h": 2.0,
+                        "offset_volatility_ema_span_1h_candles": 2.0,
                         "offset_volatility_1h_weight": 0.25,
                         "offset_psize_weight": 0.1,
                     }
                 }
             },
+            "portfolio": {"strategy_kind": "ema_anchor"},
         },
     }
 

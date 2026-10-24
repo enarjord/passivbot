@@ -1,0 +1,2 @@
+include schemas/config-v9.schema.json
+include requirements-live.txt requirements-full.txt requirements-dev.txt requirements-rust.txt

@@ -1,4 +1,5 @@
 """Offline simulation must succeed with sockets denied and fail before any download."""
+from config.universe import set_side_universe_sources
 import asyncio
 import json
 import os
@@ -11,7 +12,7 @@ import pytest
 import hlcv_preparation as hp
 import procedures
 import utils
-from config.schema import get_template_config
+from config.schema import get_template_config, get_expanded_config_prototype
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_store import OhlcvStore
 from simulation_data import (
@@ -146,7 +147,7 @@ async def test_raw_coverage_and_missing_warmup_tail_internal(tmp_path, monkeypat
         mask[missing] = False
     catalog, store, ts = raw_store(tmp_path, mask)
     om = SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False)
-    kwargs = dict(om=om, catalog=catalog, store=store, legacy_root=None, exchange="binance",
+    kwargs = dict(om=om, catalog=catalog, store=store, exchange="binance",
                   coin="BTC", symbol=SYMBOL, start_ts=int(ts[0]), end_ts=int(ts[-1]),
                   allow_remote_fetch=True, local_hit_log_label="test", remote_fetch_log_label="test")
     with simulation_data_policy(OFFLINE):
@@ -170,7 +171,7 @@ async def test_confirmed_listing_boundary_remains_usable(tmp_path, monkeypatch):
     with simulation_data_policy(OFFLINE):
         rng = await hp._resolve_v2_store_range(
             om=SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0), catalog=catalog,
-            store=store, legacy_root=None, exchange="binance", coin="BTC", symbol=SYMBOL,
+            store=store, exchange="binance", coin="BTC", symbol=SYMBOL,
             start_ts=int(ts[0]), end_ts=int(ts[-1]), allow_remote_fetch=True,
             local_hit_log_label="test", remote_fetch_log_label="test")
         assert rng.timestamps[0] == ts[2]
@@ -200,13 +201,16 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     from utils import ts_to_date
     metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["binance"],
                               start_date=ts_to_date(START), end_date=ts_to_date(START + 9*60000),
                               compress_cache=False, gap_tolerance_ohlcvs_minutes=0)
-    config["live"].update(approved_coins={"long": ["BTC"], "short": []},
-                          ignored_coins={"long": [], "short": []},
-                          minimum_coin_age_days=0, max_warmup_minutes=1)
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(tmp_path / "caches/ohlcvs/catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches/ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -282,10 +286,14 @@ async def test_online_market_expiry_still_refreshes(tmp_path, monkeypatch):
 ])
 async def test_suite_policy_precedes_metadata_preload(tmp_path, monkeypatch, module, function, extra):
     import importlib
+    from config import prepare_config
+
     monkeypatch.chdir(tmp_path)
     config = get_template_config()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["binance"])
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
+    config = prepare_config(config, verbose=False)
     with pytest.raises(OfflineDataError, match="markets.json"):
         await getattr(importlib.import_module(module), function)(
             config, {"scenarios": [{"label": "one"}]}, **extra)
@@ -318,11 +326,11 @@ async def test_combined_offline_never_swallows_missing_coin(monkeypatch, empty):
         await hp._resolve_combined_coin(
             coin="BTC", sem=asyncio.Semaphore(1), base_start_ts=START,
             end_ts=START + 600000, first_timestamps_unified={"BTC": START - 60000},
-            minimum_coin_age_days=0, min_coin_age_ms=0, tradfi_for_stock_perps=False,
+            tradfi_for_stock_perps=False,
             forced_sources={}, market_settings_sources={}, exchanges_to_consider=["binance"],
             normalization_candidate_exchanges=[], om_dict={"binance": object()},
             per_coin_warmups={}, default_warm=0, force_refetch_gaps=False,
-            catalog=None, store=None, legacy_root=None)
+            catalog=None, store=None)
 
 
 @pytest.mark.asyncio
@@ -337,7 +345,7 @@ async def test_known_tail_does_not_authorize_unknown_leading_gap(tmp_path, monke
     with simulation_data_policy(OFFLINE), pytest.raises(OfflineDataError, match="Unverified offline candle boundary"):
         await hp._resolve_v2_store_range(
             om=SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0), catalog=catalog,
-            store=store, legacy_root=None, exchange="binance", coin="BTC", symbol=SYMBOL,
+            store=store, exchange="binance", coin="BTC", symbol=SYMBOL,
             start_ts=int(ts[0]), end_ts=int(ts[-1]), allow_remote_fetch=True,
             local_hit_log_label="test", remote_fetch_log_label="test")
 
@@ -378,7 +386,7 @@ async def test_btc_candidates_try_all_local_sources(monkeypatch, use_v2, all_mis
             exchanges_to_consider=["bybit"], timestamps=ts,
             effective_start_date="2024-01-01", end_date="2024-01-02",
             gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
-            catalog=None, store=None, legacy_root=None, use_v2_local=use_v2)
+            catalog=None, store=None, use_v2_local=use_v2)
         if all_missing:
             with pytest.raises(OfflineDataError, match="BTC benchmark"):
                 await call
@@ -454,7 +462,7 @@ async def test_multi_venue_btc_prefers_configured_local_sources(
             exchanges_to_consider=venues, timestamps=ts,
             effective_start_date="2024-01-01", end_date="2024-01-02",
             gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
-            catalog=None, store=None, legacy_root=None, use_v2_local=use_v2,
+            catalog=None, store=None, use_v2_local=use_v2,
         )
     assert source_exchange == expected_source
     assert len(frame) == 2
@@ -482,11 +490,14 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
         data = json.loads(path.read_text())
         data["ETH"] = value
         path.write_text(json.dumps(data))
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
-    config["live"].update(approved_coins={"long": ["ETH", "UNLISTED"], "short": []},
-                          minimum_coin_age_days=0, max_warmup_minutes=1)
+    set_side_universe_sources(config, 'approved_coins', {'long': ['ETH', 'UNLISTED'], 'short': []})
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
     store = OhlcvStore(cache / "ohlcvs", catalog)
     ts = START + np.arange(-1, 10, dtype=np.int64)*60000
@@ -545,7 +556,7 @@ async def test_iterative_preload_uses_stale_markets_offline(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     config = get_template_config()
     config["backtest"].update(exchanges=["binance"], offline=not cli_override)
-    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config))
     session = IterativeBacktestSession(
@@ -585,16 +596,17 @@ async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeyp
     from utils import ts_to_date
 
     monkeypatch.chdir(tmp_path)
-    config = get_template_config()
+    config = get_expanded_config_prototype()
+    config["bot"]["long"]["enabled"] = True
     config["backtest"].update(
         exchanges=["bybit", "hyperliquid"], start_date=ts_to_date(START),
         end_date=ts_to_date(START + 9 * 60000), compress_cache=False,
     )
-    config["live"].update(
-        approved_coins={"long": ["BTC"], "short": []},
-        ignored_coins={"long": [], "short": []}, minimum_coin_age_days=0,
-        max_warmup_minutes=1,
-    )
+    set_side_universe_sources(config, 'approved_coins', {'long': ['BTC'], 'short': []})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    for side in ("long", "short"):
+        config["bot"][side]["universe"]["minimum_coin_age_days"] = 0
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 1
     monkeypatch.setattr(backtest, "coin_to_symbol", lambda *args, **kwargs: SYMBOL)
     ts = START + np.arange(10, dtype=np.int64) * 60000
     hlcvs = np.tile([101.0, 99.0, 100.0, 10.0], (10, 1, 1))
@@ -677,7 +689,7 @@ async def test_combined_btc_rejects_partial_history(
         exchanges_to_consider=["hyperliquid", "bybit"], timestamps=ts,
         effective_start_date="2024-01-01", end_date="2024-01-02",
         gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
-        catalog=None, store=None, legacy_root=None, use_v2_local=use_v2,
+        catalog=None, store=None, use_v2_local=use_v2,
     )
     with simulation_data_policy(OFFLINE):
         if fallback_available:

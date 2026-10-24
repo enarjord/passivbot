@@ -29,13 +29,15 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     overrides = {('long', symbols[0]): .017, ('short', symbols[1]): .028}
     def params(side, symbol):
         calls[side, symbol] += 1
-        result = deepcopy(defaults[side])
+        from config.strategy_paths import lower_runtime_strategy_side
+
+        result = lower_runtime_strategy_side("trailing_martingale", defaults[side])
         result['entry']['initial_qty_pct'] = overrides.get((side, symbol), .011)
         return result
     def bp(side, key, symbol=None):
         return 'bounded' if key == 'risk_we_excess_allowance_mode' else .2
     bot = SimpleNamespace(
-        config={'live': {'strategy_kind': 'trailing_martingale'}},
+        config={"live": {}, "bot": {"portfolio": {"strategy_kind": "trailing_martingale"}}},
         positions={s: {'long': {'size': 1., 'price': 100.}, 'short': {'size': -.5, 'price': 100.}} for s in symbols},
         _strategy_params_to_rust_dict=params,
         _orchestrator_exchange_params=lambda s: {'qty_step': .01},

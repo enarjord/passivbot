@@ -1,7 +1,7 @@
 //! Observed backtest performance; never supplies HSL trading permission.
 use super::*;
 
-impl Backtest<'_> {
+impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     pub(super) fn record_hsl_analysis(&mut self, k: usize, at_fill_boundary: bool) {
         let Some(&timestamp) = self.equities.timestamps_ms.last() else {
             return;

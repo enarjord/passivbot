@@ -120,7 +120,8 @@ def _cleanup_stale_symbol_map_locks() -> None:
                 logging.debug("failed to remove stale lock %s: %s", lock_path, exc)
 
 
-def _resolve_coins_file_path(value: str) -> Optional[Path]:
+def _resolve_coins_file_path(value: str, *, preserve_selected_path: bool = False) -> Optional[Path]:
+    """Use legacy lookup precedence, optionally retaining the selected file alias."""
     if not isinstance(value, str) or not value.strip():
         return None
     raw_path = Path(value.strip())
@@ -145,6 +146,7 @@ def _resolve_coins_file_path(value: str) -> Optional[Path]:
 
     seen: set[Path] = set()
     for candidate in candidates:
+        selected_path = candidate.absolute()
         candidate = candidate.resolve()
         if candidate in seen:
             continue
@@ -160,7 +162,7 @@ def _resolve_coins_file_path(value: str) -> Optional[Path]:
                     raw_path,
                     rel,
                 )
-            return candidate
+            return selected_path if preserve_selected_path else candidate
     return None
 
 
@@ -685,7 +687,7 @@ def get_quote(exchange, quote=None):
         return quote
     # Legacy hardcoded defaults for backward compatibility
     exchange = to_ccxt_exchange_id(exchange)
-    return "USDC" if exchange in ["hyperliquid", "defx", "paradex", "lighter"] else "USDT"
+    return "USDC" if exchange in ["hyperliquid", "lighter"] else "USDT"
 
 
 def remove_powers_of_ten(text):
@@ -1081,6 +1083,8 @@ def split_exchange_qualified_market_identifier(identifier: str):
     if not isinstance(identifier, str) or "::" not in identifier:
         return None, identifier
     prefix, value = identifier.split("::", 1)
+    if prefix.lower() in {"defx", "paradex"}:
+        raise ValueError(f"Exchange {prefix.lower()!r} was retired in v9")
     if not prefix or not value or "/" in prefix:
         return None, identifier
     global _KNOWN_EXCHANGE_QUALIFIERS
@@ -1094,7 +1098,6 @@ def split_exchange_qualified_market_identifier(identifier: str):
                 "bitget",
                 "bitunix",
                 "bybit",
-                "defx",
                 "fake",
                 "gate",
                 "gateio",
@@ -1102,7 +1105,6 @@ def split_exchange_qualified_market_identifier(identifier: str):
                 "kucoin",
                 "kucoinfutures",
                 "okx",
-                "paradex",
                 "weex",
             }
         )
@@ -1413,7 +1415,7 @@ def _resolve_fake_scenario_path(config) -> Optional[str]:
     scenario_path = live.get("fake_scenario_path")
     if scenario_path:
         return scenario_path
-    user = live.get("user")
+    user = live.get("account", {}).get("user")
     if not user:
         return None
     from procedures import load_user_info
@@ -1586,85 +1588,59 @@ async def _remove_resolved_ignored_markets(
     include_backtest_coin_source_venues=False,
 ) -> None:
     """Subtract ignored aliases resolving to the same venue market."""
-    approved_by_side = config["live"]["approved_coins"]
-    ignored_by_side = config["live"]["ignored_coins"]
-    potentially_overlapping_sides = [
-        pside
-        for pside in ("long", "short")
-        if any(
-            approved != ignored
-            and (
-                looks_like_exact_market_identifier(approved)
-                or looks_like_exact_market_identifier(ignored)
-                or heuristic_symbol_to_coin(approved) == heuristic_symbol_to_coin(ignored)
-            )
-            for approved in approved_by_side[pside]
-            for ignored in ignored_by_side[pside]
-        )
-    ]
-    if not potentially_overlapping_sides:
-        return
+    from config.universe import require_side_universe_sources
 
+    from config.universe import PreparedMarketAliases
+
+    approved_by_side = require_side_universe_sources(config, 'approved_coins')
+    ignored_by_side = require_side_universe_sources(config, 'ignored_coins')
     source_exchanges = (
         (config.get("backtest", {}).get("coin_sources") or {}).values()
         if include_backtest_coin_source_venues
         else []
     )
-    standard_exchanges = list(
-        dict.fromkeys(
-            to_standard_exchange_name(str(exchange))
-            for exchange in [*exchanges, *source_exchanges]
-            if str(exchange).lower() != "fake"
-        )
+    standard_exchanges = list(dict.fromkeys(
+        to_standard_exchange_name(str(exchange))
+        for exchange in [*exchanges, *source_exchanges]
+        if str(exchange).lower() != "fake"
+    ))
+    if not standard_exchanges or not any(approved_by_side.values()):
+        return None
+    # Keep the existing fetch boundary. Plain, non-overlapping lists need no
+    # market refresh; freeze any already acquired alias map in that case.
+    needs_resolution = any(
+        approved != ignored and (looks_like_exact_market_identifier(approved)
+            or looks_like_exact_market_identifier(ignored)
+            or heuristic_symbol_to_coin(approved) == heuristic_symbol_to_coin(ignored))
+        for side in ("long", "short") for approved in approved_by_side[side]
+        for ignored in ignored_by_side[side]
     )
-    if not standard_exchanges:
-        return
-    loaded_markets = await asyncio.gather(
+    loaded_markets = (await asyncio.gather(
         *[load_markets(ex, verbose=False, quote=quote) for ex in standard_exchanges]
-    )
-    markets_by_exchange = dict(zip(standard_exchanges, loaded_markets))
-
-    def resolve_if_available(identifier, exchange):
-        try:
-            return coin_to_symbol(identifier, exchange, quote=quote, verbose=verbose)
-        except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
-            return None
-
-    for pside in potentially_overlapping_sides:
-        ignored_symbols_by_exchange = {
-            exchange: {
-                symbol
-                for identifier in ignored_by_side[pside]
-                if (symbol := resolve_if_available(identifier, exchange)) is not None
-            }
-            for exchange in standard_exchanges
-        }
-        surviving_approved = []
-        for identifier in approved_by_side[pside]:
-            resolved_symbols = {
-                exchange: symbol
-                for exchange in standard_exchanges
-                if (symbol := resolve_if_available(identifier, exchange)) is not None
-            }
-            ignored_exchanges = {
-                exchange
-                for exchange, symbol in resolved_symbols.items()
-                if symbol in ignored_symbols_by_exchange[exchange]
-            }
-            if not ignored_exchanges:
-                surviving_approved.append(identifier)
-                continue
-            surviving_exchanges = [
-                exchange
-                for exchange in standard_exchanges
-                if exchange in resolved_symbols and exchange not in ignored_exchanges
-            ]
-            for exchange in surviving_exchanges:
-                symbol = resolved_symbols[exchange]
-                market = markets_by_exchange[exchange].get(symbol) or {}
-                exact_identifier = str(market.get("id") or symbol)
-                surviving_approved.append(f"{exchange}::{exact_identifier}")
-        approved_by_side[pside] = list(dict.fromkeys(surviving_approved))
+    )) if needs_resolution else [None] * len(standard_exchanges)
+    venues, unavailable, complete = [], [], []
+    for exchange, markets in zip(standard_exchanges, loaded_markets):
+        if markets is None:
+            aliases = _load_coin_to_symbol_map(exchange)
+            native_ids = {}  # Exact CCXT symbols are the lossless, restart-stable cache-only route.
+            if not aliases:
+                unavailable.append(exchange)
+        else:
+            complete.append(exchange)
+            aliases, _labels = _build_coin_symbol_maps(markets, get_quote(exchange, quote), exchange=exchange)
+            native_ids = {symbol: str(market.get("id") or symbol) for symbol, market in markets.items()}
+        symbols = sorted({symbol for values in aliases.values() for symbol in values})
+        venues.append((exchange,
+            tuple((alias, tuple(symbols)) for alias, symbols in sorted(aliases.items())),
+            tuple((symbol, native_ids.get(symbol, symbol)) for symbol in symbols)))
+    prepared_aliases = PreparedMarketAliases(tuple(venues), tuple(unavailable)).for_bound_inputs(
+        [coin for values in approved_by_side.values() for coin in values],
+        [coin for values in ignored_by_side.values() for coin in values], complete_venues=complete)
+    for pside in ("long", "short"):
+        config["bot"][pside]["universe"]["approved_coins"] = prepared_aliases.subtract(
+            approved_by_side[pside], ignored_by_side[pside],
+        )
+    return prepared_aliases
 
 
 async def _coalesce_resolved_approved_markets(
@@ -1691,7 +1667,7 @@ async def _coalesce_resolved_approved_markets(
     approved_identifiers = [
         identifier
         for pside in ("long", "short")
-        for identifier in config["live"]["approved_coins"][pside]
+        for identifier in config['bot'][pside]['universe']['approved_coins']
     ]
     identifiers_by_canonical = defaultdict(set)
     for identifier in approved_identifiers:
@@ -1751,19 +1727,19 @@ async def _coalesce_resolved_approved_markets(
         for source_identifier, exchange, source_symbol in source_identities
     }
     for pside in ("long", "short"):
-        for identifier in config["live"]["approved_coins"][pside]:
+        for identifier in config['bot'][pside]['universe']['approved_coins']:
             representatives.setdefault(identity(identifier), identifier)
 
     for pside in ("long", "short"):
         seen = set()
         coalesced = []
-        for identifier in config["live"]["approved_coins"][pside]:
+        for identifier in config['bot'][pside]['universe']['approved_coins']:
             market_identity = identity(identifier)
             if market_identity in seen:
                 continue
             seen.add(market_identity)
             coalesced.append(representatives[market_identity])
-        config["live"]["approved_coins"][pside] = coalesced
+        config['bot'][pside]['universe']['approved_coins'] = coalesced
 
 
 async def format_approved_ignored_coins(config, exchanges, quote=None, verbose=True, *,
@@ -1784,17 +1760,21 @@ async def _format_approved_ignored_coins(
     *,
     prefer_backtest_coin_source_keys=False,
 ):
+    from config.universe import get_side_universe_sources, require_side_universe_sources, set_side_universe_sources
+
     if isinstance(exchanges, str):
         exchanges = [exchanges]
-    before_approved = deepcopy(config.get("live", {}).get("approved_coins"))
-    before_ignored = deepcopy(config.get("live", {}).get("ignored_coins"))
+    from config.universe import raw_side_universe_sources, resolve_universe_sources, materialize_side_universe_sources
+    raw_sources = {field: raw_side_universe_sources(config, field) for field in ("approved_coins", "ignored_coins")}
+    from config.bot_inheritance import reconciled_bot_policy, install_bot_policy, with_prepared_bot_sources
+    source_policy = reconciled_bot_policy(config)
+    before_approved = deepcopy(get_side_universe_sources(config, 'approved_coins'))
+    before_ignored = deepcopy(get_side_universe_sources(config, 'ignored_coins'))
     before_sources = deepcopy(config.get("_coins_sources", {}))
     coin_sources = config.setdefault("_coins_sources", {})
-    approved_source = coin_sources.get("approved_coins", config.get("live", {}).get("approved_coins"))
-    if approved_source is None:
-        approved_source = _require_live_value(config, "approved_coins")
-    coin_sources["approved_coins"] = deepcopy(approved_source)
-    ac = normalize_coins_source(approved_source, allow_all=True)
+    coin_sources["approved_coins"] = deepcopy(raw_sources["approved_coins"])
+    ac, _ = resolve_universe_sources(config, "approved_coins")
+    ic, _ = resolve_universe_sources(config, "ignored_coins")
     needs_market_expansion = any(
         _coins_source_side_is_all(ac[pside]) for pside in ("long", "short")
     )
@@ -1825,27 +1805,28 @@ async def _format_approved_ignored_coins(
             )
         approved_coins_sorted = sorted([x for x in approved_coins if x])
 
-    config["live"]["approved_coins"] = {}
+    # Identifier reconciliation edits an execution view. These temporary plain
+    # lists must not be interpreted as authored side-source replacements.
+    if source_policy is not None:
+        config["bot"] = deepcopy(dict(config["bot"]))
+    set_side_universe_sources(config, 'approved_coins', {})
     for pside in ("long", "short"):
         if _coins_source_side_is_all(ac[pside]):
-            config["live"]["approved_coins"][pside] = list(approved_coins_sorted or [])
+            config['bot'][pside]['universe']['approved_coins'] = list(approved_coins_sorted or [])
         else:
-            config["live"]["approved_coins"][pside] = _preserve_market_identifiers(ac[pside])
+            config['bot'][pside]['universe']['approved_coins'] = _preserve_market_identifiers(ac[pside])
 
-    ignored_source = coin_sources.get("ignored_coins", config.get("live", {}).get("ignored_coins"))
-    if ignored_source is None:
-        ignored_source = _require_live_value(config, "ignored_coins")
-    coin_sources["ignored_coins"] = deepcopy(ignored_source)
-    ic = normalize_coins_source(ignored_source, allow_all=False)
-    config["live"]["ignored_coins"] = {
+    coin_sources["ignored_coins"] = deepcopy(raw_sources["ignored_coins"])
+    # Both fields were resolved against the original source before mutation.
+    set_side_universe_sources(config, 'ignored_coins', {
         pside: _preserve_market_identifiers(ic[pside]) for pside in ic
-    }
+    })
     await reject_cross_exchange_market_identifier_collisions(
         [
             identifier
             for field in ("approved_coins", "ignored_coins")
             for side in ("long", "short")
-            for identifier in config["live"][field][side]
+            for identifier in config["bot"][side]["universe"][field]
         ],
         exchanges,
         quote=quote,
@@ -1858,7 +1839,10 @@ async def _format_approved_ignored_coins(
         verbose=verbose,
         prefer_backtest_coin_source_keys=prefer_backtest_coin_source_keys,
     )
-    await _remove_resolved_ignored_markets(
+    acquired_approvals = {
+        side: tuple(value) for side, value in require_side_universe_sources(config, "approved_coins").items()
+    }
+    prepared_aliases = await _remove_resolved_ignored_markets(
         config,
         exchanges,
         quote=quote,
@@ -1866,8 +1850,14 @@ async def _format_approved_ignored_coins(
         include_backtest_coin_source_venues=prefer_backtest_coin_source_keys,
     )
 
-    approved_diff = _diff_snapshot(before_approved, config["live"]["approved_coins"])
-    ignored_diff = _diff_snapshot(before_ignored, config["live"]["ignored_coins"])
+    for field in ("approved_coins", "ignored_coins"):
+        materialize_side_universe_sources(config, field, require_side_universe_sources(config, field),
+            sources=raw_sources[field], acquired_members=acquired_approvals if field == "approved_coins" else None,
+            market_aliases={side: prepared_aliases for side in ("long", "short")} if field == "approved_coins" else None)
+    if source_policy is not None:
+        install_bot_policy(config, with_prepared_bot_sources(source_policy, config["bot"]))
+    approved_diff = _diff_snapshot(before_approved, require_side_universe_sources(config, 'approved_coins'))
+    ignored_diff = _diff_snapshot(before_ignored, require_side_universe_sources(config, 'ignored_coins'))
     sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))
     if approved_diff or ignored_diff or sources_diff:
         from config_transform import record_transform
@@ -1886,9 +1876,11 @@ def _coins_source_side_is_all(value) -> bool:
     return isinstance(value, list) and len(value) == 1 and str(value[0]).strip().lower() == "all"
 
 
-def normalize_coins_source(src, *, allow_all: bool = True):
+def normalize_coins_source(src, *, allow_all: bool = True, resolve_files: bool = True, parse_jsonish: bool = True):
     """
-    Always return: {'long': [symbols…], 'short': [symbols…]}
+    Always return: {'long': [symbols…], 'short': [symbols…]}.
+    resolve_files=False tokenizes already loaded source contents without file discovery.
+    parse_jsonish=False keeps validated source tokens literal instead of decoding shorthand.
     – Handles:
         • direct coin lists or comma-separated strings
         • lists/tuples containing paths or strings
@@ -1935,6 +1927,8 @@ def normalize_coins_source(src, *, allow_all: bool = True):
         return parsed
 
     def _maybe_parse_jsonish(val):
+        if not parse_jsonish:
+            return val
         if isinstance(val, str):
             parsed = _parse_jsonish(val)
             return parsed if parsed is not None else val
@@ -1950,6 +1944,9 @@ def normalize_coins_source(src, *, allow_all: bool = True):
         readable file path, load it with `read_external_coins_lists`.
         Otherwise just return *x* unchanged.
         """
+
+        if not resolve_files:
+            return x
 
         def _maybe_read(path_candidate):
             resolved = _resolve_coins_file_path(path_candidate)
@@ -2032,6 +2029,28 @@ def normalize_coins_source(src, *, allow_all: bool = True):
     }
 
 
+def _parse_plain_coins_list(content: str) -> list[str]:
+    """Tokenize the established comma/newline/quoted-line coin-list format."""
+    content = content.strip()
+    # Check if the content is in list format
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return items
+
+
 def read_external_coins_lists(filepath) -> dict:
     """
     reads filepath and returns dict {'long': [str], 'short': [str]}
@@ -2053,22 +2072,7 @@ def read_external_coins_lists(filepath) -> dict:
         pass
     with open(filepath, "r") as file:
         content = file.read().strip()
-    # Check if the content is in list format
-    if content.startswith("[") and content.endswith("]"):
-        # Remove brackets and split by comma
-        items = content[1:-1].split(",")
-        # Remove quotes and whitespace
-        items = [item.strip().strip("\"'") for item in items if item.strip()]
-    elif all(
-        line.strip().startswith('"') and line.strip().endswith('"')
-        for line in content.split("\n")
-        if line.strip()
-    ):
-        # Split by newline, remove quotes and whitespace
-        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
-    else:
-        # Split by newline, comma, and/or space, and filter out empty strings
-        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    items = _parse_plain_coins_list(content)
     return {"long": items, "short": items}
 
 

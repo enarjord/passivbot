@@ -1,15 +1,13 @@
 """Transient operator progress; never checkpointed or used for selection."""
-from collections import deque
 import logging
-import math
-import statistics
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+import json
 from threading import RLock
 
 
-_work_context = ContextVar("gpu_optimizer_work", default=(None, "gpu_proxy", None))
+_work_context = ContextVar("gpu_optimizer_work", default=(None, "gpu_backtest", None))
 
 
 def duration(seconds):
@@ -33,7 +31,7 @@ def log_tokens(prefix, tokens, *, logger=None, level=logging.INFO):
         try:
             logger.log(level, line)
         except Exception:
-            # Console delivery is optional; exact-result persistence is not.
+            # Console delivery is optional; result persistence is not.
             return False
         return True
 
@@ -85,6 +83,7 @@ class OptimizerProgress:
         self.phase_started = self.started
         self.last_log = None
         self.phase = "startup"
+        self.rate_baselines = {}
         self._lock = RLock()
 
     def transition(self, phase):
@@ -106,8 +105,17 @@ class OptimizerProgress:
                 # A progress snapshot is optional presentation, never evidence.
                 generation = "unknown"
                 snapshot = dict(snapshot="unavailable", error_type=type(error).__name__)
+            rates = []
+            for key in ("completed", "screened"):
+                value = snapshot.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    baseline = self.rate_baselines.setdefault(key, value)
+                    elapsed = now - self.started
+                    rate = (value - baseline) / elapsed if elapsed > 0 and value >= baseline else None
+                    rates.append(f"{key}/s={rate:.4f}" if rate is not None else f"{key}/s=unknown")
             delivered = log_tokens(f"GPU optimizer progress | gen={generation} phase={self.phase} |", [
                 *(f"{key}={value}" for key, value in snapshot.items()),
+                *rates,
                 f"phase_elapsed={duration(now - self.phase_started)}",
                 f"run_elapsed={duration(now - self.started)}",
             ])
@@ -115,145 +123,128 @@ class OptimizerProgress:
                 self.last_log = now
 
 
-class ExactValidationProgress:
-    """Show CPU queue activity without changing durable submission order.
+@contextmanager
+def search_boundary(generation, operation):
+    """Time serial ask/tell/promotion outside evaluation-stage wall spans."""
+    if not logging.getLogger().isEnabledFor(logging.INFO):
+        yield
+        return
+    try:
+        started = time.perf_counter(), time.thread_time()
+    except Exception:
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            log_tokens(f"GPU search boundary | gen={generation} operation={operation} |", [
+                f"wall_s={time.perf_counter() - started[0]:.6f}",
+                f"main_thread_cpu_s={time.thread_time() - started[1]:.6f}",
+            ], level=logging.DEBUG)
+        except Exception:
+            pass  # Optional presentation must preserve the original search error.
 
-    Estimates use worker-reported completion latency, excluding time a finished
-    result waits behind another result or while the coordinator runs a GPU pass.
-    An overdue job has an unknown ETA rather than a misleading zero-second ETA.
+
+class CohortDiagnostics:
+    """Bounded presentation of one CPU-owned evaluation stage.
+
+    Main-thread prepare, poll and consume spans are disjoint. Poll wall time
+    includes blocking waits; thread CPU time does not. Owner replay/accumulation
+    spans overlap this wall time and must never be added to the CPU spans.
+    No diagnostic value enters search, checkpoints, cadence or execution policy.
     """
 
-    def __init__(self, clock=time.monotonic):
-        self.clock = clock
-        self.pending = {}
-        self.latencies = deque(maxlen=24)
-        self._lock = RLock()
+    def __init__(self, *, generation, phase, counts, session):
+        self.enabled = logging.getLogger().isEnabledFor(logging.INFO)
+        self.generation, self.phase = generation, phase
+        self.counts, self.session = counts, session
+        self.spans = {name: [0.0, 0.0] for name in ("prepare", "poll", "consume")}
+        if self.enabled:
+            try:
+                self.started = time.perf_counter(), time.thread_time()
+                self.before = dict(counts())
+                self.transport = self._snapshot(session)
+                self.owner = self._snapshot(session.service)
+            except Exception:
+                self.enabled = False
 
-    def submitted(self, result):
-        with self._lock:
-            self.pending[result] = self.clock()
+    @staticmethod
+    def _snapshot(owner):
+        snapshot = getattr(owner, "diagnostics_snapshot", None)
+        if snapshot is None:
+            return None
+        try:
+            return snapshot()
+        except Exception:
+            return None  # Optional telemetry cannot change a future's failure.
 
-    def completed(self, result, *, worker_seconds, queue_seconds):
-        with self._lock:
-            if result not in self.pending:
-                return
-            del self.pending[result]
-            if (
-                math.isfinite(worker_seconds) and worker_seconds > 0
-                and math.isfinite(queue_seconds) and queue_seconds >= 0
-            ):
-                self.latencies.append(worker_seconds + queue_seconds)
-
-    def reset_estimate(self):
-        with self._lock:
-            self.latencies.clear()
-
-    def snapshot(self):
-        with self._lock:
-            pending = list(self.pending.items())
-            typical = statistics.median(self.latencies) if len(self.latencies) >= 4 else None
-        if not pending:
-            return {}
-        now = self.clock()
-        ready = [result.ready() for result, _ in pending]
-        age = max(0.0, now - pending[0][1])
-        remaining = typical - age if typical is not None else None
-        eta = "0s" if ready[0] else (
-            duration(remaining) if remaining is not None and remaining >= 1 else "unknown"
-        )
-        return {
-            "exact_unfinished": len(ready) - sum(ready),
-            "exact_ready_unrecorded": sum(ready),
-            "oldest_exact_age": duration(age),
-            "eta_next_exact": eta,
-        }
-
-
-class GenerationMilestone:
-    """Scoped estimate from recent finished ask/tell generations only."""
-
-    def __init__(self, clock=time.monotonic):
-        self.clock = clock
-        self.started = None
-        self.completed = deque(maxlen=5)
-
-    def begin(self):
-        self.started = self.clock()
-
-    def finish(self):
-        if self.started is not None:
-            self.completed.append(max(0.0, self.clock() - self.started))
-            self.started = None
-
-    def eta(self):
-        if self.started is None or not self.completed:
-            return "unknown"
-        remaining = statistics.median(self.completed) - (self.clock() - self.started)
-        # An overrun is new evidence, not a perpetually false zero-second ETA.
-        return duration(remaining) if remaining >= 1 else "unknown"
-
-
-class DriftProgress:
-    """Coalesce numeric warning churn without changing the drift decision."""
-    def __init__(self, *, rank_halt, constraint_halt, objective_tolerance):
-        self.thresholds = (rank_halt, constraint_halt, objective_tolerance)
-        self.signature = None
-        self.last_log = None
-
-    def update(self, status):
-        reason = status["halt_reason"] or status["warn_reason"]
-        if reason is None:
-            if self.signature is not None:
-                if not log_tokens("GPU proxy quality |", ["state=recovered", "action=continue"]):
-                    return
-            self.signature = self.last_log = None
+    @contextmanager
+    def measure(self, name):
+        if not self.enabled:
+            yield
             return
-        state = "halt" if status["halt_reason"] else "warning"
-        signature = (state, reason.split(" (", 1)[0])
-        log_tokens("GPU proxy quality detail |", [reason], level=logging.DEBUG)
-        now = time.monotonic()
-        if signature == self.signature and self.last_log is not None and now - self.last_log < 60:
+        try:
+            started = time.perf_counter(), time.thread_time()
+        except Exception:
+            self.enabled = False
+            yield
             return
-        def number(key):
-            value = status[key]
-            return f"{value:.6g}" if value == value else "unknown"
-        delivered = log_tokens(f"GPU proxy quality | state={state} |", [
-            f"reason={signature[1]}",
-            f"action={'stop' if state == 'halt' else 'continue_exact_validation'}",
-            f"samples={status['samples']}", f"rank_probes={status['probe_rank_samples']}",
-            f"rho={number('rho')}", f"probe_rho={number('probe_rho')}",
-            f"constraint_agreement={number('constraint_agreement')}",
-            f"rank_halt={self.thresholds[0]:.3g}", f"constraint_halt={self.thresholds[1]:.3g}",
-            f"objective_tolerance={self.thresholds[2]:.3g}",
-        ], level=logging.ERROR if state == "halt" else logging.WARNING)
-        if delivered:
-            self.signature, self.last_log = signature, now
+        try:
+            yield
+        finally:
+            try:
+                self.spans[name][0] += time.perf_counter() - started[0]
+                self.spans[name][1] += time.thread_time() - started[1]
+            except Exception:
+                self.enabled = False
 
+    @staticmethod
+    def _delta(after, before):
+        if after is None or before is None:
+            return None
+        return {name: value - before[name] for name, value in after.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                and name in before and isinstance(before[name], (int, float))}
 
-class SeedBootstrapProgress:
-    def __init__(self, total, *, completed=0, workers):
-        self.total = total
-        self.initial_completed = completed
-        self.started = time.monotonic()
-        self.last_log = self.started
-        logging.info(
-            "GPU seed exact start | completed=%d/%d workers=%d",
-            completed, total, workers,
-        )
-
-    def update(self, completed, *, inflight, queued, force=False):
-        now = time.monotonic()
-        if not force and now - self.last_log < 60.0:
+    def finish(self, status):
+        if not self.enabled:
             return
-        elapsed = now - self.started
-        newly_completed = completed - self.initial_completed
-        eta = (
-            duration(max(0, self.total - completed) * elapsed / newly_completed)
-            if newly_completed > 0 and elapsed > 0 else "unknown"
-        )
-        logging.info(
-            "GPU seed exact %s | completed=%d/%d inflight=%d queued=%d elapsed=%s eta_seed=%s",
-            "complete" if force else "progress", completed, self.total,
-            inflight, queued, duration(elapsed), eta,
-        )
-        self.last_log = now
+        try:
+            wall, cpu = time.perf_counter() - self.started[0], time.thread_time() - self.started[1]
+            counts = self._delta(dict(self.counts()), self.before)
+            transport = self._delta(self._snapshot(self.session), self.transport)
+            owner_after = self._snapshot(self.session.service)
+            owner = self._delta(owner_after, self.owner)
+            attempts = counts["completed"] + counts["screened"]
+            rows = None if transport is None else transport["replay_rows"]
+            rate = lambda value: f"{value / wall:.4f}" if value is not None and wall > 0 else "unknown"
+            prefix = f"GPU cohort | gen={self.generation} phase={self.phase} status={status} |"
+            log_tokens(prefix, [f"attempts={attempts}", f"prefilter={counts['prefilter_rejected']}",
+                                f"gpu_rows={rows if rows is not None else 'unknown'}", f"wall_s={wall:.3f}",
+                                f"attempts/s={rate(attempts)}", f"gpu_rows/s={rate(rows)}"])
+            details = [f"full_attempts={counts['completed']}", f"screened_attempts={counts['screened']}",
+                       f"main_thread_cpu_s={cpu:.6f}"]
+            for name, (seconds, cpu_seconds) in self.spans.items():
+                details.extend((f"{name}_wall_s={seconds:.6f}", f"{name}_cpu_s={cpu_seconds:.6f}"))
+            details.extend((f"other_wall_s={max(0.0, wall - sum(v[0] for v in self.spans.values())):.6f}",
+                            f"other_cpu_s={max(0.0, cpu - sum(v[1] for v in self.spans.values())):.6f}"))
+            if transport is None:
+                details.append("transport=unavailable")
+            else:
+                details.extend(f"{name}={value}" for name, value in transport.items())
+            if owner is None:
+                details.append("owner=unavailable")
+            else:
+                details.extend(f"overlapping_owner_{name}={value:.6f}" for name, value in owner.items()
+                               if name.endswith("seconds"))
+                details.extend(f"owner_{name}={value}" for name, value in owner.items()
+                               if name in {"batches", "rows"})
+            log_tokens(prefix, details, level=logging.DEBUG)
+            tuner = None if owner_after is None else owner_after.get("tuner")
+            if tuner is not None:
+                log_tokens(prefix, ["tuner_since_construction=" + json.dumps(tuner, sort_keys=True)],
+                           level=logging.DEBUG)
+        except Exception as error:
+            log_tokens("GPU cohort diagnostics unavailable |", [f"error_type={type(error).__name__}"],
+                       level=logging.DEBUG)

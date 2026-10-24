@@ -11,6 +11,8 @@ from .strategy_spec import (
 )
 
 
+from config.access import get_optional_config_value
+
 def _flatten_strategy_bound_items(bounds: dict, prefix: tuple[str, ...] = ()):
     for key, value in bounds.items():
         path = (*prefix, key)
@@ -30,33 +32,33 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     },
     "forager": {
         "score_weights_unilateralness": "forager_score_weights_unilateralness",
-        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
+        "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
         "score_weights_volatility": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
-        "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-        "volume_drop_pct": "forager_volume_drop_pct",
-        "volume_ema_span_1m": "forager_volume_ema_span_1m",
+        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
-        "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
-        "ema_span_minutes": "hsl_ema_span_minutes",
-        "red_threshold": "hsl_red_threshold",
+        "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
+        "drawdown_ratio_ema_span_minutes": "hsl_drawdown_ratio_ema_span_minutes",
+        "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
+        "drawdown_ratio_threshold": "hsl_red_threshold",
     },
     "risk": {
-        "n_positions": "n_positions",
-        "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
-        "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
+        "max_positions": "n_positions",
+        "total_exposure_enforcer_threshold_ratio": "risk_twel_enforcer_threshold",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
+        "position_exposure_enforcer_threshold_ratio": "risk_wel_enforcer_threshold",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
     },
     "unstuck": {
-        "close_pct": "unstuck_close_pct",
-        "ema_dist": "unstuck_ema_dist",
-        "ema_span_0": "unstuck_ema_span_0",
-        "ema_span_1": "unstuck_ema_span_1",
-        "loss_allowance_pct": "unstuck_loss_allowance_pct",
-        "threshold": "unstuck_threshold",
+        "close_fraction": "unstuck_close_pct",
+        "ema_distance_fraction": "unstuck_ema_dist",
+        "ema_span_0_minutes": "unstuck_ema_span_0",
+        "ema_span_1_minutes": "unstuck_ema_span_1",
+        "loss_allowance_fraction": "unstuck_loss_allowance_pct",
+        "exposure_trigger_ratio": "unstuck_threshold",
     },
 }
 SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY = {
@@ -72,64 +74,74 @@ BOT_BOUND_GROUP_BY_KEY = {
 SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     "long": {
         "forager": {
-            "score_weights_ema_readiness": [0, 1, 0.01],
-            "score_weights_volatility": [0, 1, 0.01],
-            "score_weights_volume": [0, 1, 0.01],
-            "volatility_ema_span_1m": [10, 2880, 1],
-            "volume_drop_pct": [0.02, 1, 0.01],
-            "volume_ema_span_1m": [180, 2880, 1]
+            "score_weights": {
+                "ema_readiness": [0, 1, 0.01],
+                "volatility": [0, 1, 0.01],
+                "volume": [0, 1, 0.01],
+            },
+            "volatility_ema_span_minutes": [10, 2880, 1],
+            "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
-            "cooldown_minutes_after_red": [2160, 2160, 10],
-            "ema_span_minutes": [720, 720, 1],
-            "red_threshold": [0.15, 0.15, 0.001]
+            "cooldown_after_red_minutes": [2160, 2160, 10],
+            "drawdown_ratio_ema_span_minutes": [720, 720, 1],
+            "drawdown_ratio_threshold": [0.15, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
-            "n_positions": [7, 7, 1],
-            "position_exposure_enforcer_threshold": [1, 1, 0.001],
-            "total_exposure_enforcer_threshold": [1, 1, 0.001],
+            "max_positions": [7, 7, 1],
             "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
-            "we_excess_allowance_pct": [0, 0.4, 0.01]
+            "we_excess_allowance_fraction": [0, 0.4, 0.01],
+            "position_exposure_enforcer": {
+                'threshold_ratio': [1, 1, 0.001],
+            },
+            "total_exposure_enforcer": {
+                'threshold_ratio': [1, 1, 0.001],
+            },
         },
         "unstuck": {
-            "close_pct": [0.01, 0.12, 0.001],
-            "ema_dist": [-0.2, 0.01, 0.0001],
-            "ema_span_0": [60, 2880, 10],
-            "ema_span_1": [60, 2880, 10],
-            "loss_allowance_pct": [0.005, 0.2, 0.0001],
-            "threshold": [0.4, 0.9, 0.001],
+            "close_fraction": [0.01, 0.12, 0.001],
+            "ema_distance_fraction": [-0.2, 0.01, 0.0001],
+            "ema_span_0_minutes": [60, 2880, 10],
+            "ema_span_1_minutes": [60, 2880, 10],
+            "loss_allowance_fraction": [0.005, 0.2, 0.0001],
+            "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
     },
     "short": {
         "forager": {
-            "score_weights_ema_readiness": [0, 1, 0.01],
-            "score_weights_volatility": [0, 1, 0.01],
-            "score_weights_volume": [0, 1, 0.01],
-            "volatility_ema_span_1m": [10, 1440, 1],
-            "volume_drop_pct": [0.02, 1, 0.01],
-            "volume_ema_span_1m": [180, 2880, 1]
+            "score_weights": {
+                "ema_readiness": [0, 1, 0.01],
+                "volatility": [0, 1, 0.01],
+                "volume": [0, 1, 0.01],
+            },
+            "volatility_ema_span_minutes": [10, 1440, 1],
+            "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
-            "cooldown_minutes_after_red": [2160, 4320, 10],
-            "ema_span_minutes": [1, 720, 1],
-            "red_threshold": [0.01, 0.15, 0.001]
+            "cooldown_after_red_minutes": [2160, 4320, 10],
+            "drawdown_ratio_ema_span_minutes": [1, 720, 1],
+            "drawdown_ratio_threshold": [0.01, 0.15, 0.001]
         },
         "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
-            "n_positions": [5, 5, 1],
-            "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
-            "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
+            "max_positions": [5, 5, 1],
             "total_wallet_exposure_limit": [0, 0],
-            "we_excess_allowance_pct": [0, 0.5, 0.01]
+            "we_excess_allowance_fraction": [0, 0.5, 0.01],
+            "position_exposure_enforcer": {
+                'threshold_ratio': [0.8, 1.01, 0.001],
+            },
+            "total_exposure_enforcer": {
+                'threshold_ratio': [0.8, 1.01, 0.001],
+            },
         },
         "unstuck": {
-            "close_pct": [0.01, 0.12, 0.001],
-            "ema_dist": [-0.2, 0.01, 0.0001],
-            "ema_span_0": [60, 2880, 10],
-            "ema_span_1": [60, 2880, 10],
-            "loss_allowance_pct": [0.005, 0.2, 0.0001],
-            "threshold": [0.4, 0.9, 0.001],
+            "close_fraction": [0.01, 0.12, 0.001],
+            "ema_distance_fraction": [-0.2, 0.01, 0.0001],
+            "ema_span_0_minutes": [60, 2880, 10],
+            "ema_span_1_minutes": [60, 2880, 10],
+            "loss_allowance_fraction": [0.005, 0.2, 0.0001],
+            "exposure_trigger_ratio": [0.4, 0.9, 0.001],
         },
     },
 }
@@ -155,8 +167,12 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     }
     if not isinstance(bounds, dict):
         return flat
-    for key, value in bounds.get("hsl", {}).items():
-        flat[f"hsl_{key}"] = deepcopy(value)
+    for key, value in bounds.get("portfolio", {}).get("unstuck", {}).items():
+        flat[f"unstuck_{key}"] = deepcopy(value)
+    for group in ("hsl", "loss_gate"):
+        for key, value in bounds.get("portfolio", {}).get(group, {}).items():
+            flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group, {}).get(key, f"{group}_{key}")
+            flat[flat_key] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
         side_bounds = bounds.get(pside, {})
         if not isinstance(side_bounds, dict):
@@ -170,93 +186,69 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
                 continue
             if not isinstance(group_bounds, dict):
                 continue
-            shared_items = []
-            for key, value in group_bounds.items():
-                if (group_name, key) in {
-                    ("entry_cooldown", "weights_minutes"),
-                    ("forager", "score_weights"),
-                } and isinstance(value, dict):
-                    shared_items.extend((f"{key}_{child}", bound) for child, bound in value.items())
-                else:
-                    shared_items.append((key, value))
-            for key, value in shared_items:
+            for key, value in _flatten_strategy_bound_items(group_bounds):
                 flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name, {}).get(key, key)
                 flat[f"{pside}_{flat_key}"] = deepcopy(value)
-    # Flat leaves take precedence when legacy and grouped bounds are mixed.
-    flat.update({
-        key: deepcopy(value) for key, value in bounds.items()
-        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
-    })
     return flat
 
 
 
 def hydrate_adaptive_optimize_bounds(config: dict, *, source_bounds=None, tracker=None) -> None:
-    """Expose omitted adaptive bounds without opening new search ranges.
+    """Materialize omitted optimizer dimensions as fixed effective bot values.
 
-    source_bounds records authored bounds before template seeding. Bot values
-    must already have their canonical defaults and normalized score weights.
+    The complete template is an explicit starting profile, never an authority
+    for missing bounds in an authored document. ``source_bounds`` must describe
+    the input before template hydration. Nullable policy remains outside the
+    numeric genome until an explicit numeric domain is supplied.
     """
-    kind = config["live"]["strategy_kind"]
+    from .param_paths import OPTIMIZABLE_BOT_KEY_PATHS, iter_optimizer_key_paths
+
+    from .inherited_bounds import get_bound_plan
+    if get_bound_plan(config) is not None:
+        return  # The typed plan already materialized every effective domain.
+    kind = config["bot"]["portfolio"]["strategy_kind"]
     bounds = config["optimize"]["bounds"]
     authored = flatten_optimize_bounds(
         bounds if source_bounds is None else source_bounds, strategy_kind=kind
     )
+    keys = set(strategy_optimize_key_path_map(kind)) | set(OPTIMIZABLE_BOT_KEY_PATHS)
     for side in BOT_POSITION_SIDES:
-        forager = config["bot"][side]["forager"]
-        cooldown = config["bot"][side]["entry_cooldown"]
-        for group, local_key, value in (
-            (
-                "forager", "score_weights_unilateralness",
-                forager["score_weights"]["unilateralness"],
-            ),
-            ("forager", "unilateralness_ema_span_1m", forager["unilateralness_ema_span_1m"]),
-            (
-                "entry_cooldown", "weights_minutes_exposure_ratio",
-                cooldown["weights_minutes"]["exposure_ratio"],
-            ),
-            (
-                "entry_cooldown", "weights_minutes_adverse_directionality",
-                cooldown["weights_minutes"]["adverse_directionality"],
-            ),
-            ("entry_cooldown", "min_duration_minutes", cooldown["min_duration_minutes"]),
-            ("entry_cooldown", "max_duration_minutes", cooldown["max_duration_minutes"]),
-        ):
-            flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY[group][local_key]
-            bound_key = f"{side}_{flat_key}"
-            if bound_key in authored:
-                # Keep explicit nested/legacy bounds ahead of seeded shorthand
-                # defaults when the canonical grouped representation is built.
-                set_flat_optimize_bound(bounds, kind, bound_key, authored[bound_key])
-                continue
-            # Null means an unbounded duration, not a numeric optimizer endpoint.
-            if value is None:
-                continue
-            if group == "entry_cooldown" and local_key == "max_duration_minutes":
+        for fields in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.values():
+            keys.update(f"{side}_{key}" for key in fields.values())
+    portfolio = config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"
+    if portfolio:
+        keys = {key for key in keys if not key.startswith(("long_hsl_", "short_hsl_"))}
+        keys.update(SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].values())
+    rebuilt = {}
+    for key, path in iter_optimizer_key_paths(config, sorted(keys | set(authored))):
+        if key in authored:
+            value = authored[key]
+        else:
+            value = config
+            for part in path or ():
+                if not isinstance(value, dict) or part not in value:
+                    break
+                value = value[part]
+            else:
+                if value is None:
+                    continue
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise TypeError(f"{'.'.join(path)} must be numeric for an optimizer bound")
                 if not math.isfinite(float(value)):
-                    raise ValueError(f"bot.{side}.entry_cooldown.max_duration_minutes must be finite when set")
-            frozen = [value, value]
-            local_path = (
-                ("weights_minutes", local_key.removeprefix("weights_minutes_"))
-                if group == "entry_cooldown" and local_key.startswith("weights_minutes_")
-                else (local_key,)
-            )
-            target = bounds.setdefault(side, {}).setdefault(group, {})
-            for part in local_path[:-1]:
-                target = target.setdefault(part, {})
-            leaf = local_path[-1]
-            if tracker is not None:
-                path = ["optimize", "bounds", side, group, *local_path]
-                if leaf not in target:
-                    tracker.add(path, frozen)
-                elif target[leaf] != frozen:
-                    tracker.update(path, target[leaf], frozen)
-            target[leaf] = frozen
+                    raise ValueError(f"{'.'.join(path)} must be finite for an optimizer bound")
+                value = [value, value]
+                set_flat_optimize_bound(rebuilt, kind, key, value)
+            continue
+        set_flat_optimize_bound(rebuilt, kind, key, value)
+    if tracker is not None and bounds != rebuilt:
+        tracker.update(["optimize", "bounds"], bounds, rebuilt)
+    bounds.clear()
+    bounds.update(rebuilt)
 
 
 def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     """Keep explicit search dimensions without adding them to default searches."""
-    kind = source.get("live", {}).get("strategy_kind", "trailing_martingale")
+    kind = get_optional_config_value(source, 'bot.portfolio.strategy_kind', "trailing_martingale")
     flat = flatten_optimize_bounds(source.get("optimize", {}).get("bounds"), strategy_kind=kind)
     optional = {
         "entry_cooldown_weights_minutes_exposure_ratio",
@@ -268,7 +260,7 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
     }
     target = template["optimize"]["bounds"]
     for key, value in flat.items():
-        if key.split("_", 1)[-1] in optional:
+        if key in {"unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"} or "hsl_memory_ema_span_minutes" in key or key.split("_", 1)[-1] in optional:
             set_flat_optimize_bound(target, kind, key, value)
     # Input also accepts nested score_weights before canonical bound sorting.
     for side in BOT_POSITION_SIDES:
@@ -285,10 +277,28 @@ def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
             )
 
 
+def _shared_bound_local_path(group: str, local_key: str) -> tuple[str, ...]:
+    for owner, prefix in (("entry_cooldown", "weights_minutes"), ("forager", "score_weights")):
+        if group == owner and local_key.startswith(prefix + "_"):
+            return (prefix, local_key.removeprefix(prefix + "_"))
+    if group == "risk":
+        for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
+            if local_key.startswith(owner + "_"):
+                return (owner, local_key.removeprefix(owner + "_"))
+    return (local_key,)
+
+
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
     normalized_kind = normalize_strategy_kind(strategy_kind)
+    if flat_key == "unstuck_memory_ema_span_minutes":
+        bounds.setdefault("portfolio", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = deepcopy(value)
+        return
+    if flat_key == "loss_gate_memory_ema_span_minutes":
+        bounds.setdefault("portfolio", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = deepcopy(value)
+        return
     if flat_key.startswith("hsl_"):
-        bounds.setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
+        local_key = SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY["hsl"].get(flat_key, flat_key.removeprefix("hsl_"))
+        bounds.setdefault("portfolio", {}).setdefault("hsl", {})[local_key] = deepcopy(value)
         return
     pside, key = flat_key.split("_", 1)
     if pside not in BOT_POSITION_SIDES:
@@ -313,15 +323,16 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
     else:
         local_key = SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY[group].get(key, key)
         target = side_bounds.setdefault(group, {})
-        if group == "entry_cooldown" and local_key.startswith("weights_minutes_"):
-            target.setdefault("weights_minutes", {})[local_key.removeprefix("weights_minutes_")] = (
-                deepcopy(value)
-            )
-        else:
-            target[local_key] = deepcopy(value)
+        path = _shared_bound_local_path(group, local_key)
+        for part in path[:-1]:
+            target = target.setdefault(part, {})
+        target[path[-1]] = deepcopy(value)
 
 
 def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio_hsl: bool = False) -> None:
+    from .inherited_bounds import PreparedOptimizationBounds
+    if type(bounds) is PreparedOptimizationBounds:
+        return  # Its immutable plan supplies canonical ordering and domains.
     flat = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
     normalized_kind = normalize_strategy_kind(strategy_kind)
     for key, value in list(flat.items()):
@@ -330,12 +341,8 @@ def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio
                 flat[key] = [value[0], value[0]]
             elif len(value) == 2:
                 flat[key] = sorted(value)
-    rebuilt = get_optimize_bounds_defaults()
-    if portfolio_hsl:
-        for side in BOT_POSITION_SIDES:
-            rebuilt[side].pop("hsl", None)
-    for pside in BOT_POSITION_SIDES:
-        rebuilt[pside]["strategy"] = {normalized_kind: deepcopy(rebuilt[pside]["strategy"][normalized_kind])}
+    # Sorting must never authorize a search dimension omitted by the author.
+    rebuilt = {}
     for flat_key, value in flat.items():
         set_flat_optimize_bound(rebuilt, normalized_kind, flat_key, value)
     bounds.clear()
@@ -343,7 +350,7 @@ def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio
 
 
 def prune_inactive_optimize_strategy_bounds(config: dict, *, tracker: Optional[object] = None) -> None:
-    active_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    active_kind = normalize_strategy_kind(get_optional_config_value(config, 'bot.portfolio.strategy_kind'))
     bounds = config.get("optimize", {}).get("bounds")
     if not isinstance(bounds, dict):
         return

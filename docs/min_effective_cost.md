@@ -24,9 +24,9 @@ With:
 - `we_allowance`: optional headroom multiplier on per-position WEL. This is always bounded to `min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit - 1))`, capped so a single symbol cannot exceed the side-level TWEL. If `wallet_exposure_limit` is non-positive/non-finite, Passivbot treats both the allowance and allowed exposure as zero; if `twel` is non-positive/non-finite, Passivbot grants no excess headroom.
 - `effective_wel = wallet_exposure_limit * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
-  order. For `live.strategy_kind = "trailing_martingale"`, this is
-  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for
-  `live.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_pct`.
+  order. For `bot.portfolio.strategy_kind = "trailing_martingale"`, this is
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_fraction`; for
+  `bot.portfolio.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_fraction`.
 
 
 ## Pass/fail check
@@ -46,7 +46,7 @@ Rearrange the inequality to solve for the minimum balance:
 Use the highest effective_min_cost among the symbols you want to trade. Example:
 - `effective_min_cost = 10 USDT`
 - `total_wallet_exposure_limit = 0.6`, `n_positions = 3` → `wallet_exposure_limit = 0.2`
-- `risk_we_excess_allowance_pct = 0.5` (effective_wel = 0.2 * (1 + 0.5) = 0.3)
+- `risk.we_excess_allowance_fraction = 0.5` (effective_wel = 0.2 * (1 + 0.5) = 0.3)
 - `strategy_initial_sizing_fraction = 0.015`
 → `balance_required >= 10 / (0.3 * 0.015) ≈ 2,222.22 USDT`
 

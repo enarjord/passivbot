@@ -18,15 +18,15 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    is derived as `pnl + fee_paid`.
 5. Fee resolution is best-effort but observable: reported quote fee, reported
    non-quote fee converted by a fresh ticker, reported fee rate, then
-   `live.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
-   against `live.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
+   `live.fills.fallback_fee_fraction`. Every fill is sanity-checked by fee/notional ratio
+   against `live.fills.max_abs_fee_fraction`; outliers use the fallback percentage.
    Explicit finite zero fees and fully resolved zero-sum fee lists are authoritative amounts.
    Loading a cached fallback or rate estimate rechecks retained amounts and persists a resolved fee;
    unresolved historical estimates retain their original policy. Same-currency offsetting
    fees need no ticker when their net amount is zero.
    Coalescing preserves missing or malformed fee amounts for fallback resolution.
    A zero non-quote fee needs no ticker and records `fee_conversion_source=zero_amount`.
-   Cached conversion quotes remain subject to `live.fee_conversion_max_age_ms` against the
+   Cached conversion quotes remain subject to `live.fills.fee_conversion_max_age_milliseconds` against the
    current time, fetch time, and each fill timestamp. Failed conversion lookups retry after
    at most one minute, bounded further by that same configured age. A batch reuses an identical
    pair/fill-time lookup, including an unavailable result. A quote rejected only for one fill
@@ -101,18 +101,22 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     fetch records an unproven range; every such range remains retryable under the
     execution loop's backoff regardless of attempt count, and a successful bounded
     traversal clears it even when the response contains no fills.
-12. Live coverage requirements follow the enabled consumer. Realized-PnL risk
-    features require the configured PnL lookback and authoritative PnL quality.
-    Entry cooldown without a PnL consumer requires structural fill coverage only
-    across its maximum configured cooldown horizon. Trailing reconstruction retains
+12. Live coverage requirements follow the enabled consumer. Auto-unstuck and the
+    realized-loss gate require authoritative PnL across their shared retained suffix
+    from its declared continuous-memory bootstrap origin. An unknown-prefix zero
+    initializer and attenuation remain explicit; finite suffix coverage does not
+    prove complete infinite-history memory or make its initial allowance safe.
+    Entry cooldown independently requires structural fill coverage across its maximum
+    configured horizon. When both consumers are enabled, acquire and prove the earlier
+    boundary, while checking PnL quality and replaying realized memory only from its
+    fixed origin. Older structural fills do not rebase that origin. Trailing reconstruction retains
     its symbol/position-side confirmation and bounded recovery. With no historical
     consumer enabled, routine ingestion starts from a bounded recent fetch rather
-    than proving an unrelated PnL window. Coin HSL with
-    `restart_after_red_policy=always` uses its canonical fill-proven held-episode
-    boundary plus the flat-scope RED cooldown horizon; a recent fill for a flat
-    scope, ambiguous reconstruction, another restart policy, or a broader HSL
-    signal mode preserves the configured PnL lookback. Coin scopes use their
-    effective per-coin HSL policy and cooldown. Recompute both coverage and PnL
+    than proving an unrelated PnL window. HSL separately acquires its bounded
+    bootstrap history and full finite cooldown horizon using its best-effort Rust
+    reconciliation contract. HSL alone does not require strict authoritative PnL
+    across the separate shared realized-memory suffix required by unstuck or the gate.
+    Coin scopes use their effective per-coin HSL policy and cooldown. Recompute both coverage and PnL
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.
 
@@ -220,8 +224,9 @@ Unproven required coverage is a controlled live-planning deferral. The execution
 bounded, reason-aware retry cadence, and failed coverage ranges do not consume the generic
 process-restart budget or become terminal after an independent manager retry limit. A change
 between coverage and PnL block reasons restarts that reason's backoff at its configured base.
-Already-latched HSL RED supervisors continue protective management without fills while coverage
-repair proceeds. Manager-owned failed-range state remains evidence about coverage, not a second
+Current HSL protection continues from fresh account facts and its explicit best-effort
+reconstruction while strict-consumer coverage repair proceeds. A prior RED is not permission.
+Manager-owned failed-range state remains evidence about coverage, not a second
 orchestration timer.
 
 ## Validation

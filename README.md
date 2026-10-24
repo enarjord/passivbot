@@ -9,12 +9,9 @@ A clone of `master` includes subsequent changes listed under
 [Unreleased](CHANGELOG.md#unreleased). See [release status and version meanings](docs/releases.md)
 before choosing a revision; these docs describe the revision you are viewing.
 
-> **Upgrading from v7:** v8 is a breaking config and strategy release. Do not
-> start v8 live with an unreviewed v7 config. Read the
-> [v8.0.0 upgrade notes](docs/release_notes_v8.0.0.md) and use the explicit
-> `passivbot tool migrate-config-v7` helper when preserving v7 trailing-grid
-> behavior.
-
+> **V9 configuration transition:** this revision accepts the final canonical v9 layout.
+> Use the [explicit released-v8 converter](docs/v8_to_v9_migration.md), review semantic
+> choices and backtest the result. The v7 strategy and its migration command are removed.
 
 ## Overview
 
@@ -33,8 +30,7 @@ as price moves against it, subject to configured exposure and risk limits. Re-en
 average entry price, while closes seek a configured profit margin or use trailing confirmation.
 Entry sizes, distances, and trailing behavior are configurable.
 
-The `ema_anchor` strategy is also available. `trailing_grid_v7` is a deprecated compatibility
-strategy for explicit v7 migrations. See the [bot configuration guide](docs/config.bot.md) for
+The `ema_anchor` strategy is also available. See the [bot configuration guide](docs/config.bot.md) for
 strategy-specific parameters.
 
 ### Trailing Orders
@@ -45,10 +41,10 @@ For trailing entries, the bot waits for the price to move beyond a specified thr
 Grid and trailing orders may be combined, such that the robot enters or closes a whole or a part of the position as grid orders and/or as trailing orders.
 
 ### Forager
-The Forager feature dynamically chooses which approved markets may open positions. It first prunes low relative-volume candidates, then ranks the remaining markets with configurable weights for quote volume, EMA readiness, and 1m log-range volatility.
+The Forager feature dynamically chooses which approved markets may open positions. It ranks eligible markets with configurable weights for quote volume, EMA readiness, 1m log-range volatility and unilateralness.
 
 ### Unstucking Mechanism
-Passivbot manages underperforming, or "stuck", positions by realizing small losses over time. If multiple positions are stuck, the bot prioritizes positions with the smallest gap between the entry price and current market price for "unstucking". Losses are limited by ensuring that the account balance does not fall under a set percentage below the past peak balance.  
+Passivbot manages underperforming, or "stuck", positions by realizing small losses over time. If multiple positions are stuck, the bot prioritizes positions with the smallest gap between the entry price and current market price for "unstucking". A continuous net-realized loss memory limits its allowance, with a separate account-wide loss gate for non-panic closes.
 
 ## Installation
 
@@ -57,26 +53,13 @@ To install Passivbot and its dependencies, follow the steps below.
 Passivbot supports **Python 3.12 and Python 3.14**. Python 3.13 is not supported by the pinned
 dependency set.
 
-### Upgrading a v7 config
+### Configuration upgrades
 
-V8 does not silently reinterpret v7 strategy fields. To preserve v7
-trailing-grid behavior while moving the config into canonical v8 shape, run:
-
-```sh
-passivbot tool migrate-config-v7 \
-  path/to/config_v7.json \
-  path/to/config_v8_trailing_grid_v7.json \
-  --report path/to/v7_migration_report.json
-```
-
-The helper writes the deprecated compatibility strategy `trailing_grid_v7`;
-it does not translate the config into the new `trailing_martingale` strategy.
-If unsupported or ambiguous fields require manual review, the command returns
-nonzero and does not write the output config unless
-`--allow-manual-review-output` is explicitly supplied. Review the report and
-backtest the result before considering a live run. New configs and new
-optimization work should start from
-`configs/examples/default_trailing_martingale_long.json`.
+Start new configurations from `configs/examples/default_trailing_martingale_long.json`
+or `configs/examples/ema_anchor.json`. Convert released v8 inputs with
+`passivbot tool migrate-config-v9`; follow the [migration guide](docs/v8_to_v9_migration.md)
+for explicit spans, metric formulas and search-policy acknowledgments. Normal loading performs
+no legacy migration. Pre-v8 and unreleased intermediate layouts are unsupported.
 
 ### Step 1: Clone the Repository
 

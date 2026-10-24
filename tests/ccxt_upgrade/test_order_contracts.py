@@ -8,7 +8,6 @@ from bitget_normalization import deduce_uta_side_pside
 from exchanges.bitget import BitgetBot
 from exchanges.binance import BinanceBot
 from exchanges.bybit import BybitBot
-from exchanges.defx import DefxBot
 from exchanges.gateio import GateIOBot
 from exchanges.hyperliquid import HyperliquidBot
 from exchanges.okx import OKXBot
@@ -499,7 +498,7 @@ def test_bitget_uta_custom_id_respects_v3_client_oid_contract():
 
 def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
     bot = BitgetBot.__new__(BitgetBot)
-    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
     bot.is_uta = True
     order = {
         "position_side": "short",
@@ -515,7 +514,7 @@ def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
     assert "reduceOnly" not in post_only_params
     assert post_only_params["clientOid"] == "0x0007abcdef"
 
-    bot.config = {"live": {"time_in_force": "gtc"}}
+    bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
     gtc_params = bot._build_order_params(order)
 
     assert gtc_params["timeInForce"] == "gtc"
@@ -526,7 +525,7 @@ def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
 
 def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
     bot = BitgetBot.__new__(BitgetBot)
-    bot.config = {"live": {"time_in_force": "gtc"}}
+    bot.config = {"live": {"execution": {"time_in_force": "gtc"}}}
     bot.is_uta = True
     params = bot._build_order_params(
         {
@@ -566,7 +565,7 @@ def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
 
 def test_bitget_classic_order_params_keep_reduce_only_contract():
     bot = BitgetBot.__new__(BitgetBot)
-    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
     bot.is_uta = False
 
     params = bot._build_order_params(
@@ -904,7 +903,7 @@ def test_gateio_order_side_contract_depends_on_reduce_only_flag():
 
 def test_gateio_order_params_use_client_order_id_for_ccxt_text_prefix():
     bot = GateIOBot.__new__(GateIOBot)
-    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
     params = bot._build_order_params(
         {
             "type": "limit",
@@ -1594,18 +1593,6 @@ async def test_okx_legacy_and_staged_balance_snapshot_use_same_collateral_value(
     assert staged_balance == pytest.approx(legacy_balance)
 
 
-def test_legacy_defx_prefers_existing_position_state_over_side():
-    bot = DefxBot.__new__(DefxBot)
-    bot.positions = {
-        "BTC/USDT:USDT": {
-            "long": {"size": 1.0},
-            "short": {"size": 0.0},
-        }
-    }
-    bot.has_position = lambda pside, symbol: abs(
-        float(bot.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
-    ) > 0.0
-    assert bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "sell"}) == "long"
 
 
 @pytest.mark.asyncio

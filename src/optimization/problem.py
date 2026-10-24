@@ -123,6 +123,11 @@ class PymooEvaluatorAdapter:
 
     @property
     def has_constraints(self) -> bool:
+        from config.prefilter import prefilter_enabled
+
+        base = getattr(self.evaluator, "base", self.evaluator)
+        if prefilter_enabled(getattr(base, "config", {}).get("optimize", {}).get("prefilter")):
+            return True
         if hasattr(self.evaluator, "limit_checks"):
             return bool(getattr(self.evaluator, "limit_checks"))
         base = getattr(self.evaluator, "base", None)

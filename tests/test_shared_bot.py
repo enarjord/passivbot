@@ -5,7 +5,7 @@ from config.shared_bot import flatten_shared_bot_side, require_grouped_bot_value
 
 def test_flatten_shared_bot_side_prefers_grouped_value_over_stale_runtime_alias():
     side_cfg = {
-        "hsl": {"red_threshold": 1.0},
+        "hsl": {"drawdown_ratio_threshold": 1.0},
         "hsl_red_threshold": 0.3,
     }
 

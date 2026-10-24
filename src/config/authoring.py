@@ -1,0 +1,678 @@
+"""Offline authoring views and explanations, separate from authored policy.
+
+The existing loader and override validators own accepted inputs and precedence.
+These helpers never query markets or accounts and never add report metadata to
+configuration objects.
+"""
+
+from copy import deepcopy
+from pathlib import Path
+import os
+
+from .field_registry import get_field_registry
+from .field_spec import NO_DEFAULT
+from .load import prepare_config
+from .overrides import parse_overrides, normalize_coin_override_keys
+from .param_paths import resolve_dotted_config_path
+from .result_records import extract_result_config
+from .scenario_overrides import normalize_scenario_overrides
+from .universe import COIN_SOURCE_FIELDS
+
+
+_MISSING = object()
+_UNIVERSE_PATHS = tuple(("bot", side, "universe", field)
+                        for side in ("global", "long", "short") for field in sorted(COIN_SOURCE_FIELDS))
+_PROTECTED = (
+    *(("bot", owner, "enabled") for owner in ("long", "short")),
+    ("coin_overrides",), ("optimize", "bounds"),
+    ("optimize", "fixed_params"), ("optimize", "fixed_runtime_overrides"),
+    ("optimize", "enable_overrides"), ("optimize", "limits"), ("optimize", "scoring"),
+    ("backtest", "scenarios"), *_UNIVERSE_PATHS,
+    # A declaration is a pin even when its current value equals the common
+    # default. Compact output must not turn it into future inheritance.
+    ("bot", "long"), ("bot", "short"),
+    *(("bot", side, "forager", "always_include") for side in ("long", "short")),
+    ("bot", "portfolio", "hsl"),
+)
+
+
+def _get(mapping, path, default=_MISSING):
+    current = mapping
+    for part in path:
+        if isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, TypeError, IndexError):
+                return default
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return default
+    return current
+
+
+def _set(mapping, path, value):
+    current = mapping
+    for part in path[:-1]:
+        current = current.setdefault(part, {})
+    current[path[-1]] = deepcopy(value)
+
+
+def _patch(config, overrides):
+    result = deepcopy(config)
+    from .bot_inheritance import get_bot_policy
+    policy_source = get_bot_policy(result)
+    bounds_source = result.get("optimize", {}).get("bounds")
+    normalized = normalize_scenario_overrides(overrides)
+    for selector, value in normalized.items():
+        _set(result, resolve_dotted_config_path(result, selector), value)
+    from .activation import apply_activation_patch
+    apply_activation_patch(result, normalized, policy_source=policy_source, bounds_source=bounds_source)
+    return result
+
+
+def _authored(source, base_config_path):
+    from tools.clean_config import cleanup_config
+    from config_utils import strip_config_metadata
+
+    from .universe import universe_source_view
+    from .activation import activation_source_view
+    payload = universe_source_view(activation_source_view(
+        extract_result_config(source, allow_unmarked_wrapper=True)))
+    # Validate the complete input before stripping metadata or pruning defaults.
+    full = cleanup_config(payload, base_config_path=base_config_path, _allow_sparse=True)
+    payload = strip_config_metadata(payload)
+    payload.get("live", {}).pop("base_config_path", None)
+    return payload, full
+
+
+def _rebase_override_files(config, source, destination):
+    if not source or not destination:
+        return config
+    source_path = Path(source).absolute()
+    destination_path = Path(destination).absolute()
+    base = source_path.parent.resolve()
+    output = destination_path.parent.resolve()
+    # In-place writes through a selected symlink target the physical file. A
+    # relative reference cannot in general survive loading through both aliases.
+    shared_file_aliases = source_path.resolve() == destination_path.resolve() and base != output
+
+    def visit(node):
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                source_leaf = key.split(".")[-1]
+                candidate = value[0] if isinstance(value, list) and len(value) == 1 else value
+                from .universe import resolve_universe_source_path
+                source_file = (resolve_universe_source_path(candidate, base_config_path=source, discover_ambiguous=not isinstance(value, list), allow_all=source_leaf == "approved_coins")
+                               if source_leaf in COIN_SOURCE_FIELDS else None)
+                coin_source = source_leaf in COIN_SOURCE_FIELDS and isinstance(candidate, str) and (
+                    source_file is not None or candidate.startswith(("./", "../", "/", "~"))
+                    or Path(candidate).suffix.lower() in {".json", ".hjson", ".txt"}
+                )
+                if (source_leaf == "override_config_path" and isinstance(value, str)) or coin_source:
+                    value = candidate if coin_source else value
+                    reference = Path(value).expanduser()
+                    if not reference.is_absolute():
+                        candidates = (base / reference, Path.cwd() / reference)
+                        resolved = (source_file.absolute() if source_file is not None else None) if coin_source else next((path.resolve() for path in candidates if path.is_file()), None)
+                        if resolved is None:
+                            raise FileNotFoundError(f"{source_leaf} file not found: {value}")
+                        selected = str(resolved) if shared_file_aliases else os.path.relpath(resolved, output)
+                        node[key] = [selected] if coin_source and isinstance(node[key], list) else selected
+                else:
+                    visit(value)
+
+    visit(config)
+    return config
+
+
+def compact_config(source, *, base_config_path="", destination_path=""):
+    """Remove redundant authored defaults while retaining policy authority.
+
+    Eligibility, search settings, sparse patches, scenarios, explicit nulls and
+    optional HSL authorization remain explicit. The normal loader verifies the
+    entire result; context-dependent defaults conservatively retain the source.
+    Relative coin-override file references follow the output location.
+    """
+    from tools.clean_config import cleanup_config
+
+    authored, full = _authored(source, base_config_path)
+    baseline = {"config_version": authored["config_version"]}
+    if "bot" in authored:
+        baseline["bot"] = {side: {} for side in ("long", "short") if side in authored["bot"]}
+    if "bot" in authored:
+        baseline["bot"]["portfolio"] = {"strategy_kind": full["bot"]["portfolio"]["strategy_kind"]}
+    if "live" in authored:
+        baseline["live"] = {}
+    if full["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
+        baseline["bot"].setdefault("portfolio", {})["hsl"] = deepcopy(full["bot"]["portfolio"]["hsl"])
+    defaults = cleanup_config(baseline, base_config_path=base_config_path, _allow_sparse=True)
+    registry = get_field_registry()
+    keep_empty = {("bot",), ("live",), ("bot", "long"), ("bot", "short")}
+
+    def prune(value, path=()):
+        if value is None or path == ("config_version",) or any(
+            path[:len(prefix)] == prefix for prefix in _PROTECTED
+        ):
+            return deepcopy(value)
+        if isinstance(value, dict):
+            result = {}
+            for name, child in value.items():
+                selected = prune(child, (*path, name))
+                if selected is not _MISSING:
+                    result[name] = selected
+            return result if result or path in keep_empty or not path else _MISSING
+        field = registry.find(path)
+        if (field is not None and field.default is not NO_DEFAULT
+                and value == field.default and value == _get(defaults, path)):
+            return _MISSING
+        return deepcopy(value)
+
+    result = prune(authored)
+    if cleanup_config(result, base_config_path=base_config_path, _allow_sparse=True) != full:
+        # A default may depend on another authored field. Retain the complete
+        # authored authority rather than guessing which dependency can be omitted.
+        result = deepcopy(authored)
+    return _rebase_override_files(result, base_config_path, destination_path)
+
+
+def _resolve_coin_sources(config, *, require_complete):
+    result = deepcopy(config)
+    unresolved = []
+    from .bot_inheritance import apply_bot_policy_patch, install_bot_policy, reconciled_bot_policy
+    from .universe import (resolve_universe_sources, raw_side_universe_sources,
+                           source_inherits_shared, universe_source_view)
+    source = universe_source_view(result)
+    replacements = {}
+    for field in sorted(COIN_SOURCE_FIELDS):
+        raw = raw_side_universe_sources(result, field)
+        values, _ = resolve_universe_sources(result, field)
+        inherited = [side for side in ("long", "short") if source_inherits_shared(field, raw, side)]
+        if inherited:
+            common = values[inherited[0]]
+        else:
+            # Unused common files still need a portable resolved export, but
+            # their contents never replace independently pinned side sources.
+            probe = deepcopy(source)
+            probe.setdefault("bot", {}).setdefault("long", {}).setdefault("universe", {}).pop(field, None)
+            selected, _ = resolve_universe_sources(probe, field, position_sides=("long",))
+            common = selected["long"]
+        common_path = ("bot", "global", "universe", field)
+        if field == "approved_coins" and common == ["all"]:
+            unresolved.append(".".join(common_path))
+        elif _get(source, common_path) is not _MISSING and _get(source, common_path) is not None:
+            replacements[".".join(common_path)] = common
+        for side in ("long", "short"):
+            # Omission and each field's null semantics remain source policy.
+            if side not in raw or raw[side] is None:
+                continue
+            path = f"bot.{side}.universe.{field}"
+            if field == "approved_coins" and values[side] == ["all"]:
+                unresolved.append(path)
+            else:
+                replacements[path] = values[side]
+    policy = reconciled_bot_policy(result)
+    if policy is not None:
+        from dataclasses import replace
+        projected = apply_bot_policy_patch(policy, replacements)
+        # Resolving only source spellings cannot change numeric candidate
+        # transforms or their formatter representations.
+        install_bot_policy(result, replace(projected, _derived=policy._derived,
+                                           _normalized=policy._normalized))
+    else:
+        for selector, value in replacements.items():
+            _set(result, tuple(selector.split(".")), value)
+    if require_complete and unresolved:
+        raise ValueError(
+            "offline resolved export cannot expand approved_coins='all'; "
+            "supply explicit coin lists (market metadata would be required)"
+        )
+    return result, unresolved
+
+
+def _resolved_context(config, *, base_config_path, require_complete=True):
+    prepared = prepare_config(
+        config, base_config_path=base_config_path, live_only=True,
+        verbose=False, log_config_transforms=False,
+    )
+    prepared, unresolved = _resolve_coin_sources(prepared, require_complete=require_complete)
+    return parse_overrides(prepared, verbose=False), unresolved
+
+
+def _resolved_patch_value(value, parts, effective):
+    """Inline local sources within exactly the authored replacement scope."""
+    if parts == ("coin_overrides",):
+        return deepcopy(effective["coin_overrides"])
+    if len(parts) == 2 and parts[0] == "coin_overrides":
+        coin = next(iter(normalize_coin_override_keys({parts[1]: {}}, verbose=False)))
+        return deepcopy(effective["coin_overrides"][coin])
+    if parts in _UNIVERSE_PATHS:
+        from .universe import universe_source_view
+        return deepcopy(_get(universe_source_view(effective), parts))
+    if isinstance(value, dict):
+        return {name: _resolved_patch_value(child, (*parts, name), effective)
+                for name, child in value.items()}
+    return deepcopy(value)
+
+
+def resolved_config(source, *, base_config_path=""):
+    """Export explicit defaults, local coin-list contents and inline coin pins.
+
+    Dates and null inheritance retain their authored semantics. This is a local
+    policy snapshot, not exchange capability discovery or a prepared dataset.
+    """
+    from tools.clean_config import cleanup_config
+
+    _, full = _authored(source, base_config_path)
+    resolved, _ = _resolved_context(full, base_config_path=base_config_path)
+    result = cleanup_config(resolved, base_config_path=base_config_path)
+    # Resolve each patch in its effective root context, preserving its original
+    # sparse paths instead of copying inherited root values into the patch.
+    patches = [(result["optimize"], "fixed_runtime_overrides")]
+    patches.extend((scenario, "overrides") for scenario in result["backtest"]["scenarios"]
+                   if "overrides" in scenario)
+    for owner, name in patches:
+        raw = normalize_scenario_overrides(owner[name])
+        if not raw:
+            continue
+        effective, _ = _resolved_context(_patch(full, raw), base_config_path=base_config_path)
+        for selector in list(raw):
+            parts = resolve_dotted_config_path(full, selector)
+            raw[selector] = _resolved_patch_value(raw[selector], parts, effective)
+        owner[name] = raw
+    return cleanup_config(result, base_config_path=base_config_path)
+
+
+def _intersects(left, right):
+    return left[:len(right)] == right or right[:len(left)] == left
+
+
+def _inherited_sources(config, parts):
+    """Inspection may expand values without changing declared source authority."""
+    from .bot_inheritance import reconciled_bot_policy
+    policy = reconciled_bot_policy(config)
+    if policy is not None:
+        return [(origin.target, origin.source) for origin in policy.resolve()[1]
+                if origin.source is not None and origin.source[:2] == ("bot", "global")
+                and origin.target[:len(parts)] == parts]
+    from .universe import raw_side_universe_sources, source_inherits_shared
+    if len(parts) == 4 and parts[:1] == ("bot",) and parts[1] in {"long", "short"} and parts[2] == "universe" and parts[3] in COIN_SOURCE_FIELDS:
+        sources = raw_side_universe_sources(config, parts[3])
+        if source_inherits_shared(parts[3], sources, parts[1]):
+            return [(parts, ("bot", "global", "universe", parts[3]))]
+    return []
+
+
+def _bound_target(config, path):
+    """Reuse the canonical optimizer writer to identify a bounds leaf."""
+    if path[:2] != ("optimize", "bounds"):
+        return None
+    from .optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+    from .param_paths import iter_optimizer_key_paths
+
+    selected = path[2:]
+    if selected and str(selected[-1]).isdigit():
+        selected = selected[:-1]
+    from .inherited_bounds import get_bound_plan
+    plan = get_bound_plan(config)
+    if plan is not None:
+        target = ("bot", *selected)
+        return target if any(target == binding.authoring_path or target in binding.effective_targets
+                             for binding in plan.bindings) else None
+    kind = config["bot"]["portfolio"]["strategy_kind"]
+    bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
+    for key, target in iter_optimizer_key_paths(config, bounds):
+        singleton = {}
+        set_flat_optimize_bound(singleton, kind, key, bounds[key])
+        selected_bound = _get(singleton, selected)
+        if isinstance(selected_bound, list) or type(selected_bound) in (int, float):
+            return target
+    return None
+
+
+def _event_path(event):
+    return tuple(event.get("path_parts", event["path"].split(".")))
+
+
+def _canonical_coin_event(path, value):
+    """Use loader coin identities in reports without rewriting authored selectors."""
+    if path == ("coin_overrides",):
+        value = normalize_coin_override_keys(value, verbose=False)
+    elif path[:1] == ("coin_overrides",) and len(path) > 1:
+        coin = next(iter(normalize_coin_override_keys({path[1]: {}}, verbose=False)))
+        path = ("coin_overrides", coin, *path[2:])
+    return path, deepcopy(value)
+
+
+def _search_treatment(config, path, authored, *, coin_patch=None, coin=None, applied_overrides=()):
+    from .optimize_bounds import flatten_optimize_bounds
+    from .param_paths import iter_optimizer_key_paths, resolve_bound_selectors
+    from optimization.bounds import Bound
+
+    from .inherited_bounds import get_bound_plan, resolve_plan_selectors
+    plan = get_bound_plan(config)
+    selectors = config["optimize"].get("fixed_params", [])
+    if plan is not None:
+        binding = next((binding for binding in plan.bindings
+                        if path == binding.authoring_path or path in binding.effective_targets), None)
+        if binding is None:
+            return {"status": "not_in_bounds"}
+        key, bound = binding.key, binding.bound
+        raw_bound = _get(authored, binding.bound_path)
+        declared = raw_bound is not _MISSING
+        if not declared:
+            raw_bound = [bound.low, bound.high]
+            if bound.step is not None:
+                raw_bound.append(bound.step)
+        fixed_by = [selector for selector in selectors
+                    if key in resolve_plan_selectors(config, [selector], plan=plan)]
+        native_keys = binding.native_ids
+    else:
+        bounds = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=config["bot"]["portfolio"]["strategy_kind"])
+        matches = [(key, bounds[key]) for key, target in iter_optimizer_key_paths(config, bounds) if target == path]
+        if not matches:
+            return {"status": "not_in_bounds"}
+        key, raw_bound = matches[0]
+        try:
+            bound = Bound.from_config(key, raw_bound)
+        except Exception as exc:
+            raise ValueError(f"invalid optimize bound {key!r}: {exc}") from exc
+        fixed_by = [selector for selector in selectors
+                    if key in resolve_bound_selectors(config, [selector], bounds)]
+        authored_bounds = flatten_optimize_bounds(
+            authored.get("optimize", {}).get("bounds", {}), strategy_kind=config["bot"]["portfolio"]["strategy_kind"],
+        )
+        declared = key in authored_bounds
+        native_keys = (key,)
+    status = ("fixed_selector" if fixed_by else
+              "fixed_bound" if declared and bound.low == bound.high else
+              "omitted_fixed" if bound.low == bound.high else "searched")
+    gene_status = status
+    shadowed_by = [event for event in applied_overrides
+                   if _intersects(path, _event_path(event))]
+    if shadowed_by:
+        status = shadowed_by[-1]["kind"]
+    if coin_patch is not None and _get(coin_patch, path) is not _MISSING:
+        coin_events = [event for event in applied_overrides if
+                       _intersects(("coin_overrides", coin, *path), _event_path(event))]
+        status = coin_events[-1]["kind"] if coin_events else "coin_override"
+        shadowed_by.extend(coin_events)
+    from optimizer_overrides import COUPLED_UNSTUCK_EMA_BOUND_KEYS, unstuck_ema_spans_coupled
+    independent = not (any(key in COUPLED_UNSTUCK_EMA_BOUND_KEYS for key in native_keys)
+                       and unstuck_ema_spans_coupled(config))
+    if not independent:
+        gene_status = "not_in_genome"
+    return {
+        "status": status, "gene_status": gene_status,
+        "independent_gene": independent,
+        "shadowed_by": [{"kind": event["kind"], "path": event["path"]} for event in shadowed_by],
+        "key": key, "bounds": deepcopy(raw_bound),
+        "bounds_source": "authored" if declared else
+                         "configured_value" if bound.low == bound.high else "loader_default_or_derived",
+        "fixed_selectors": fixed_by,
+    }
+
+
+def explain_config(source, path, *, base_config_path="", coin=None, scenario=None, optimize=False):
+    """Return a report envelope without adding provenance to authored policy."""
+    authored, full = _authored(source, base_config_path)
+    # Cleanup returns reusable authored policy. Inspection needs the resolved
+    # numeric view and its validated gene bindings, without changing exports.
+    # Capture the original declarations before completed common defaults could
+    # be mistaken for authored global pins in the inspection provenance.
+    full["bot"] = deepcopy(authored.get("bot", {}))
+    full = prepare_config(full, base_config_path=base_config_path, live_only=True,
+                          verbose=False, log_config_transforms=False)
+    parts = resolve_dotted_config_path(full, path)
+    if parts is None or not parts:
+        raise ValueError("configuration path must not be empty")
+    if coin is not None and parts[:1] == ("coin_overrides",):
+        raise ValueError("--coin expects a root setting path, not a coin_overrides path")
+    if coin is not None:
+        coin = next(iter(normalize_coin_override_keys({coin: {}}, verbose=False)))
+    direct_coin = parts[:1] == ("coin_overrides",) and len(parts) >= 2
+    if direct_coin:
+        normalized_coin = next(iter(normalize_coin_override_keys({parts[1]: {}}, verbose=False)))
+        parts = ("coin_overrides", normalized_coin, *parts[2:])
+    selected_coin = parts[1] if direct_coin else coin
+    coin_parts = parts[2:] if direct_coin else parts
+    bound_target = _bound_target(full, parts)
+    query_target = bound_target or parts
+    selected_target = (parts if direct_coin else
+                       ("coin_overrides", coin, *query_target) if coin is not None else query_target)
+    events = []
+    authored_coins = normalize_coin_override_keys(authored.get("coin_overrides", {}), verbose=False)
+    root_value = (_get(authored_coins, parts[1:]) if direct_coin else _get(authored, parts))
+    if root_value is not _MISSING:
+        events.append({"kind": "authored", "path": ".".join(parts), "value": deepcopy(root_value)})
+    elif not direct_coin:
+        events.append({"kind": "default_or_derived", "path": ".".join(parts)})
+    context = deepcopy(full)
+    context.setdefault("live", {})["base_config_path"] = base_config_path
+    # Materializing optimizer dependencies consumes local files. Keep their
+    # authored origins separate, with the same canonical identities as the loader.
+    source_context = deepcopy(context)
+    source_context["coin_overrides"] = normalize_coin_override_keys(
+        source_context["coin_overrides"], verbose=False,
+    )
+    # Both suite and optimizer entrypoints materialize coin policy before pins.
+    # Keep that actual ordering distinct from the retained authored sources.
+    context = parse_overrides(context, verbose=False)
+    dataset_selection = None
+    applied_overrides = []
+
+    def trace(name, target, dependencies, value, operation):
+        target, value = _canonical_coin_event(target, value)
+        dependencies = [_canonical_coin_event(source, None)[0] for source in dependencies]
+        event = {"kind": "optimizer_transform", "name": name,
+                 "path": ".".join(target), "path_parts": list(target),
+                 "dependencies": [{"path": ".".join(source), "path_parts": list(source)}
+                                  for source in dependencies],
+                 "operation": operation, "value": deepcopy(value)}
+        applied_overrides.append(event)
+        if _intersects(selected_target, target) or _intersects(query_target, target):
+            events.append(event)
+
+    def apply(raw, kind):
+        nonlocal context, source_context
+        normalized = normalize_scenario_overrides(raw)
+        if kind == "fixed_runtime_override":
+            from optimization.warmup import _apply_config_overrides
+
+            _apply_config_overrides(context, normalized)
+        elif kind == "scenario_override":
+            from suite_runner import apply_scenario_overrides
+
+            apply_scenario_overrides(context, normalized)
+        else:
+            context = _patch(context, normalized)
+        for selector, value in normalized.items():
+            target = resolve_dotted_config_path(context, selector)
+            target, event_value = _canonical_coin_event(target, value)
+            event = {"kind": kind, "path": ".".join(target), "path_parts": list(target),
+                     "value": event_value}
+            applied_overrides.append(event)
+            if _intersects(query_target, target) or _intersects(selected_target, target):
+                events.append(event)
+            _set(source_context, target, event_value)
+
+    if optimize:
+        from optimizer_overrides import optimizer_overrides
+
+        apply(context["optimize"]["fixed_runtime_overrides"], "fixed_runtime_override")
+        transformations = context["optimize"]["enable_overrides"]
+        context = optimizer_overrides(transformations, context, None, trace=trace)
+        for side in ("long", "short"):
+            context = optimizer_overrides(transformations, context, side, trace=trace)
+    if scenario is not None:
+        selected = [item for item in context["backtest"]["scenarios"] if item.get("label") == scenario]
+        if len(selected) != 1:
+            raise ValueError(f"scenario {scenario!r} must match exactly one explicit label")
+        selected = selected[0]
+        dataset_selection = {name: deepcopy(selected[name]) for name in (
+            "coins", "ignored_coins", "exchanges", "coin_sources",
+        ) if name in selected}
+        if any(_intersects(parts, prefix) for prefix in (
+            *_UNIVERSE_PATHS,
+            ("backtest", "coin_sources"),
+        )):
+            raise ValueError(
+                "scenario eligibility depends on a prepared dataset; inspect the "
+                "backtest.scenarios record directly instead of guessing dataset membership"
+            )
+        date_patch = {f"backtest.{name}": selected[name] for name in ("start_date", "end_date")
+                      if selected.get(name)}
+        if selected.get("exchanges"):
+            from suite_runner import _coerce_exchange_list
+
+            date_patch["backtest.exchanges"] = _coerce_exchange_list(selected["exchanges"])
+        apply(date_patch, "scenario_selection")
+        apply(selected.get("overrides", {}), "scenario_override")
+        if optimize:
+            from optimizer_overrides import apply_coupled_unstuck_ema_spans
+
+            context = apply_coupled_unstuck_ema_spans(context, trace=trace)
+    before_files = deepcopy(source_context)
+    effective, unresolved = _resolved_context(context, base_config_path=base_config_path, require_complete=False)
+    # The same non-live loader resolves null inheritance, ignored lists and
+    # dynamic dates without fetching market data.
+    effective = prepare_config(effective, base_config_path=base_config_path, verbose=False, log_config_transforms=False)
+    inherited_sources = _inherited_sources(context, parts)
+    inherited_paths = {common for _, common in inherited_sources}
+    for target, common in inherited_sources:
+        events.append({"kind": "inherited", "path": ".".join(common),
+                       "target": ".".join(target),
+                       "value": deepcopy(_get(effective, common))})
+    for prefix in _UNIVERSE_PATHS:
+        if not (_intersects(parts, prefix) or prefix in inherited_paths):
+            continue
+        from .universe import resolve_universe_source_path
+
+        def references(value):
+            if isinstance(value, list) and len(value) == 1:
+                yield from references(value[0])
+            elif isinstance(value, str):
+                resolved_file = resolve_universe_source_path(value, base_config_path=base_config_path, allow_all=prefix[-1] == "approved_coins")
+                if resolved_file is not None:
+                    yield str(resolved_file)
+
+        for reference in sorted(set(references(_get(before_files, prefix)))):
+            events.append({"kind": "coin_list_file", "path": ".".join(prefix), "file": reference})
+    if parts == ("backtest", "filter_by_min_effective_cost") and _get(context, parts) is None:
+        from .policy import effective_minimum_cost_filters
+
+        value = effective_minimum_cost_filters(effective)
+        events.extend({"kind": "inherited",
+                       "path": f"bot.{side}.universe.filter_by_min_effective_cost",
+                       "value": value[side]} for side in ("long", "short"))
+        # Explain the effective simulation policy without changing authored or
+        # resolved exports, which preserve explicit null inheritance.
+        effective["backtest"]["filter_by_min_effective_cost"] = value
+    coin_patch = None
+    if selected_coin is not None:
+        from .overrides import nested_update
+        # Reuse authored-key normalization: exact markets and venue-qualified
+        # identifiers must survive without a heuristic underlying substitution.
+        coin_patch = effective["coin_overrides"].get(selected_coin, {})
+        inline = normalize_coin_override_keys(before_files["coin_overrides"], verbose=False).get(selected_coin, {})
+
+        def append_coin_source(local_parts):
+            value = _get(coin_patch, local_parts)
+            if value is _MISSING:
+                return
+            target = ("coin_overrides", selected_coin, *local_parts)
+            inline_value = _get(inline, local_parts)
+            generated = [event for event in applied_overrides if
+                         target[:len(_event_path(event))] == _event_path(event)
+                         and _get(event["value"], target[len(_event_path(event)):]) is not _MISSING]
+            event = (deepcopy(generated[-1]) if generated and (
+                         inline_value is not _MISSING or generated[-1]["kind"] == "optimizer_transform") else
+                     {"kind": "coin_override" if inline_value is not _MISSING else "override_file",
+                     "path": ".".join(target),
+                     "path_parts": list(target), "value": deepcopy(value)}
+                     )
+            if event["kind"] == "override_file":
+                from .overrides import _resolve_override_config_path
+
+                file_context = deepcopy(before_files)
+                file_context["live"]["base_config_path"] = base_config_path
+                event["file"] = _resolve_override_config_path(file_context, selected_coin)
+            if not events or events[-1] != event:
+                events.append(event)
+
+        def leaf_paths(value, prefix):
+            if isinstance(value, dict):
+                for name, child in value.items():
+                    yield from leaf_paths(child, (*prefix, name))
+            else:
+                yield prefix
+
+        for local_parts in leaf_paths(_get(coin_patch, coin_parts), coin_parts):
+            append_coin_source(local_parts)
+        if coin is not None:
+            effective = nested_update(deepcopy(effective), coin_patch)
+    value = _get(effective, parts)
+    if bound_target is not None:
+        value = _get(authored, parts, _get(full, parts))
+    if value is _MISSING:
+        raise KeyError(f"unknown or inactive configuration path {path!r}")
+    # Bounds explain declarations; target transformations are separate evidence.
+    aggregate_coin_sources = selected_coin is not None and isinstance(_get(coin_patch, coin_parts), dict)
+    normalization_events = reversed(events) if bound_target is None and not aggregate_coin_sources else ()
+    for event in normalization_events:
+        if event["kind"] in {"inherited", "coin_list_file"}:
+            # These events explain a source resolution already; comparing its
+            # authored null/path with the resolved value invents normalization.
+            break
+        event_path = _event_path(event)
+        projection_path = selected_target if event_path[:1] == ("coin_overrides",) else parts
+        if "value" not in event or projection_path[:len(event_path)] != event_path:
+            continue
+        projected = _get(event["value"], projection_path[len(event_path):])
+        if projected is not _MISSING and projected != value:
+            events.append({"kind": "normalization", "path": ".".join(parts), "value": deepcopy(value)})
+        break
+    registry = get_field_registry()
+    field = registry.find(parts)
+    inherited_field = None
+    search_path = parts
+    search_coin_patch = coin_patch
+    if parts[:1] == ("coin_overrides",) and len(parts) > 2:
+        inherited_field = registry.find(parts[2:])
+        search_path = parts[2:]
+        search_coin_patch = effective["coin_overrides"].get(parts[1], {})
+    if field is None and coin is not None:
+        field = registry.find(("coin_overrides", coin, *parts))
+    parameter_field = registry.find(bound_target) if bound_target is not None else None
+    default = field.default if field is not None else NO_DEFAULT
+    if bound_target is not None:
+        from .schema import get_template_config
+
+        default = _get(get_template_config(), parts, NO_DEFAULT)
+    metadata_field = field or inherited_field or parameter_field
+    types = ([kind.value for kind in metadata_field.types] +
+             (["null"] if metadata_field.nullable else [])) if metadata_field else None
+    if bound_target is not None and isinstance(value, list):
+        types = ["array"]
+    return {
+        "path": ".".join(parts), "value": deepcopy(value),
+        "context": {"coin": coin, "scenario": scenario, "optimize": optimize,
+                    "scope": "offline_policy"},
+        "types": types,
+        "unit": metadata_field.unit if metadata_field else None,
+        "denominator": metadata_field.denominator if metadata_field else None,
+        "scope": metadata_field.scope if metadata_field else None,
+        "default": {"declared": default is not NO_DEFAULT, **({"value": deepcopy(default)} if default is not NO_DEFAULT else {})},
+        "sources": events, "search": _search_treatment(
+            full, bound_target or search_path, authored, coin_patch=search_coin_patch,
+            coin=coin or (parts[1] if parts[:1] == ("coin_overrides",) and len(parts) > 2 else None),
+            applied_overrides=applied_overrides,
+        ),
+        "unresolved": unresolved,
+        "dataset_selection": dataset_selection,
+        "bound_target": ".".join(bound_target) if bound_target is not None else None,
+        "bound_element_types": [kind.value for kind in parameter_field.types] if parameter_field else None,
+    }

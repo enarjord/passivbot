@@ -94,7 +94,7 @@ Live runs use Passivbot's canonical logging config.
 
 - `logging.persist_to_file` defaults to `true`
 - `logging.dir` defaults to `logs`
-- log files are written as `${logging.dir}/${live.user}.log`
+- log files are written as `${logging.dir}/${live.account.user}.log`
 
 Container logs still go to stdout/stderr, and file persistence uses the same live logging handler rather than a wrapper-level tee.
 

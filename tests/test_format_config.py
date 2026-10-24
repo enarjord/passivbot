@@ -1,18 +1,19 @@
+from config.universe import require_side_universe_sources
+from config.universe import set_side_universe_sources
 import copy
 import logging
 import pytest
 
+from config.schema import get_expanded_config_prototype
+
 from config_utils import (
     format_config,
-    get_template_config,
 )
 
-# Internal helpers were intentionally made top-level; import directly for unit tests
-from config_utils import detect_flavor, build_base_config_from_flavor
 
 
 def _template():
-    return get_template_config()
+    return get_expanded_config_prototype()
 
 
 def _bound(config, pside, *path):
@@ -22,66 +23,19 @@ def _bound(config, pside, *path):
     return cur
 
 
-def test_detect_flavor_variants():
-    tmpl = _template()
-
-    pb_multi = {
-        "user": "u",
-        "pnls_max_lookback_days": 30,
-        "loss_allowance_pct": 0.1,
-        "stuck_threshold": 0.2,
-        "unstuck_close_pct": 0.3,
-        "TWE_long": 1.0,
-        "TWE_short": 1.0,
-        "universal_live_config": {
-            "long": {"n_close_orders": 5},
-            "short": {"n_close_orders": 5},
-        },
-        "approved_symbols": ["BTC", "ETH"],
-        "ignored_symbols": ["X"],
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_unsupported_config_wrappers_are_rejected(wrapped):
+    config = {"config": _template()} if wrapped else {
+        "TWE_long": 1.0, "TWE_short": 1.0, "universal_live_config": {},
     }
-    assert detect_flavor(pb_multi, tmpl) == "pb_multi"
-
-    current = copy.deepcopy(tmpl)
-    assert detect_flavor(current, tmpl) == "current"
-
-    nested = {"config": copy.deepcopy(tmpl)}
-    assert detect_flavor(nested, tmpl) == "nested_current"
-
-    live_only = {
-        "config_version": tmpl["config_version"],
-        "bot": tmpl["bot"],
-        "live": tmpl["live"],
-    }
-    assert detect_flavor(live_only, tmpl) == "live_only"
+    with pytest.raises(ValueError, match="explicit migration"):
+        format_config(config, verbose=False)
 
 
-def test_build_base_config_pb_multi():
-    tmpl = _template()
-    cfg = {
-        "user": "u",
-        "pnls_max_lookback_days": 30,
-        "loss_allowance_pct": 0.1,
-        "stuck_threshold": 0.2,
-        "unstuck_close_pct": 0.3,
-        "TWE_long": 1.2,
-        "TWE_short": 1.5,
-        "universal_live_config": {
-            "long": {"n_close_orders": 4},
-            "short": {"n_close_orders": 5},
-        },
-        "approved_symbols": ["BTC", "ETH"],
-        "ignored_symbols": ["X"],
-    }
-    base = build_base_config_from_flavor(cfg, tmpl, "pb_multi", verbose=True)
-    assert sorted(base["live"]["approved_coins"]) == ["BTC", "ETH"]
-    assert sorted(base["live"]["ignored_coins"]) == ["X"]
-    # close_grid_qty_pct derived from n_close_orders
-    assert pytest.approx(base["bot"]["long"]["close_grid_qty_pct"]) == 1.0 / 4.0
-    assert pytest.approx(base["bot"]["short"]["close_grid_qty_pct"]) == 1.0 / 5.0
-    # total_wallet_exposure_limit derived from TWE_x when enabled by default
-    assert base["bot"]["long"]["total_wallet_exposure_limit"] == 1.2
-    assert base["bot"]["short"]["total_wallet_exposure_limit"] == 1.5
+def test_legacy_shape_cannot_claim_final_schema_version():
+    config = {"config_version": "v9.0.0", "TWE_long": 1.2, "universal_live_config": {}}
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        format_config(config, verbose=False)
 
 
 def test_format_config_live_only_adds_sections():
@@ -100,9 +54,10 @@ def test_format_config_live_only_adds_sections():
 
 def test_format_config_missing_short_side_stays_disabled():
     current = {
+        "config_version": _template()["config_version"],
         "bot": {
             "long": {
-                "total_wallet_exposure_limit": 0.7,
+                "risk": {"total_wallet_exposure_limit": 0.7},
             }
         },
         "live": {},
@@ -115,14 +70,16 @@ def test_format_config_missing_short_side_stays_disabled():
     out = format_config(current, verbose=False)
 
     assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.7
-    assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert out["bot"]["short"]["enabled"] is False
+    assert out["bot"]["short"]["risk"] == _template()["bot"]["global"]["risk"]
 
 
 def test_format_config_missing_long_side_stays_disabled():
     current = {
+        "config_version": _template()["config_version"],
         "bot": {
             "short": {
-                "total_wallet_exposure_limit": 0.7,
+                "risk": {"total_wallet_exposure_limit": 0.7},
             }
         },
         "live": {},
@@ -135,7 +92,8 @@ def test_format_config_missing_long_side_stays_disabled():
     out = format_config(current, verbose=False)
 
     assert out["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.7
-    assert out["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert out["bot"]["long"]["enabled"] is False
+    assert out["bot"]["long"]["risk"] == _template()["bot"]["long"]["risk"]
 
 
 def test_format_config_current_roundtrip_basic():
@@ -143,28 +101,28 @@ def test_format_config_current_roundtrip_basic():
     # expected top-level sections while normalising new exposure controls
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["bot"]["long"]["risk_wel_enforcer_threshold"] = 0.99
-    current["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.25
-    current["bot"]["long"]["risk_twel_enforcer_threshold"] = 0.95
-    current["bot"]["short"]["risk_wel_enforcer_threshold"] = 1.02
-    current["bot"]["short"]["risk_twel_enforcer_threshold"] = 1.08
+    current['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = 0.99
+    current["bot"]["long"]["risk"]["we_excess_allowance_fraction"] = 0.25
+    current['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'] = 0.95
+    current['bot']['short']['risk']['position_exposure_enforcer']['threshold_ratio'] = 1.02
+    current['bot']['short']['risk']['total_exposure_enforcer']['threshold_ratio'] = 1.08
     out = format_config(current, verbose=False)
     for k in ["bot", "live", "optimize", "backtest"]:
         assert k in out
     assert isinstance(
-        out["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"], (int, float)
+        out['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'], (int, float)
     )
-    assert isinstance(out["bot"]["long"]["risk"]["we_excess_allowance_pct"], float)
+    assert isinstance(out["bot"]["long"]["risk"]["we_excess_allowance_fraction"], float)
     assert "we_excess_allowance_mode" not in out["bot"]["long"]["risk"]
     assert isinstance(
-        out["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"], (int, float)
+        out['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'], (int, float)
     )
     assert isinstance(
-        out["bot"]["short"]["risk"]["position_exposure_enforcer_threshold"],
+        out['bot']['short']['risk']['position_exposure_enforcer']['threshold_ratio'],
         (int, float),
     )
     assert isinstance(
-        out["bot"]["short"]["risk"]["total_exposure_enforcer_threshold"], (int, float)
+        out['bot']['short']['risk']['total_exposure_enforcer']['threshold_ratio'], (int, float)
     )
     assert "risk_twel_enforcer_threshold" not in out["bot"]["long"]
 
@@ -191,33 +149,29 @@ def test_format_config_restores_missing_trailing_martingale_weight_defaults():
 def test_format_config_preserves_approved_coins_dict():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["live"]["approved_coins"] = {"long": ["BTC"], "short": ["BTC"]}
+    set_side_universe_sources(current, 'approved_coins', {"long": ["BTC"], "short": ["BTC"]})
     out = format_config(current, verbose=False)
-    assert out["live"]["approved_coins"] == {"long": ["BTC"], "short": ["BTC"]}
+    assert require_side_universe_sources(out, 'approved_coins') == {"long": ["BTC"], "short": ["BTC"]}
 
 
-def test_format_config_prunes_unknown_keys_recursively():
-    tmpl = _template()
-    current = copy.deepcopy(tmpl)
-    current["live"]["unexpected"] = "value"
-    current["bot"]["long"]["foo"] = 1
-    current["bot"]["short"]["bar"] = 2
-    current["optimize"]["bounds"]["extra"] = [0, 1]
-    current["extra_section"] = {"nested": 1}
-    out = format_config(current, verbose=False)
-    assert "unexpected" not in out["live"]
-    assert "foo" not in out["bot"]["long"]
-    assert "bar" not in out["bot"]["short"]
-    assert "extra" not in out["optimize"]["bounds"]
-    assert "extra_section" not in out
+@pytest.mark.parametrize("path", [("live", "unexpected"), ("bot", "long", "foo"),
+                                  ("optimize", "bounds", "extra"), ("extra_section",)])
+def test_format_config_rejects_unknown_keys_recursively(path):
+    current = copy.deepcopy(_template())
+    target = current
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = 1
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        format_config(current, verbose=False)
 
 
 @pytest.mark.parametrize("removed_value", ["manual", "bad_policy"])
-def test_format_config_drops_removed_cooldown_position_policy(removed_value):
+def test_format_config_rejects_removed_cooldown_position_policy(removed_value):
     current = copy.deepcopy(_template())
     current["live"]["hsl_position_during_cooldown_policy"] = removed_value
-    out = format_config(current, verbose=False, live_only=True)
-    assert "hsl_position_during_cooldown_policy" not in out["live"]
+    with pytest.raises(ValueError, match="migrate-config-v9"):
+        format_config(current, verbose=False, live_only=True)
 
 
 def test_format_config_adds_monitor_defaults():
@@ -239,7 +193,7 @@ def test_format_config_adds_monitor_defaults():
         "retain_candles": True,
         "retain_fills": True,
         "compress_rotated_segments": True,
-        "price_tick_min_interval_ms": 500,
+        "price_tick_min_interval_milliseconds": 500,
         "emit_completed_candles": True,
         "include_raw_fill_payloads": False,
     }
@@ -280,40 +234,38 @@ def test_format_config_rejects_invalid_monitor_snapshot_interval():
         format_config(current, verbose=False, live_only=True)
 
 
-def test_format_config_current_with_empty_optimize_adds_bounds():
+def test_format_config_empty_optimize_freezes_configured_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     current["optimize"] = {}
+    current["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["threshold_base_fraction"] = 0.006
+    current["bot"]["short"]["strategy"]["trailing_martingale"]["close"]["threshold_base_fraction"] = -0.003
 
     out = format_config(current, verbose=False, live_only=True)
 
     assert "bounds" in out["optimize"]
     assert _bound(
-        out, "long", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    ) == _bound(
-        tmpl, "long", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    )
+        out, "long", "strategy", "trailing_martingale", "close", "threshold_base_fraction"
+    ) == [0.006, 0.006]
     assert _bound(
-        out, "short", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    ) == _bound(
-        tmpl, "short", "strategy", "trailing_martingale", "close", "threshold_base_pct"
-    )
+        out, "short", "strategy", "trailing_martingale", "close", "threshold_base_fraction"
+    ) == [-0.003, -0.003]
 
 
 def test_format_config_current_with_optimize_missing_bounds_adds_defaults():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"] = {"scoring": ["adg"]}
+    current["optimize"] = {"scoring": [{"metric": "adg_usd", "goal": "max"}]}
 
     out = format_config(current, verbose=False, live_only=True)
 
     assert out["optimize"]["scoring"] == [{"metric": "adg_usd", "goal": "max"}]
     assert (
-        "qty_pct"
+        "qty_fraction"
         in out["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"]
     )
     assert (
-        "qty_pct"
+        "qty_fraction"
         in out["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
             "close"
         ]
@@ -329,15 +281,15 @@ def test_format_config_current_with_missing_bot_side_adds_defaults():
 
     assert (
         out["bot"]["short"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_base_pct"
+            "threshold_base_fraction"
         ]
         == tmpl["bot"]["short"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_base_pct"
+            "threshold_base_fraction"
         ]
     )
     assert (
-        out["bot"]["short"]["risk"]["n_positions"]
-        == tmpl["bot"]["short"]["risk"]["n_positions"]
+        out["bot"]["short"]["risk"]["max_positions"]
+        == tmpl["bot"]["short"]["risk"]["max_positions"]
     )
 
 
@@ -353,13 +305,13 @@ def test_format_config_raises_on_non_dict_optimize_bounds():
 def test_format_config_preserves_nested_strategy_bounds_before_hydration():
     current = copy.deepcopy(_template())
     current["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = [
         0.005,
         0.02,
     ]
     current["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]["close"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] = [
         0.004,
         0.016,
@@ -368,44 +320,44 @@ def test_format_config_preserves_nested_strategy_bounds_before_hydration():
     out = format_config(current, verbose=False, live_only=True)
 
     assert _bound(
-        out, "long", "strategy", "trailing_martingale", "close", "threshold_base_pct"
+        out, "long", "strategy", "trailing_martingale", "close", "threshold_base_fraction"
     ) == [
         0.005,
         0.02,
     ]
     assert _bound(
-        out, "short", "strategy", "trailing_martingale", "close", "threshold_base_pct"
+        out, "short", "strategy", "trailing_martingale", "close", "threshold_base_fraction"
     ) == [
         0.004,
         0.016,
     ]
 
 
-def test_format_config_legacy_omissions_disable_newer_bot_features():
+def test_format_config_canonical_omissions_restore_documented_defaults():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     trailing_martingale = current["bot"]["long"]["strategy"]["trailing_martingale"]
-    trailing_martingale.pop("volatility_ema_span_1h")
-    trailing_martingale.pop("volatility_ema_span_1m")
+    trailing_martingale.pop("volatility_ema_span_1h_candles")
+    trailing_martingale.pop("volatility_ema_span_minutes")
     for key in (
         "threshold_volatility_1h_weight",
         "threshold_volatility_1m_weight",
         "threshold_we_weight",
-        "retracement_base_pct",
+        "retracement_base_fraction",
     ):
         trailing_martingale["entry"].pop(key)
-    for key in ("threshold_volatility_1h_weight", "retracement_base_pct"):
+    for key in ("threshold_volatility_1h_weight", "retracement_base_fraction"):
         trailing_martingale["close"].pop(key)
-    current["bot"]["long"]["forager"].pop("volatility_ema_span_1m")
-    current["bot"]["long"]["forager"].pop("volume_ema_span_1m")
+    current["bot"]["long"]["forager"].pop("volatility_ema_span_minutes")
+    current["bot"]["long"]["forager"].pop("volume_ema_span_minutes")
     current["bot"]["long"]["hsl"].pop("panic_close_order_type")
-    current["bot"]["long"]["risk"].pop("total_exposure_enforcer_threshold")
-    current["bot"]["long"]["risk"].pop("we_excess_allowance_pct")
-    current["bot"]["long"]["risk"].pop("position_exposure_enforcer_threshold")
-    current["bot"]["long"]["unstuck"].pop("close_pct")
-    current["bot"]["long"]["unstuck"].pop("ema_dist")
-    current["bot"]["long"]["unstuck"].pop("loss_allowance_pct")
-    current["bot"]["long"]["unstuck"].pop("threshold")
+    current["bot"]["long"]["risk"]["total_exposure_enforcer"].pop("threshold_ratio")
+    current["bot"]["long"]["risk"].pop("we_excess_allowance_fraction")
+    current["bot"]["long"]["risk"]["position_exposure_enforcer"].pop("threshold_ratio")
+    current["bot"]["long"]["unstuck"].pop("close_fraction")
+    current["bot"]["long"]["unstuck"].pop("ema_distance_fraction")
+    current["bot"]["long"]["unstuck"].pop("loss_allowance_fraction")
+    current["bot"]["long"]["unstuck"].pop("exposure_trigger_ratio")
 
     out = format_config(current, verbose=False, live_only=True)
 
@@ -413,11 +365,11 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
     long_strategy = long_cfg["strategy"]["trailing_martingale"]
     default_long = tmpl["bot"]["long"]
     default_strategy = default_long["strategy"]["trailing_martingale"]
-    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(
-        default_strategy["volatility_ema_span_1h"]
+    assert long_strategy["volatility_ema_span_1h_candles"] == pytest.approx(
+        default_strategy["volatility_ema_span_1h_candles"]
     )
-    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(
-        default_strategy["volatility_ema_span_1m"]
+    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(
+        default_strategy["volatility_ema_span_minutes"]
     )
     assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(
         default_strategy["entry"]["threshold_volatility_1h_weight"]
@@ -428,61 +380,60 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
         default_strategy["entry"]["threshold_we_weight"]
     )
-    assert long_strategy["entry"]["retracement_base_pct"] == pytest.approx(
-        default_strategy["entry"]["retracement_base_pct"]
+    assert long_strategy["entry"]["retracement_base_fraction"] == pytest.approx(
+        default_strategy["entry"]["retracement_base_fraction"]
     )
     assert long_strategy["close"]["threshold_volatility_1h_weight"] == pytest.approx(
         default_strategy["close"]["threshold_volatility_1h_weight"]
     )
-    assert long_strategy["close"]["retracement_base_pct"] == pytest.approx(
-        default_strategy["close"]["retracement_base_pct"]
+    assert long_strategy["close"]["retracement_base_fraction"] == pytest.approx(
+        default_strategy["close"]["retracement_base_fraction"]
     )
-    assert long_cfg["forager"]["volatility_ema_span_1m"] == pytest.approx(
-        default_long["forager"]["volatility_ema_span_1m"]
+    assert long_cfg["forager"]["volatility_ema_span_minutes"] == pytest.approx(
+        default_long["forager"]["volatility_ema_span_minutes"]
     )
-    assert long_cfg["forager"]["volume_ema_span_1m"] == pytest.approx(
-        default_long["forager"]["volume_ema_span_1m"]
+    assert long_cfg["forager"]["volume_ema_span_minutes"] == pytest.approx(
+        default_long["forager"]["volume_ema_span_minutes"]
     )
     assert (
         long_cfg["hsl"]["panic_close_order_type"]
         == default_long["hsl"]["panic_close_order_type"]
     )
-    assert long_cfg["risk"]["total_exposure_enforcer_threshold"] == pytest.approx(
-        default_long["risk"]["total_exposure_enforcer_threshold"]
+    assert long_cfg['risk']['total_exposure_enforcer']['threshold_ratio'] == pytest.approx(
+        default_long['risk']['total_exposure_enforcer']['threshold_ratio']
     )
-    assert long_cfg["risk"]["we_excess_allowance_pct"] == pytest.approx(
-        default_long["risk"]["we_excess_allowance_pct"]
+    assert long_cfg["risk"]["we_excess_allowance_fraction"] == pytest.approx(
+        default_long["risk"]["we_excess_allowance_fraction"]
     )
     assert "we_excess_allowance_mode" not in long_cfg["risk"]
-    assert long_cfg["risk"]["position_exposure_enforcer_threshold"] == pytest.approx(
-        default_long["risk"]["position_exposure_enforcer_threshold"]
+    assert long_cfg['risk']['position_exposure_enforcer']['threshold_ratio'] == pytest.approx(
+        default_long['risk']['position_exposure_enforcer']['threshold_ratio']
     )
-    assert long_cfg["unstuck"]["close_pct"] == pytest.approx(
-        default_long["unstuck"]["close_pct"]
+    assert long_cfg["unstuck"]["close_fraction"] == pytest.approx(
+        default_long["unstuck"]["close_fraction"]
     )
-    assert long_cfg["unstuck"]["ema_dist"] == pytest.approx(
-        default_long["unstuck"]["ema_dist"]
+    assert long_cfg["unstuck"]["ema_distance_fraction"] == pytest.approx(
+        default_long["unstuck"]["ema_distance_fraction"]
     )
-    assert long_cfg["unstuck"]["loss_allowance_pct"] == pytest.approx(
-        default_long["unstuck"]["loss_allowance_pct"]
+    assert long_cfg["unstuck"]["loss_allowance_fraction"] == pytest.approx(
+        default_long["unstuck"]["loss_allowance_fraction"]
     )
-    assert long_cfg["unstuck"]["threshold"] == pytest.approx(
-        default_long["unstuck"]["threshold"]
+    assert long_cfg["unstuck"]["exposure_trigger_ratio"] == pytest.approx(
+        default_long["unstuck"]["exposure_trigger_ratio"]
     )
 
 
 def test_format_config_restores_missing_current_close_qty_pct_from_schema_default():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop("qty_pct")
-    current["bot"]["long"]["n_closes"] = 4
+    current["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop("qty_fraction")
 
     out = format_config(current, verbose=False, live_only=True)
 
     assert out["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-        "qty_pct"
+        "qty_fraction"
     ] == pytest.approx(
-        tmpl["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["qty_pct"]
+        tmpl["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["qty_fraction"]
     )
     assert "n_closes" not in out["bot"]["long"]
 
@@ -491,88 +442,66 @@ def test_format_config_restores_missing_current_enabled_side_core_params():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     current["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].pop(
-        "threshold_base_pct"
+        "threshold_base_fraction"
     )
 
     out = format_config(current, verbose=False, live_only=True)
 
     assert out["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-        "threshold_base_pct"
+        "threshold_base_fraction"
     ] == pytest.approx(
         tmpl["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
-            "threshold_base_pct"
+            "threshold_base_fraction"
         ]
     )
 
 
 def test_format_config_warns_and_snaps_cliff_edge_thresholds(caplog):
     current = copy.deepcopy(_template())
-    current["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = False
-    current["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] = 5e-10
-    current["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"] = 0.05
-    current["bot"]["long"]["unstuck"]["threshold"] = 5e-10
+    current['bot']['long']['risk']['position_exposure_enforcer']['enabled'] = False
+    current['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = 5e-10
+    current['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'] = 0.05
+    current["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 5e-10
 
     with caplog.at_level(logging.WARNING):
         out = format_config(current, verbose=True, live_only=True)
 
-    assert out["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] == 0.0
-    assert out["bot"]["long"]["risk"][
-        "total_exposure_enforcer_threshold"
-    ] == pytest.approx(0.05)
-    assert out["bot"]["long"]["unstuck"]["threshold"] == 0.0
+    assert out['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] == 0.0
+    assert out['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'] == pytest.approx(0.05)
+    assert out["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] == 0.0
     assert any(
-        "bot.long.risk.position_exposure_enforcer_threshold" in rec.message
+        "bot.long.risk.position_exposure_enforcer.threshold_ratio" in rec.message
         and "snapping to 0.0" in rec.message
         for rec in caplog.records
     )
     assert any(
-        "bot.long.risk.total_exposure_enforcer_threshold=0.05" in rec.message
+        "bot.long.risk.total_exposure_enforcer.threshold_ratio=0.05" in rec.message
         for rec in caplog.records
     )
     assert any(
-        "bot.long.unstuck.threshold" in rec.message and "snapping to 0.0" in rec.message
+        "bot.long.unstuck.exposure_trigger_ratio" in rec.message and "snapping to 0.0" in rec.message
         for rec in caplog.records
     )
 
 
 def test_format_config_rejects_enabled_enforcer_threshold_snapped_to_zero():
     current = copy.deepcopy(_template())
-    current["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = True
-    current["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] = 5e-10
+    current['bot']['long']['risk']['position_exposure_enforcer']['enabled'] = True
+    current['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = 5e-10
 
     with pytest.raises(
         ValueError,
-        match="position_exposure_enforcer_threshold must be finite and > 0.0",
+        match="position_exposure_enforcer.threshold_ratio must be finite and > 0.0",
     ):
         format_config(current, verbose=False, live_only=True)
 
 
-def test_format_config_prunes_legacy_close_grid_markup_aliases(caplog):
-    tmpl = _template()
-    current = copy.deepcopy(tmpl)
-    current["bot"]["long"]["close_grid_min_markup"] = 0.0072835
-    current["bot"]["long"]["close_grid_markup_range"] = 0.003
-    current["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop(
-        "threshold_base_pct", None
-    )
-
-    with caplog.at_level(logging.INFO):
-        out = format_config(current, verbose=True, live_only=True)
-
-    assert out["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-        "threshold_base_pct"
-    ] == pytest.approx(
-        tmpl["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_base_pct"
-        ]
-    )
-    assert "close_grid_min_markup" not in out["bot"]["long"]
-    assert "close_grid_markup_range" not in out["bot"]["long"]
-    assert any(
-        "Removed" in rec.message
-        and "obsolete or unused keys under bot.long" in rec.message
-        for rec in caplog.records
-    )
+@pytest.mark.parametrize("key", ["close_grid_min_markup", "close_grid_markup_range", "n_closes"])
+def test_format_config_rejects_legacy_close_grid_aliases(key):
+    current = copy.deepcopy(_template())
+    current["bot"]["long"][key] = 0.007
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        format_config(current, verbose=False)
 
 
 def test_format_config_is_idempotent_for_lean_live_config():
@@ -593,8 +522,8 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["long"]["hsl"]["ema_span_minutes"] = [
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = [
         10.0,
         120.0,
         5.0,
@@ -602,27 +531,20 @@ def test_format_config_preserves_live_optimize_bounds():
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_threshold"] == [
         0.1,
         0.3,
         0.01,
     ]
-    assert out["optimize"]["bounds"]["long"]["hsl"]["ema_span_minutes"] == [
+    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] == [
         10.0,
         120.0,
         5.0,
     ]
 
 
-def test_format_config_prunes_obsolete_grid_close_price_anchor():
+def test_format_config_rejects_obsolete_grid_close_price_anchor():
     current = copy.deepcopy(_template())
-    current["bot"]["long"]["strategy"]["trailing_martingale"][
-        "grid_close_price_anchor"
-    ] = "ema_band"
-
-    out = format_config(current, verbose=False, live_only=True)
-
-    assert (
-        "grid_close_price_anchor"
-        not in out["bot"]["long"]["strategy"]["trailing_martingale"]
-    )
+    current["bot"]["long"]["strategy"]["trailing_martingale"]["grid_close_price_anchor"] = "ema_band"
+    with pytest.raises(ValueError, match="unknown configuration field"):
+        format_config(current, verbose=False)

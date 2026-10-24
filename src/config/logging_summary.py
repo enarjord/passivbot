@@ -43,8 +43,8 @@ def summarize_transform_events(events: Iterable[dict]) -> List[str]:
                 "optimize.backend",
                 "optimize.population_size",
                 "optimize.pymoo.algorithm",
-                "live.approved_coins",
-                "live.ignored_coins",
+                *(f"bot.{side}.universe.{field}" for side in ("long", "short")
+                  for field in ("approved_coins", "ignored_coins")),
                 "backtest.btc_collateral_cap",
                 "bot.long.forager_score_weights",
                 "bot.short.forager_score_weights",

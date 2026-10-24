@@ -23,7 +23,7 @@ def test_new_position_never_rewrites_completed_history(side, d):
         assert out["reconciliation"]["after"] == d * qty
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "pside", "portfolio"])
 @pytest.mark.parametrize("side,d", [("long", 1), ("short", -1)])
 def test_missing_open_is_green_at_basis_but_current_loss_still_panics(mode, side, d):
     import passivbot_rust as r
@@ -39,20 +39,22 @@ def test_missing_open_is_green_at_basis_but_current_loss_still_panics(mode, side
                 Fill("close", 2 * cases.M, -d * 10, 80 if d == 1 else 120, -200, 0),
             ],
         )
-        selectors = {} if mode == "unified" else {"pside": side}
+        selectors = {} if mode == "portfolio" else {"pside": side}
         if mode == "coin":
             selectors["symbol"] = "A"
         snapshot = payload(cases.frame(pair, balance=1000), mode, **selectors)
         out = json.loads(
-            r.hsl_evaluate(
+            r.hsl_v9_evaluate(
                 json.dumps(
                     dict(
                         snapshot=snapshot,
                         slots=1,
-                        span=356,
+                        drawdown_ratio_ema_span_minutes=356,
                         threshold=0.06,
                         cooldown_ms=116 * 60000,
-                        restart="always",
+                        memory_ema_span_minutes=43200.0,
+                        scale_budget_with_excess_allowance=False,
+                        exposure_budget=None, budget_observations=[],
                     )
                 )
             )

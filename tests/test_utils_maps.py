@@ -57,11 +57,10 @@ def test_load_ccxt_instance_defaults_okx_to_swap_only_markets(monkeypatch):
     assert cc.options["fetchMarkets"] == {"types": ["swap"]}
 
 
-def test_defx_exchange_qualified_identifier_is_recognized():
-    assert utils.split_exchange_qualified_market_identifier("defx::ABCUSDC") == (
-        "defx",
-        "ABCUSDC",
-    )
+@pytest.mark.parametrize("exchange", ["defx", "paradex"])
+def test_retired_exchange_qualified_identifier_is_rejected(exchange):
+    with pytest.raises(ValueError, match="retired in v9"):
+        utils.split_exchange_qualified_market_identifier(f"{exchange}::ABCUSDC")
 
 
 @pytest.mark.parametrize(
@@ -754,7 +753,7 @@ def test_get_quote_with_explicit_override():
     # With explicit override - returns the override
     assert utils.get_quote("binance", quote="USDC") == "USDC"
     assert utils.get_quote("hyperliquid", quote="USDT") == "USDT"
-    assert utils.get_quote("paradex", quote="USDC") == "USDC"
+    assert utils.get_quote("kraken", quote="USDC") == "USDC"
 
 
 def test_filter_markets_with_explicit_quote():
@@ -802,7 +801,7 @@ def test_filter_markets_demotes_boot_inventory_chatter_to_debug(caplog):
 def test_coin_to_symbol_with_explicit_quote(tmp_path, monkeypatch):
     """coin_to_symbol() uses explicit quote for fallback symbol construction."""
     monkeypatch.chdir(tmp_path)
-    ex = "paradex"
+    ex = "kraken"
 
     # No cache exists, so fallback is used
     # Default would be USDT, but with explicit USDC override

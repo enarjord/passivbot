@@ -1,13 +1,14 @@
-"""Scoped HSL through real multi-coin screening and replay buffers."""
+"""V9 forward HSL dispatch, candidate isolation and temporal replay structure."""
 
+from config.universe import set_side_universe_sources
 from copy import deepcopy
 import numpy as np
 import pytest
 from config import prepare_config
 from config.hsl import generated_template
 from config.schema import get_template_config
-from optimization.gpu.service import MpsMulticoinProxy
-from tools.gpu_proxy_benchmark import _synthetic_hlcvs
+from optimization.gpu.service import SharedAccountReplay
+from tools.synthetic_backtest_data import synthetic_hlcvs as _synthetic_hlcvs
 
 torch = pytest.importorskip("torch")
 pytestmark = pytest.mark.skipif(
@@ -20,49 +21,49 @@ def make_proxy(
     mode,
     strategy="trailing_martingale",
     sides=("long", "short"),
-    minutes=3000,
+    minutes=256,
     enabled=True,
     override=None,
     chunk=False,
-    lookback=1,
+    memory_span=1440.0,
     coin_count=2,
+    prepared_data_cache=None,
+    interrupt_check=None,
+    factual_hsl=True,
+    override_side="long",
+    dispatch_budget=1000000,
 ):
     config = generated_template(get_template_config(), mode)
-    config["live"].update(hsl_signal_mode=mode)
-    coins = ["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)]
-    config["live"].update(
-        strategy_kind=strategy,
-        approved_coins={s: coins if s in sides else [] for s in ("long", "short")},
-        ignored_coins={"long": [], "short": []},
-        pnls_max_lookback_days=lookback,
-        max_warmup_minutes=60,
-    )
+    assert coin_count >= 1
+    coins = (["AAA", "BBB"] + [f"COIN{i}" for i in range(2, coin_count)])[:coin_count]
+    config['bot']["portfolio"]['strategy_kind'] = strategy
+    set_side_universe_sources(config, 'approved_coins', {s: coins if s in sides else [] for s in ('long', 'short')})
+    set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
+    config['bot']["portfolio"]['warmup']['max_minutes'] = 60
     config["backtest"].update(
         coins={"binance": coins}, starting_balance=1000.0, btc_collateral_cap=0.0
     )
     for side in ("long", "short"):
-        config["bot"][side]["risk"].update(
-            n_positions=1 if side in sides else 0,
-            total_wallet_exposure_limit=2 if side in sides else 0,
-            position_exposure_enforcer_enabled=False,
-        )
+        config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
         config["bot"][side]["hsl"].update(
-            enabled=enabled and mode != "unified",
-            red_threshold=0.02,
-            ema_span_minutes=2.5,
+            enabled=enabled and mode != "portfolio",
+            drawdown_ratio_threshold=0.02,
+            drawdown_ratio_ema_span_minutes=2.5,
+            memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
-            restart_after_red_policy="always",
         )
-    if mode == "unified":
-        config["bot"]["hsl"].update(
+    if mode == "portfolio":
+        config["bot"]["portfolio"]["hsl"].update(
             enabled=enabled,
-            red_threshold=0.02,
-            ema_span_minutes=2.5,
+            drawdown_ratio_threshold=0.02,
+            drawdown_ratio_ema_span_minutes=2.5,
+            memory_ema_span_minutes=memory_span,
             cooldown_minutes_after_red=5,
-            restart_after_red_policy="always",
         )
+    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = memory_span
+    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
     if override:
-        config["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": override}}}}
+        config["coin_overrides"] = {"AAA": {"bot": {override_side: {"hsl": override}}}}
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     config["backtest"]["coins"] = {"binance": coins}
     candles, timestamps = _synthetic_hlcvs(minutes, len(coins), 43)
@@ -79,7 +80,7 @@ def make_proxy(
         )
         for c in coins
     }
-    proxy = MpsMulticoinProxy(
+    proxy = SharedAccountReplay(
         config=config,
         hlcvs=candles,
         mss=markets,
@@ -88,19 +89,22 @@ def make_proxy(
         exchange="binance",
         batch_size=3,
         needed_metrics={"adg_usd"},
+        prepared_data_cache=prepared_data_cache,
+        interrupt_check=interrupt_check,
+        factual_hsl=factual_hsl,
         max_dispatch_candidate_bars=(
-            minutes * len(coins) * len(sides) if chunk else 1000000
+            minutes * len(coins) * len(sides) if chunk else dispatch_budget
         ),
     )
     if chunk:
-        assert proxy.fused_runner is None  # temporal multi-coin replay is single-side
-        for runner in proxy.runners.values():
+        runners = [proxy.fused_runner] if proxy.fused_runner else list(proxy.runners.values())
+        for runner in runners:
             runner.max_dispatch_candidate_bars = 500
     return proxy
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_multicoin_hsl_service_dispatch(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides)
@@ -146,7 +150,7 @@ def compare(a, b):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, sides):
     proxy = make_proxy(mode, strategy, sides, enabled=False)
@@ -161,13 +165,13 @@ def test_disabled_multicoin_hsl_policy_does_not_change_strategy(strategy, mode, 
             }
         ],
     )
-    assert runner.dispatch_hsl_disabled is False
+    assert not runner.dispatch_hsl_disabled
     compare(baseline, changed)
     assert float(baseline["fill_count"].sum()) > 0
     assert not (baseline["hsl_triggers_long"] + baseline["hsl_triggers_short"]).any()
 
 
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_temporal_replay_and_scratch_batches(mode):
     candidates = [
         {f"long_hsl_red_threshold": 1e-6, "hsl_red_threshold": 1e-6},
@@ -189,7 +193,7 @@ def test_multicoin_temporal_replay_and_scratch_batches(mode):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_candidates_do_not_share_history(strategy, mode):
     p = make_proxy(mode, strategy)
     candidates = [
@@ -212,7 +216,7 @@ def test_multicoin_candidates_do_not_share_history(strategy, mode):
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
     p = make_proxy(mode, strategy)
     _, r = raw(
@@ -230,22 +234,13 @@ def test_multicoin_hsl_threshold_controls_actual_panics(strategy, mode):
     assert triggers[0] > 0
     assert triggers[1] == 0
     assert r["alive"].all()
-    if mode == "unified":
+    if mode == "portfolio":
         assert (r["hsl_triggers_short"] == 0).all()  # one portfolio owner
-
-
-@pytest.mark.parametrize("lookback", [0, "all"])
-@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-def test_multicoin_inactive_history_is_inert(strategy, lookback):
-    p = make_proxy("coin", strategy, enabled=False, lookback=lookback)
-    _, r = raw(p, [{}])
-    assert r["alive"].all()
-    assert (r["hsl_triggers_long"] + r["hsl_triggers_short"] == 0).all()
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 def test_multicoin_static_policy_does_not_replace_other_coin_base(strategy):
-    p = make_proxy("coin", strategy, override={"enabled": False, "red_threshold": 0.7})
+    p = make_proxy("coin", strategy, override={"enabled": False, "drawdown_ratio_threshold": 0.7})
     assert p.base_params["long"]["hsl_enabled"] == 1.0
     assert p.base_params["long"]["hsl_red_threshold"] == pytest.approx(0.02)
     _, r = raw(p, [{"long_hsl_red_threshold": 1e-6, "short_hsl_red_threshold": 1e-6}])
@@ -269,7 +264,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy, chunk, sides):
     candidates = [{}, {}, {}]
     runner, _ = raw(p, candidates)
     runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
-    ends = np.array([3000, 1700, 500], dtype=np.int32)
+    ends = np.array([runner.n, runner.n // 2, runner.n // 4], dtype=np.int32)
     runner, _ = raw(p, candidates, end_steps=ends, profile=True)
     steps = int((np.clip(ends, 1, runner.n - 1) - 1).sum())
     assert runner.last_profile["kernel_candidate_steps"] == steps
@@ -288,7 +283,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy, chunk, sides):
     not torch.backends.mps.is_available(), reason="Metal specialization"
 )
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
 def test_metal_hsl_capacity_matches_full_arrays(strategy, mode, sides):
     candidates = [

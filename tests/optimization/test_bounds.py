@@ -1,18 +1,11 @@
 import numpy as np
 import pytest
-from unittest.mock import MagicMock, patch
 
 from optimization.bounds import (
     Bound,
     enforce_bounds,
 )
-from optimization.deap_adapters import (
-    to_index_space,
-    prepare_bounds_for_deap,
-    from_index_space,
-    mutPolynomialBoundedWrapper,
-    cxSimulatedBinaryBoundedWrapper,
-)
+
 
 
 class TestBound:

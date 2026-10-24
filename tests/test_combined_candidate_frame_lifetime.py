@@ -130,7 +130,11 @@ async def test_combined_candidate_frames_are_released_after_normalization(monkey
         )
     monkeypatch.setattr(pd.DataFrame, "set_index", assert_lifetime_at_alignment)
 
-    config = {"backtest": {}, "live": {"minimum_coin_age_days": 0.0}}
+    config = {
+        "backtest": {},
+        "live": {},
+        "bot": {},
+    }
     _mss, output_timestamps, aligned = await hp._prepare_hlcvs_combined_impl(
         config,
         {"binance": DummyManager(), "bybit": DummyManager()},
@@ -141,7 +145,6 @@ async def test_combined_candidate_frames_are_released_after_normalization(monkey
         force_refetch_gaps=False,
         catalog=None,
         store=None,
-        legacy_root=None,
         use_v2_local=False,
     )
 

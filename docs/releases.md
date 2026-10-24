@@ -14,16 +14,17 @@ those changes. The development package reports `8.2.0.dev0`; this is not a new t
 | Package version (`passivbot --version`) | The package's declared version; record the Git commit too when using `master` |
 | `config_version` | Config schema compatibility, independent of the package/release number |
 
-Current `master` uses config schema **v8.6.0** and accepts v8.0.0 through v8.5.0
-through migration. These schema numbers do not imply corresponding published releases. Use
+This revision uses the final config schema **v9.0.0** layout. Released v8 configurations require explicit
+[v9 migration](v8_to_v9_migration.md) before ordinary loading. These schema numbers do not
+imply corresponding published releases. Use
 examples and documentation from the same revision as the installed runtime. A config saved by a
 newer runtime may not load in an older tagged release; retain the original when upgrading.
 See [Config Workflow](config_workflow.md) for migration and review steps.
 
-The next package release remains in the v8 architecture generation. Its HSL migration is still
-an incompatible behavior change: migrate and re-backtest existing HSL configs and discard old
-optimizer fitness. The minor package number does not imply HSL compatibility. Schema `v8.6.0`
-advances from the adaptive-cooldown schema `v8.5.0`; it is not the package release number `8.2.0`.
+The v9 risk model is an incompatible behavior change: choose new loss-memory spans,
+retune and re-backtest migrated configurations, and discard old optimizer fitness/checkpoints.
+The declared development package number does not imply compatibility with v8 HSL or
+auto-unstuck memory, and a schema change does not itself publish a package release.
 
 ## Choose an installation revision
 

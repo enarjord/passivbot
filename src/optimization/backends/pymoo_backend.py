@@ -5,7 +5,6 @@ import logging
 import math
 import multiprocessing
 import os
-import pickle
 from typing import Any
 
 import numpy as np
@@ -44,6 +43,7 @@ from optimization.problem import (
     initialize_pymoo_worker,
 )
 from optimization.repair import BoundsRepair
+from optimization.pymoo_checkpoint import load_checkpoint, save_checkpoint
 
 DEFAULT_PYMOO_ALGORITHM = "auto"
 DEFAULT_PYMOO_SHARED = {
@@ -89,6 +89,15 @@ def _prepare_resumed_algorithm(
     )
     if saved_random_state is not None:
         algorithm.random_state = saved_random_state
+    if algorithm.is_initialized and algorithm.n_iter is not None:
+        # Checkpoints store the next iteration. Refresh the new budget against
+        # completed generations so an unchanged budget performs no extra work.
+        next_iteration = algorithm.n_iter
+        try:
+            algorithm.n_iter = next_iteration - 1
+            algorithm.termination.update(algorithm)
+        finally:
+            algorithm.n_iter = next_iteration
 
 
 def _population_from_payloads(
@@ -282,37 +291,11 @@ def _resolve_pymoo_shared(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(shared, dict):
         shared = {}
 
-    def _fallback(name: str, legacy_name: str | None = None):
-        legacy_name = legacy_name or name
-        if name in shared and shared[name] is not None:
-            return shared[name]
-        if legacy_name in optimize_cfg and optimize_cfg[legacy_name] is not None:
-            return optimize_cfg[legacy_name]
-        return DEFAULT_PYMOO_SHARED[name]
-
-    mutation_prob = shared.get("mutation_prob", shared.get("mutation_prob_var"))
-    if mutation_prob is None:
-        legacy_mutation = optimize_cfg.get("mutation_indpb")
-        if isinstance(legacy_mutation, (int, float)) and float(legacy_mutation) > 0.0:
-            mutation_prob = float(legacy_mutation)
-        else:
-            mutation_prob = DEFAULT_PYMOO_SHARED["mutation_prob"]
-
-    return {
-        "crossover_eta": float(_fallback("crossover_eta")),
-        "crossover_prob_var": float(_fallback("crossover_prob_var", "crossover_probability")),
-        "mutation_eta": float(_fallback("mutation_eta")),
-        "mutation_prob": mutation_prob,
-        "mutation_prob_per_variable": shared.get("mutation_prob_per_variable", "auto"),
-        "eliminate_duplicates": bool(_fallback("eliminate_duplicates")),
-    }
+    return {name: shared.get(name, default) for name, default in DEFAULT_PYMOO_SHARED.items()}
 
 
 def _resolve_mutation_prob(shared: dict[str, Any], n_params: int) -> float:
-    raw = shared.get(
-        "mutation_prob",
-        shared.get("mutation_prob_var", DEFAULT_PYMOO_SHARED["mutation_prob"]),
-    )
+    raw = shared.get("mutation_prob", DEFAULT_PYMOO_SHARED["mutation_prob"])
     if isinstance(raw, str) and raw.strip().lower() == "auto":
         return 1.0 / max(1, int(n_params))
     return max(0.0, min(1.0, float(raw)))
@@ -545,9 +528,10 @@ def _build_algorithm(
 
 
 class PymooCheckpointCallback(Callback):
-    def __init__(self, path):
+    def __init__(self, path, config):
         super().__init__()
         self.path = path
+        self.config = config
 
     def notify(self, algorithm):
         try:
@@ -562,6 +546,7 @@ class PymooCheckpointCallback(Callback):
             alg_runner = getattr(alg_problem, "elementwise_runner", None) if alg_problem else None
             alg_adapter = getattr(alg_problem, "evaluator_adapter", None) if alg_problem else None
             alg_adapter_evaluator = getattr(alg_adapter, "evaluator", None) if alg_adapter else None
+            completed_iteration = algorithm.n_iter
 
             try:
                 if runner is not None:
@@ -574,11 +559,12 @@ class PymooCheckpointCallback(Callback):
                 if alg_adapter is not None:
                     alg_adapter.evaluator = None
 
-                tmp_path = self.path + ".tmp"
-                with open(tmp_path, "wb") as f:
-                    pickle.dump(algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
-                os.replace(tmp_path, self.path)
+                # pymoo calls callbacks before incrementing n_iter. Persist
+                # the state expected by its next ask/tell iteration.
+                algorithm.n_iter = completed_iteration + 1
+                save_checkpoint(self.path, algorithm, self.config)
             finally:
+                algorithm.n_iter = completed_iteration
                 # Restore runner and evaluator
                 if runner is not None:
                     algorithm.problem.elementwise_runner = runner
@@ -603,15 +589,12 @@ def run_backend(
     overrides_list,
     duplicate_counter,
     starting_configs_path: str | None,
-    constraint_fitness_cls,
     ignore_sigint_in_worker,
     get_starting_configs,
     configs_to_individuals,
     iter_starting_configs=None,
     configs_to_individuals_streaming=None,
     optimization_shape=None,
-    record_individual_result,
-    run_evolution,
     build_config_fn,
     overrides_fn,
     checkpoint_path: str | None = None,
@@ -619,15 +602,14 @@ def run_backend(
 ) -> dict[str, Any]:
     del evaluator
     del duplicate_counter
-    del constraint_fitness_cls
-    del record_individual_result
-    del run_evolution
     if NSGA2 is None:  # pragma: no cover
         raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
 
     base_evaluator = getattr(evaluator_for_pool, "base", evaluator_for_pool)
     if hasattr(base_evaluator, "use_duplicate_guard"):
         base_evaluator.use_duplicate_guard = False
+    # Reject incompatible saved fitness before allocating a worker pool.
+    algorithm = load_checkpoint(checkpoint_path, config) if resume else None
     pool = None
     try:
         bounds = base_evaluator.bounds
@@ -693,18 +675,10 @@ def run_backend(
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         termination = get_termination("n_gen", ngen)
         checkpoint_callback = (
-            PymooCheckpointCallback(checkpoint_path) if checkpoint_path is not None else None
+            PymooCheckpointCallback(checkpoint_path, config) if checkpoint_path is not None else None
         )
 
-        algorithm = None
         if resume:
-            if checkpoint_path is None:
-                raise ValueError("PyMoo resume requested without a checkpoint path")
-            if not os.path.isfile(checkpoint_path):
-                raise FileNotFoundError(f"PyMoo checkpoint not found: {checkpoint_path}")
-            logging.info(f"Loading PyMoo checkpoint from {checkpoint_path}...")
-            with open(checkpoint_path, "rb") as f:
-                algorithm = pickle.load(f)
             _prepare_resumed_algorithm(
                 algorithm,
                 problem=problem,

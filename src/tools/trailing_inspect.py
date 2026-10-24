@@ -98,11 +98,11 @@ def _validate_derived_finite(value: Any, path: str = "result") -> None:
 
 
 def _extract_strategy_params(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
-    live = _require_mapping(config.get("live"), "live")
-    strategy_kind = str(live.get("strategy_kind") or STRATEGY_KIND).strip().lower()
+    portfolio_policy = _require_mapping(config.get("bot", {}).get("portfolio"), "bot.portfolio")
+    strategy_kind = str(portfolio_policy.get("strategy_kind") or STRATEGY_KIND).strip().lower()
     if strategy_kind != STRATEGY_KIND:
         raise ValueError(
-            f"config uses live.strategy_kind={strategy_kind!r}; this inspector supports "
+            f"config uses bot.portfolio.strategy_kind={strategy_kind!r}; this inspector supports "
             f"only {STRATEGY_KIND!r}"
         )
     bot = _require_mapping(config.get("bot"), "bot")
@@ -114,7 +114,11 @@ def _extract_strategy_params(config: Mapping[str, Any], pside: str) -> dict[str,
     )
     entry = _require_mapping(params.get("entry"), f"bot.{pside}.strategy.{STRATEGY_KIND}.entry")
     close = _require_mapping(params.get("close"), f"bot.{pside}.strategy.{STRATEGY_KIND}.close")
-    return {"entry": deepcopy(dict(entry)), "close": deepcopy(dict(close))}
+    from config.strategy_paths import lower_runtime_strategy_side
+
+    return lower_runtime_strategy_side(
+        STRATEGY_KIND, {"entry": dict(entry), "close": dict(close)}
+    )
 
 
 def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str, Any], str]:
@@ -135,8 +139,8 @@ def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str
     defaults = get_strategy_defaults(STRATEGY_KIND)
     return _extract_strategy_params(
         {
-            "live": {"strategy_kind": STRATEGY_KIND},
             "bot": {
+                "portfolio": {"strategy_kind": STRATEGY_KIND},
                 pside: {
                     "strategy": {STRATEGY_KIND: defaults[pside]},
                 }
@@ -152,7 +156,11 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
-    hsl = _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
+    portfolio_risk = _require_mapping(bot.get("portfolio"), "bot.portfolio")
+    hsl_policy = _require_mapping(portfolio_risk.get("hsl"), "bot.portfolio.hsl")
+    hsl_scope = hsl_policy["scope"]
+    hsl = hsl_policy if hsl_scope == "portfolio" else _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
+    loss_gate = _require_mapping(portfolio_risk.get("loss_gate"), "bot.portfolio.loss_gate")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
     unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
@@ -160,19 +168,22 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         strategies.get(STRATEGY_KIND),
         f"bot.{pside}.strategy.{STRATEGY_KIND}",
     )
+    from config.strategy_paths import lower_runtime_strategy_side
+
+    strategy = lower_runtime_strategy_side(STRATEGY_KIND, strategy)
     entry = _require_mapping(strategy.get("entry"), "strategy.entry")
     close = _require_mapping(strategy.get("close"), "strategy.close")
     total_wallet_exposure_limit = _finite_float(
         risk.get("total_wallet_exposure_limit"),
         f"bot.{pside}.risk.total_wallet_exposure_limit",
     )
-    n_positions = int(_finite_float(risk.get("n_positions"), f"bot.{pside}.risk.n_positions"))
-    forced_mode_raw = str(live.get(f"forced_mode_{pside}", "") or "").strip()
+    max_positions = int(_finite_float(risk.get("max_positions"), f"bot.{pside}.risk.max_positions"))
+    forced_mode_raw = str(live.get("modes", {}).get(pside, "") or "").strip()
     try:
         forced_mode = expand_PB_mode(forced_mode_raw) if forced_mode_raw else "normal"
     except Exception as exc:
         raise ValueError(
-            f"invalid live.forced_mode_{pside}={forced_mode_raw!r}: {exc}"
+            f"invalid live.modes.{pside}={forced_mode_raw!r}: {exc}"
         ) from exc
     coin_overrides = _require_mapping(config.get("coin_overrides", {}), "coin_overrides")
     coin_strategy_override_symbols: list[str] = []
@@ -182,8 +193,10 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         override = _require_mapping(raw_override, f"coin_overrides.{symbol}")
         context_paths: list[str] = []
         override_live = override.get("live", {})
-        if isinstance(override_live, Mapping) and f"forced_mode_{pside}" in override_live:
-            context_paths.append(f"live.forced_mode_{pside}")
+        if isinstance(override_live, Mapping) and pside in override_live.get(
+            "modes", {}
+        ):
+            context_paths.append(f"live.modes.{pside}")
         override_bot = override.get("bot", {})
         if not isinstance(override_bot, Mapping):
             continue
@@ -223,72 +236,71 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         ceiling is None or clamped_base < ceiling
     )
     return {
-        "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
+        "active": total_wallet_exposure_limit > 0.0 and max_positions > 0,
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
-        "n_positions": n_positions,
+        "max_positions": max_positions,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled_global or bool(hsl_enabled_override_symbols),
         "hsl_enabled_global": hsl_enabled_global,
         "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
-        "hsl_signal_mode": str(live.get("hsl_signal_mode", "unknown")),
-        "hedge_mode": bool(live.get("hedge_mode", False)),
+        "hsl_scope": hsl_scope,
+        "hedge_mode": bool(portfolio_risk.get("hedge_mode", False)),
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
-        "max_realized_loss_pct": _finite_float(
-            live.get("max_realized_loss_pct", 1.0), "live.max_realized_loss_pct"
+        "loss_gate_max_drawdown_ratio": _finite_float(
+            loss_gate["max_drawdown_ratio"], "bot.portfolio.loss_gate.max_drawdown_ratio"
         ),
         "position_exposure_enforcer_enabled": bool(
-            risk.get("position_exposure_enforcer_enabled", False)
+            risk.get('position_exposure_enforcer', {}).get('enabled', False)
         ),
-        "position_exposure_enforcer_threshold": _finite_float(
-            risk.get("position_exposure_enforcer_threshold", 0.0),
-            f"bot.{pside}.risk.position_exposure_enforcer_threshold",
-        ),
-        "total_exposure_entry_gate_enabled": bool(
-            risk.get("total_exposure_entry_gate_enabled", False)
+        "position_exposure_enforcer_threshold_ratio": _finite_float(
+            risk.get('position_exposure_enforcer', {}).get('threshold_ratio', 0.0),
+            f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_enabled": bool(
-            risk.get("total_exposure_enforcer_enabled", False)
+            risk.get('total_exposure_enforcer', {}).get('enabled', False)
         ),
-        "total_exposure_enforcer_threshold": _finite_float(
-            risk.get("total_exposure_enforcer_threshold", 0.0),
-            f"bot.{pside}.risk.total_exposure_enforcer_threshold",
+        "total_exposure_enforcer_threshold_ratio": _finite_float(
+            risk.get('total_exposure_enforcer', {}).get('threshold_ratio', 0.0),
+            f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         ),
         "total_exposure_enforcer_policy": str(
-            risk.get("total_exposure_enforcer_policy", "unknown")
+            risk.get('total_exposure_enforcer', {}).get('policy', 'unknown')
         ),
         "unstuck_enabled": bool(unstuck.get("enabled", False)),
-        "unstuck_close_pct": _finite_float(
-            unstuck.get("close_pct", 0.0), f"bot.{pside}.unstuck.close_pct"
+        "unstuck_close_fraction": _finite_float(
+            unstuck.get("close_fraction", 0.0), f"bot.{pside}.unstuck.close_fraction"
         ),
-        "unstuck_loss_allowance_pct": _finite_float(
-            unstuck.get("loss_allowance_pct", 0.0),
-            f"bot.{pside}.unstuck.loss_allowance_pct",
+        "unstuck_loss_allowance_fraction": _finite_float(
+            unstuck.get("loss_allowance_fraction", 0.0),
+            f"bot.{pside}.unstuck.loss_allowance_fraction",
         ),
         "unstuck_ema_gating_enabled": bool(
             unstuck.get("ema_gating_enabled", False)
         ),
-        "unstuck_threshold": _finite_float(
-            unstuck.get("threshold", 0.0), f"bot.{pside}.unstuck.threshold"
+        "unstuck_exposure_trigger_ratio": _finite_float(
+            unstuck.get("exposure_trigger_ratio", 0.0), f"bot.{pside}.unstuck.exposure_trigger_ratio"
         ),
         "entry_cooldown_minutes": None if state_dependent else clamped_base,
         "entry_cooldown": deepcopy(cooldown),
         "entry_ema_gate_mode": str(entry.get("ema_gate_mode", "unknown")),
-        "entry_initial_ema_dist": _finite_float(
+        "entry_initial_ema_distance_fraction": _finite_float(
             entry.get("initial_ema_dist", 0.0), "entry.initial_ema_dist"
         ),
-        "entry_initial_qty_pct": _finite_float(
+        "entry_initial_qty_fraction": _finite_float(
             entry.get("initial_qty_pct", 0.0), "entry.initial_qty_pct"
         ),
         "entry_double_down_factor": _finite_float(
             entry.get("double_down_factor", 0.0), "entry.double_down_factor"
         ),
-        "close_qty_pct": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
-        "volatility_ema_span_1m": _finite_float(
-            strategy.get("volatility_ema_span_1m", 0.0), "volatility_ema_span_1m"
+        "close_qty_fraction": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
+        "volatility_ema_span_minutes": _finite_float(
+            strategy.get("volatility_ema_span_1m", 0.0),
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_minutes"
         ),
-        "volatility_ema_span_1h": _finite_float(
-            strategy.get("volatility_ema_span_1h", 0.0), "volatility_ema_span_1h"
+        "volatility_ema_span_1h_candles": _finite_float(
+            strategy.get("volatility_ema_span_1h", 0.0),
+            f"bot.{pside}.strategy.{STRATEGY_KIND}.volatility_ema_span_1h_candles"
         ),
     }
 
@@ -673,9 +685,9 @@ def _unstuck_active(context: Mapping[str, Any] | None) -> bool:
     return bool(
         context
         and context.get("unstuck_enabled", False)
-        and context.get("unstuck_close_pct", 0.0) > 0.0
-        and context.get("unstuck_loss_allowance_pct", 0.0) > 0.0
-        and context.get("unstuck_threshold", 0.0) > 0.0
+        and context.get("unstuck_close_fraction", 0.0) > 0.0
+        and context.get("unstuck_loss_allowance_fraction", 0.0) > 0.0
+        and context.get("unstuck_exposure_trigger_ratio", 0.0) > 0.0
     )
 
 
@@ -870,13 +882,13 @@ def _classify_side(
             overall.append(
                 f"{pside.capitalize()} is enabled: total exposure limit "
                 f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
-                f"{context['n_positions']} configured position slot(s)."
+                f"{context['max_positions']} configured position slot(s)."
             )
         elif context.get("hsl_enabled", False):
             overall.append(
                 f"Global forced mode {forced_mode!r} is the fallback for this config, but HSL runtime "
-                "state has precedence. ORANGE or RED may replace that static mode with graceful-stop, "
-                "tp-only, or panic behavior, so the table paths remain HSL-dependent rather than wholly "
+                "state has precedence. RED may require panic closing and a qualified flattening may "
+                "hold new exposure through finite cooldown, so the table paths remain HSL-dependent rather than wholly "
                 "dormant."
             )
         elif forced_mode == "panic":
@@ -940,12 +952,12 @@ def _classify_side(
         else:
             overall.append(
                 "Each strategy close starts from the allowed full-position size × "
-                f"{context['close_qty_pct'] * 100.0:.2f}%, adds any current position size above "
+                f"{context['close_qty_fraction'] * 100.0:.2f}%, adds any current position size above "
                 "that allowed full size, then caps at the remaining position and applies "
                 "minimum-quantity, rounding, and dust-remainder rules."
             )
         if context.get("position_exposure_enforcer_enabled", False):
-            enforcer_threshold = context.get("position_exposure_enforcer_threshold", 0.0)
+            enforcer_threshold = context.get("position_exposure_enforcer_threshold_ratio", 0.0)
             if context["active"] and (
                 forced_mode not in {"panic", "manual"}
                 or context.get("hsl_enabled", False)
@@ -963,14 +975,13 @@ def _classify_side(
                     "Position-exposure enforcement is configured, but the disabled side or current "
                     "forced mode keeps that close path dormant."
                 )
-        if context.get("total_exposure_entry_gate_enabled", False):
-            overall.append(
-                "The account-wide total-exposure entry gate is enabled. Eligible RE-ENTRY / ADD "
+        overall.append(
+                "The side total-exposure entry cap applies unconditionally. Eligible RE-ENTRY / ADD "
                 "rows are marked 'portfolio-dependent': after strategy calculation, the orchestrator "
                 "may crop or remove the order based on exposure consumed by all positions on this side."
             )
         if context.get("total_exposure_enforcer_enabled", False):
-            twel_threshold = context.get("total_exposure_enforcer_threshold", 0.0)
+            twel_threshold = context.get("total_exposure_enforcer_threshold_ratio", 0.0)
             twel_policy = context.get("total_exposure_enforcer_policy", "unknown")
             if context["active"] and (
                 forced_mode not in {"panic", "manual"}
@@ -995,9 +1006,9 @@ def _classify_side(
             )
             overall.append(
                 "Auto-unstuck is active with close quantity "
-                f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
-                f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
-                f"{context['unstuck_threshold'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
+                f"{context['unstuck_close_fraction'] * 100.0:g}%, loss allowance "
+                f"{context['unstuck_loss_allowance_fraction'] * 100.0:g}%, and position threshold "
+                f"{context['unstuck_exposure_trigger_ratio'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
                 "WE / effective WEL threshold are marked unstuck-dependent: "
                 "Rust may contribute a globally selected unstuck candidate based on realized PnL and "
                 f"portfolio/position state. {unstuck_ema_note}"
@@ -1007,26 +1018,26 @@ def _classify_side(
                 "Auto-unstuck is enabled but inactive because its close quantity, loss allowance, "
                 "or position threshold is non-positive."
             )
-        if context.get("max_realized_loss_pct", 1.0) < 1.0:
+        if context.get("loss_gate_max_drawdown_ratio", 1.0) < 1.0:
             overall.append(
                 "The realized-loss gate is active at "
-                f"{context['max_realized_loss_pct'] * 100.0:g}% of peak balance. CLOSE rows are "
-                "PnL-gated: Rust may remove losing strategy closes or protective reducers after "
+                f"a maximum remembered drawdown ratio of {context['loss_gate_max_drawdown_ratio'] * 100.0:g}%. CLOSE rows are "
+                "PnL-gated: Rust may remove losing non-panic strategy closes or protective reducers after "
                 "evaluating projected batch PnL, fees, and account-wide realized-loss allowance."
             )
         if context.get("hsl_enabled", False):
             hsl_scope = (
-                "globally for this side"
+                ("for the portfolio" if context.get("hsl_scope") == "portfolio" else "globally for this side")
                 if context.get("hsl_enabled_global", False)
                 else "through coin overrides for "
                 + ", ".join(context.get("hsl_enabled_override_symbols", ()))
             )
             overall.append(
-                f"Equity hard stop loss is enabled {hsl_scope} with signal mode "
-                f"{context.get('hsl_signal_mode', 'unknown')!r}. Active rows are HSL-dependent: "
-                "the current account/position PnL drawdown tier may block entries at ORANGE or RED, "
-                "replace strategy closes with panic closes at RED, or leave the strategy path unchanged. "
-                "An offline config report cannot know the live HSL tier."
+                f"Equity hard stop loss is enabled {hsl_scope} with scope "
+                f"{context.get('hsl_scope', 'unknown')!r}. Active rows are HSL-dependent: "
+                "current RED permission may block entries and require panic closes; "
+                "a qualified flattening may hold new exposure through finite cooldown. "
+                "An offline config report cannot know the current HSL permission or cooldown."
             )
         if (
             context.get("position_exposure_enforcer_enabled", False)
@@ -1182,8 +1193,8 @@ def build_overview(
                 )
                 enforcer_threshold = (
                     _finite_float(
-                        context.get("position_exposure_enforcer_threshold", 0.0),
-                        "position_exposure_enforcer_threshold",
+                        context.get("position_exposure_enforcer_threshold_ratio", 0.0),
+                        "position_exposure_enforcer_threshold_ratio",
                     )
                     if context
                     else 0.0
@@ -1476,8 +1487,7 @@ def _scenario_runtime_path(
                     if forced_mode in {"panic", "manual", "tp_only"}
                     else f"{forced_mode} fallback"
                 )
-        if context.get("total_exposure_entry_gate_enabled", False):
-            qualifiers.append("portfolio-dependent")
+        qualifiers.append("portfolio-dependent")
         return " / ".join(qualifiers) if qualifiers else "re-entry"
     if context is None:
         return "context unknown"
@@ -1490,9 +1500,9 @@ def _scenario_runtime_path(
             qualifiers.append(f"{context['forced_mode']} fallback")
     if context.get("total_exposure_enforcer_enabled", False):
         qualifiers.append("TWEL-dependent")
-    if _unstuck_active(context) and exposure_ratio > context.get("unstuck_threshold", 0.0):
+    if _unstuck_active(context) and exposure_ratio > context.get("unstuck_exposure_trigger_ratio", 0.0):
         qualifiers.append("unstuck-dependent")
-    if context.get("max_realized_loss_pct", 1.0) < 1.0:
+    if context.get("loss_gate_max_drawdown_ratio", 1.0) < 1.0:
         qualifiers.append("PnL-gated")
     if payload.get("inactive_reason") in {
         "unreachable_short_threshold",
@@ -1605,8 +1615,8 @@ def render_overview(result: Mapping[str, Any]) -> str:
         if context:
             lines.append(
                 "  Volatility EMA spans: "
-                f"1m {context['volatility_ema_span_1m']:g}, "
-                f"1h {context['volatility_ema_span_1h']:g}."
+                f"{context['volatility_ema_span_minutes']:g} minutes, "
+                f"{context['volatility_ema_span_1h_candles']:g} one-hour candles."
             )
         if side["overridden_parameters"]:
             lines.append("  Overrides: " + ", ".join(side["overridden_parameters"]))
@@ -1777,22 +1787,22 @@ def build_parser() -> argparse.ArgumentParser:
     state.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     entry_threshold = parser.add_argument_group("entry threshold overrides")
-    entry_threshold.add_argument("--entry-threshold-base-pct", type=float)
+    entry_threshold.add_argument("--entry-threshold-base-fraction", dest="entry_threshold_base_pct", type=float)
     entry_threshold.add_argument("--entry-threshold-we-weight", type=float)
     entry_threshold.add_argument("--entry-threshold-volatility-1h-weight", type=float)
     entry_threshold.add_argument("--entry-threshold-volatility-1m-weight", type=float)
     entry_retracement = parser.add_argument_group("entry retracement overrides")
-    entry_retracement.add_argument("--entry-retracement-base-pct", type=float)
+    entry_retracement.add_argument("--entry-retracement-base-fraction", dest="entry_retracement_base_pct", type=float)
     entry_retracement.add_argument("--entry-retracement-we-weight", type=float)
     entry_retracement.add_argument("--entry-retracement-volatility-1h-weight", type=float)
     entry_retracement.add_argument("--entry-retracement-volatility-1m-weight", type=float)
     close_threshold = parser.add_argument_group("close threshold overrides")
-    close_threshold.add_argument("--close-threshold-base-pct", type=float)
+    close_threshold.add_argument("--close-threshold-base-fraction", dest="close_threshold_base_pct", type=float)
     close_threshold.add_argument("--close-threshold-we-weight", type=float)
     close_threshold.add_argument("--close-threshold-volatility-1h-weight", type=float)
     close_threshold.add_argument("--close-threshold-volatility-1m-weight", type=float)
     close_retracement = parser.add_argument_group("close retracement overrides")
-    close_retracement.add_argument("--close-retracement-base-pct", type=float)
+    close_retracement.add_argument("--close-retracement-base-fraction", dest="close_retracement_base_pct", type=float)
     close_retracement.add_argument("--close-retracement-volatility-1h-weight", type=float)
     close_retracement.add_argument("--close-retracement-volatility-1m-weight", type=float)
     return parser
