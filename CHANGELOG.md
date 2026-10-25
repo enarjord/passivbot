@@ -9,6 +9,10 @@ since the latest release tag; these features may already be available when insta
 - Publish immutable analysis quantity metadata and a generated reference covering units,
   denominators, observation populations, aggregation and weighting without changing formulas.
 
+- Require complete config-override long-option spellings in the live, backtest and optimizer
+  command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
+  select a renamed field.
+
 - Replace `strategy_eq_underwater_pct_mean` with `pain_index_strategy_eq`, the mean
   drawdown across all recorded strategy-equity samples, and add `ulcer_index_strategy_eq`,
   their root mean square. Both use minute-level samples with standard one-minute candles,
