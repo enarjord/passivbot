@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name benchmark account fractions, ratios, counts and log returns explicitly; advance the
+  account metric/discovery identities without changing economic calculations or converting old results.
+
 - Publish immutable analysis quantity metadata and a generated reference covering units,
   denominators, observation populations, aggregation and weighting without changing formulas.
 

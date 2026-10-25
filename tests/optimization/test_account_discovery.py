@@ -30,23 +30,23 @@ def account(**updates):
 
 def test_account_uses_ordinary_equity_and_does_not_double_charge_fees():
     result = account()
-    assert result["net_return"] == pytest.approx(.08)
-    assert result["geometric_growth_per_day"] == pytest.approx(1.08 ** .25 - 1)
-    assert result["log_growth_per_day"] == pytest.approx(math.log(1.08) / 4)
-    assert result["account_max_drawdown"] == pytest.approx(.25)
+    assert result["net_return_fraction"] == pytest.approx(.08)
+    assert result["geometric_return_per_day_fraction"] == pytest.approx(1.08 ** .25 - 1)
+    assert result["log_return_per_day"] == pytest.approx(math.log(1.08) / 4)
+    assert result["account_drawdown_max_fraction"] == pytest.approx(.25)
     assert result["net_realized_pnl"] == 3
     assert (result["fees_paid"], result["rebates_received"], result["net_fees"]) == (2, .25, 1.75)
-    assert (result["fill_count"], result["close_fill_count"], result["active_days"]) == (2, 1, 2)
+    assert (result["fill_count"], result["close_fill_count"], result["active_day_count"]) == (2, 1, 2)
     assert result["traded_notional"] == 410
-    assert result["gross_exposure_ratio_mean"] == pytest.approx(.875)
-    assert result["gross_exposure_ratio_max"] == 2
-    assert result["exposed_fraction"] == .75
+    assert result["gross_exposure_mean_ratio"] == pytest.approx(.875)
+    assert result["gross_exposure_max_ratio"] == 2
+    assert result["exposed_time_fraction"] == .75
 
 
 def test_underwater_recovery_and_terminal_right_censor_are_distinct():
     result = account()
-    assert result["underwater_fraction"] == .25
-    assert result["recovery_duration_max_ms_lower_bound"] == 2 * DAY_MS
+    assert result["underwater_time_fraction"] == .25
+    assert result["recovery_duration_max_lower_bound_ms"] == 2 * DAY_MS
     assert result["terminal_underwater_censored"]
     recovered, censored = result["recovery_episodes"]
     assert recovered == dict(peak_timestamp_ms=DAY_MS, peak_equity=120,
@@ -60,11 +60,11 @@ def test_underwater_recovery_and_terminal_right_censor_are_distinct():
 def test_first_sample_loss_uses_prefill_baseline_and_incomplete_tail_is_not_fabricated():
     result = account(timestamps_ms=[0, DAY_MS], equity=[90, 80], gross_exposure_ratio=[2, 0],
                      fills=[], completed=False)
-    assert result["net_return"] == pytest.approx(-.2)
-    assert result["account_max_drawdown"] == .2
-    assert result["underwater_fraction"] == 1
-    assert result["gross_exposure_ratio_mean"] == 2
-    assert result["completion_ratio"] == .25
+    assert result["net_return_fraction"] == pytest.approx(-.2)
+    assert result["account_drawdown_max_fraction"] == .2
+    assert result["underwater_time_fraction"] == 1
+    assert result["gross_exposure_mean_ratio"] == 2
+    assert result["completion_fraction"] == .25
     assert result["observed_end_ms"] == DAY_MS
     assert result["recovery_episodes"][0]["duration_ms"] == DAY_MS
     assert result["recovery_episodes"][0]["censored"]
@@ -73,17 +73,17 @@ def test_first_sample_loss_uses_prefill_baseline_and_incomplete_tail_is_not_fabr
 def test_liquidation_and_nonpositive_equity_remain_explicit_without_fake_growth():
     result = account(equity=[100, 120, 90, 0, -10], liquidated=True)
     assert result["liquidated"] and result["nonpositive_equity_observed"]
-    assert result["geometric_growth_per_day"] is None
-    assert result["log_growth_per_day"] is None
+    assert result["geometric_return_per_day_fraction"] is None
+    assert result["log_return_per_day"] is None
     assert result["growth_unavailable_reason"] == "nonpositive_terminal_equity"
-    assert result["account_max_drawdown"] == pytest.approx(130 / 120)
+    assert result["account_drawdown_max_fraction"] == pytest.approx(130 / 120)
 
 
 def test_declared_final_partial_grid_interval_is_time_weighted():
     result = account(expected_end_ms=DAY_MS + 100, timestamps_ms=[0, DAY_MS, DAY_MS + 100],
                      equity=[100, 90, 95], gross_exposure_ratio=[1, 2, 0], fills=[])
-    assert result["gross_exposure_ratio_mean"] == pytest.approx((DAY_MS + 200) / (DAY_MS + 100))
-    assert result["underwater_fraction"] == pytest.approx(100 / (DAY_MS + 100))
+    assert result["gross_exposure_mean_ratio"] == pytest.approx((DAY_MS + 200) / (DAY_MS + 100))
+    assert result["underwater_time_fraction"] == pytest.approx(100 / (DAY_MS + 100))
 
 
 def test_native_numpy_observations_are_supported_without_rounding_fractional_clocks():
@@ -92,8 +92,8 @@ def test_native_numpy_observations_are_supported_without_rounding_fractional_clo
     result = account(timestamps_ms=np.arange(5, dtype=np.int64) * DAY_MS,
                      equity=np.array([100, 120, 90, 120, 108], dtype=np.float32),
                      gross_exposure_ratio=np.array([0, 2, 1, .5, 0], dtype=np.float32))
-    assert result["account_max_drawdown"] == .25
-    assert result["net_return"] == pytest.approx(.08)
+    assert result["account_drawdown_max_fraction"] == .25
+    assert result["net_return_fraction"] == pytest.approx(.08)
     with pytest.raises(ValueError, match="exact integer"):
         account(timestamps_ms=[0, DAY_MS + .5, 2 * DAY_MS, 3 * DAY_MS, 4 * DAY_MS])
 
@@ -123,12 +123,12 @@ def effective(gene=1):
 
 def protocol(**updates):
     # Synthetic test thresholds only; production protocols must be calibrated.
-    result = dict(version=1, scenarios={"base": "a" * 64, "stress": "b" * 64},
+    result = dict(version=2, scenarios={"base": "a" * 64, "stress": "b" * 64},
                   heldout_scenarios={"heldout": "c" * 64}, runtime_identities={"v9": "d" * 64},
-                  axes=[dict(metric="net_return", goal="max", reducer="min", novelty_tolerance=.01),
-                        dict(metric="account_max_drawdown", goal="min", reducer="max", novelty_tolerance=.01)],
-                  constraints=[dict(metric="account_max_drawdown", op="<=", value=.4),
-                               dict(metric="net_return", op=">=", value=0)],
+                  axes=[dict(metric="net_return_fraction", goal="max", reducer="min", novelty_tolerance=.01),
+                        dict(metric="account_drawdown_max_fraction", goal="min", reducer="max", novelty_tolerance=.01)],
+                  constraints=[dict(metric="account_drawdown_max_fraction", op="<=", value=.4),
+                               dict(metric="net_return_fraction", op=">=", value=0)],
                   minimum_activity={"close_fill_count": 1}, target_k=2, time_budget_seconds=100,
                   target_measure="retained_frontier", timer_origin="before_preparation",
                   timing_phases=sorted(COLD_PHASES))
@@ -140,8 +140,8 @@ def evidence(gene, gain, drawdown, *, at=10, export=None, scenarios=None, engine
     config = effective(gene)
     identity = canonical_configuration_identity(config, model="v9")
     p = protocol()
-    fields = dict(metric_definition="ordinary_account_v1", net_return=gain,
-                  account_max_drawdown=drawdown, close_fill_count=2, completed=True,
+    fields = dict(metric_definition="ordinary_account_v2", net_return_fraction=gain,
+                  account_drawdown_max_fraction=drawdown, close_fill_count=2, completed=True,
                   liquidated=False, nonpositive_equity_observed=False)
     fields.update(metrics)
     confirmations = {}
@@ -422,10 +422,10 @@ def test_same_time_batch_never_counts_its_dominated_member():
 def test_heldout_only_tests_economics_and_never_improves_search_objective():
     records = counter(target_k=1)
     heldout_star = evidence(1, .09, .21)
-    heldout_star["confirmations"]["heldout"]["metrics"].update(net_return=100, account_max_drawdown=0)
+    heldout_star["confirmations"]["heldout"]["metrics"].update(net_return_fraction=100, account_drawdown_max_fraction=0)
     records.add(heldout_star)
     failed = evidence(2, .5, .1)
-    failed["confirmations"]["heldout"]["metrics"]["account_max_drawdown"] = .5
+    failed["confirmations"]["heldout"]["metrics"]["account_drawdown_max_fraction"] = .5
     records.add(failed)
     report = records.report()
     assert not report["useful_frontier_discoveries"]
@@ -450,7 +450,7 @@ def test_conflicting_authoritative_cpu_confirmation_is_never_silently_replaced()
 @pytest.mark.parametrize("metric,value,match", [
     ("metric_definition", "strategy_equity", "ordinary-account"),
     ("completed", None, "boolean"),
-    ("net_return", float("nan"), "finite"),
+    ("net_return_fraction", float("nan"), "finite"),
 ])
 def test_missing_or_wrong_account_evidence_cannot_become_neutral_score(metric, value, match):
     record = evidence(1, .2, .3)
@@ -487,7 +487,7 @@ def test_caller_mutation_cannot_rewrite_frozen_protocol_or_evidence():
     exposed["constraints"][0]["value"] = 100
     row = evidence(1, .5, .5)
     records.add(row)
-    row["confirmations"]["base"]["metrics"]["account_max_drawdown"] = 0
+    row["confirmations"]["base"]["metrics"]["account_drawdown_max_fraction"] = 0
     assert len(records.report()["infeasible"]) == 1
 
 
@@ -496,7 +496,7 @@ def test_duplicate_fill_and_missing_objective_are_explicit_errors():
                 fee_cashflow=0, notional=1, is_close=False)
     with pytest.raises(ValueError, match="unique"):
         account(fills=[fill, deepcopy(fill)])
-    records = counter(axes=[dict(metric="geometric_growth_per_day", goal="max", reducer="min",
+    records = counter(axes=[dict(metric="geometric_return_per_day_fraction", goal="max", reducer="min",
                                 novelty_tolerance=0)])
     with pytest.raises(ValueError, match="missing required account objective"):
         records.report()
@@ -530,3 +530,25 @@ def test_v9_benchmark_missing_native_service_fails_before_device_import(monkeypa
     monkeypatch.setitem(sys.modules, "torch", None)
     with pytest.raises(RuntimeError, match="requires NativeBacktestService.*legacy direct replay is unsupported"):
         worker._gpu_runs({"configs": [{"config_version": "v9.0.0"}]}, (), "1", 1, 0, 0, 1)
+
+
+def test_retired_discovery_identity_is_rejected_without_translation():
+    with pytest.raises(ValueError, match="protocol version"):
+        validate_protocol(protocol(version=1))
+
+
+def test_retired_account_metric_name_is_not_an_objective_alias():
+    value = protocol()
+    value["axes"][0]["metric"] = "net_return"
+    with pytest.raises(ValueError, match="metrics"):
+        validate_protocol(value)
+
+
+def test_retired_account_result_identity_cannot_confirm_current_discovery():
+    records = counter()
+    record = evidence(1, .3, .1)
+    for confirmation in record["confirmations"].values():
+        confirmation["metrics"]["metric_definition"] = "ordinary_account_v1"
+    records.add(record)
+    with pytest.raises(ValueError, match="ordinary-account"):
+        records.report()
