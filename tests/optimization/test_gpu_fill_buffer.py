@@ -81,19 +81,19 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
             st = cfg['bot'][s]['strategy'][strategy_kind]
-            st['entry'].update(ema_span_0=2., ema_span_1=3., initial_ema_dist=0.,
-                               initial_qty_pct=0.1, ema_gate_mode='disabled',
-                               threshold_base_pct=0.01, threshold_exposure_ratio_coefficient=0.,
+            st['entry'].update(ema_span_0=2., ema_span_1=3., initial_ema_distance_fraction=0.,
+                               initial_qty_fraction=0.1, ema_gate_mode='disabled',
+                               threshold_base_fraction=0.01, threshold_exposure_ratio_coefficient=0.,
                                threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
-                               retracement_base_pct=0., retracement_exposure_ratio_coefficient=0.,
+                               retracement_base_fraction=0., retracement_exposure_ratio_coefficient=0.,
                                retracement_log_range_1m_coefficient=0., retracement_log_range_1h_coefficient=0.)
-            st['close'].update(qty_pct=1., threshold_base_pct=0.01, threshold_exposure_ratio_coefficient=0.,
+            st['close'].update(qty_fraction=1., threshold_base_fraction=0.01, threshold_exposure_ratio_coefficient=0.,
                                threshold_log_range_1m_coefficient=0., threshold_log_range_1h_coefficient=0.,
-                               retracement_base_pct=0., retracement_log_range_1m_coefficient=0.,
+                               retracement_base_fraction=0., retracement_log_range_1m_coefficient=0.,
                                retracement_log_range_1h_coefficient=0.)
         else:
-            cfg['bot'][s]['strategy'][strategy_kind].update(base_qty_pct=0.1, ema_span_0=2.,
-                                                            ema_span_1=3., offset=0., inventory_offset_exposure_coefficient=0.,
+            cfg['bot'][s]['strategy'][strategy_kind].update(base_qty_fraction=0.1, ema_span_0=2.,
+                                                            ema_span_1=3., offset_fraction=0., inventory_offset_exposure_coefficient=0.,
                                                             offset_log_range_1m_coefficient=0., offset_log_range_1h_coefficient=0.)
     n = 120
     candles = np.tile([[[100.005, 99.995, 100., 1000.]]], (n, coin_count, 1))

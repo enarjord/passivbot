@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native strategy sizing, price fractions and exposure coefficients with the authored
+  configuration names, including optimizer IDs, calculator keywords and trailing diagnostics.
+  Numeric values, calculator argument positions and GPU parameter columns are unchanged.
+  Released-v8 conversion retains its frozen source vocabulary; earlier dev-v9 native names
+  are unsupported.
+
 - Name public candle-range indicators `log_range`: strategy horizons and forager ranking now
   use that name, and strategy sensitivities end in `_coefficient`. The measurement remains the
   EMA of `ln(high / low)`; values, normalization, native identifiers, and trading formulas are
@@ -13,8 +19,8 @@ since the latest release tag; these features may already be available when insta
 
 - Describe strategy sizing and exposure sensitivities explicitly: trailing-martingale uses
   `reentry_qty_multiplier` and `_exposure_ratio_coefficient` leaves; EMA-anchor uses
-  `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds,
-  formulas, and native optimizer identifiers are unchanged. Explicit v8 conversion emits the
+  `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds
+  and trading formulas are unchanged. Explicit v8 conversion emits the
   new names; earlier development-v9 spellings are unsupported.
 
 - Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and

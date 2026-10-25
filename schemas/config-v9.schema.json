@@ -2946,7 +2946,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_base_qty_pct",
+                          "x-passivbot-optimizer-key": "long_base_qty_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -3008,7 +3008,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_entry_double_down_factor",
+                          "x-passivbot-optimizer-key": "long_entry_qty_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -3030,7 +3030,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_offset_psize_weight",
+                          "x-passivbot-optimizer-key": "long_inventory_offset_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -3051,7 +3051,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_offset",
+                          "x-passivbot-optimizer-key": "long_offset_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -3168,7 +3168,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_qty_pct",
+                              "x-passivbot-optimizer-key": "long_close_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3189,7 +3189,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "long_close_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3254,7 +3254,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "long_close_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3276,7 +3276,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "long_close_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3405,7 +3405,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_initial_ema_dist",
+                              "x-passivbot-optimizer-key": "long_entry_initial_ema_distance_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3426,7 +3426,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_initial_qty_pct",
+                              "x-passivbot-optimizer-key": "long_entry_initial_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3448,7 +3448,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_double_down_factor",
+                              "x-passivbot-optimizer-key": "long_entry_reentry_qty_multiplier",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3469,7 +3469,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "long_entry_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3491,7 +3491,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_retracement_we_weight",
+                              "x-passivbot-optimizer-key": "long_entry_retracement_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3556,7 +3556,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "long_entry_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -3578,7 +3578,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "long_entry_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -4860,7 +4860,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_base_qty_pct",
+                          "x-passivbot-optimizer-key": "short_base_qty_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -4922,7 +4922,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_entry_double_down_factor",
+                          "x-passivbot-optimizer-key": "short_entry_qty_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -4944,7 +4944,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_offset_psize_weight",
+                          "x-passivbot-optimizer-key": "short_inventory_offset_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -4965,7 +4965,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_offset",
+                          "x-passivbot-optimizer-key": "short_offset_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -5082,7 +5082,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_qty_pct",
+                              "x-passivbot-optimizer-key": "short_close_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5103,7 +5103,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "short_close_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5168,7 +5168,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "short_close_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5190,7 +5190,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "short_close_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5319,7 +5319,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_initial_ema_dist",
+                              "x-passivbot-optimizer-key": "short_entry_initial_ema_distance_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5340,7 +5340,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_initial_qty_pct",
+                              "x-passivbot-optimizer-key": "short_entry_initial_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5362,7 +5362,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_double_down_factor",
+                              "x-passivbot-optimizer-key": "short_entry_reentry_qty_multiplier",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5383,7 +5383,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "short_entry_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5405,7 +5405,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_retracement_we_weight",
+                              "x-passivbot-optimizer-key": "short_entry_retracement_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5470,7 +5470,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "short_entry_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -5492,7 +5492,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "short_entry_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14260,7 +14260,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_double_down_factor",
+                              "x-passivbot-optimizer-key": "long_entry_reentry_qty_multiplier",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14280,7 +14280,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_initial_qty_pct",
+                              "x-passivbot-optimizer-key": "long_entry_initial_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14300,7 +14300,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_initial_ema_dist",
+                              "x-passivbot-optimizer-key": "long_entry_initial_ema_distance_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14320,7 +14320,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "long_entry_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14341,7 +14341,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "long_entry_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14403,7 +14403,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "long_entry_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14424,7 +14424,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_retracement_we_weight",
+                              "x-passivbot-optimizer-key": "long_entry_retracement_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14550,7 +14550,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_qty_pct",
+                              "x-passivbot-optimizer-key": "long_close_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14570,7 +14570,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "long_close_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14591,7 +14591,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "long_close_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14653,7 +14653,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "long_close_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -14723,7 +14723,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_base_qty_pct",
+                          "x-passivbot-optimizer-key": "long_base_qty_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -14782,7 +14782,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_entry_double_down_factor",
+                          "x-passivbot-optimizer-key": "long_entry_qty_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -14802,7 +14802,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_offset",
+                          "x-passivbot-optimizer-key": "long_offset_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -14905,7 +14905,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_offset_psize_weight",
+                          "x-passivbot-optimizer-key": "long_inventory_offset_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -15428,7 +15428,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_double_down_factor",
+                              "x-passivbot-optimizer-key": "short_entry_reentry_qty_multiplier",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15448,7 +15448,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_initial_qty_pct",
+                              "x-passivbot-optimizer-key": "short_entry_initial_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15468,7 +15468,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_initial_ema_dist",
+                              "x-passivbot-optimizer-key": "short_entry_initial_ema_distance_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15488,7 +15488,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "short_entry_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15509,7 +15509,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "short_entry_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15571,7 +15571,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "short_entry_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15592,7 +15592,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_retracement_we_weight",
+                              "x-passivbot-optimizer-key": "short_entry_retracement_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15718,7 +15718,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_qty_pct",
+                              "x-passivbot-optimizer-key": "short_close_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15738,7 +15738,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "short_close_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15759,7 +15759,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "short_close_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15821,7 +15821,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "short_close_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -15891,7 +15891,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_base_qty_pct",
+                          "x-passivbot-optimizer-key": "short_base_qty_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -15950,7 +15950,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_entry_double_down_factor",
+                          "x-passivbot-optimizer-key": "short_entry_qty_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -15970,7 +15970,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_offset",
+                          "x-passivbot-optimizer-key": "short_offset_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -16073,7 +16073,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_offset_psize_weight",
+                          "x-passivbot-optimizer-key": "short_inventory_offset_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -16545,7 +16545,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_double_down_factor",
+                              "x-passivbot-optimizer-key": "long_entry_reentry_qty_multiplier",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16565,7 +16565,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_initial_qty_pct",
+                              "x-passivbot-optimizer-key": "long_entry_initial_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16585,7 +16585,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_initial_ema_dist",
+                              "x-passivbot-optimizer-key": "long_entry_initial_ema_distance_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16605,7 +16605,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "long_entry_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16626,7 +16626,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "long_entry_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16688,7 +16688,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "long_entry_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16709,7 +16709,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_entry_retracement_we_weight",
+                              "x-passivbot-optimizer-key": "long_entry_retracement_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16835,7 +16835,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_qty_pct",
+                              "x-passivbot-optimizer-key": "long_close_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16855,7 +16855,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "long_close_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16876,7 +16876,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "long_close_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -16938,7 +16938,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "long_close_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "long_close_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17008,7 +17008,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_base_qty_pct",
+                          "x-passivbot-optimizer-key": "long_base_qty_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -17067,7 +17067,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_entry_double_down_factor",
+                          "x-passivbot-optimizer-key": "long_entry_qty_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -17087,7 +17087,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_offset",
+                          "x-passivbot-optimizer-key": "long_offset_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -17190,7 +17190,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_offset_psize_weight",
+                          "x-passivbot-optimizer-key": "long_inventory_offset_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -17590,7 +17590,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_double_down_factor",
+                              "x-passivbot-optimizer-key": "short_entry_reentry_qty_multiplier",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17610,7 +17610,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_initial_qty_pct",
+                              "x-passivbot-optimizer-key": "short_entry_initial_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17630,7 +17630,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_initial_ema_dist",
+                              "x-passivbot-optimizer-key": "short_entry_initial_ema_distance_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17650,7 +17650,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "short_entry_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17671,7 +17671,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "short_entry_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17733,7 +17733,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "short_entry_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17754,7 +17754,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_entry_retracement_we_weight",
+                              "x-passivbot-optimizer-key": "short_entry_retracement_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17880,7 +17880,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_qty_pct",
+                              "x-passivbot-optimizer-key": "short_close_qty_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17900,7 +17900,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_threshold_base_pct",
+                              "x-passivbot-optimizer-key": "short_close_threshold_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17921,7 +17921,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_threshold_we_weight",
+                              "x-passivbot-optimizer-key": "short_close_threshold_exposure_ratio_coefficient",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -17983,7 +17983,7 @@
                                 "backtest",
                                 "optimize"
                               ],
-                              "x-passivbot-optimizer-key": "short_close_retracement_base_pct",
+                              "x-passivbot-optimizer-key": "short_close_retracement_base_fraction",
                               "x-passivbot-optimizable": true,
                               "x-passivbot-optimize-when": "trailing_martingale is the active strategy",
                               "x-passivbot-recommended-bounds": [
@@ -18053,7 +18053,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_base_qty_pct",
+                          "x-passivbot-optimizer-key": "short_base_qty_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -18112,7 +18112,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_entry_double_down_factor",
+                          "x-passivbot-optimizer-key": "short_entry_qty_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -18132,7 +18132,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_offset",
+                          "x-passivbot-optimizer-key": "short_offset_fraction",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [
@@ -18235,7 +18235,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_offset_psize_weight",
+                          "x-passivbot-optimizer-key": "short_inventory_offset_exposure_coefficient",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-optimize-when": "ema_anchor is the active strategy",
                           "x-passivbot-recommended-bounds": [

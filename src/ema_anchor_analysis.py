@@ -121,12 +121,12 @@ def _calc_quote_series(
         price_step=price_step,
         ema_span_0=float(params["ema_span_0"]),
         ema_span_1=float(params["ema_span_1"]),
-        offset=float(params["offset"]),
+        offset_fraction=float(params["offset_fraction"]),
         offset_volatility_ema_span_1m=float(params["offset_volatility_ema_span_1m"]),
         offset_volatility_1m_weight=float(params["offset_volatility_1m_weight"]),
         offset_volatility_ema_span_1h=float(params["offset_volatility_ema_span_1h"]),
         offset_volatility_1h_weight=float(params["offset_volatility_1h_weight"]),
-        offset_psize_weight=float(params["offset_psize_weight"]),
+        inventory_offset_exposure_coefficient=float(params["inventory_offset_exposure_coefficient"]),
     )
     return np.asarray(bids, dtype=float), np.asarray(asks, dtype=float)
 

@@ -29,7 +29,7 @@ from optimization.gpu.model import EMA_ANCHOR_COIN_OVERRIDE_COLS
 policy = dict(enabled=False, red_threshold=0.1, ema_span_minutes=30,
               cooldown_minutes_after_red=0)
 payload = SimpleNamespace(
-    strategy_params_list=[{"long": {"offset": 0.125}}],
+    strategy_params_list=[{"long": {"offset_fraction": 0.125}}],
     bot_params_list=[{"long": {"n_positions": 1}}],
     backtest_params={"coins": ["COIN"], "dynamic_wel_by_tradability": True, "lookback_ema_span_minutes": 1440.0,
                      "equity_hard_stop_loss": {"engine": "hsl", "mode": "coin",

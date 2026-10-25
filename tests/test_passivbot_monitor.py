@@ -4363,9 +4363,9 @@ def test_trailing_status_event_emits_structured_summary():
             "triggered": False,
             "threshold_met": True,
             "retracement_met": False,
-            "threshold_pct": 0.01,
+            "threshold_fraction": 0.01,
             "threshold_price": 101_000.0,
-            "retracement_pct": 0.004,
+            "retracement_fraction": 0.004,
             "retracement_price": 100_596.0,
             "current_price": 100_700.0,
             "position_price": 100_000.0,
@@ -4390,9 +4390,9 @@ def test_trailing_status_event_emits_structured_summary():
     assert event.data["selected_mode"] == "trailing"
     assert event.data["threshold_met"] is True
     assert event.data["retracement_met"] is False
-    assert event.data["threshold_pct"] == pytest.approx(0.01)
+    assert event.data["threshold_fraction"] == pytest.approx(0.01)
     assert event.data["threshold_price"] == pytest.approx(101_000.0)
-    assert event.data["retracement_pct"] == pytest.approx(0.004)
+    assert event.data["retracement_fraction"] == pytest.approx(0.004)
     assert event.data["retracement_price"] == pytest.approx(100_596.0)
     assert event.data["threshold_projection_retracement_price"] == pytest.approx(
         100_596.0
@@ -6660,8 +6660,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("long", "ema_span_1"): 20.0,
                 ("short", "ema_span_0"): 10.0,
                 ("short", "ema_span_1"): 20.0,
-                ("long", "entry_initial_ema_dist"): 0.01,
-                ("short", "entry_initial_ema_dist"): 0.01,
+                ("long", "entry_initial_ema_distance_fraction"): 0.01,
+                ("short", "entry_initial_ema_distance_fraction"): 0.01,
                 ("long", "entry_volatility_ema_span_1h"): 24.0,
                 ("short", "entry_volatility_ema_span_1h"): 24.0,
                 ("long", "unstuck_enabled"): True,
@@ -6677,34 +6677,34 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "unstuck_close_pct"): 0.5,
                 ("long", "unstuck_threshold"): 0.8,
                 ("short", "unstuck_threshold"): 0.8,
-                ("long", "entry_grid_double_down_factor"): 1.0,
-                ("short", "entry_grid_double_down_factor"): 1.0,
-                ("long", "entry_grid_spacing_pct"): 0.01,
-                ("short", "entry_grid_spacing_pct"): 0.01,
+                ("long", "entry_grid_reentry_qty_multiplier"): 1.0,
+                ("short", "entry_grid_reentry_qty_multiplier"): 1.0,
+                ("long", "entry_grid_threshold_base_fraction"): 0.01,
+                ("short", "entry_grid_threshold_base_fraction"): 0.01,
                 ("long", "entry_volatility_ema_span_1m"): 60.0,
                 ("short", "entry_volatility_ema_span_1m"): 60.0,
                 ("long", "entry_weight_volatility_1h"): 0.0,
                 ("short", "entry_weight_volatility_1h"): 0.0,
                 ("long", "entry_weight_volatility_1m"): 0.0,
                 ("short", "entry_weight_volatility_1m"): 0.0,
-                ("long", "entry_we_weight"): 0.0,
-                ("short", "entry_we_weight"): 0.0,
-                ("long", "entry_initial_qty_pct"): 0.1,
-                ("short", "entry_initial_qty_pct"): 0.1,
-                ("long", "entry_trailing_double_down_factor"): 1.0,
-                ("short", "entry_trailing_double_down_factor"): 1.0,
-                ("long", "entry_trailing_retracement_pct"): 0.01,
-                ("short", "entry_trailing_retracement_pct"): 0.01,
-                ("long", "entry_trailing_threshold_pct"): 0.01,
-                ("short", "entry_trailing_threshold_pct"): 0.01,
-                ("long", "close_grid_qty_pct"): 1.0,
-                ("short", "close_grid_qty_pct"): 1.0,
-                ("long", "close_trailing_qty_pct"): 1.0,
-                ("short", "close_trailing_qty_pct"): 1.0,
-                ("long", "close_trailing_retracement_pct"): 0.01,
-                ("short", "close_trailing_retracement_pct"): 0.01,
-                ("long", "close_trailing_threshold_pct"): 0.01,
-                ("short", "close_trailing_threshold_pct"): 0.01,
+                ("long", "entry_exposure_ratio_coefficient"): 0.0,
+                ("short", "entry_exposure_ratio_coefficient"): 0.0,
+                ("long", "entry_initial_qty_fraction"): 0.1,
+                ("short", "entry_initial_qty_fraction"): 0.1,
+                ("long", "entry_trailing_reentry_qty_multiplier"): 1.0,
+                ("short", "entry_trailing_reentry_qty_multiplier"): 1.0,
+                ("long", "entry_trailing_retracement_base_fraction"): 0.01,
+                ("short", "entry_trailing_retracement_base_fraction"): 0.01,
+                ("long", "entry_trailing_threshold_base_fraction"): 0.01,
+                ("short", "entry_trailing_threshold_base_fraction"): 0.01,
+                ("long", "close_grid_qty_fraction"): 1.0,
+                ("short", "close_grid_qty_fraction"): 1.0,
+                ("long", "close_trailing_qty_fraction"): 1.0,
+                ("short", "close_trailing_qty_fraction"): 1.0,
+                ("long", "close_trailing_retracement_base_fraction"): 0.01,
+                ("short", "close_trailing_retracement_base_fraction"): 0.01,
+                ("long", "close_trailing_threshold_base_fraction"): 0.01,
+                ("short", "close_trailing_threshold_base_fraction"): 0.01,
                 ("long", "close_weight_volatility_1h"): 0.0,
                 ("short", "close_weight_volatility_1h"): 0.0,
                 ("long", "close_weight_volatility_1m"): 0.0,
@@ -6850,7 +6850,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                             "ask": 100500.0,
                             "ema_lower": 100200.0,
                             "ema_upper": 100600.0,
-                            "entry_initial_ema_dist": 0.01,
+                            "entry_initial_ema_distance_fraction": 0.01,
                         }
                     )
                 else:
@@ -6863,7 +6863,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                             "ask": 2500.0,
                             "ema_lower": 2550.0,
                             "ema_upper": 2600.0,
-                            "entry_initial_ema_dist": 0.01,
+                            "entry_initial_ema_distance_fraction": 0.01,
                         }
                     )
             return payloads
@@ -7510,12 +7510,12 @@ def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
                 "volatility_ema_span_1m": 1323.0,
                 "volatility_ema_span_1h": 668.0,
                 "close": {
-                    "qty_pct": 0.23,
-                    "threshold_base_pct": -0.0143,
-                    "threshold_we_weight": -0.0278,
+                    "qty_fraction": 0.23,
+                    "threshold_base_fraction": -0.0143,
+                    "threshold_exposure_ratio_coefficient": -0.0278,
                     "threshold_volatility_1h_weight": 0.19,
                     "threshold_volatility_1m_weight": 7.93,
-                    "retracement_base_pct": 0.0001,
+                    "retracement_base_fraction": 0.0001,
                     "retracement_volatility_1h_weight": 12.11,
                     "retracement_volatility_1m_weight": 4.49,
                 },
@@ -7660,7 +7660,7 @@ def test_monitor_ema_families_are_independent(missing_family):
         "unstuck_ema_span_1": 400.0,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "entry_initial_ema_dist": 0.01,
+        "entry_initial_ema_distance_fraction": 0.01,
         "unstuck_ema_dist": 0.02,
     }
     bot = SimpleNamespace(bp=lambda side, key, symbol: values[key])
@@ -7764,7 +7764,7 @@ async def test_monitor_unilateralness_total_uses_rust_ranking(side, volume_weigh
                 "ask": 100.0,
                 "ema_lower": 100.0,
                 "ema_upper": 100.0,
-                "entry_initial_ema_dist": 0.0,
+                "entry_initial_ema_distance_fraction": 0.0,
             }
             for v in [900.0, 100.0, 600.0]
         ]

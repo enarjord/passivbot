@@ -233,9 +233,9 @@ struct TmCloseGridContext {
     int touch_nearest;
     float touch_min_qty;
     int touch_min_qty_relation;
-    float close_qty_pct;
-    float close_threshold_base;
-    float close_threshold_we;
+    float close_qty_fraction;
+    float close_threshold_base_fraction;
+    float close_threshold_exposure_ratio_coefficient;
     float close_threshold_v1h;
     float close_threshold_v1m;
     float volatility_1h;
@@ -288,8 +288,8 @@ inline bool next_tm_close_grid_group(
         float we = iterator.sim_psize * context.pprice * context.c_mult
             / fmax(context.generation_balance, 1.0e-9f);
         float wer = we / fmax(context.allowed_wel, 1.0e-12f);
-        float threshold = context.close_threshold_base
-            + wer * context.close_threshold_we
+        float threshold = context.close_threshold_base_fraction
+            + wer * context.close_threshold_exposure_ratio_coefficient
             + context.volatility_1h * context.close_threshold_v1h
             + context.volatility_1m * context.close_threshold_v1m;
         float target = fma(context.pprice,
@@ -310,8 +310,8 @@ inline bool next_tm_close_grid_group(
             );
         int minimum_relation = touch_controls
             ? context.touch_min_qty_relation : 0;
-        float close_pct = context.close_threshold_we == 0.0f
-            ? 1.0f : context.close_qty_pct;
+        float close_pct = context.close_threshold_exposure_ratio_coefficient == 0.0f
+            ? 1.0f : context.close_qty_fraction;
         float order_qty = calc_close_qty(
             iterator.sim_psize, context.pprice, context.generation_balance, context.allowed_wel,
             minimum_close, minimum_relation, close_pct,
@@ -402,9 +402,9 @@ inline bool recursive_grid_close_would_expand(
     int touch_nearest,
     float touch_min_qty,
     int touch_min_qty_relation,
-    float close_qty_pct,
-    float close_threshold_base,
-    float close_threshold_we,
+    float close_qty_fraction,
+    float close_threshold_base_fraction,
+    float close_threshold_exposure_ratio_coefficient,
     float close_threshold_v1h,
     float close_threshold_v1m,
     float volatility_1h,
@@ -423,8 +423,8 @@ inline bool recursive_grid_close_would_expand(
         float we = sim_psize * pprice * c_mult
             / fmax(generation_balance, 1.0e-9f);
         float wer = we / fmax(allowed_wel, 1.0e-12f);
-        float threshold = close_threshold_base
-            + wer * close_threshold_we
+        float threshold = close_threshold_base_fraction
+            + wer * close_threshold_exposure_ratio_coefficient
             + volatility_1h * close_threshold_v1h
             + volatility_1m * close_threshold_v1m;
         float target = fma(pprice, short_side ? -threshold : threshold, pprice);
@@ -442,8 +442,8 @@ inline bool recursive_grid_close_would_expand(
                 order_price, qty_step, min_qty, min_cost, c_mult
             );
         int minimum_relation = touch_controls ? touch_min_qty_relation : 0;
-        float close_pct = close_threshold_we == 0.0f
-            ? 1.0f : close_qty_pct;
+        float close_pct = close_threshold_exposure_ratio_coefficient == 0.0f
+            ? 1.0f : close_qty_fraction;
         float order_qty = round_step(
             calc_close_qty(
                 sim_psize, pprice, generation_balance, allowed_wel,
@@ -649,7 +649,7 @@ inline int finalize_tm_admission_closes(
             finalize_tm_close_grid_group(context, group);
             if (group.qty > 0.0f) orders[count++] = {group, group.qty, index};
         }
-        if (context.close_threshold_we > 0.0f) {
+        if (context.close_threshold_exposure_ratio_coefficient > 0.0f) {
             reverse_tm_ordinary_closes(orders, count);
         }
     } else if (source.ordinary.qty > 0.0f) {
@@ -944,23 +944,23 @@ struct TrailingMartingaleMulticoinSideConfig {
     GpuDecimal decimals[5];
     uint decimal_entry_modifiers, decimal_entry_retracement_modifiers;
     uint decimal_close_modifiers, decimal_close_retracement_modifiers;
-    float ddf;
-    float initial_ema_dist;
-    float initial_qty_pct;
-    float entry_threshold_base;
-    float entry_threshold_we;
+    float reentry_qty_multiplier;
+    float initial_ema_distance_fraction;
+    float initial_qty_fraction;
+    float entry_threshold_base_fraction;
+    float entry_threshold_exposure_ratio_coefficient;
     float entry_threshold_v1h;
     float entry_threshold_v1m;
-    float entry_retracement_base;
-    float entry_retracement_we;
+    float entry_retracement_base_fraction;
+    float entry_retracement_exposure_ratio_coefficient;
     float entry_retracement_v1h;
     float entry_retracement_v1m;
-    float close_qty_pct;
-    float close_threshold_base;
-    float close_threshold_we;
+    float close_qty_fraction;
+    float close_threshold_base_fraction;
+    float close_threshold_exposure_ratio_coefficient;
     float close_threshold_v1h;
     float close_threshold_v1m;
-    float close_retracement_base;
+    float close_retracement_base_fraction;
     float close_retracement_v1h;
     float close_retracement_v1m;
     AdaptiveTiming adaptive;
@@ -1032,12 +1032,12 @@ struct RecursiveEntryCandidate {
 // Generation-time indicators and policy stay fixed across one recursive ladder.
 // Resolve overrides and EMA gate ticks once rather than at every rung.
 struct RecursiveEntryContext {
-    float initial_qty_pct;
+    float initial_qty_fraction;
     float threshold_base;
     float threshold_we;
     float threshold_v1h;
     float threshold_v1m;
-    float ddf;
+    float reentry_qty_multiplier;
     int band_tick;
     bool coin_gate_reentry;
 };
@@ -1046,17 +1046,17 @@ inline RecursiveEntryContext recursive_entry_context(
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* coin_overrides, int coin, bool short_side, float price_step
 ) {
-    float initial_ema_dist = coin_override_or(
-        coin_overrides, coin, 5, config.initial_ema_dist
+    float initial_ema_distance_fraction = coin_override_or(
+        coin_overrides, coin, 5, config.initial_ema_distance_fraction
     );
-    float initial_qty_pct = coin_override_or(
-        coin_overrides, coin, 6, config.initial_qty_pct
+    float initial_qty_fraction = coin_override_or(
+        coin_overrides, coin, 6, config.initial_qty_fraction
     );
     float threshold_base = coin_override_or(
-        coin_overrides, coin, 7, config.entry_threshold_base
+        coin_overrides, coin, 7, config.entry_threshold_base_fraction
     );
     float threshold_we = coin_override_or(
-        coin_overrides, coin, 8, config.entry_threshold_we
+        coin_overrides, coin, 8, config.entry_threshold_exposure_ratio_coefficient
     );
     float threshold_v1h = coin_override_or(
         coin_overrides, coin, 9, config.entry_threshold_v1h
@@ -1064,16 +1064,16 @@ inline RecursiveEntryContext recursive_entry_context(
     float threshold_v1m = coin_override_or(
         coin_overrides, coin, 10, config.entry_threshold_v1m
     );
-    float ddf = coin_override_or(coin_overrides, coin, 4, config.ddf);
+    float reentry_qty_multiplier = coin_override_or(coin_overrides, coin, 4, config.reentry_qty_multiplier);
     float band = short_side
         ? fmax(side.ema0[coin], fmax(side.ema1[coin], side.ema2[coin]))
         : fmin(side.ema0[coin], fmin(side.ema1[coin], side.ema2[coin]));
     int band_tick = short_side
         ? int(ceil(
-            band * (1.0f + initial_ema_dist) / price_step - 1.0e-6f
+            band * (1.0f + initial_ema_distance_fraction) / price_step - 1.0e-6f
         ))
         : int(floor(
-            band * (1.0f - initial_ema_dist) / price_step + 1.0e-6f
+            band * (1.0f - initial_ema_distance_fraction) / price_step + 1.0e-6f
         ));
     bool coin_gate_reentry = coin_override_or(
         coin_overrides, coin, GATE_REENTRY_OVERRIDE_COL,
@@ -1081,12 +1081,12 @@ inline RecursiveEntryContext recursive_entry_context(
     ) > 0.5f;
 
     RecursiveEntryContext out;
-    out.initial_qty_pct = initial_qty_pct;
+    out.initial_qty_fraction = initial_qty_fraction;
     out.threshold_base = threshold_base;
     out.threshold_we = threshold_we;
     out.threshold_v1h = threshold_v1h;
     out.threshold_v1m = threshold_v1m;
-    out.ddf = ddf;
+    out.reentry_qty_multiplier = reentry_qty_multiplier;
     out.band_tick = band_tick;
     out.coin_gate_reentry = coin_gate_reentry;
     return out;
@@ -1126,12 +1126,12 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
 
     RecursiveEntryContext context = cached_context != nullptr ? *cached_context
         : recursive_entry_context(side, config, coin_overrides, coin, short_side, price_step);
-    float initial_qty_pct = context.initial_qty_pct;
+    float initial_qty_fraction = context.initial_qty_fraction;
     float threshold_base = context.threshold_base;
     float threshold_we = context.threshold_we;
     float threshold_v1h = context.threshold_v1h;
     float threshold_v1m = context.threshold_v1m;
-    float ddf = context.ddf;
+    float reentry_qty_multiplier = context.reentry_qty_multiplier;
     int band_tick = context.band_tick;
     bool coin_gate_reentry = context.coin_gate_reentry;
     // Rust's recursive ladder advances the simulated book after each rung.
@@ -1145,7 +1145,7 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         initial_price, qty_step, min_qty, min_cost, c_mult
     );
     float iq = fmax(min_iq, round_step(
-        generation_balance * allowed_wel * initial_qty_pct
+        generation_balance * allowed_wel * initial_qty_fraction
             / fmax(initial_price * c_mult, 1.0e-12f),
         qty_step
     ));
@@ -1188,9 +1188,9 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
     );
     float rq = fmax(iq_effective, fmax(min_rq, round_step(
         fmax(
-            rounded_gpu_reentry_product(sim_psize, ddf, qty_step,
+            rounded_gpu_reentry_product(sim_psize, reentry_qty_multiplier, qty_step,
                 tm_decimal_override(coin_overrides, coin, 4, 0, config.decimals[0])),
-            generation_balance * allowed_wel * initial_qty_pct
+            generation_balance * allowed_wel * initial_qty_fraction
                 / fmax(entry_price * c_mult, 1.0e-12f)
         ),
         qty_step
@@ -2063,9 +2063,9 @@ inline bool process_tm_multicoin_side_fills(
     bool opposite_has_position = false
 ) {
     const bool coin_hsl_mode = config.coin_hsl_mode;
-    const float close_qty_pct = config.close_qty_pct;
-    const float close_threshold_base = config.close_threshold_base;
-    const float close_threshold_we = config.close_threshold_we;
+    const float close_qty_fraction = config.close_qty_fraction;
+    const float close_threshold_base_fraction = config.close_threshold_base_fraction;
+    const float close_threshold_exposure_ratio_coefficient = config.close_threshold_exposure_ratio_coefficient;
     const float close_threshold_v1h = config.close_threshold_v1h;
     const float close_threshold_v1m = config.close_threshold_v1m;
     thread float* volatility_1m = side.volatility_1m;
@@ -2176,11 +2176,11 @@ inline bool process_tm_multicoin_side_fills(
                 touch_nearest_ticks[(k - 1) * C + c],
                 as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
                 touch_min_qty_relation[(k - 1) * C + c],
-                coin_override_or(coin_overrides, c, 15, close_qty_pct),
+                coin_override_or(coin_overrides, c, 15, close_qty_fraction),
                 coin_override_or(
-                    coin_overrides, c, 16, close_threshold_base
+                    coin_overrides, c, 16, close_threshold_base_fraction
                 ),
-                coin_override_or(coin_overrides, c, 17, close_threshold_we),
+                coin_override_or(coin_overrides, c, 17, close_threshold_exposure_ratio_coefficient),
                 coin_override_or(
                     coin_overrides, c, 18, close_threshold_v1h
                 ),
@@ -2218,7 +2218,7 @@ inline bool process_tm_multicoin_side_fills(
                 : fmin(round_step(close_qty[c], qty_step), psize[c]);
             float grid_gen_psize = close_grid_gen_psize[c];
             int gen_tick_offset = 0;
-            float coin_close_qty_pct = 0.0f;
+            float coin_close_qty_fraction = 0.0f;
             float coin_close_threshold_base = 0.0f;
             float coin_close_threshold_we = 0.0f;
             float coin_close_threshold_v1h = 0.0f;
@@ -2232,14 +2232,14 @@ inline bool process_tm_multicoin_side_fills(
 
             if (rebuild_grid && grid_gen_psize > 0.0f) {
                 gen_tick_offset = ((k - 1) * C + c) * 2;
-                coin_close_qty_pct = coin_override_or(
-                    coin_overrides, c, 15, close_qty_pct
+                coin_close_qty_fraction = coin_override_or(
+                    coin_overrides, c, 15, close_qty_fraction
                 );
                 coin_close_threshold_base = coin_override_or(
-                    coin_overrides, c, 16, close_threshold_base
+                    coin_overrides, c, 16, close_threshold_base_fraction
                 );
                 coin_close_threshold_we = coin_override_or(
-                    coin_overrides, c, 17, close_threshold_we
+                    coin_overrides, c, 17, close_threshold_exposure_ratio_coefficient
                 );
                 coin_close_threshold_v1h = coin_override_or(
                     coin_overrides, c, 18, close_threshold_v1h
@@ -2262,7 +2262,7 @@ inline bool process_tm_multicoin_side_fills(
                     touch_nearest_ticks[(k - 1) * C + c],
                     as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
                     touch_min_qty_relation[(k - 1) * C + c],
-                    coin_close_qty_pct,
+                    coin_close_qty_fraction,
                     coin_close_threshold_base,
                     coin_close_threshold_we,
                     coin_close_threshold_v1h,
@@ -2825,23 +2825,23 @@ load_trailing_martingale_multicoin_side_config(
     config.decimal_entry_retracement_modifiers = uint(params[po + 86]);
     config.decimal_close_modifiers = uint(params[po + 87]);
     config.decimal_close_retracement_modifiers = uint(params[po + 88]);
-    config.ddf = params[po + 4];
-    config.initial_ema_dist = params[po + 5];
-    config.initial_qty_pct = params[po + 6];
-    config.entry_threshold_base = params[po + 7];
-    config.entry_threshold_we = params[po + 8];
+    config.reentry_qty_multiplier = params[po + 4];
+    config.initial_ema_distance_fraction = params[po + 5];
+    config.initial_qty_fraction = params[po + 6];
+    config.entry_threshold_base_fraction = params[po + 7];
+    config.entry_threshold_exposure_ratio_coefficient = params[po + 8];
     config.entry_threshold_v1h = params[po + 9];
     config.entry_threshold_v1m = params[po + 10];
-    config.entry_retracement_base = params[po + 11];
-    config.entry_retracement_we = params[po + 12];
+    config.entry_retracement_base_fraction = params[po + 11];
+    config.entry_retracement_exposure_ratio_coefficient = params[po + 12];
     config.entry_retracement_v1h = params[po + 13];
     config.entry_retracement_v1m = params[po + 14];
-    config.close_qty_pct = params[po + 15];
-    config.close_threshold_base = params[po + 16];
-    config.close_threshold_we = params[po + 17];
+    config.close_qty_fraction = params[po + 15];
+    config.close_threshold_base_fraction = params[po + 16];
+    config.close_threshold_exposure_ratio_coefficient = params[po + 17];
     config.close_threshold_v1h = params[po + 18];
     config.close_threshold_v1m = params[po + 19];
-    config.close_retracement_base = params[po + 20];
+    config.close_retracement_base_fraction = params[po + 20];
     config.close_retracement_v1h = params[po + 21];
     config.close_retracement_v1m = params[po + 22];
     config.cooldown_min = params[po + 23];
@@ -3530,12 +3530,12 @@ inline void update_tm_multicoin_side_selection(
         );
         float allowed_wel = allowed_wallet_exposure_limit(
             base_limit, config.twel, allowance_pct);
-        float initial_qty_pct = coin_override_or(
-            coin_overrides, c, 6, config.initial_qty_pct
+        float initial_qty_fraction = coin_override_or(
+            coin_overrides, c, 6, config.initial_qty_fraction
         );
         bool min_cost_eligible = passes_multicoin_min_effective_cost(
             filter_by_min_effective_cost, balance,
-            allowed_wel, initial_qty_pct, bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
+            allowed_wel, initial_qty_fraction, bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
         );
         bool base_eligible =
 #ifdef PASSIVBOT_ORGANILLO
@@ -3601,12 +3601,12 @@ inline void update_tm_multicoin_side_selection(
         float close = bars[bar_offset + 2];
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
-        float coin_initial_ema_dist = coin_override_or(
-            coin_overrides, c, 5, config.initial_ema_dist
+        float coin_initial_ema_distance_fraction = coin_override_or(
+            coin_overrides, c, 5, config.initial_ema_distance_fraction
         );
         float threshold = short_side
-            ? upper * (1.0f + coin_initial_ema_dist)
-            : lower * (1.0f - coin_initial_ema_dist);
+            ? upper * (1.0f + coin_initial_ema_distance_fraction)
+            : lower * (1.0f - coin_initial_ema_distance_fraction);
         float readiness = threshold > 0.0f
             ? (short_side
                 ? 1.0f - close / threshold
@@ -3630,12 +3630,12 @@ inline void update_tm_multicoin_side_selection(
         float close = bars[bar_offset + 2];
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
-        float coin_initial_ema_dist = coin_override_or(
-            coin_overrides, c, 5, config.initial_ema_dist
+        float coin_initial_ema_distance_fraction = coin_override_or(
+            coin_overrides, c, 5, config.initial_ema_distance_fraction
         );
         float threshold = short_side
-            ? upper * (1.0f + coin_initial_ema_dist)
-            : lower * (1.0f - coin_initial_ema_dist);
+            ? upper * (1.0f + coin_initial_ema_distance_fraction)
+            : lower * (1.0f - coin_initial_ema_distance_fraction);
         float readiness = threshold > 0.0f
             ? (short_side
                 ? 1.0f - close / threshold
@@ -3916,7 +3916,7 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
                 filter_by_min_effective_cost_long, balance,
                 long_allowed_wel,
                 coin_override_or(
-                    long_coin_overrides, c, 6, long_config.initial_qty_pct
+                    long_coin_overrides, c, 6, long_config.initial_qty_fraction
                 ),
                 bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
@@ -3925,7 +3925,7 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
                 filter_by_min_effective_cost_short, balance,
                 short_allowed_wel,
                 coin_override_or(
-                    short_coin_overrides, c, 6, short_config.initial_qty_pct
+                    short_coin_overrides, c, 6, short_config.initial_qty_fraction
                 ),
                 bars[(k * coin_count + c) * 4 + 2], coin_settings ORGANILLO_PASS, coin_offset
             );
@@ -3970,10 +3970,10 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
             short_side.ema0[c], fmax(short_side.ema1[c], short_side.ema2[c])
         );
         const float long_dist = coin_override_or(
-            long_coin_overrides, c, 5, long_config.initial_ema_dist
+            long_coin_overrides, c, 5, long_config.initial_ema_distance_fraction
         );
         const float short_dist = coin_override_or(
-            short_coin_overrides, c, 5, short_config.initial_ema_dist
+            short_coin_overrides, c, 5, short_config.initial_ema_distance_fraction
         );
         const float dist_long = long_lower * (1.0f - long_dist)
             / close - 1.0f;
@@ -4014,23 +4014,23 @@ inline void generate_tm_multicoin_side_orders(
     ulong one_way_initial_blocked_mask
 ) {
     const int C = coin_count;
-    const float ddf = config.ddf;
-    const float initial_ema_dist = config.initial_ema_dist;
-    const float initial_qty_pct = config.initial_qty_pct;
-    const float entry_threshold_base = config.entry_threshold_base;
-    const float entry_threshold_we = config.entry_threshold_we;
+    const float reentry_qty_multiplier = config.reentry_qty_multiplier;
+    const float initial_ema_distance_fraction = config.initial_ema_distance_fraction;
+    const float initial_qty_fraction = config.initial_qty_fraction;
+    const float entry_threshold_base_fraction = config.entry_threshold_base_fraction;
+    const float entry_threshold_exposure_ratio_coefficient = config.entry_threshold_exposure_ratio_coefficient;
     const float entry_threshold_v1h = config.entry_threshold_v1h;
     const float entry_threshold_v1m = config.entry_threshold_v1m;
-    const float entry_retracement_base = config.entry_retracement_base;
-    const float entry_retracement_we = config.entry_retracement_we;
+    const float entry_retracement_base_fraction = config.entry_retracement_base_fraction;
+    const float entry_retracement_exposure_ratio_coefficient = config.entry_retracement_exposure_ratio_coefficient;
     const float entry_retracement_v1h = config.entry_retracement_v1h;
     const float entry_retracement_v1m = config.entry_retracement_v1m;
-    const float close_qty_pct = config.close_qty_pct;
-    const float close_threshold_base = config.close_threshold_base;
-    const float close_threshold_we = config.close_threshold_we;
+    const float close_qty_fraction = config.close_qty_fraction;
+    const float close_threshold_base_fraction = config.close_threshold_base_fraction;
+    const float close_threshold_exposure_ratio_coefficient = config.close_threshold_exposure_ratio_coefficient;
     const float close_threshold_v1h = config.close_threshold_v1h;
     const float close_threshold_v1m = config.close_threshold_v1m;
-    const float close_retracement_base = config.close_retracement_base;
+    const float close_retracement_base_fraction = config.close_retracement_base_fraction;
     const float close_retracement_v1h = config.close_retracement_v1h;
     const float close_retracement_v1m = config.close_retracement_v1m;
     const float cooldown_min = config.cooldown_min;
@@ -4470,19 +4470,19 @@ inline void generate_tm_multicoin_side_orders(
         float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
         float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
         float coin_ddf = coin_override_or(
-            coin_overrides, c, 4, ddf
+            coin_overrides, c, 4, reentry_qty_multiplier
         );
-        float coin_initial_ema_dist = coin_override_or(
-            coin_overrides, c, 5, initial_ema_dist
+        float coin_initial_ema_distance_fraction = coin_override_or(
+            coin_overrides, c, 5, initial_ema_distance_fraction
         );
-        float coin_initial_qty_pct = coin_override_or(
-            coin_overrides, c, 6, initial_qty_pct
+        float coin_initial_qty_fraction = coin_override_or(
+            coin_overrides, c, 6, initial_qty_fraction
         );
         float coin_entry_threshold_base = coin_override_or(
-            coin_overrides, c, 7, entry_threshold_base
+            coin_overrides, c, 7, entry_threshold_base_fraction
         );
         float coin_entry_threshold_we = coin_override_or(
-            coin_overrides, c, 8, entry_threshold_we
+            coin_overrides, c, 8, entry_threshold_exposure_ratio_coefficient
         );
         float coin_entry_threshold_v1h = coin_override_or(
             coin_overrides, c, 9, entry_threshold_v1h
@@ -4491,10 +4491,10 @@ inline void generate_tm_multicoin_side_orders(
             coin_overrides, c, 10, entry_threshold_v1m
         );
         float coin_entry_retracement_base = coin_override_or(
-            coin_overrides, c, 11, entry_retracement_base
+            coin_overrides, c, 11, entry_retracement_base_fraction
         );
         float coin_entry_retracement_we = coin_override_or(
-            coin_overrides, c, 12, entry_retracement_we
+            coin_overrides, c, 12, entry_retracement_exposure_ratio_coefficient
         );
         float coin_entry_retracement_v1h = coin_override_or(
             coin_overrides, c, 13, entry_retracement_v1h
@@ -4502,14 +4502,14 @@ inline void generate_tm_multicoin_side_orders(
         float coin_entry_retracement_v1m = coin_override_or(
             coin_overrides, c, 14, entry_retracement_v1m
         );
-        float coin_close_qty_pct = coin_override_or(
-            coin_overrides, c, 15, close_qty_pct
+        float coin_close_qty_fraction = coin_override_or(
+            coin_overrides, c, 15, close_qty_fraction
         );
         float coin_close_threshold_base = coin_override_or(
-            coin_overrides, c, 16, close_threshold_base
+            coin_overrides, c, 16, close_threshold_base_fraction
         );
         float coin_close_threshold_we = coin_override_or(
-            coin_overrides, c, 17, close_threshold_we
+            coin_overrides, c, 17, close_threshold_exposure_ratio_coefficient
         );
         float coin_close_threshold_v1h = coin_override_or(
             coin_overrides, c, 18, close_threshold_v1h
@@ -4518,7 +4518,7 @@ inline void generate_tm_multicoin_side_orders(
             coin_overrides, c, 19, close_threshold_v1m
         );
         float coin_close_retracement_base = coin_override_or(
-            coin_overrides, c, 20, close_retracement_base
+            coin_overrides, c, 20, close_retracement_base_fraction
         );
         float coin_close_retracement_v1h = coin_override_or(
             coin_overrides, c, 21, close_retracement_v1h
@@ -4539,9 +4539,9 @@ inline void generate_tm_multicoin_side_orders(
         int touch_up = touch_ticks[tick_offset + 1];
         int entry_touch = short_side ? touch_up : touch_down;
         int band_tick = short_side
-            ? int(ceil(upper * (1.0f + coin_initial_ema_dist)
+            ? int(ceil(upper * (1.0f + coin_initial_ema_distance_fraction)
                 / price_step - 1.0e-6f))
-            : int(floor(lower * (1.0f - coin_initial_ema_dist)
+            : int(floor(lower * (1.0f - coin_initial_ema_distance_fraction)
                 / price_step + 1.0e-6f));
         bool coin_gate_initial = coin_override_or(
             coin_overrides, c, GATE_INITIAL_OVERRIDE_COL,
@@ -4561,7 +4561,7 @@ inline void generate_tm_multicoin_side_orders(
             ? as_type<float>(touch_min_qty_bits[k * C + c])
             : min_entry_qty(initial_price, qty_step, min_qty, min_cost, c_mult);
         float iq = fmax(min_iq, round_step(
-            balance * allowed_coin_wel * coin_initial_qty_pct
+            balance * allowed_coin_wel * coin_initial_qty_fraction
                 / fmax(initial_sizing_price * c_mult, 1.0e-12f),
             qty_step
         ));
@@ -4653,7 +4653,7 @@ inline void generate_tm_multicoin_side_orders(
             fmax(
                 rounded_gpu_reentry_product(psize[c], coin_ddf, qty_step,
                     tm_decimal_override(coin_overrides, c, 4, 0, config.decimals[0])),
-                balance * allowed_coin_wel * coin_initial_qty_pct
+                balance * allowed_coin_wel * coin_initial_qty_fraction
                     / fmax(reentry_sizing_price * c_mult, 1.0e-12f)
             ),
             qty_step
@@ -4686,7 +4686,7 @@ inline void generate_tm_multicoin_side_orders(
                 && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul);
         if (!entries_enabled || !selected[c] || !initial_entry_allowed
             || cooldown || balance <= 0.0f
-            || coin_initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
+            || coin_initial_qty_fraction <= 0.0f || candidate_entry_tick <= 1) {
             quantity = 0.0f;
         }
         // finalize_next_entry crops and enforces the minimum again at the
@@ -4892,9 +4892,9 @@ inline void generate_tm_multicoin_side_orders(
             );
         int minimum_close_relation = close_touch_controls
             ? touch_min_qty_relation[k * C + c] : 0;
-        float close_pct = trailing_close ? coin_close_qty_pct
+        float close_pct = trailing_close ? coin_close_qty_fraction
             : (coin_close_threshold_we == 0.0f
-                ? 1.0f : coin_close_qty_pct);
+                ? 1.0f : coin_close_qty_fraction);
         float clip = calc_close_qty(
             psize[c], pprice[c], balance, allowed_coin_wel,
             minimum_close, minimum_close_relation, close_pct,
@@ -4944,7 +4944,7 @@ inline void generate_tm_multicoin_side_orders(
                 touch_down, touch_up, touch_nearest_ticks[k * C + c],
                 as_type<float>(touch_min_qty_bits[k * C + c]),
                 touch_min_qty_relation[k * C + c],
-                coin_close_qty_pct, coin_close_threshold_base, coin_close_threshold_we,
+                coin_close_qty_fraction, coin_close_threshold_base, coin_close_threshold_we,
                 coin_close_threshold_v1h, coin_close_threshold_v1m,
                 volatility_1h[c], volatility_1m[c],
                 qty_step, price_step, min_qty, min_cost, c_mult,
@@ -4995,7 +4995,7 @@ inline void generate_tm_multicoin_side_orders(
                     touch_nearest_ticks[k * C + c],
                     as_type<float>(touch_min_qty_bits[k * C + c]),
                     touch_min_qty_relation[k * C + c],
-                    coin_close_qty_pct,
+                    coin_close_qty_fraction,
                     coin_close_threshold_base,
                     coin_close_threshold_we,
                     coin_close_threshold_v1h,
@@ -5314,14 +5314,14 @@ inline float tm_multicoin_entry_initial_balance_pct(
 ) {
     float base_limit = effective_n_positions > 0
         ? config.twel / float(effective_n_positions) : 0.0f;
-    float initial_qty_pct = coin_override_or(
-        coin_overrides, 0, 6, config.initial_qty_pct
+    float initial_qty_fraction = coin_override_or(
+        coin_overrides, 0, 6, config.initial_qty_fraction
     );
     float allowance_pct = coin_override_or(
         coin_overrides, 0, 25, config.allowance_pct
     );
     return allowed_wallet_exposure_limit(
-        base_limit, config.twel, allowance_pct) * initial_qty_pct;
+        base_limit, config.twel, allowance_pct) * initial_qty_fraction;
 }
 
 // A temporal dispatch boundary preserves the entire candidate replay. Output
@@ -6846,7 +6846,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const int po = int(b) * PARAM_COLS;
     const TrailingMartingaleMulticoinSideConfig config =
         load_trailing_martingale_multicoin_side_config(params, po);
-    const float initial_qty_pct = config.initial_qty_pct;
+    const float initial_qty_fraction = config.initial_qty_fraction;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
@@ -7651,14 +7651,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         );
     float entry_base_limit = entry_effective_n_positions > 0
         ? twel / float(entry_effective_n_positions) : 0.0f;
-    float entry_initial_qty_pct = coin_override_or(
-        coin_overrides, 0, 6, initial_qty_pct
+    float entry_initial_qty_fraction = coin_override_or(
+        coin_overrides, 0, 6, initial_qty_fraction
     );
     float entry_allowance_pct = coin_override_or(
         coin_overrides, 0, 25, allowance_pct
     );
     scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
-        entry_base_limit, twel, entry_allowance_pct) * entry_initial_qty_pct;
+        entry_base_limit, twel, entry_allowance_pct) * entry_initial_qty_fraction;
     scalars[scalar_offset + 22] = total_wallet_exposure_max;
     scalars[scalar_offset + 23] = total_wallet_exposure_mean;
     scalars[scalar_offset + 24] = fill_count;

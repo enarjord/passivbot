@@ -1,11 +1,11 @@
 fn activation_input(kind: StrategyKind, side: PositionSide, held: bool) -> OrchestratorInput {
     let mut symbol = make_basic_symbol(0);
     for params in [&mut symbol.long.bot_params, &mut symbol.short.bot_params] {
-        params.entry_initial_qty_pct = 0.1;
-        params.entry_grid_double_down_factor = 1.2;
-        params.entry_grid_spacing_pct = 0.01;
-        params.close_grid_qty_pct = 0.5;
-        params.close_trailing_threshold_pct = 0.01;
+        params.entry_initial_qty_fraction = 0.1;
+        params.entry_grid_reentry_qty_multiplier = 1.2;
+        params.entry_grid_threshold_base_fraction = 0.01;
+        params.close_grid_qty_fraction = 0.5;
+        params.close_trailing_threshold_base_fraction = 0.01;
     }
     for input in [&mut symbol.long, &mut symbol.short] {
         input.mode = Some(TradingMode::Normal);
@@ -17,8 +17,8 @@ fn activation_input(kind: StrategyKind, side: PositionSide, held: bool) -> Orche
                 StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
                     ema_span_0: 10.0,
                     ema_span_1: 20.0,
-                    base_qty_pct: 0.1,
-                    offset_psize_weight: 0.0,
+                    base_qty_fraction: 0.1,
+                    inventory_offset_exposure_coefficient: 0.0,
                     ..Default::default()
                 })
             }

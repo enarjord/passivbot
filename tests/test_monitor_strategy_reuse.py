@@ -32,7 +32,7 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
         from config.strategy_paths import lower_runtime_strategy_side
 
         result = lower_runtime_strategy_side("trailing_martingale", defaults[side])
-        result['entry']['initial_qty_pct'] = overrides.get((side, symbol), .011)
+        result['entry']['initial_qty_fraction'] = overrides.get((side, symbol), .011)
         return result
     def bp(side, key, symbol=None):
         return 'bounded' if key == 'risk_we_excess_allowance_mode' else .2
@@ -58,7 +58,7 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     calls.clear()
     overrides['long', symbols[0]] = .043
     fresh = build()
-    assert fresh[symbols[0]]['long']['entry']['entry_initial_qty_pct'] == .043
+    assert fresh[symbols[0]]['long']['entry']['entry_initial_qty_fraction'] == .043
     assert fresh[symbols[1]] == cached[symbols[1]]
     assert calls == Counter({(side, s): 1 for s in symbols for side in ('long', 'short')})
 
@@ -69,13 +69,13 @@ def test_failed_strategy_resolution_is_not_cached():
         calls.append(1)
         if len(calls) == 1:
             raise ValueError('invalid strategy')
-        return {'entry': {'initial_qty_pct': .02}}
+        return {'entry': {'initial_qty_fraction': .02}}
     bot = SimpleNamespace(_strategy_params_to_rust_dict=getter)
     cache = {}
     with pytest.raises(ValueError):
-        monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_pct', 'A', strategy_cache=cache)
+        monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_fraction', 'A', strategy_cache=cache)
     assert cache == {}
-    assert monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_pct', 'A', strategy_cache=cache) == .02
+    assert monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_fraction', 'A', strategy_cache=cache) == .02
 
 
 def test_market_snapshot_reuses_h1_resolution_and_observes_changes():

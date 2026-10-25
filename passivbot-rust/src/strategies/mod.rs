@@ -53,16 +53,16 @@ pub struct TrailingMartingaleParams {
 pub struct TrailingMartingaleEntryParams {
     pub ema_span_0: f64,
     pub ema_span_1: f64,
-    pub double_down_factor: f64,
+    pub reentry_qty_multiplier: f64,
     pub ema_gate_mode: EmaGateMode,
-    pub initial_ema_dist: f64,
-    pub initial_qty_pct: f64,
-    pub threshold_base_pct: f64,
-    pub threshold_we_weight: f64,
+    pub initial_ema_distance_fraction: f64,
+    pub initial_qty_fraction: f64,
+    pub threshold_base_fraction: f64,
+    pub threshold_exposure_ratio_coefficient: f64,
     pub threshold_volatility_1h_weight: f64,
     pub threshold_volatility_1m_weight: f64,
-    pub retracement_base_pct: f64,
-    pub retracement_we_weight: f64,
+    pub retracement_base_fraction: f64,
+    pub retracement_exposure_ratio_coefficient: f64,
     pub retracement_volatility_1h_weight: f64,
     pub retracement_volatility_1m_weight: f64,
 }
@@ -70,12 +70,12 @@ pub struct TrailingMartingaleEntryParams {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleCloseParams {
-    pub qty_pct: f64,
-    pub threshold_base_pct: f64,
-    pub threshold_we_weight: f64,
+    pub qty_fraction: f64,
+    pub threshold_base_fraction: f64,
+    pub threshold_exposure_ratio_coefficient: f64,
     pub threshold_volatility_1h_weight: f64,
     pub threshold_volatility_1m_weight: f64,
-    pub retracement_base_pct: f64,
+    pub retracement_base_fraction: f64,
     pub retracement_volatility_1h_weight: f64,
     pub retracement_volatility_1m_weight: f64,
 }
@@ -98,31 +98,31 @@ impl TrailingMartingaleParams {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct EmaAnchorParams {
-    pub base_qty_pct: f64,
+    pub base_qty_fraction: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
-    pub entry_double_down_factor: f64,
-    pub offset: f64,
+    pub entry_qty_exposure_coefficient: f64,
+    pub offset_fraction: f64,
     pub offset_volatility_ema_span_1m: f64,
     pub offset_volatility_1m_weight: f64,
     pub offset_volatility_ema_span_1h: f64,
     pub offset_volatility_1h_weight: f64,
-    pub offset_psize_weight: f64,
+    pub inventory_offset_exposure_coefficient: f64,
 }
 
 impl Default for EmaAnchorParams {
     fn default() -> Self {
         Self {
-            base_qty_pct: 0.01,
+            base_qty_fraction: 0.01,
             ema_span_0: 200.0,
             ema_span_1: 800.0,
-            entry_double_down_factor: 0.0,
-            offset: 0.002,
+            entry_qty_exposure_coefficient: 0.0,
+            offset_fraction: 0.002,
             offset_volatility_ema_span_1m: 60.0,
             offset_volatility_1m_weight: 0.0,
             offset_volatility_ema_span_1h: 24.0,
             offset_volatility_1h_weight: 0.0,
-            offset_psize_weight: 0.1,
+            inventory_offset_exposure_coefficient: 0.1,
         }
     }
 }
@@ -225,23 +225,23 @@ pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Optio
     }
 }
 
-pub fn strategy_initial_entry_offset(params: &StrategyParams) -> f64 {
+pub fn strategy_initial_entry_offset_fraction(params: &StrategyParams) -> f64 {
     match params {
-        StrategyParams::TrailingMartingale(params) => params.entry.initial_ema_dist,
-        StrategyParams::EmaAnchor(params) => params.offset,
+        StrategyParams::TrailingMartingale(params) => params.entry.initial_ema_distance_fraction,
+        StrategyParams::EmaAnchor(params) => params.offset_fraction,
     }
 }
 
-pub fn strategy_initial_qty_pct(params: &StrategyParams) -> f64 {
+pub fn strategy_initial_qty_fraction(params: &StrategyParams) -> f64 {
     match params {
-        StrategyParams::TrailingMartingale(params) => params.entry.initial_qty_pct,
-        StrategyParams::EmaAnchor(params) => params.base_qty_pct,
+        StrategyParams::TrailingMartingale(params) => params.entry.initial_qty_fraction,
+        StrategyParams::EmaAnchor(params) => params.base_qty_fraction,
     }
 }
 
 pub fn strategy_entry_retracement_enabled(params: &StrategyParams) -> bool {
     match params {
-        StrategyParams::TrailingMartingale(params) => params.entry.retracement_base_pct > 0.0,
+        StrategyParams::TrailingMartingale(params) => params.entry.retracement_base_fraction > 0.0,
         StrategyParams::EmaAnchor(_) => false,
     }
 }
@@ -315,8 +315,8 @@ pub fn strategy_needs_trailing_for_request(
 ) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {
-            (wants_entries && params.entry.retracement_base_pct > 0.0)
-                || (wants_closes && params.close.retracement_base_pct > 0.0)
+            (wants_entries && params.entry.retracement_base_fraction > 0.0)
+                || (wants_closes && params.close.retracement_base_fraction > 0.0)
         }
         StrategyParams::EmaAnchor(_) => false,
     }
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn trailing_input_needs_are_request_scoped_for_supported_strategies() {
         let mut martingale = TrailingMartingaleParams::default();
-        martingale.entry.retracement_base_pct = 0.01;
+        martingale.entry.retracement_base_fraction = 0.01;
         let martingale = StrategyParams::TrailingMartingale(martingale);
         assert!(strategy_needs_trailing_for_request(
             &martingale,

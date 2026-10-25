@@ -104,10 +104,10 @@ def _raw_rust_input(
     short_last_increase_fill_timestamp_ms=None,
     long_entry_cooldown_minutes=0.0,
     short_entry_cooldown_minutes=0.0,
-    long_entry_retracement_base_pct=0.0,
-    short_entry_retracement_base_pct=0.0,
-    long_close_retracement_base_pct=0.0,
-    short_close_retracement_base_pct=0.0,
+    long_entry_retracement_base_fraction=0.0,
+    short_entry_retracement_base_fraction=0.0,
+    long_close_retracement_base_fraction=0.0,
+    short_close_retracement_base_fraction=0.0,
     long_hsl_enabled=False,
     short_hsl_enabled=False,
     long_hsl_panic_close_order_type="market",
@@ -173,10 +173,10 @@ def _raw_rust_input(
                     "position": {"size": long_pos_size, "price": 100.0},
                     "strategy_params": {
                         "entry": {
-                            "retracement_base_pct": long_entry_retracement_base_pct
+                            "retracement_base_fraction": long_entry_retracement_base_fraction
                         },
                         "close": {
-                            "retracement_base_pct": long_close_retracement_base_pct
+                            "retracement_base_fraction": long_close_retracement_base_fraction
                         }
                     },
                     "bot_params": {
@@ -200,10 +200,10 @@ def _raw_rust_input(
                     "position": {"size": short_pos_size, "price": 100.0},
                     "strategy_params": {
                         "entry": {
-                            "retracement_base_pct": short_entry_retracement_base_pct
+                            "retracement_base_fraction": short_entry_retracement_base_fraction
                         },
                         "close": {
-                            "retracement_base_pct": short_close_retracement_base_pct
+                            "retracement_base_fraction": short_close_retracement_base_fraction
                         }
                     },
                     "bot_params": {
@@ -312,7 +312,7 @@ def _raw_min_effective_cost_block(**overrides) -> dict:
         "pside": "long",
         "balance": 1_000.0,
         "effective_limit": 10.0,
-        "entry_initial_qty_pct": 0.01,
+        "entry_initial_qty_fraction": 0.01,
         "projected_initial_cost": 5.0,
         "effective_min_cost": 10.0,
     }
@@ -1682,7 +1682,7 @@ def test_raw_rust_output_rejects_impossible_flat_entry_batch(order_type):
             {0: SYMBOL},
             _raw_rust_input(
                 long_pos_size=0.0,
-                long_entry_retracement_base_pct=(
+                long_entry_retracement_base_fraction=(
                     0.01 if order_type.startswith("entry_trailing_") else 0.0
                 ),
             ),
@@ -2307,8 +2307,8 @@ def test_raw_rust_output_rejects_multiple_entries_with_positive_retracement(psid
                 short_mode=None if pside == "short" else "manual",
                 long_pos_size=1.0 if pside == "long" else 0.0,
                 short_pos_size=-1.0 if pside == "short" else 0.0,
-                long_entry_retracement_base_pct=0.01 if pside == "long" else 0.0,
-                short_entry_retracement_base_pct=0.01 if pside == "short" else 0.0,
+                long_entry_retracement_base_fraction=0.01 if pside == "long" else 0.0,
+                short_entry_retracement_base_fraction=0.01 if pside == "short" else 0.0,
                 qty_step=0.1,
                 min_qty=0.1,
                 min_cost=0.0,
@@ -2338,8 +2338,8 @@ def test_raw_rust_output_rejects_multiple_trailing_martingale_closes(pside):
                 short_mode=None if pside == "short" else "manual",
                 long_pos_size=1.0 if pside == "long" else 0.0,
                 short_pos_size=-1.0 if pside == "short" else 0.0,
-                long_close_retracement_base_pct=0.01 if pside == "long" else 0.0,
-                short_close_retracement_base_pct=0.01 if pside == "short" else 0.0,
+                long_close_retracement_base_fraction=0.01 if pside == "long" else 0.0,
+                short_close_retracement_base_fraction=0.01 if pside == "short" else 0.0,
                 qty_step=0.1,
                 min_qty=0.1,
                 min_cost=0.0,
@@ -2348,7 +2348,7 @@ def test_raw_rust_output_rejects_multiple_trailing_martingale_closes(pside):
 
 
 @pytest.mark.parametrize(
-    ("pside", "retracement_base_pct", "order_family"),
+    ("pside", "retracement_base_fraction", "order_family"),
     [
         ("long", 0.0, "entry_trailing_normal"),
         ("short", 0.0, "entry_trailing_cropped"),
@@ -2357,7 +2357,7 @@ def test_raw_rust_output_rejects_multiple_trailing_martingale_closes(pside):
     ],
 )
 def test_raw_rust_output_rejects_martingale_entry_family_for_retracement_mode(
-    pside, retracement_base_pct, order_family
+    pside, retracement_base_fraction, order_family
 ):
     qty = 0.1 if pside == "long" else -0.1
     order = _raw_rust_order(
@@ -2375,11 +2375,11 @@ def test_raw_rust_output_rejects_martingale_entry_family_for_retracement_mode(
                 short_mode=None if pside == "short" else "manual",
                 long_pos_size=1.0 if pside == "long" else 0.0,
                 short_pos_size=-1.0 if pside == "short" else 0.0,
-                long_entry_retracement_base_pct=(
-                    retracement_base_pct if pside == "long" else 0.0
+                long_entry_retracement_base_fraction=(
+                    retracement_base_fraction if pside == "long" else 0.0
                 ),
-                short_entry_retracement_base_pct=(
-                    retracement_base_pct if pside == "short" else 0.0
+                short_entry_retracement_base_fraction=(
+                    retracement_base_fraction if pside == "short" else 0.0
                 ),
                 qty_step=0.1,
                 min_qty=0.1,
@@ -2389,7 +2389,7 @@ def test_raw_rust_output_rejects_martingale_entry_family_for_retracement_mode(
 
 
 @pytest.mark.parametrize(
-    ("pside", "retracement_base_pct", "order_family"),
+    ("pside", "retracement_base_fraction", "order_family"),
     [
         ("long", 0.0, "close_trailing"),
         ("short", 0.0, "close_trailing"),
@@ -2398,7 +2398,7 @@ def test_raw_rust_output_rejects_martingale_entry_family_for_retracement_mode(
     ],
 )
 def test_raw_rust_output_rejects_martingale_close_family_for_retracement_mode(
-    pside, retracement_base_pct, order_family
+    pside, retracement_base_fraction, order_family
 ):
     qty = -0.1 if pside == "long" else 0.1
     order = _raw_rust_order(
@@ -2416,11 +2416,11 @@ def test_raw_rust_output_rejects_martingale_close_family_for_retracement_mode(
                 short_mode=None if pside == "short" else "manual",
                 long_pos_size=1.0 if pside == "long" else 0.0,
                 short_pos_size=-1.0 if pside == "short" else 0.0,
-                long_close_retracement_base_pct=(
-                    retracement_base_pct if pside == "long" else 0.0
+                long_close_retracement_base_fraction=(
+                    retracement_base_fraction if pside == "long" else 0.0
                 ),
-                short_close_retracement_base_pct=(
-                    retracement_base_pct if pside == "short" else 0.0
+                short_close_retracement_base_fraction=(
+                    retracement_base_fraction if pside == "short" else 0.0
                 ),
                 qty_step=0.1,
                 min_qty=0.1,

@@ -1821,9 +1821,9 @@ def _console_min_effective_cost_summary(event: LiveEvent) -> list[str]:
     effective_limit = _data_number(data, "effective_limit")
     if effective_limit is not None:
         parts.append(f"effective_limit={effective_limit * 100.0:.4f}%")
-    entry_qty_pct = _data_number(data, "entry_initial_qty_pct")
-    if entry_qty_pct is not None:
-        parts.append(f"initial_qty={entry_qty_pct * 100.0:.4f}%")
+    entry_qty_fraction = _data_number(data, "entry_initial_qty_fraction")
+    if entry_qty_fraction is not None:
+        parts.append(f"initial_qty={entry_qty_fraction * 100.0:.4f}%")
     return parts
 
 
@@ -2626,23 +2626,23 @@ def _format_console_trailing_status(event: LiveEvent) -> str | None:
     if gate_states:
         parts.append(f"gates={'/'.join(gate_states)}")
 
-    threshold_pct = _data_number(data, "threshold_pct")
+    threshold_fraction = _data_number(data, "threshold_fraction")
     threshold_price = _data_number(data, "threshold_price")
-    if threshold_pct is not None and threshold_price:
-        parts.append(f"threshold={threshold_pct * 100.0:.4f}%@{threshold_price:g}")
-    elif threshold_pct is not None:
-        parts.append(f"threshold={threshold_pct * 100.0:.4f}%")
+    if threshold_fraction is not None and threshold_price:
+        parts.append(f"threshold={threshold_fraction * 100.0:.4f}%@{threshold_price:g}")
+    elif threshold_fraction is not None:
+        parts.append(f"threshold={threshold_fraction * 100.0:.4f}%")
     elif threshold_price:
         parts.append(f"threshold={threshold_price:g}")
 
-    retracement_pct = _data_number(data, "retracement_pct")
+    retracement_fraction = _data_number(data, "retracement_fraction")
     retracement_price = _data_number(data, "retracement_price")
-    if retracement_pct is not None and retracement_price:
+    if retracement_fraction is not None and retracement_price:
         parts.append(
-            f"retracement={retracement_pct * 100.0:.4f}%@{retracement_price:g}"
+            f"retracement={retracement_fraction * 100.0:.4f}%@{retracement_price:g}"
         )
-    elif retracement_pct is not None:
-        parts.append(f"retracement={retracement_pct * 100.0:.4f}%")
+    elif retracement_fraction is not None:
+        parts.append(f"retracement={retracement_fraction * 100.0:.4f}%")
     elif retracement_price:
         parts.append(f"retracement={retracement_price:g}")
 

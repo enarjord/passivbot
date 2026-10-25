@@ -41,7 +41,7 @@ def _min_effective_cost_out(count=1):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -359,7 +359,7 @@ def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -396,7 +396,7 @@ def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -444,7 +444,7 @@ def test_log_min_effective_cost_blocks_emits_structured_event(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -474,7 +474,7 @@ def test_log_min_effective_cost_blocks_emits_structured_event(monkeypatch):
     assert event.data["effective_min_cost"] == pytest.approx(10.1)
     assert event.data["balance"] == pytest.approx(51.154957)
     assert event.data["effective_limit"] == pytest.approx(1.5)
-    assert event.data["entry_initial_qty_pct"] == pytest.approx(0.0192)
+    assert event.data["entry_initial_qty_fraction"] == pytest.approx(0.0192)
     assert event.data["action"] == "skip_create"
 
 
@@ -646,7 +646,7 @@ def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
                     "pside": "long",
                     "balance": 51.154957,
                     "effective_limit": 1.5,
-                    "entry_initial_qty_pct": 0.0192,
+                    "entry_initial_qty_fraction": 0.0192,
                     "projected_initial_cost": 1.4732627616,
                     "effective_min_cost": 10.1,
                 }
@@ -680,7 +680,7 @@ def test_log_min_effective_cost_blocks_throttles_symbol_across_set_changes(monke
             "pside": "long",
             "balance": 51.154957,
             "effective_limit": 1.5,
-            "entry_initial_qty_pct": 0.0192,
+            "entry_initial_qty_fraction": 0.0192,
             "projected_initial_cost": 1.4732627616,
             "effective_min_cost": 10.1,
         }

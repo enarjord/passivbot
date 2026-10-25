@@ -327,7 +327,7 @@ class TestApplyConfigOverrides:
         config = get_expanded_config_prototype()
         config['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
         with pytest.raises(KeyError, match="missing"):
-            _apply_config_overrides(config, {"bot.long.entry_threshold_base_pct": 0.25})
+            _apply_config_overrides(config, {"bot.long.entry_threshold_base_fraction": 0.25})
         _apply_config_overrides(config, {
             "bot.long.strategy.trailing_martingale.entry.threshold_base_fraction": 0.25,
         })
@@ -1379,10 +1379,10 @@ class TestIndividualToConfig:
                 },
             },
             "optimize": _toy_optimize_bounds(
-                "long_entry_initial_qty_pct",
-                "long_entry_threshold_we_weight",
-                "short_entry_initial_qty_pct",
-                "short_entry_threshold_we_weight",
+                "long_entry_initial_qty_fraction",
+                "long_entry_threshold_exposure_ratio_coefficient",
+                "short_entry_initial_qty_fraction",
+                "short_entry_threshold_exposure_ratio_coefficient",
             ),
         }
         overrides_list = []
@@ -1414,10 +1414,10 @@ class TestIndividualToConfig:
                 },
             },
             "optimize": _toy_optimize_bounds(
-                "long_entry_initial_qty_pct",
-                "long_entry_threshold_we_weight",
-                "short_entry_initial_qty_pct",
-                "short_entry_threshold_we_weight",
+                "long_entry_initial_qty_fraction",
+                "long_entry_threshold_exposure_ratio_coefficient",
+                "short_entry_initial_qty_fraction",
+                "short_entry_threshold_exposure_ratio_coefficient",
             ),
         }
         overrides_list = []
@@ -1427,7 +1427,7 @@ class TestIndividualToConfig:
             individual, mock_overrides, overrides_list, template
         )
 
-        # sorted: long.strategy.trailing_martingale.entry.initial_qty_pct, long.strategy.trailing_martingale.entry.threshold_we_weight, short.strategy.trailing_martingale.entry.initial_qty_pct, short.strategy.trailing_martingale.entry.threshold_we_weight
+        # sorted: long.strategy.trailing_martingale.entry.initial_qty_fraction, long.strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient, short.strategy.trailing_martingale.entry.initial_qty_fraction, short.strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 10.0
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == 20.0
         assert result["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 30.0
@@ -1449,10 +1449,10 @@ class TestIndividualToConfig:
                 },
             },
             "optimize": _toy_optimize_bounds(
-                "long_entry_initial_qty_pct",
-                "long_entry_threshold_we_weight",
-                "short_entry_initial_qty_pct",
-                "short_entry_threshold_we_weight",
+                "long_entry_initial_qty_fraction",
+                "long_entry_threshold_exposure_ratio_coefficient",
+                "short_entry_initial_qty_fraction",
+                "short_entry_threshold_exposure_ratio_coefficient",
             ),
         }
         original_template = deepcopy(template)
@@ -1484,10 +1484,10 @@ class TestIndividualToConfig:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_initial_qty_pct": [0.0, 10.0],
-                        "long_entry_threshold_we_weight": [0.0, 10.0],
-                        "short_entry_initial_qty_pct": [0.0, 10.0],
-                        "short_entry_threshold_we_weight": [0.0, 10.0],
+                        "long_entry_initial_qty_fraction": [0.0, 10.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
+                        "short_entry_initial_qty_fraction": [0.0, 10.0],
+                        "short_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
                         "long_hsl_memory_ema_span_minutes": [30.0, 180.0, 5.0],
                         "short_hsl_red_threshold": [0.15, 0.35, 0.01],
                     },
@@ -1524,10 +1524,10 @@ class TestIndividualToConfig:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_initial_qty_pct": [0.0, 10.0],
-                        "long_entry_threshold_we_weight": [0.0, 10.0],
-                        "short_entry_initial_qty_pct": [0.0, 10.0],
-                        "short_entry_threshold_we_weight": [0.0, 10.0],
+                        "long_entry_initial_qty_fraction": [0.0, 10.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
+                        "short_entry_initial_qty_fraction": [0.0, 10.0],
+                        "short_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
                         "long_hsl_red_threshold": [0.15, 0.35, 0.01],
                     },
                 ),
@@ -1745,7 +1745,7 @@ class TestIndividualToConfig:
         [
             (
                 "trailing_martingale",
-                "long_entry_threshold_base_pct",
+                "long_entry_threshold_base_fraction",
                 (
                     "bot",
                     "long",
@@ -1758,7 +1758,7 @@ class TestIndividualToConfig:
             ),
             (
                 "ema_anchor",
-                "long_offset",
+                "long_offset_fraction",
                 ("bot", "long", "strategy", "ema_anchor", "offset_fraction"),
                 0.0045,
             ),
@@ -1853,10 +1853,10 @@ class TestIndividualToConfig:
                 },
             },
             "optimize": _toy_optimize_bounds(
-                "long_entry_initial_qty_pct",
-                "long_entry_threshold_we_weight",
-                "short_entry_initial_qty_pct",
-                "short_entry_threshold_we_weight",
+                "long_entry_initial_qty_fraction",
+                "long_entry_threshold_exposure_ratio_coefficient",
+                "short_entry_initial_qty_fraction",
+                "short_entry_threshold_exposure_ratio_coefficient",
             ),
         }
         key_paths = get_optimization_key_paths(template)
@@ -1884,7 +1884,7 @@ class TestIndividualToConfig:
         vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
         key_to_idx = _shape_indices_with_native_ids(template, shape)
 
-        vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
+        vector[key_to_idx["long_close_retracement_base_fraction"]] = -0.0005
         vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
         vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
         vector[key_to_idx["long_close_threshold_volatility_1h_weight"]] = 39.0
@@ -1927,10 +1927,10 @@ class TestIndividualToConfig:
         vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
         key_to_idx = _shape_indices_with_native_ids(template, shape)
 
-        vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
+        vector[key_to_idx["long_close_retracement_base_fraction"]] = -0.0005
         vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
         vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
-        vector[key_to_idx["short_close_retracement_base_pct"]] = 0.002
+        vector[key_to_idx["short_close_retracement_base_fraction"]] = 0.002
         vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] = 71.0
 
         config = _canonicalize_optimizer_individual(
@@ -1944,7 +1944,7 @@ class TestIndividualToConfig:
         long_close = config["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
         short_close = config["bot"]["short"]["strategy"]["trailing_martingale"]["close"]
 
-        assert vector[key_to_idx["long_close_retracement_base_pct"]] == pytest.approx(
+        assert vector[key_to_idx["long_close_retracement_base_fraction"]] == pytest.approx(
             0.0
         )
         assert vector[
@@ -1953,7 +1953,7 @@ class TestIndividualToConfig:
         assert vector[
             key_to_idx["long_close_retracement_volatility_1m_weight"]
         ] == pytest.approx(0.01)
-        assert vector[key_to_idx["short_close_retracement_base_pct"]] == pytest.approx(
+        assert vector[key_to_idx["short_close_retracement_base_fraction"]] == pytest.approx(
             0.002
         )
         assert vector[
@@ -1987,8 +1987,8 @@ class TestIndividualToConfig:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -2023,7 +2023,7 @@ class TestIndividualToConfig:
                         },
                         "fixed_values": [
                             {
-                                "key": "long_entry_threshold_we_weight",
+                                "key": "long_entry_threshold_exposure_ratio_coefficient",
                                 "path": [
                                     "bot",
                                     "long",
@@ -2062,7 +2062,7 @@ class TestIndividualToConfig:
                         },
                         "fixed_values": [
                             {
-                                "key": "long_entry_threshold_we_weight",
+                                "key": "long_entry_threshold_exposure_ratio_coefficient",
                                 "path": [
                                     "bot",
                                     "long",
@@ -2076,7 +2076,7 @@ class TestIndividualToConfig:
                         ],
                     },
                 ],
-                "fixed_keys": ["long_entry_threshold_we_weight"],
+                "fixed_keys": ["long_entry_threshold_exposure_ratio_coefficient"],
                 "key_paths": [
                     [
                         "bot",
@@ -2087,7 +2087,7 @@ class TestIndividualToConfig:
                         "initial_qty_fraction",
                     ]
                 ],
-                "tunable_keys": ["long_entry_initial_qty_pct"],
+                "tunable_keys": ["long_entry_initial_qty_fraction"],
             },
         }
 
@@ -2116,8 +2116,8 @@ class TestIndividualToConfig:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -2139,7 +2139,7 @@ class TestIndividualToConfig:
                         },
                         "fixed_values": [
                             {
-                                "key": "long_entry_threshold_we_weight",
+                                "key": "long_entry_threshold_exposure_ratio_coefficient",
                                 "path": [
                                     "bot",
                                     "long",
@@ -2165,7 +2165,7 @@ class TestIndividualToConfig:
                         },
                         "fixed_values": [
                             {
-                                "key": "long_entry_threshold_we_weight",
+                                "key": "long_entry_threshold_exposure_ratio_coefficient",
                                 "path": [
                                     "bot",
                                     "long",
@@ -2179,9 +2179,9 @@ class TestIndividualToConfig:
                         ],
                     },
                 ],
-                "fixed_keys": ["long_entry_threshold_we_weight"],
+                "fixed_keys": ["long_entry_threshold_exposure_ratio_coefficient"],
                 "key_paths": [["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_fraction"]],
-                "tunable_keys": ["long_entry_initial_qty_pct"],
+                "tunable_keys": ["long_entry_initial_qty_fraction"],
             },
         }
         template["bot"]["long"]["enabled"] = True
@@ -2212,10 +2212,10 @@ class TestConfigToIndividual:
                 },
             },
             "optimize": _toy_optimize_bounds(
-                "long_entry_initial_qty_pct",
-                "long_entry_threshold_we_weight",
-                "short_entry_initial_qty_pct",
-                "short_entry_threshold_we_weight",
+                "long_entry_initial_qty_fraction",
+                "long_entry_threshold_exposure_ratio_coefficient",
+                "short_entry_initial_qty_fraction",
+                "short_entry_threshold_exposure_ratio_coefficient",
             ),
         }
         bounds = [Bound(0.0, 10.0) for _ in range(4)]
@@ -2245,10 +2245,10 @@ class TestConfigToIndividual:
                 },
             },
             "optimize": _toy_optimize_bounds(
-                "long_entry_initial_qty_pct",
-                "long_entry_threshold_we_weight",
-                "short_entry_initial_qty_pct",
-                "short_entry_threshold_we_weight",
+                "long_entry_initial_qty_fraction",
+                "long_entry_threshold_exposure_ratio_coefficient",
+                "short_entry_initial_qty_fraction",
+                "short_entry_threshold_exposure_ratio_coefficient",
             ),
         }
         bounds = [Bound(0.0, 1000.0)] * 4
@@ -2256,7 +2256,7 @@ class TestConfigToIndividual:
 
         result = config_to_individual(config, bounds, sig_digits)
 
-        # Order: long.strategy.trailing_martingale.entry.initial_qty_pct, long.strategy.trailing_martingale.entry.threshold_we_weight, short.strategy.trailing_martingale.entry.initial_qty_pct, short.strategy.trailing_martingale.entry.threshold_we_weight
+        # Order: long.strategy.trailing_martingale.entry.initial_qty_fraction, long.strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient, short.strategy.trailing_martingale.entry.initial_qty_fraction, short.strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient
         assert result[0] == pytest.approx(200.0)
         assert result[1] == pytest.approx(100.0)
         assert result[2] == pytest.approx(400.0)
@@ -2281,10 +2281,10 @@ class TestConfigToIndividual:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_initial_qty_pct": [0.0, 1000.0],
-                        "long_entry_threshold_we_weight": [0.0, 1000.0],
-                        "short_entry_initial_qty_pct": [0.0, 1000.0],
-                        "short_entry_threshold_we_weight": [0.0, 1000.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1000.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1000.0],
+                        "short_entry_initial_qty_fraction": [0.0, 1000.0],
+                        "short_entry_threshold_exposure_ratio_coefficient": [0.0, 1000.0],
                         "long_hsl_memory_ema_span_minutes": [30.0, 180.0, 5.0],
                         "short_hsl_red_threshold": [0.15, 0.35, 0.01],
                     },
@@ -2316,19 +2316,19 @@ class TestConfigToIndividual:
         bounds = [Bound(0.0, 10.0) for _ in range(4)]
         key_paths = [
             (
-                "long_entry_threshold_we_weight",
+                "long_entry_threshold_exposure_ratio_coefficient",
                 ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_exposure_ratio_coefficient"),
             ),
             (
-                "long_entry_initial_qty_pct",
+                "long_entry_initial_qty_fraction",
                 ("bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_fraction"),
             ),
             (
-                "short_entry_threshold_we_weight",
+                "short_entry_threshold_exposure_ratio_coefficient",
                 ("bot", "short", "strategy", "trailing_martingale", "entry", "threshold_exposure_ratio_coefficient"),
             ),
             (
-                "short_entry_initial_qty_pct",
+                "short_entry_initial_qty_fraction",
                 ("bot", "short", "strategy", "trailing_martingale", "entry", "initial_qty_fraction"),
             ),
         ]
@@ -2360,8 +2360,8 @@ class TestConfigToIndividual:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -2382,9 +2382,9 @@ class TestConfigToIndividual:
                         },
                     },
                 ],
-                "fixed_keys": ["long_entry_threshold_we_weight"],
+                "fixed_keys": ["long_entry_threshold_exposure_ratio_coefficient"],
                 "key_paths": [["bot", "long", "strategy", "trailing_martingale", "entry", "initial_qty_fraction"]],
-                "tunable_keys": ["long_entry_initial_qty_pct"],
+                "tunable_keys": ["long_entry_initial_qty_fraction"],
             },
         }
         config["bot"]["long"]["enabled"] = True
@@ -2396,7 +2396,7 @@ class TestConfigToIndividual:
         )
 
         assert shape.key_paths[0][0] == ANCHOR_GENE_KEY
-        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_entry_initial_qty_pct"]
+        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_entry_initial_qty_fraction"]
         assert result == pytest.approx([0.0, 0.25])
 
 
@@ -2645,8 +2645,8 @@ class TestApplyPolishBounds:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_threshold_base_pct": [0.01, 0.1, 0.001],
-                        "long_close_threshold_we_weight": [-1.0, 1.0],
+                        "long_entry_threshold_base_fraction": [0.01, 0.1, 0.001],
+                        "long_close_threshold_exposure_ratio_coefficient": [-1.0, 1.0],
                     }
                 )
             },
@@ -2666,10 +2666,10 @@ class TestApplyPolishBounds:
         apply_polish_bounds(config, 0.2)
 
         assert _flat_bounds(config)[
-            "long_entry_threshold_base_pct"
+            "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.04, 0.06, 0.001])
         assert _flat_bounds(config)[
-            "long_close_threshold_we_weight"
+            "long_close_threshold_exposure_ratio_coefficient"
         ] == pytest.approx([-0.09552, -0.06368])
 
     def test_fixed_bounds_stay_fixed(self):
@@ -2678,8 +2678,8 @@ class TestApplyPolishBounds:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_threshold_base_pct": 0.05,
-                        "long_close_threshold_we_weight": [-0.07, -0.07],
+                        "long_entry_threshold_base_fraction": 0.05,
+                        "long_close_threshold_exposure_ratio_coefficient": [-0.07, -0.07],
                     }
                 )
             },
@@ -2698,8 +2698,8 @@ class TestApplyPolishBounds:
 
         apply_polish_bounds(config, 0.2)
 
-        assert _flat_bounds(config)["long_entry_threshold_base_pct"] == 0.05
-        assert _flat_bounds(config)["long_close_threshold_we_weight"] == [
+        assert _flat_bounds(config)["long_entry_threshold_base_fraction"] == 0.05
+        assert _flat_bounds(config)["long_close_threshold_exposure_ratio_coefficient"] == [
             -0.07,
             -0.07,
         ]
@@ -2708,7 +2708,7 @@ class TestApplyPolishBounds:
         config = {
             "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})
+                "bounds": _bounds_from_flat({"long_entry_threshold_base_fraction": [0.01, 0.1]})
             },
             "bot": {
                 "long": {
@@ -2721,14 +2721,14 @@ class TestApplyPolishBounds:
         apply_polish_bounds(config, 0.2)
 
         assert _flat_bounds(config)[
-            "long_entry_threshold_base_pct"
+            "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.08, 0.1])
 
     def test_override_tunable_allows_tunable_bounds_outside_existing_domain(self):
         config = {
             "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})
+                "bounds": _bounds_from_flat({"long_entry_threshold_base_fraction": [0.01, 0.1]})
             },
             "bot": {
                 "long": {
@@ -2741,14 +2741,14 @@ class TestApplyPolishBounds:
         apply_polish_bounds(config, 0.5, bounds_mode="override-tunable")
 
         assert _flat_bounds(config)[
-            "long_entry_threshold_base_pct"
+            "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.045, 0.135])
 
     def test_override_tunable_uses_current_value_outside_existing_domain(self):
         config = {
             "live": {},
             "optimize": {
-                "bounds": _bounds_from_flat({"long_entry_threshold_base_pct": [0.01, 0.1]})
+                "bounds": _bounds_from_flat({"long_entry_threshold_base_fraction": [0.01, 0.1]})
             },
             "bot": {
                 "long": {
@@ -2761,7 +2761,7 @@ class TestApplyPolishBounds:
         apply_polish_bounds(config, 0.2, bounds_mode="override-tunable")
 
         assert _flat_bounds(config)[
-            "long_entry_threshold_base_pct"
+            "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.8, 1.2])
 
     def test_override_tunable_keeps_fixed_bounds_fixed(self):
@@ -2770,8 +2770,8 @@ class TestApplyPolishBounds:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_threshold_base_pct": 0.05,
-                        "long_close_threshold_we_weight": [-0.07, -0.07],
+                        "long_entry_threshold_base_fraction": 0.05,
+                        "long_close_threshold_exposure_ratio_coefficient": [-0.07, -0.07],
                     }
                 )
             },
@@ -2790,8 +2790,8 @@ class TestApplyPolishBounds:
 
         apply_polish_bounds(config, 0.2, bounds_mode="override-tunable")
 
-        assert _flat_bounds(config)["long_entry_threshold_base_pct"] == 0.05
-        assert _flat_bounds(config)["long_close_threshold_we_weight"] == [
+        assert _flat_bounds(config)["long_entry_threshold_base_fraction"] == 0.05
+        assert _flat_bounds(config)["long_close_threshold_exposure_ratio_coefficient"] == [
             -0.07,
             -0.07,
         ]
@@ -2802,8 +2802,8 @@ class TestApplyPolishBounds:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_threshold_base_pct": 0.05,
-                        "long_close_threshold_we_weight": [-0.07, -0.07],
+                        "long_entry_threshold_base_fraction": 0.05,
+                        "long_close_threshold_exposure_ratio_coefficient": [-0.07, -0.07],
                     }
                 )
             },
@@ -2823,10 +2823,10 @@ class TestApplyPolishBounds:
         apply_polish_bounds(config, 0.2, bounds_mode="override-all")
 
         assert _flat_bounds(config)[
-            "long_entry_threshold_base_pct"
+            "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.04, 0.06])
         assert _flat_bounds(config)[
-            "long_close_threshold_we_weight"
+            "long_close_threshold_exposure_ratio_coefficient"
         ] == pytest.approx([-0.084, -0.056])
 
     def test_fixed_params_collapse_after_override_all_polish(self):
@@ -2877,7 +2877,7 @@ class TestApplyPolishBounds:
             "live": {},
             "optimize": {
                 "bounds": _bounds_from_flat(
-                    {"long_entry_threshold_base_pct": [0.01, 0.1, 0.05]}
+                    {"long_entry_threshold_base_fraction": [0.01, 0.1, 0.05]}
                 )
             },
             "bot": {
@@ -2891,7 +2891,7 @@ class TestApplyPolishBounds:
         apply_polish_bounds(config, 0.2)
 
         assert _flat_bounds(config)[
-            "long_entry_threshold_base_pct"
+            "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.04, 0.06])
 
     def test_invalid_percentage_raises(self):
@@ -2911,8 +2911,8 @@ class TestApplyFineTuneBounds:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "short_entry_initial_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "short_entry_initial_qty_fraction": [0.0, 1.0],
                     },
                 ),
             },
@@ -2930,8 +2930,8 @@ class TestApplyFineTuneBounds:
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                     },
                 ),
             },
@@ -2946,8 +2946,8 @@ class TestApplyFineTuneBounds:
         # Only tune param1, param2 should be fixed
         apply_fine_tune_bounds(config, ["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction"], set())
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [0.0, 1.0]
-        assert _flat_bounds(config)["long_entry_threshold_we_weight"] == [0.7, 0.7]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [0.0, 1.0]
+        assert _flat_bounds(config)["long_entry_threshold_exposure_ratio_coefficient"] == [0.7, 0.7]
 
     def test_fine_tune_params_accept_dotted_path_selectors(self):
         config = {
@@ -3047,21 +3047,21 @@ class TestApplyFineTuneBounds:
 
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
-            "optimize": {"bounds": _bounds_from_flat({"long_entry_initial_qty_pct": [5.0]})},
+            "optimize": {"bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": [5.0]})},
             "bot": {"long": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.5}}}}},
         }
-        apply_fine_tune_bounds(config, [], {"long_entry_initial_qty_pct"})
+        apply_fine_tune_bounds(config, [], {"long_entry_initial_qty_fraction"})
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [5.0, 5.0]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [5.0, 5.0]
 
     def test_cli_override_scalar_becomes_fixed(self):
         config = {
-            "optimize": {"bounds": _bounds_from_flat({"long_entry_initial_qty_pct": 5.0})},
+            "optimize": {"bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": 5.0})},
             "bot": {"long": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.5}}}}},
         }
-        apply_fine_tune_bounds(config, [], {"long_entry_initial_qty_pct"})
+        apply_fine_tune_bounds(config, [], {"long_entry_initial_qty_fraction"})
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [5.0, 5.0]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [5.0, 5.0]
 
     def test_nested_bounds_fix_non_tuned_params(self):
         config = {
@@ -3115,7 +3115,7 @@ class TestApplyFineTuneBounds:
         config = {
             "optimize": {
                 "bounds": _bounds_from_flat({
-                    "long_entry_initial_qty_pct": [0.0, 1.0],
+                    "long_entry_initial_qty_fraction": [0.0, 1.0],
                 })
             },
             "bot": {
@@ -3126,7 +3126,7 @@ class TestApplyFineTuneBounds:
         apply_fine_tune_bounds(config, [], set())
 
         # Bound should remain unchanged
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [0.0, 1.0]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [0.0, 1.0]
 
     def test_unparseable_key_keeps_bound(self):
         # Keys without underscore can't be parsed as pside_param
@@ -3145,20 +3145,20 @@ class TestApplyFineTuneBounds:
 
     def test_fine_tune_missing_key_logs(self):
         config = {
-            "optimize": {"bounds": _bounds_from_flat({"long_entry_initial_qty_pct": [0.0, 1.0]})},
+            "optimize": {"bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": [0.0, 1.0]})},
             "bot": {"long": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.5}}}}},
         }
         apply_fine_tune_bounds(config, ["long.nonexistent"], set())
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [0.5, 0.5]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [0.5, 0.5]
 
     def test_config_fixed_params_fix_only_listed_bounds(self):
         config = {
             "optimize": {
                 "bounds": _bounds_from_flat(
                     {
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                     },
                 ),
                 "fixed_params": ["bot.long.strategy.trailing_martingale.entry.threshold_exposure_ratio_coefficient"],
@@ -3173,8 +3173,8 @@ class TestApplyFineTuneBounds:
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [0.0, 1.0]
-        assert _flat_bounds(config)["long_entry_threshold_we_weight"] == [0.7, 0.7]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [0.0, 1.0]
+        assert _flat_bounds(config)["long_entry_threshold_exposure_ratio_coefficient"] == [0.7, 0.7]
 
     def test_config_fixed_params_accept_dotted_path_prefix_selectors(self, caplog):
         caplog.set_level(logging.INFO)
@@ -3244,7 +3244,7 @@ class TestApplyFineTuneBounds:
     def test_config_fixed_params_warn_for_unmatched_selectors(self, caplog):
         config = {
             "optimize": {
-                "bounds": _bounds_from_flat({"long_entry_initial_qty_pct": [0.0, 1.0]}),
+                "bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": [0.0, 1.0]}),
                 "fixed_params": ["long.missing"],
             },
             "bot": {"long": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.5}}}}},
@@ -3252,7 +3252,7 @@ class TestApplyFineTuneBounds:
 
         apply_fine_tune_bounds(config, [], set())
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [0.0, 1.0]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [0.0, 1.0]
         assert (
             "optimize.fixed_params selector matched no optimize bounds: long.missing"
             in caplog.text
@@ -3421,9 +3421,9 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
-                        "long_close_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
+                        "long_close_qty_fraction": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3444,9 +3444,9 @@ class TestApplyFineTuneBounds:
         }
         apply_fine_tune_bounds(config, ["bot.long.strategy.trailing_martingale.entry.initial_qty_fraction", "bot.long.strategy.trailing_martingale.close.qty_fraction"], set())
 
-        assert _flat_bounds(config)["long_entry_initial_qty_pct"] == [0.0, 1.0]
-        assert _flat_bounds(config)["long_entry_threshold_we_weight"] == [0.7, 0.7]
-        assert _flat_bounds(config)["long_close_qty_pct"] == [0.9, 0.9]
+        assert _flat_bounds(config)["long_entry_initial_qty_fraction"] == [0.0, 1.0]
+        assert _flat_bounds(config)["long_entry_threshold_exposure_ratio_coefficient"] == [0.7, 0.7]
+        assert _flat_bounds(config)["long_close_qty_fraction"] == [0.9, 0.9]
 
     def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path, caplog):
         config = {
@@ -3456,9 +3456,9 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
-                        "long_close_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
+                        "long_close_qty_fraction": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3513,8 +3513,8 @@ class TestApplyFineTuneBounds:
         shape = build_optimization_shape(config)
         result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], config)
 
-        assert _flat_bounds(config)["long_entry_threshold_we_weight"] == [0.0, 1.0]
-        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_entry_initial_qty_pct"]
+        assert _flat_bounds(config)["long_entry_threshold_exposure_ratio_coefficient"] == [0.0, 1.0]
+        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_entry_initial_qty_fraction"]
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == pytest.approx(0.9)
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(1.0)
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["qty_fraction"] == pytest.approx(0.66)
@@ -3526,7 +3526,7 @@ class TestApplyFineTuneBounds:
         )
         assert "anchor_0.json" in caplog.text
         assert "anchor_1.json" in caplog.text
-        assert "key=long_entry_threshold_we_weight" in caplog.text
+        assert "key=long_entry_threshold_exposure_ratio_coefficient" in caplog.text
 
     def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
         config = {
@@ -3536,8 +3536,8 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
-                        "long_entry_threshold_we_weight": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
+                        "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3586,7 +3586,7 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3619,7 +3619,7 @@ class TestApplyFineTuneBounds:
                         "initial_qty_fraction",
                     ]
                 ],
-                "tunable_keys": ["long_entry_initial_qty_pct"],
+                "tunable_keys": ["long_entry_initial_qty_fraction"],
             },
         }
         config["bot"]["long"]["enabled"] = True
@@ -3657,7 +3657,7 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3688,7 +3688,7 @@ class TestApplyFineTuneBounds:
                         "initial_qty_fraction",
                     ]
                 ],
-                "tunable_keys": ["long_entry_initial_qty_pct"],
+                "tunable_keys": ["long_entry_initial_qty_fraction"],
             },
         }
         config["bot"]["long"]["enabled"] = True
@@ -3722,7 +3722,7 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3753,7 +3753,7 @@ class TestApplyFineTuneBounds:
                         "initial_qty_fraction",
                     ]
                 ],
-                "tunable_keys": ["long_entry_initial_qty_pct"],
+                "tunable_keys": ["long_entry_initial_qty_fraction"],
             },
         }
         config["bot"]["long"]["enabled"] = True
@@ -3782,7 +3782,7 @@ class TestApplyFineTuneBounds:
                 "bounds": _bounds_from_flat(
                     {
                         "long_n_positions": [1.0, 1.0],
-                        "long_entry_initial_qty_pct": [0.0, 1.0],
+                        "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_total_wallet_exposure_limit": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
                         "short_total_wallet_exposure_limit": [0.0, 0.0],
@@ -3813,7 +3813,7 @@ class TestApplyFineTuneBounds:
             optimization_shape=shape,
         )
 
-        idx = [key for key, _ in shape.key_paths].index("long_entry_initial_qty_pct")
+        idx = [key for key, _ in shape.key_paths].index("long_entry_initial_qty_fraction")
         assert raw_count == 1
         assert len(individuals) == 1
         assert individuals[0][idx] == pytest.approx(1.0)
@@ -3822,7 +3822,7 @@ class TestApplyFineTuneBounds:
             in caplog.text
         )
         assert "source=seed.json" in caplog.text
-        assert "key=long_entry_initial_qty_pct" in caplog.text
+        assert "key=long_entry_initial_qty_fraction" in caplog.text
 
 
 class TestExtractConfigs:
@@ -5489,7 +5489,7 @@ def _resume_validation_entry():
         "live": {},
         "optimize": {
             "backend": "pymoo",
-            "bounds": _bounds_from_flat({"long_entry_initial_qty_pct": [0.001, 0.01]}),
+            "bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": [0.001, 0.01]}),
             "iters": 2,
             "population_size": 2,
             "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
@@ -5788,10 +5788,10 @@ def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path, backe
     checkpoint_path = tmp_path / "checkpoint.pkl"
     anchor_plan = {
         "anchors": [{"seed_bot": {}, "fixed_values": [], "source": "checkpoint"}],
-        "fixed_keys": ["long_base_qty_pct"],
+        "fixed_keys": ["long_base_qty_fraction"],
         "key_paths": [["bot", "long", "base_qty_fraction"]],
         "strategy_kind": "trailing_martingale",
-        "tunable_keys": ["long_base_qty_pct"],
+        "tunable_keys": ["long_base_qty_fraction"],
     }
     with open(checkpoint_path, "wb") as file:
         pickle.dump({"anchor_plan": anchor_plan}, file)

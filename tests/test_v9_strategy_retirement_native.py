@@ -54,7 +54,7 @@ def test_martingale_close_diagnostics_remain_available(
             "min_since_open": 100.0, "max_since_min": 110.0,
             "max_since_open": 110.0, "min_since_max": 100.0,
         },
-        "close_params": {"qty_pct": 0.25, "threshold_base_pct": 0.01},
+        "close_params": {"qty_fraction": 0.25, "threshold_base_fraction": 0.01},
     }
     result = json.loads(require_real_passivbot_rust_module.calc_trailing_martingale_close_diagnostic_py(
         json.dumps(payload)

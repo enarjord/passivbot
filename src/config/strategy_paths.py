@@ -1,4 +1,4 @@
-"""Translate public strategy paths at the unchanged native protocol boundary.
+"""Translate public strategy paths at the native protocol boundary.
 
 Native parameter names and optimizer IDs remain Rust-owned. Only authored local
 paths are projected; this module does not authorize alternate config spellings.
@@ -13,25 +13,14 @@ STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]
         ("entry", "ema_span_1"): ("entry", "ema_span_1_minutes"),
         ("volatility_ema_span_1m",): ("log_range_ema_span_minutes",),
         ("volatility_ema_span_1h",): ("log_range_ema_span_1h_candles",),
-        ("entry", "initial_qty_pct"): ("entry", "initial_qty_fraction"),
-        ("entry", "initial_ema_dist"): ("entry", "initial_ema_distance_fraction"),
-        ("entry", "double_down_factor"): ("entry", "reentry_qty_multiplier"),
-        ("entry", "threshold_we_weight"): ("entry", "threshold_exposure_ratio_coefficient"),
-        ("entry", "retracement_we_weight"): ("entry", "retracement_exposure_ratio_coefficient"),
         ("entry", "threshold_volatility_1m_weight"): ("entry", "threshold_log_range_1m_coefficient"),
         ("entry", "threshold_volatility_1h_weight"): ("entry", "threshold_log_range_1h_coefficient"),
         ("entry", "retracement_volatility_1m_weight"): ("entry", "retracement_log_range_1m_coefficient"),
         ("entry", "retracement_volatility_1h_weight"): ("entry", "retracement_log_range_1h_coefficient"),
-        ("entry", "threshold_base_pct"): ("entry", "threshold_base_fraction"),
-        ("entry", "retracement_base_pct"): ("entry", "retracement_base_fraction"),
-        ("close", "qty_pct"): ("close", "qty_fraction"),
-        ("close", "threshold_base_pct"): ("close", "threshold_base_fraction"),
-        ("close", "threshold_we_weight"): ("close", "threshold_exposure_ratio_coefficient"),
         ("close", "threshold_volatility_1m_weight"): ("close", "threshold_log_range_1m_coefficient"),
         ("close", "threshold_volatility_1h_weight"): ("close", "threshold_log_range_1h_coefficient"),
         ("close", "retracement_volatility_1m_weight"): ("close", "retracement_log_range_1m_coefficient"),
         ("close", "retracement_volatility_1h_weight"): ("close", "retracement_log_range_1h_coefficient"),
-        ("close", "retracement_base_pct"): ("close", "retracement_base_fraction"),
     },
     "ema_anchor": {
         ("ema_span_0",): ("ema_span_0_minutes",),
@@ -40,10 +29,6 @@ STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]
         ("offset_volatility_ema_span_1h",): ("offset_log_range_ema_span_1h_candles",),
         ("offset_volatility_1m_weight",): ("offset_log_range_1m_coefficient",),
         ("offset_volatility_1h_weight",): ("offset_log_range_1h_coefficient",),
-        ("base_qty_pct",): ("base_qty_fraction",),
-        ("offset",): ("offset_fraction",),
-        ("entry_double_down_factor",): ("entry_qty_exposure_coefficient",),
-        ("offset_psize_weight",): ("inventory_offset_exposure_coefficient",),
     },
 }
 
@@ -113,5 +98,5 @@ def project_native_strategy_side(strategy_kind, native_side):
 
 
 def lower_runtime_strategy_side(strategy_kind, public_side):
-    """Copy a merged public strategy into the unchanged native parameter tree."""
+    """Copy a merged public strategy into the native parameter tree."""
     return _project_strategy_tree(strategy_kind, public_side, public_strategy_path_to_native)

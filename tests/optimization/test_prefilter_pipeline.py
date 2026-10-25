@@ -183,6 +183,6 @@ def test_mixed_screened_cohort_keeps_config_rejections_in_tell(monkeypatch, tmp_
         ]
         assert rejected and replayed
         assert all(
-            row["long_entry_initial_qty_pct"] >= 0.03 for row in FakeService.rows
+            row["long_entry_initial_qty_fraction"] >= 0.03 for row in FakeService.rows
         )
         assert load_checkpoint(path, base.config)["phase"] == "idle"

@@ -49,7 +49,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
         "--unstuck",
     ]))
     config["live"].update(max_realized_loss_pct=0.1, lookback_ema_span_minutes=8.0)
-    key = "long_base_qty_pct" if strategy == "ema_anchor" else "long_entry_initial_qty_pct"
+    key = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.SharedAccountReplay(
         config=config, mss=markets, hlcvs=candles, btc=btc, timestamps=timestamps,
@@ -191,17 +191,17 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
     for side in ("long", "short"):
         bot = config["bot"][side]["strategy"][strategy]
         if strategy == "ema_anchor":
-            bot.update(ema_span_0=10., ema_span_1=20., offset=.02,
+            bot.update(ema_span_0=10., ema_span_1=20., offset_fraction=.02,
                        inventory_offset_exposure_coefficient=0., offset_log_range_1m_coefficient=0.,
-                       offset_log_range_1h_coefficient=0., base_qty_pct=.02,
+                       offset_log_range_1h_coefficient=0., base_qty_fraction=.02,
                        entry_qty_exposure_coefficient=1.)
         else:
-            bot["entry"].update(ema_span_0=10., ema_span_1=20., initial_ema_dist=.01,
-                                initial_qty_pct=.02, reentry_qty_multiplier=1.,
-                                threshold_base_pct=.9, threshold_exposure_ratio_coefficient=0.,
+            bot["entry"].update(ema_span_0=10., ema_span_1=20., initial_ema_distance_fraction=.01,
+                                initial_qty_fraction=.02, reentry_qty_multiplier=1.,
+                                threshold_base_fraction=.9, threshold_exposure_ratio_coefficient=0.,
                                 threshold_log_range_1m_coefficient=0.,
                                 threshold_log_range_1h_coefficient=0.)
-            bot["close"].update(qty_pct=1., threshold_base_pct=.5,
+            bot["close"].update(qty_fraction=1., threshold_base_fraction=.5,
                                 threshold_exposure_ratio_coefficient=0., threshold_log_range_1m_coefficient=0.,
                                 threshold_log_range_1h_coefficient=0.)
     metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",

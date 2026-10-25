@@ -77,7 +77,7 @@ class FakeService(GpuBacktestService):
             if self.failure is not None:
                 raise self.failure
             self.rows.extend(deepcopy(candidates))
-            return [ReplayResult(metrics={name: 0.1 + row["long_entry_initial_qty_pct"]
+            return [ReplayResult(metrics={name: 0.1 + row["long_entry_initial_qty_fraction"]
                                          for name in dataset.metrics}, liquidated=False)
                     for row in candidates]
         super().register_dataset(dataset_id, SimpleNamespace(evaluate=evaluate))

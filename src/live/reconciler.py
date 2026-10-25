@@ -1717,21 +1717,21 @@ def _submitted_rust_input_context(
             ):
                 entry_params = strategy_params.get("entry")
                 if isinstance(entry_params, dict):
-                    retracement_base_pct = _validated_rust_finite_number(
-                        entry_params.get("retracement_base_pct", 0.0),
-                        f"symbol input {input_idx} has invalid {pside} entry retracement_base_pct",
+                    retracement_base_fraction = _validated_rust_finite_number(
+                        entry_params.get("retracement_base_fraction", 0.0),
+                        f"symbol input {input_idx} has invalid {pside} entry retracement_base_fraction",
                     )
                     entry_sequential_staging[(symbol_idx, pside)] = (
-                        retracement_base_pct > 0.0
+                        retracement_base_fraction > 0.0
                     )
                 close_params = strategy_params.get("close")
                 if isinstance(close_params, dict):
-                    close_retracement_base_pct = _validated_rust_finite_number(
-                        close_params.get("retracement_base_pct", 0.0),
-                        f"symbol input {input_idx} has invalid {pside} close retracement_base_pct",
+                    close_retracement_base_fraction = _validated_rust_finite_number(
+                        close_params.get("retracement_base_fraction", 0.0),
+                        f"symbol input {input_idx} has invalid {pside} close retracement_base_fraction",
                     )
                     close_retracement_enabled[(symbol_idx, pside)] = (
-                        close_retracement_base_pct > 0.0
+                        close_retracement_base_fraction > 0.0
                     )
             last_fill_timestamp_ms = side_input.get("last_increase_fill_timestamp_ms")
             if last_fill_timestamp_ms is not None:
@@ -2717,7 +2717,7 @@ def validate_rust_orchestrator_output(
     min_cost_finite_fields = (
         "balance",
         "effective_limit",
-        "entry_initial_qty_pct",
+        "entry_initial_qty_fraction",
         "projected_initial_cost",
         "effective_min_cost",
     )

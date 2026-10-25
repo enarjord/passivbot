@@ -20,9 +20,6 @@ def source_config(base):
     config = clean_config(base.config)
     for side in ("long", "short"):
         entry = config["optimize"]["bounds"][side]["strategy"]["trailing_martingale"]["entry"]
-        if "initial_qty_pct" in entry:
-            assert "initial_qty_fraction" not in entry
-            entry["initial_qty_fraction"] = entry.pop("initial_qty_pct")
         assert "initial_qty_fraction" in entry
     return config
 

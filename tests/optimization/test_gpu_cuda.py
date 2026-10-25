@@ -703,9 +703,9 @@ def test_cuda_prepared_service_preserves_actual_liquidation_per_candidate(cuda, 
     bot = config["bot"]["long"]
     bot["risk"]["total_wallet_exposure_limit_ratio"] = 10.0
     strategy = bot["strategy"]["trailing_martingale"]
-    strategy["entry"].update(initial_qty_pct=1.0, ema_gate_mode="disabled")
-    strategy["close"]["threshold_base_pct"] = 1.0
-    parameters = [{}, {"long_total_wallet_exposure_limit": 0.1, "long_entry_initial_qty_pct": 0.01}]
+    strategy["entry"].update(initial_qty_fraction=1.0, ema_gate_mode="disabled")
+    strategy["close"]["threshold_base_fraction"] = 1.0
+    parameters = [{}, {"long_total_wallet_exposure_limit": 0.1, "long_entry_initial_qty_fraction": 0.01}]
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -745,11 +745,11 @@ def test_cuda_first_coin_patch_does_not_replace_global_defaults(cuda, strategy):
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "128",
     ]))
     if strategy == "trailing_martingale":
-        parameter = "entry_initial_qty_pct"
-        global_value = config["bot"]["long"]["strategy"][strategy]["entry"]["initial_qty_pct"]
-        patch = {"entry": {"initial_qty_pct": 0.5}}
+        parameter = "entry_initial_qty_fraction"
+        global_value = config["bot"]["long"]["strategy"][strategy]["entry"]["initial_qty_fraction"]
+        patch = {"entry": {"initial_qty_fraction": 0.5}}
     else:
-        parameter = "base_qty_pct"
+        parameter = "base_qty_fraction"
         global_value = config["bot"]["long"]["strategy"][strategy][parameter]
         patch = {parameter: 0.5}
     config["coin_overrides"] = {"COIN00": {"bot": {"long": {"strategy": {strategy: patch}}}}}
@@ -780,7 +780,7 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
-    config["optimize"]["bounds"] = {"long_entry_initial_qty_pct": [0.01, 0.03]}
+    config["optimize"]["bounds"] = {"long_entry_initial_qty_fraction": [0.01, 0.03]}
     for side in ("long", "short"):
         for key in ("n_positions", "total_wallet_exposure_limit"):
             value = config["bot"][side]["risk"][key]
@@ -809,7 +809,7 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
         monkeypatch.setattr(base, "evaluate", forbidden)
         monkeypatch.setattr(suite, "evaluate", forbidden)
         candidate_values = [0.03, 0.02, 0.01]
-        parameters = [{"long_entry_initial_qty_pct": value} for value in candidate_values]
+        parameters = [{"long_entry_initial_qty_fraction": value} for value in candidate_values]
         collectors, final, received = {}, {}, {}
         with CudaBacktestService(batch_size=2, max_pending=8) as service:
             for label, scenario_config in scenario_configs.items():
@@ -823,7 +823,7 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
             for index, candidate in enumerate(parameters):
                 graph = [ResultSlot(f"{index}:{label}", label, label, "binance", requested_metrics)
                          for label in scenario_configs]
-                vector = [candidate_values[index] if key == "long_entry_initial_qty_pct" else bound.low
+                vector = [candidate_values[index] if key == "long_entry_initial_qty_fraction" else bound.low
                           for (key, _path), bound in zip(base.key_paths, base.bounds, strict=True)]
                 collectors[str(index)] = CandidateEvaluation(str(index), vector, graph, scorer)
                 for slot in graph:
@@ -873,7 +873,7 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
         for key in ("n_positions", "total_wallet_exposure_limit"):
             value = config["bot"][side]["risk"][key]
             config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
-        config["optimize"]["bounds"][f"{side}_entry_initial_qty_pct"] = [0.01, 0.05]
+        config["optimize"]["bounds"][f"{side}_entry_initial_qty_fraction"] = [0.01, 0.05]
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
     }
@@ -916,7 +916,7 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
         )) for label, value in scenario_configs.items()]
         planner = NativeCandidatePlanner(suite, bindings)
         vector = config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
-        vectors = [[qty if key.endswith("entry_initial_qty_pct") else original
+        vectors = [[qty if key.endswith("entry_initial_qty_fraction") else original
                     for (key, _path), original in zip(base.key_paths, vector, strict=True)]
                    for qty in (0.01, 0.05, 0.03)]
         plans = [planner.prepare(str(index), values) for index, values in enumerate(vectors)]

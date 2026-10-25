@@ -22,7 +22,7 @@ use crate::orchestrator::{
 };
 use crate::strategies::{
     parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
-    strategy_has_trailing, strategy_initial_qty_pct, strategy_needs_log_range_1h,
+    strategy_has_trailing, strategy_initial_qty_fraction, strategy_needs_log_range_1h,
     strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, StrategyParams,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
@@ -791,14 +791,14 @@ impl OrchProfile {
 fn calc_entry_balance_pct(
     params: &BotParams,
     effective_n_positions: usize,
-    entry_initial_qty_pct: f64,
+    entry_initial_qty_fraction: f64,
 ) -> f64 {
     if effective_n_positions == 0 {
         return 0.0;
     }
     let base_limit = params.total_wallet_exposure_limit / effective_n_positions as f64;
     let allowance_multiplier = 1.0 + effective_we_excess_allowance_pct(params, base_limit);
-    base_limit * entry_initial_qty_pct * allowance_multiplier
+    base_limit * entry_initial_qty_fraction * allowance_multiplier
 }
 
 fn configured_wallet_exposure_limit(params: &BotParams) -> f64 {
@@ -853,25 +853,25 @@ fn test_trailing_martingale_params_value_from_flat(bot_params: &BotParams) -> se
         entry: crate::strategies::TrailingMartingaleEntryParams {
             ema_span_0: bot_params.ema_span_0,
             ema_span_1: bot_params.ema_span_1,
-            double_down_factor: bot_params.entry_grid_double_down_factor,
+            reentry_qty_multiplier: bot_params.entry_grid_reentry_qty_multiplier,
             ema_gate_mode: crate::strategies::EmaGateMode::Initial,
-            initial_ema_dist: bot_params.entry_initial_ema_dist,
-            initial_qty_pct: bot_params.entry_initial_qty_pct,
-            threshold_base_pct: bot_params.entry_grid_spacing_pct,
-            threshold_we_weight: bot_params.entry_we_weight,
+            initial_ema_distance_fraction: bot_params.entry_initial_ema_distance_fraction,
+            initial_qty_fraction: bot_params.entry_initial_qty_fraction,
+            threshold_base_fraction: bot_params.entry_grid_threshold_base_fraction,
+            threshold_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
             threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
             threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
-            retracement_base_pct: bot_params.entry_trailing_retracement_pct,
-            retracement_we_weight: bot_params.entry_we_weight,
+            retracement_base_fraction: bot_params.entry_trailing_retracement_base_fraction,
+            retracement_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
             retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
             retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
         },
         close: crate::strategies::TrailingMartingaleCloseParams {
-            qty_pct: bot_params.close_grid_qty_pct,
-            threshold_base_pct: bot_params.close_trailing_threshold_pct,
+            qty_fraction: bot_params.close_grid_qty_fraction,
+            threshold_base_fraction: bot_params.close_trailing_threshold_base_fraction,
             threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
             threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
-            retracement_base_pct: bot_params.close_trailing_retracement_pct,
+            retracement_base_fraction: bot_params.close_trailing_retracement_base_fraction,
             retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
             retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
             ..Default::default()
@@ -2605,8 +2605,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             SHORT => &self.strategy_params[idx].short,
             _ => return false,
         };
-        let entry_initial_qty_pct = strategy_initial_qty_pct(strategy);
-        if entry_initial_qty_pct <= 0.0 {
+        let entry_initial_qty_fraction = strategy_initial_qty_fraction(strategy);
+        if entry_initial_qty_fraction <= 0.0 {
             return false;
         }
         let base_limit = self
@@ -2617,7 +2617,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
         let effective_limit = wallet_exposure_limit_with_allowance_from_base(bot, base_limit);
         let projected_cost =
-            self.balance.usd_total_balance * effective_limit * entry_initial_qty_pct;
+            self.balance.usd_total_balance * effective_limit * entry_initial_qty_fraction;
         projected_cost >= min_cost
     }
 
@@ -4378,27 +4378,27 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     }
 
     pub fn initial_entry_balance_pct(&self) -> (f64, f64) {
-        let default_long_qty_pct = self.bot_params_master.long.entry_initial_qty_pct;
-        let default_short_qty_pct = self.bot_params_master.short.entry_initial_qty_pct;
-        let (long_qty_pct, short_qty_pct) = self
+        let default_long_qty_fraction = self.bot_params_master.long.entry_initial_qty_fraction;
+        let default_short_qty_fraction = self.bot_params_master.short.entry_initial_qty_fraction;
+        let (long_qty_fraction, short_qty_fraction) = self
             .strategy_params
             .first()
             .map(|params| {
                 (
-                    strategy_initial_qty_pct(&params.long),
-                    strategy_initial_qty_pct(&params.short),
+                    strategy_initial_qty_fraction(&params.long),
+                    strategy_initial_qty_fraction(&params.short),
                 )
             })
-            .unwrap_or((default_long_qty_pct, default_short_qty_pct));
+            .unwrap_or((default_long_qty_fraction, default_short_qty_fraction));
         let long = calc_entry_balance_pct(
             &self.bot_params_master.long,
             self.effective_n_positions.long,
-            long_qty_pct,
+            long_qty_fraction,
         );
         let short = calc_entry_balance_pct(
             &self.bot_params_master.short,
             self.effective_n_positions.short,
-            short_qty_pct,
+            short_qty_fraction,
         );
         (long, short)
     }
@@ -4868,25 +4868,25 @@ mod tests {
             entry: TrailingMartingaleEntryParams {
                 ema_span_0: bot_params.ema_span_0,
                 ema_span_1: bot_params.ema_span_1,
-                double_down_factor: bot_params.entry_grid_double_down_factor,
+                reentry_qty_multiplier: bot_params.entry_grid_reentry_qty_multiplier,
                 ema_gate_mode: crate::strategies::EmaGateMode::Initial,
-                initial_ema_dist: bot_params.entry_initial_ema_dist,
-                initial_qty_pct: bot_params.entry_initial_qty_pct,
-                threshold_base_pct: bot_params.entry_grid_spacing_pct,
-                threshold_we_weight: bot_params.entry_we_weight,
+                initial_ema_distance_fraction: bot_params.entry_initial_ema_distance_fraction,
+                initial_qty_fraction: bot_params.entry_initial_qty_fraction,
+                threshold_base_fraction: bot_params.entry_grid_threshold_base_fraction,
+                threshold_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
                 threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
                 threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
-                retracement_base_pct: bot_params.entry_trailing_retracement_pct,
-                retracement_we_weight: bot_params.entry_we_weight,
+                retracement_base_fraction: bot_params.entry_trailing_retracement_base_fraction,
+                retracement_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
                 retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
                 retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
             },
             close: TrailingMartingaleCloseParams {
-                qty_pct: bot_params.close_grid_qty_pct,
-                threshold_base_pct: bot_params.close_trailing_threshold_pct,
+                qty_fraction: bot_params.close_grid_qty_fraction,
+                threshold_base_fraction: bot_params.close_trailing_threshold_base_fraction,
                 threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
                 threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
-                retracement_base_pct: bot_params.close_trailing_retracement_pct,
+                retracement_base_fraction: bot_params.close_trailing_retracement_base_fraction,
                 retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
                 retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
                 ..Default::default()
@@ -5098,12 +5098,12 @@ mod tests {
         pair.long.wallet_exposure_limit = 1.0;
         pair.long.ema_span_0 = 1.0;
         pair.long.ema_span_1 = 1.0;
-        pair.long.entry_initial_qty_pct = 0.1;
-        pair.long.entry_grid_spacing_pct = 0.02;
+        pair.long.entry_initial_qty_fraction = 0.1;
+        pair.long.entry_grid_threshold_base_fraction = 0.02;
         pair.long.entry_volatility_ema_span_1h = 3.0;
         pair.long.entry_weight_volatility_1h = 1.0;
-        pair.long.close_grid_qty_pct = 1.0;
-        pair.long.close_trailing_threshold_pct = 0.01;
+        pair.long.close_grid_qty_fraction = 1.0;
+        pair.long.close_trailing_threshold_base_fraction = 0.01;
         pair
     }
 
@@ -6973,7 +6973,7 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit = 1.0;
         bp_pair.long.wallet_exposure_limit = 0.1;
-        bp_pair.long.entry_initial_qty_pct = 0.1;
+        bp_pair.long.entry_initial_qty_fraction = 0.1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -7829,7 +7829,7 @@ mod tests {
         bp_pair.long.n_positions = 1;
         bp_pair.long.total_wallet_exposure_limit = 1.0;
         bp_pair.long.wallet_exposure_limit = 0.1;
-        bp_pair.long.entry_initial_qty_pct = 0.1;
+        bp_pair.long.entry_initial_qty_fraction = 0.1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 

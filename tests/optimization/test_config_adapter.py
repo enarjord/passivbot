@@ -140,7 +140,7 @@ class TestConfigAdapter:
                 "ema_span_0_minutes"
             ]
         )
-        assert spec["defaults"]["short"]["entry_threshold_base_pct"] == bot_template[
+        assert spec["defaults"]["short"]["entry_threshold_base_fraction"] == bot_template[
             "short"
         ]["strategy"]["trailing_martingale"]["entry"]["threshold_base_fraction"]
         assert (
@@ -170,10 +170,10 @@ class TestConfigAdapter:
         spec = get_strategy_spec("ema_anchor")
 
         assert spec["strategy_kind"] == "ema_anchor"
-        assert spec["defaults"]["long"]["base_qty_pct"] == 0.01
-        assert spec["defaults"]["short"]["offset"] == 0.002
+        assert spec["defaults"]["long"]["base_qty_fraction"] == 0.01
+        assert spec["defaults"]["short"]["offset_fraction"] == 0.002
         assert spec["defaults"]["long"]["offset_volatility_ema_span_1m"] == 60.0
-        assert spec["optimize_bounds"]["long_offset"] == [0.0, 0.05, 0.0001]
+        assert spec["optimize_bounds"]["long_offset_fraction"] == [0.0, 0.05, 0.0001]
         assert spec["optimize_bounds"]["long_offset_volatility_1m_weight"] == [0.0, 40.0, 0.1]
         assert any(
             param["config_path"] == ["strategy", "long", "base_qty_fraction"]
@@ -198,7 +198,7 @@ class TestConfigAdapter:
             ("bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
         ) in key_paths
         assert (
-            "short_entry_threshold_base_pct",
+            "short_entry_threshold_base_fraction",
             (
                 "bot",
                 "short",
@@ -221,12 +221,12 @@ class TestConfigAdapter:
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_base_qty_pct", ("bot", "long", "strategy", "ema_anchor", "base_qty_fraction")) in key_paths
+        assert ("long_base_qty_fraction", ("bot", "long", "strategy", "ema_anchor", "base_qty_fraction")) in key_paths
         assert (
             "long_offset_volatility_1m_weight",
             ("bot", "long", "strategy", "ema_anchor", "offset_log_range_1m_coefficient"),
         ) in key_paths
-        assert ("short_offset", ("bot", "short", "strategy", "ema_anchor", "offset_fraction")) in key_paths
+        assert ("short_offset_fraction", ("bot", "short", "strategy", "ema_anchor", "offset_fraction")) in key_paths
 
     @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
     def test_strategy_optimizer_key_path_map_is_exhaustive_for_rust_spec(self, strategy_kind):

@@ -258,7 +258,7 @@ def _read_legacy_alias(bot_cfg: dict, *keys: str):
     return None
 
 
-def _derive_close_grid_qty_pct(bot_cfg: dict, *, path: str) -> Optional[float]:
+def _derive_close_grid_qty_fraction(bot_cfg: dict, *, path: str) -> Optional[float]:
     raw_n_closes = _read_legacy_alias(bot_cfg, "n_closes", "n_close_orders")
     if raw_n_closes is None:
         return None

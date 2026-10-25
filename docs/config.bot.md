@@ -93,15 +93,15 @@ entry_retracement_multiplier = max(1, 1 + entry_retracement_vol_term + entry_ret
 
 initial_price(pside) =
     if entry.ema_gate_mode gates initial entries:
-        long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
-        short : max(best_ask, EMA_high * (1 + entry_initial_ema_dist))
+        long  : min(best_bid, EMA_low * (1 - entry.initial_ema_distance_fraction))
+        short : max(best_ask, EMA_high * (1 + entry.initial_ema_distance_fraction))
     else:
         long  : best_bid
         short : best_ask
 
 initial_qty(balance) =
     max(min_qty,
-        balance * wel_allowed * entry_initial_qty_pct / initial_price)
+        balance * wel_allowed * entry.initial_qty_fraction / initial_price)
 
 effective_entry_threshold =
     entry.threshold_base_fraction * entry_threshold_multiplier
@@ -114,8 +114,8 @@ next_entry_price(pside) =
     short : pos.price * (1 + effective_entry_threshold)
 
 if entry.ema_gate_mode gates re-entries:
-    next_entry_price(long)  = min(next_entry_price(long), EMA_low * (1 - entry_initial_ema_dist))
-    next_entry_price(short) = max(next_entry_price(short), EMA_high * (1 + entry_initial_ema_dist))
+    next_entry_price(long)  = min(next_entry_price(long), EMA_low * (1 - entry.initial_ema_distance_fraction))
+    next_entry_price(short) = max(next_entry_price(short), EMA_high * (1 + entry.initial_ema_distance_fraction))
 
 next_entry_qty(pos.size) =
     max(min_entry_qty,
@@ -433,10 +433,10 @@ intervention:
 | ---------------------------------------------- | -----------------------------------------------------------| ------------- |
 | `strategy.<kind>.ema_span_*`                    | Defines the strategy's price EMA band                      | `EMA_low`, `EMA_high` |
 | `unstuck.ema_span_*`                            | Defines the independent auto-unstuck EMA band              | `EMA_low`, `EMA_high` |
-| `entry_grid_spacing_*`, `entry_grid_double_down_factor` | Controls grid spacing and growth of re-entry quantities | `next_grid_price`, `next_grid_qty` |
-| `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `exposure_trigger_ratio`, `retracement` |
-| `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
-| `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
+| `entry.threshold_base_fraction`, `entry.reentry_qty_multiplier` | Controls grid spacing and growth of re-entry quantities | `next_grid_price`, `next_grid_qty` |
+| `entry.retracement_base_fraction`, `entry.*_exposure_ratio_coefficient`                             | Adjust trailing entry triggers via exposure & volatility  | `exposure_trigger_ratio`, `retracement` |
+| `close.threshold_base_fraction`, `close.qty_fraction`    | Sizes and places recursive closes                                          | `tp_prices`, `tp_qty` |
+| `close.retracement_base_fraction`, `close.threshold_exposure_ratio_coefficient`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
 | `position_exposure_enforcer.threshold_ratio`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
 | `total_exposure_enforcer.threshold_ratio`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |

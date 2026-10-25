@@ -9,11 +9,11 @@ from test_orchestrator_json_api import adaptive_strategy_params, bot_params_pair
 
 def snapshot(kind, flags, *, hedge=True, held=None, forager=False):
     bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0, "wallet_exposure_limit": 1.0,
-          "entry_initial_qty_pct": 0.001, "risk_we_excess_allowance_pct": 0.0}
-    strategy = (adaptive_strategy_params(entry={"initial_qty_pct": 0.001, "initial_ema_dist": 0.0})
+          "entry_initial_qty_fraction": 0.001, "risk_we_excess_allowance_pct": 0.0}
+    strategy = (adaptive_strategy_params(entry={"initial_qty_fraction": 0.001, "initial_ema_distance_fraction": 0.0})
                 if kind == "trailing_martingale" else
-                {"base_qty_pct": 0.001, "ema_span_0": 10.0, "ema_span_1": 20.0,
-                 "offset": 0.0, "offset_psize_weight": 0.0})
+                {"base_qty_fraction": 0.001, "ema_span_0": 10.0, "ema_span_1": 20.0,
+                 "offset_fraction": 0.0, "inventory_offset_exposure_coefficient": 0.0})
     symbols = []
     for i in range(2 if forager else 1):
         kwargs = {f"{held}_pos_size": 0.1 if held == "long" else -0.1,

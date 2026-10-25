@@ -1,10 +1,12 @@
 # Strategy Runtime Contracts
 
 Public scale-one shares and relative price offsets use `_fraction`; these names do not rescale
-values. Strategy metadata is copied before public path projection, while Rust parameter names,
-optimizer IDs, defaults and native transport keys remain Rust-owned. Runtime builders lower the
-merged public strategy exactly once at the native boundary. Normal loading accepts one public
-spelling; explicit released-v8 conversion reports path changes across all authored layers.
+values. Strategy metadata is copied before public path projection. Native strategy sizing,
+relative-price quantities and exposure coefficients use the same names as their public paths; optimizer IDs and
+native transport keys remain Rust-owned. Runtime builders lower the remaining indicator paths
+exactly once at the native boundary. Normal loading accepts one public spelling. Explicit
+released-v8 conversion owns its frozen source vocabulary independently of current Rust names
+and reports path changes across all authored layers.
 
 Public candle-range inputs use `log_range`: the indicator is the EMA of `ln(high / low)`,
 not a return standard deviation. Strategy sensitivities use `_coefficient`; forager

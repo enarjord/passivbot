@@ -26,7 +26,7 @@ def test_inherited_overrides_preserve_hsl_and_temporal_continuation(monkeypatch,
 
         def with_overrides(config, **kwargs):
             patch = {"entry_cooldown": {"min_duration_minutes": 0.0},
-                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": 0.07}}}}
+                     "strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": 0.07}}}}
             if mode == "coin":
                 patch["hsl"] = {"enabled": False, "drawdown_threshold_fraction": 0.03}
             # A short-side-only finite zero must retain lookup in fused replay.

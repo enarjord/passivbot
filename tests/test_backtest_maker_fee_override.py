@@ -358,9 +358,9 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
 
     assert len(bot_params_list) == 1
     assert "ema_span_0" not in bot_params_list[0]["long"]
-    assert "entry_grid_spacing_pct" not in bot_params_list[0]["short"]
+    assert "entry_grid_threshold_base_fraction" not in bot_params_list[0]["short"]
     assert strategy_params_list[0]["long"]["entry"]["ema_span_0"] == 321.0
-    assert strategy_params_list[0]["short"]["entry"]["threshold_base_pct"] == 0.0123
+    assert strategy_params_list[0]["short"]["entry"]["threshold_base_fraction"] == 0.0123
 
 
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
@@ -400,17 +400,17 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     assert backtest_params["strategy_kind"] == "ema_anchor"
     assert len(bot_params_list) == 1
     assert len(strategy_params_list) == 1
-    assert "base_qty_pct" not in bot_params_list[0]["long"]
+    assert "base_qty_fraction" not in bot_params_list[0]["long"]
     assert "offset_volatility_ema_span_1m" not in bot_params_list[0]["long"]
     assert bot_params_list[0]["long"]["risk_entry_cooldown_minutes"] == 3.0
-    assert strategy_params_list[0]["long"]["base_qty_pct"] == 0.02
-    assert strategy_params_list[0]["long"]["entry_double_down_factor"] == 0.8
+    assert strategy_params_list[0]["long"]["base_qty_fraction"] == 0.02
+    assert strategy_params_list[0]["long"]["entry_qty_exposure_coefficient"] == 0.8
     assert strategy_params_list[0]["long"]["offset_volatility_ema_span_1m"] == 30.0
     assert strategy_params_list[0]["long"]["offset_volatility_1m_weight"] == 2.5
     assert strategy_params_list[0]["short"]["offset_volatility_ema_span_1h"] == 18.0
     assert strategy_params_list[0]["short"]["offset_volatility_1h_weight"] == 0.5
-    assert strategy_params_list[0]["short"]["offset"] == 0.004
-    assert strategy_params_list[0]["short"]["entry_double_down_factor"] == 0.5
+    assert strategy_params_list[0]["short"]["offset_fraction"] == 0.004
+    assert strategy_params_list[0]["short"]["entry_qty_exposure_coefficient"] == 0.5
 
 
 def test_prep_backtest_args_does_not_log_execution_settings_by_default(caplog):
@@ -550,9 +550,9 @@ def test_run_backtest_bundle_rejects_unrecognized_strategy_pair_keys(strategy_ki
 
 @pytest.mark.parametrize("strategy_kind,path", [
     ("trailing_martingale", ("volatility_ema_span_1m",)),
-    ("trailing_martingale", ("entry", "double_down_factor")),
-    ("trailing_martingale", ("close", "qty_pct")),
-    ("ema_anchor", ("offset",)),
+    ("trailing_martingale", ("entry", "reentry_qty_multiplier")),
+    ("trailing_martingale", ("close", "qty_fraction")),
+    ("ema_anchor", ("offset_fraction",)),
 ])
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 @pytest.mark.parametrize("pside", ["long", "short"])
@@ -570,7 +570,7 @@ def test_run_backtest_bundle_rejects_nonfinite_strategy_values(strategy_kind, pa
 @pytest.mark.parametrize("strategy_kind,optional", [
     ("trailing_martingale", [("entry", "ema_gate_mode")]),
     ("ema_anchor", [
-        ("entry_double_down_factor",),
+        ("entry_qty_exposure_coefficient",),
         ("offset_volatility_ema_span_1m",),
         ("offset_volatility_1m_weight",),
         ("offset_volatility_ema_span_1h",),

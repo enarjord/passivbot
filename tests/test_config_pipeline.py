@@ -72,10 +72,10 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     }.items():
         assert config["backtest"][key] == expected
     expected_native_strategy = {
-        "base_qty_pct": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
-        "offset": 0.003, "offset_volatility_ema_span_1m": 60.0,
+        "base_qty_fraction": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
+        "offset_fraction": 0.003, "offset_volatility_ema_span_1m": 60.0,
         "offset_volatility_1m_weight": 0.0, "offset_volatility_ema_span_1h": 24.0,
-        "offset_volatility_1h_weight": 0.0, "offset_psize_weight": 0.2,
+        "offset_volatility_1h_weight": 0.0, "inventory_offset_exposure_coefficient": 0.2,
     }
     expected_strategy = project_native_strategy_side("ema_anchor", expected_native_strategy)
     for side in ("long", "short"):
@@ -443,7 +443,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
     assert prepared['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
     assert "ema_span_0" not in get_template_config()["bot"]["long"]
-    assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
+    assert "entry_grid_threshold_base_fraction" not in get_template_config()["bot"]["short"]
     assert (
         _strategy_side(prepared, "long")["entry"]["ema_span_0_minutes"]
         == _strategy_side(get_template_config(), "global", "trailing_martingale")[
@@ -455,7 +455,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
 def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_martingale():
     source = get_template_config()
     source['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
-    source["bot"]["long"]["entry_grid_spacing_pct"] = 0.01
+    source["bot"]["long"]["entry_grid_threshold_base_fraction"] = 0.01
     source["bot"]["long"]["entry_trailing_grid_ratio"] = -0.5
     source["bot"]["long"]["close_grid_markup_start"] = 0.01
 
@@ -465,7 +465,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_marti
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor"])
 @pytest.mark.parametrize(
-    "flat_key", ["entry_grid_spacing_pct", "entry_volatility_ema_span_1h"]
+    "flat_key", ["entry_grid_threshold_base_fraction", "entry_volatility_ema_span_1h"]
 )
 def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_kind(
     strategy_kind,
@@ -643,8 +643,8 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     assert _strategy_side(prepared, "short")[
         "entry_qty_exposure_coefficient"
     ] == pytest.approx(0.4)
-    assert "base_qty_pct" not in compiled["bot"]["long"]
-    assert "offset" not in compiled["bot"]["short"]
+    assert "base_qty_fraction" not in compiled["bot"]["long"]
+    assert "offset_fraction" not in compiled["bot"]["short"]
     assert compiled["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(2.5)
 
 
@@ -663,7 +663,7 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
         "entry_qty_exposure_coefficient"
     ] == pytest.approx(0.0)
     assert _strategy_side(prepared, "short")["offset_fraction"] == pytest.approx(0.002)
-    assert "base_qty_pct" not in prepared["bot"]["long"]
+    assert "base_qty_fraction" not in prepared["bot"]["long"]
 
 
 def test_prepare_config_rejects_negative_entry_cooldown_minutes():

@@ -93,12 +93,12 @@ def adaptive_params(bot: dict) -> dict:
 
 
 EMA_ANCHOR_PARAM_KEYS = (
-    "base_qty_pct",
+    "base_qty_fraction",
     "ema_span_0",
     "ema_span_1",
-    "entry_double_down_factor",
-    "offset",
-    "offset_psize_weight",
+    "entry_qty_exposure_coefficient",
+    "offset_fraction",
+    "inventory_offset_exposure_coefficient",
     "offset_volatility_1h_weight",
     "offset_volatility_1m_weight",
     "offset_volatility_ema_span_1h",
@@ -222,23 +222,23 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
     "ema_span_1",
     "volatility_ema_span_1h",
     "volatility_ema_span_1m",
-    "entry_double_down_factor",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_threshold_base_pct",
-    "entry_threshold_we_weight",
+    "entry_reentry_qty_multiplier",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_threshold_base_fraction",
+    "entry_threshold_exposure_ratio_coefficient",
     "entry_threshold_volatility_1h_weight",
     "entry_threshold_volatility_1m_weight",
-    "entry_retracement_base_pct",
-    "entry_retracement_we_weight",
+    "entry_retracement_base_fraction",
+    "entry_retracement_exposure_ratio_coefficient",
     "entry_retracement_volatility_1h_weight",
     "entry_retracement_volatility_1m_weight",
-    "close_qty_pct",
-    "close_threshold_base_pct",
-    "close_threshold_we_weight",
+    "close_qty_fraction",
+    "close_threshold_base_fraction",
+    "close_threshold_exposure_ratio_coefficient",
     "close_threshold_volatility_1h_weight",
     "close_threshold_volatility_1m_weight",
-    "close_retracement_base_pct",
+    "close_retracement_base_fraction",
     "close_retracement_volatility_1h_weight",
     "close_retracement_volatility_1m_weight",
     "entry_cooldown_minutes",
@@ -271,11 +271,11 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
     ("ema_span_1", ("entry", "ema_span_1")),
     ("volatility_ema_span_1h", ("volatility_ema_span_1h",)),
     ("volatility_ema_span_1m", ("volatility_ema_span_1m",)),
-    ("entry_double_down_factor", ("entry", "double_down_factor")),
-    ("entry_initial_ema_dist", ("entry", "initial_ema_dist")),
-    ("entry_initial_qty_pct", ("entry", "initial_qty_pct")),
-    ("entry_threshold_base_pct", ("entry", "threshold_base_pct")),
-    ("entry_threshold_we_weight", ("entry", "threshold_we_weight")),
+    ("entry_reentry_qty_multiplier", ("entry", "reentry_qty_multiplier")),
+    ("entry_initial_ema_distance_fraction", ("entry", "initial_ema_distance_fraction")),
+    ("entry_initial_qty_fraction", ("entry", "initial_qty_fraction")),
+    ("entry_threshold_base_fraction", ("entry", "threshold_base_fraction")),
+    ("entry_threshold_exposure_ratio_coefficient", ("entry", "threshold_exposure_ratio_coefficient")),
     (
         "entry_threshold_volatility_1h_weight",
         ("entry", "threshold_volatility_1h_weight"),
@@ -284,8 +284,8 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
         "entry_threshold_volatility_1m_weight",
         ("entry", "threshold_volatility_1m_weight"),
     ),
-    ("entry_retracement_base_pct", ("entry", "retracement_base_pct")),
-    ("entry_retracement_we_weight", ("entry", "retracement_we_weight")),
+    ("entry_retracement_base_fraction", ("entry", "retracement_base_fraction")),
+    ("entry_retracement_exposure_ratio_coefficient", ("entry", "retracement_exposure_ratio_coefficient")),
     (
         "entry_retracement_volatility_1h_weight",
         ("entry", "retracement_volatility_1h_weight"),
@@ -294,9 +294,9 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
         "entry_retracement_volatility_1m_weight",
         ("entry", "retracement_volatility_1m_weight"),
     ),
-    ("close_qty_pct", ("close", "qty_pct")),
-    ("close_threshold_base_pct", ("close", "threshold_base_pct")),
-    ("close_threshold_we_weight", ("close", "threshold_we_weight")),
+    ("close_qty_fraction", ("close", "qty_fraction")),
+    ("close_threshold_base_fraction", ("close", "threshold_base_fraction")),
+    ("close_threshold_exposure_ratio_coefficient", ("close", "threshold_exposure_ratio_coefficient")),
     (
         "close_threshold_volatility_1h_weight",
         ("close", "threshold_volatility_1h_weight"),
@@ -305,7 +305,7 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
         "close_threshold_volatility_1m_weight",
         ("close", "threshold_volatility_1m_weight"),
     ),
-    ("close_retracement_base_pct", ("close", "retracement_base_pct")),
+    ("close_retracement_base_fraction", ("close", "retracement_base_fraction")),
     (
         "close_retracement_volatility_1h_weight",
         ("close", "retracement_volatility_1h_weight"),
@@ -359,13 +359,13 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_COLS = (
 )
 
 
-def encode_tm_retracement_base_pct(value) -> np.float32:
+def encode_tm_retracement_base_fraction(value) -> np.float32:
     """Pack a TM retracement base without losing its recursive/trailing mode."""
 
     value = float(value)
     if not math.isfinite(value) or abs(value) > float(np.finfo(np.float32).max):
         raise ValueError(
-            "Trailing Martingale retracement_base_pct must be finite and "
+            "Trailing Martingale retracement_base_fraction must be finite and "
             "representable as float32"
         )
     encoded = np.float32(value)
@@ -411,15 +411,15 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             "entry",
             entry,
             (
-                "double_down_factor",
-                "initial_ema_dist",
-                "initial_qty_pct",
-                "threshold_base_pct",
-                "threshold_we_weight",
+                "reentry_qty_multiplier",
+                "initial_ema_distance_fraction",
+                "initial_qty_fraction",
+                "threshold_base_fraction",
+                "threshold_exposure_ratio_coefficient",
                 "threshold_volatility_1h_weight",
                 "threshold_volatility_1m_weight",
-                "retracement_base_pct",
-                "retracement_we_weight",
+                "retracement_base_fraction",
+                "retracement_exposure_ratio_coefficient",
                 "retracement_volatility_1h_weight",
                 "retracement_volatility_1m_weight",
             ),
@@ -428,12 +428,12 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             "close",
             close,
             (
-                "qty_pct",
-                "threshold_base_pct",
-                "threshold_we_weight",
+                "qty_fraction",
+                "threshold_base_fraction",
+                "threshold_exposure_ratio_coefficient",
                 "threshold_volatility_1h_weight",
                 "threshold_volatility_1m_weight",
-                "retracement_base_pct",
+                "retracement_base_fraction",
                 "retracement_volatility_1h_weight",
                 "retracement_volatility_1m_weight",
             ),

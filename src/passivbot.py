@@ -3018,8 +3018,8 @@ class Passivbot:
         values = {
             name: self._status_materiality_number(payload.get(name))
             for name in (
-                "threshold_pct",
-                "retracement_pct",
+                "threshold_fraction",
+                "retracement_fraction",
                 "threshold_price",
                 "retracement_price",
             )
@@ -3028,7 +3028,7 @@ class Passivbot:
         baseline = baselines.get(key)
         material_changed = baseline is None or qualitative != baseline["qualitative"]
         if not material_changed:
-            for name in ("threshold_pct", "retracement_pct"):
+            for name in ("threshold_fraction", "retracement_fraction"):
                 if self._trailing_status_number_materially_changed(
                     baseline["values"][name], values[name], relative=False
                 ):
@@ -3876,7 +3876,7 @@ class Passivbot:
                 try:
                     span0 = float(self.bp(pside, "ema_span_0", symbol))
                     span1 = float(self.bp(pside, "ema_span_1", symbol))
-                    ema_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
+                    ema_dist = float(self.bp(pside, "entry_initial_ema_distance_fraction", symbol))
 
                     if span0 <= 0 or span1 <= 0:
                         continue
@@ -8114,10 +8114,10 @@ class Passivbot:
         )
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         return (
-            float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0)
+            float(strategy_cfg.get("entry", {}).get("retracement_base_fraction", 0.0) or 0.0)
             > 0.0
             or float(
-                strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0
+                strategy_cfg.get("close", {}).get("retracement_base_fraction", 0.0) or 0.0
             )
             > 0.0
         )
@@ -10407,21 +10407,21 @@ class Passivbot:
         """Return the active strategy's initial sizing fraction."""
         config = getattr(self, "config", None)
         if not isinstance(config, dict):
-            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+            return float(self.bp(pside, "entry_initial_qty_fraction", symbol))
         bot_cfg = config.get("bot")
         if not isinstance(bot_cfg, dict) or not isinstance(bot_cfg.get(pside), dict):
-            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+            return float(self.bp(pside, "entry_initial_qty_fraction", symbol))
         strategy_kind = normalize_strategy_kind(config["bot"]["portfolio"]["strategy_kind"])
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
-            return float(strategy_cfg["base_qty_pct"])
+            return float(strategy_cfg["base_qty_fraction"])
         if strategy_kind == "trailing_martingale":
             entry_cfg = strategy_cfg.get("entry")
-            if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
+            if not isinstance(entry_cfg, dict) or "initial_qty_fraction" not in entry_cfg:
                 raise KeyError(
-                    f"missing required strategy key {pside}.entry.initial_qty_pct"
+                    f"missing required strategy key {pside}.entry.initial_qty_fraction"
                 )
-            return float(entry_cfg["initial_qty_pct"])
+            return float(entry_cfg["initial_qty_fraction"])
         raise ValueError(f"unsupported strategy kind {strategy_kind!r}")
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
@@ -13519,8 +13519,8 @@ class Passivbot:
         for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
             effective_limit = float(block.get("effective_limit", 0.0) or 0.0)
-            entry_initial_qty_pct = float(
-                block.get("entry_initial_qty_pct", 0.0) or 0.0
+            entry_initial_qty_fraction = float(
+                block.get("entry_initial_qty_fraction", 0.0) or 0.0
             )
             projected_initial_cost = float(
                 block.get("projected_initial_cost", 0.0) or 0.0
@@ -13535,14 +13535,14 @@ class Passivbot:
                     effective_min_cost,
                 )
             logging.debug(
-                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.%s.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
+                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_fraction=%.6f next_steps=increase_balance_or_reduce_bot.%s.risk.max_positions_or_increase_per_slot_sizing override=bot.%s.universe.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
                 effective_min_cost,
                 balance,
                 effective_limit,
-                entry_initial_qty_pct,
+                entry_initial_qty_fraction,
                 pside,
                 pside,
             )
@@ -13554,7 +13554,7 @@ class Passivbot:
                     effective_min_cost=effective_min_cost,
                     balance=balance,
                     effective_limit=effective_limit,
-                    entry_initial_qty_pct=entry_initial_qty_pct,
+                    entry_initial_qty_fraction=entry_initial_qty_fraction,
                 )
         if len(eligible_blocks) > detail_limit:
             examples = ",".join(
@@ -14965,47 +14965,47 @@ class Passivbot:
             "risk_twel_enforcer_policy",
         }
         strategy_keys = {
-            "close_grid_qty_pct",
-            "close_trailing_retracement_pct",
-            "close_trailing_qty_pct",
-            "close_trailing_threshold_pct",
+            "close_grid_qty_fraction",
+            "close_trailing_retracement_base_fraction",
+            "close_trailing_qty_fraction",
+            "close_trailing_threshold_base_fraction",
             "close_weight_volatility_1h",
             "close_weight_volatility_1m",
-            "entry_grid_double_down_factor",
-            "entry_grid_spacing_pct",
+            "entry_grid_reentry_qty_multiplier",
+            "entry_grid_threshold_base_fraction",
             "entry_volatility_ema_span_1h",
             "entry_volatility_ema_span_1m",
             "entry_weight_volatility_1h",
             "entry_weight_volatility_1m",
-            "entry_we_weight",
-            "entry_initial_ema_dist",
-            "entry_initial_qty_pct",
-            "entry_trailing_double_down_factor",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_threshold_pct",
+            "entry_exposure_ratio_coefficient",
+            "entry_initial_ema_distance_fraction",
+            "entry_initial_qty_fraction",
+            "entry_trailing_reentry_qty_multiplier",
+            "entry_trailing_retracement_base_fraction",
+            "entry_trailing_threshold_base_fraction",
             "ema_span_0",
             "ema_span_1",
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
-            "close_grid_qty_pct",
-            "close_trailing_retracement_pct",
-            "close_trailing_qty_pct",
-            "close_trailing_threshold_pct",
+            "close_grid_qty_fraction",
+            "close_trailing_retracement_base_fraction",
+            "close_trailing_qty_fraction",
+            "close_trailing_threshold_base_fraction",
             "close_weight_volatility_1h",
             "close_weight_volatility_1m",
-            "entry_grid_double_down_factor",
-            "entry_grid_spacing_pct",
+            "entry_grid_reentry_qty_multiplier",
+            "entry_grid_threshold_base_fraction",
             "entry_volatility_ema_span_1h",
             "entry_volatility_ema_span_1m",
             "entry_weight_volatility_1h",
             "entry_weight_volatility_1m",
-            "entry_we_weight",
-            "entry_initial_ema_dist",
-            "entry_initial_qty_pct",
-            "entry_trailing_double_down_factor",
-            "entry_trailing_retracement_pct",
-            "entry_trailing_threshold_pct",
+            "entry_exposure_ratio_coefficient",
+            "entry_initial_ema_distance_fraction",
+            "entry_initial_qty_fraction",
+            "entry_trailing_reentry_qty_multiplier",
+            "entry_trailing_retracement_base_fraction",
+            "entry_trailing_threshold_base_fraction",
             "forager_volatility_ema_span_1m",
             "forager_volume_ema_span_1m",
             "forager_score_weights",

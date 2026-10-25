@@ -43,8 +43,8 @@ mod core {
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
-        strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
-        strategy_initial_qty_pct, strategy_needs_log_range_1h,
+        strategy_entry_volatility_span_hours, strategy_initial_entry_offset_fraction,
+        strategy_initial_qty_fraction, strategy_needs_log_range_1h,
         strategy_needs_log_range_1h_for_request, strategy_needs_log_range_1m,
         strategy_needs_log_range_1m_for_request, strategy_needs_trailing_for_request,
         strategy_offset_volatility_span_minutes, strategy_requires_sequential_entry_staging,
@@ -190,7 +190,7 @@ mod core {
         pub pside: PositionSide,
         pub balance: f64,
         pub effective_limit: f64,
-        pub entry_initial_qty_pct: f64,
+        pub entry_initial_qty_fraction: f64,
         pub projected_initial_cost: f64,
         pub effective_min_cost: f64,
     }
@@ -1250,7 +1250,7 @@ mod core {
         effective_min_cost: f64,
         bot: &BotParams,
         runtime_budget: &RuntimeBudgetState,
-        entry_initial_qty_pct: f64,
+        entry_initial_qty_fraction: f64,
     ) -> bool {
         if !filter_enabled {
             return true;
@@ -1261,7 +1261,7 @@ mod core {
             effective_min_cost,
             bot,
             runtime_budget,
-            entry_initial_qty_pct,
+            entry_initial_qty_fraction,
         ) {
             req >= effective_min_cost
         } else {
@@ -1275,7 +1275,7 @@ mod core {
         effective_min_cost: f64,
         bot: &BotParams,
         runtime_budget: &RuntimeBudgetState,
-        entry_initial_qty_pct: f64,
+        entry_initial_qty_fraction: f64,
     ) -> Option<(f64, f64)> {
         if !filter_enabled {
             return None;
@@ -1292,7 +1292,7 @@ mod core {
         if !(effective_limit.is_finite() && effective_limit > 0.0) {
             return None;
         }
-        let req = balance * effective_limit * entry_initial_qty_pct;
+        let req = balance * effective_limit * entry_initial_qty_fraction;
         if !(req.is_finite() && req > 0.0) {
             return None;
         }
@@ -1308,7 +1308,7 @@ mod core {
         filter_enabled: bool,
         bot: &BotParams,
         runtime_budget: &RuntimeBudgetState,
-        entry_initial_qty_pct: f64,
+        entry_initial_qty_fraction: f64,
     ) {
         if let Some((effective_limit, projected_initial_cost)) = min_effective_cost_projection(
             balance,
@@ -1316,7 +1316,7 @@ mod core {
             effective_min_cost,
             bot,
             runtime_budget,
-            entry_initial_qty_pct,
+            entry_initial_qty_fraction,
         ) {
             if projected_initial_cost + 1e-12 < effective_min_cost {
                 diagnostics
@@ -1326,7 +1326,7 @@ mod core {
                         pside,
                         balance,
                         effective_limit,
-                        entry_initial_qty_pct,
+                        entry_initial_qty_fraction,
                         projected_initial_cost,
                         effective_min_cost,
                     });
@@ -2269,7 +2269,7 @@ mod core {
             ask: 0.0,
             ema_lower: 0.0,
             ema_upper: 0.0,
-            entry_initial_ema_dist: 0.0,
+            entry_initial_ema_distance_fraction: 0.0,
         }
     }
 
@@ -2316,7 +2316,7 @@ mod core {
                 s.effective_min_cost,
                 &side.bot_params,
                 &runtime_budgets[s.symbol_idx],
-                strategy_initial_qty_pct(&strategy_params),
+                strategy_initial_qty_fraction(&strategy_params),
             );
             let eligible_without_min_cost = symbol_side_eligible(s, pside, now_ms)
                 && !already_active
@@ -2334,7 +2334,7 @@ mod core {
                     filter_enabled,
                     &side.bot_params,
                     &runtime_budgets[s.symbol_idx],
-                    strategy_initial_qty_pct(&strategy_params),
+                    strategy_initial_qty_fraction(&strategy_params),
                 );
             }
         }
@@ -2428,7 +2428,7 @@ mod core {
             } else {
                 0.0
             };
-            let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
+            let (bid, ask, ema_lower, ema_upper, entry_initial_ema_distance_fraction) = if ema_readiness_required
             {
                 let ema_bands = match cached_ema_bands(
                     derived_cache,
@@ -2446,11 +2446,11 @@ mod core {
                     }
                     Err(err) => return Err(err),
                 };
-                let entry_initial_ema_dist = strategy_initial_entry_offset(&strategy_params);
-                let entry_initial_ema_dist = match require_forager_input(
+                let entry_initial_ema_distance_fraction = strategy_initial_entry_offset_fraction(&strategy_params);
+                let entry_initial_ema_distance_fraction = match require_forager_input(
                     s.symbol_idx,
-                    "entry_initial_ema_dist",
-                    entry_initial_ema_dist,
+                    "entry_initial_ema_distance_fraction",
+                    entry_initial_ema_distance_fraction,
                 ) {
                     Ok(v) => v,
                     Err(_) => {
@@ -2463,7 +2463,7 @@ mod core {
                     require_forager_input(s.symbol_idx, "forager_market_ask", s.order_book.ask)?,
                     ema_bands.lower,
                     ema_bands.upper,
-                    entry_initial_ema_dist,
+                    entry_initial_ema_distance_fraction,
                 )
             } else {
                 (0.0, 0.0, 0.0, 0.0, 0.0)
@@ -2479,7 +2479,7 @@ mod core {
                 ask,
                 ema_lower,
                 ema_upper,
-                entry_initial_ema_dist,
+                entry_initial_ema_distance_fraction,
             });
         }
         if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
@@ -3853,7 +3853,7 @@ mod core {
                             s.effective_min_cost,
                             &s.long.bot_params,
                             &workspace.runtime_budget_long[idx],
-                            strategy_initial_qty_pct(&cached_strategy_params_for_symbol_side(
+                            strategy_initial_qty_fraction(&cached_strategy_params_for_symbol_side(
                                 &mut workspace.derived_long,
                                 idx,
                                 input.global.strategy_kind,
@@ -3868,7 +3868,7 @@ mod core {
                             s.effective_min_cost,
                             &s.short.bot_params,
                             &workspace.runtime_budget_short[idx],
-                            strategy_initial_qty_pct(&cached_strategy_params_for_symbol_side(
+                            strategy_initial_qty_fraction(&cached_strategy_params_for_symbol_side(
                                 &mut workspace.derived_short,
                                 idx,
                                 input.global.strategy_kind,
@@ -3949,9 +3949,9 @@ mod core {
                     };
 
                     let entry_threshold_long =
-                        bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
+                        bands_long.lower * (1.0 - strategy_initial_entry_offset_fraction(&params_long));
                     let entry_threshold_short =
-                        bands_short.upper * (1.0 + strategy_initial_entry_offset(&params_short));
+                        bands_short.upper * (1.0 + strategy_initial_entry_offset_fraction(&params_short));
 
                     let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
                     let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
@@ -4018,7 +4018,7 @@ mod core {
                         s.effective_min_cost,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
-                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
+                        strategy_initial_qty_fraction(&strategy_params_for_min_cost),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -4111,7 +4111,7 @@ mod core {
                         s.effective_min_cost,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
-                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
+                        strategy_initial_qty_fraction(&strategy_params_for_min_cost),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -4771,8 +4771,8 @@ mod core {
                         &workspace.runtime_budget_long[s.symbol_idx],
                         workspace.derived_long[s.symbol_idx]
                             .strategy_params
-                            .map(|params| strategy_initial_qty_pct(&params))
-                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
+                            .map(|params| strategy_initial_qty_fraction(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_fraction),
                     );
                 if symbol_side_eligible(s, PositionSide::Long, input.timestamp_ms)
                     && workspace.actives_long[s.symbol_idx]
@@ -4791,8 +4791,8 @@ mod core {
                         &workspace.runtime_budget_long[s.symbol_idx],
                         workspace.derived_long[s.symbol_idx]
                             .strategy_params
-                            .map(|params| strategy_initial_qty_pct(&params))
-                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
+                            .map(|params| strategy_initial_qty_fraction(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_fraction),
                     );
                 }
                 let short_allow_initial = enabled_short
@@ -4807,8 +4807,8 @@ mod core {
                         &workspace.runtime_budget_short[s.symbol_idx],
                         workspace.derived_short[s.symbol_idx]
                             .strategy_params
-                            .map(|params| strategy_initial_qty_pct(&params))
-                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
+                            .map(|params| strategy_initial_qty_fraction(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_fraction),
                     );
                 if symbol_side_eligible(s, PositionSide::Short, input.timestamp_ms)
                     && workspace.actives_short[s.symbol_idx]
@@ -4827,8 +4827,8 @@ mod core {
                         &workspace.runtime_budget_short[s.symbol_idx],
                         workspace.derived_short[s.symbol_idx]
                             .strategy_params
-                            .map(|params| strategy_initial_qty_pct(&params))
-                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
+                            .map(|params| strategy_initial_qty_fraction(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_fraction),
                     );
                 }
                 SymbolStateDiagnostic {
@@ -4874,25 +4874,25 @@ mod core {
                 entry: crate::strategies::TrailingMartingaleEntryParams {
                     ema_span_0: bot_params.ema_span_0,
                     ema_span_1: bot_params.ema_span_1,
-                    double_down_factor: bot_params.entry_grid_double_down_factor,
+                    reentry_qty_multiplier: bot_params.entry_grid_reentry_qty_multiplier,
                     ema_gate_mode: crate::strategies::EmaGateMode::Initial,
-                    initial_ema_dist: bot_params.entry_initial_ema_dist,
-                    initial_qty_pct: bot_params.entry_initial_qty_pct,
-                    threshold_base_pct: bot_params.entry_grid_spacing_pct,
-                    threshold_we_weight: bot_params.entry_we_weight,
+                    initial_ema_distance_fraction: bot_params.entry_initial_ema_distance_fraction,
+                    initial_qty_fraction: bot_params.entry_initial_qty_fraction,
+                    threshold_base_fraction: bot_params.entry_grid_threshold_base_fraction,
+                    threshold_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
                     threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
                     threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
-                    retracement_base_pct: bot_params.entry_trailing_retracement_pct,
-                    retracement_we_weight: bot_params.entry_we_weight,
+                    retracement_base_fraction: bot_params.entry_trailing_retracement_base_fraction,
+                    retracement_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
                     retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
                     retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
                 },
                 close: crate::strategies::TrailingMartingaleCloseParams {
-                    qty_pct: bot_params.close_grid_qty_pct,
-                    threshold_base_pct: bot_params.close_trailing_threshold_pct,
+                    qty_fraction: bot_params.close_grid_qty_fraction,
+                    threshold_base_fraction: bot_params.close_trailing_threshold_base_fraction,
                     threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
                     threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
-                    retracement_base_pct: bot_params.close_trailing_retracement_pct,
+                    retracement_base_fraction: bot_params.close_trailing_retracement_base_fraction,
                     retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
                     retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
                     ..Default::default()
@@ -4920,7 +4920,7 @@ mod core {
             bp.total_wallet_exposure_limit = 1.0;
             bp.n_positions = 1;
             bp.wallet_exposure_limit = 1.0;
-            bp.entry_initial_qty_pct = 1.0;
+            bp.entry_initial_qty_fraction = 1.0;
 
             SymbolInput {
                 inception_timestamp_ms: None,
@@ -5593,7 +5593,7 @@ mod core {
             let mut sym = make_basic_symbol(0);
             sym.effective_min_cost = 10.1;
             sym.long.bot_params.wallet_exposure_limit = 1.5;
-            sym.long.bot_params.entry_initial_qty_pct = 0.0192;
+            sym.long.bot_params.entry_initial_qty_fraction = 0.0192;
 
             let input = OrchestratorInput {
                 timestamp_ms: 0,
@@ -6049,9 +6049,9 @@ mod core {
         #[test]
         fn next_candle_peek_expands_only_when_next_would_fill() {
             let mut sym = make_basic_symbol(0);
-            sym.long.bot_params.entry_grid_spacing_pct = 0.01;
-            sym.long.bot_params.entry_grid_double_down_factor = 1.2;
-            sym.long.bot_params.entry_initial_qty_pct = 0.01;
+            sym.long.bot_params.entry_grid_threshold_base_fraction = 0.01;
+            sym.long.bot_params.entry_grid_reentry_qty_multiplier = 1.2;
+            sym.long.bot_params.entry_initial_qty_fraction = 0.01;
             sym.long.bot_params.wallet_exposure_limit = 100.0;
             sym.long.position = Position {
                 size: 100.0,
@@ -6143,10 +6143,10 @@ mod core {
         #[test]
         fn adaptive_grid_long_entry_output_regression() {
             let mut sym = make_basic_symbol(0);
-            sym.long.bot_params.entry_initial_ema_dist = -0.01;
-            sym.long.bot_params.entry_initial_qty_pct = 0.1;
-            sym.long.bot_params.entry_grid_spacing_pct = 0.02;
-            sym.long.bot_params.entry_grid_double_down_factor = 1.0;
+            sym.long.bot_params.entry_initial_ema_distance_fraction = -0.01;
+            sym.long.bot_params.entry_initial_qty_fraction = 0.1;
+            sym.long.bot_params.entry_grid_threshold_base_fraction = 0.02;
+            sym.long.bot_params.entry_grid_reentry_qty_multiplier = 1.0;
             sym.short.bot_params.total_wallet_exposure_limit = 0.0;
             sym.short.bot_params.n_positions = 0;
 
@@ -6214,10 +6214,10 @@ mod core {
             sym.long.bot_params.n_positions = 0;
             sym.short.bot_params.total_wallet_exposure_limit = 1.0;
             sym.short.bot_params.n_positions = 1;
-            sym.short.bot_params.entry_initial_ema_dist = 0.01;
-            sym.short.bot_params.entry_initial_qty_pct = 0.1;
-            sym.short.bot_params.entry_grid_spacing_pct = 0.02;
-            sym.short.bot_params.entry_grid_double_down_factor = 1.0;
+            sym.short.bot_params.entry_initial_ema_distance_fraction = 0.01;
+            sym.short.bot_params.entry_initial_qty_fraction = 0.1;
+            sym.short.bot_params.entry_grid_threshold_base_fraction = 0.02;
+            sym.short.bot_params.entry_grid_reentry_qty_multiplier = 1.0;
 
             let mut global = make_basic_global();
             global.global_bot_params.long.total_wallet_exposure_limit = 0.0;
@@ -6279,9 +6279,9 @@ mod core {
         #[test]
         fn live_peek_hints_keep_flat_entries_next_only_until_position_exists() {
             let mut sym = make_basic_symbol(0);
-            sym.long.bot_params.entry_grid_spacing_pct = 0.01;
-            sym.long.bot_params.entry_grid_double_down_factor = 1.2;
-            sym.long.bot_params.entry_initial_qty_pct = 0.01;
+            sym.long.bot_params.entry_grid_threshold_base_fraction = 0.01;
+            sym.long.bot_params.entry_grid_reentry_qty_multiplier = 1.2;
+            sym.long.bot_params.entry_initial_qty_fraction = 0.01;
             sym.long.bot_params.wallet_exposure_limit = 100.0;
 
             let mut global = make_basic_global();
@@ -6337,7 +6337,7 @@ mod core {
             sym.long.bot_params.n_positions = 1;
             sym.long.bot_params.total_wallet_exposure_limit = 1.0;
             sym.long.bot_params.wallet_exposure_limit = 1.0;
-            sym.long.bot_params.entry_initial_qty_pct = 1.0;
+            sym.long.bot_params.entry_initial_qty_fraction = 1.0;
 
             let mut global = make_basic_global();
             global.global_bot_params.long.n_positions = 1;
@@ -9296,7 +9296,7 @@ mod core {
             sym.long.bot_params.wallet_exposure_limit = 1.0;
             sym.long.bot_params.total_wallet_exposure_limit = 0.01;
             sym.long.bot_params.n_positions = 1;
-            sym.long.bot_params.entry_initial_qty_pct = 1.0;
+            sym.long.bot_params.entry_initial_qty_fraction = 1.0;
             sym.exchange.qty_step = 0.001;
             sym.exchange.min_qty = 0.001;
 

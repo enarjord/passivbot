@@ -982,20 +982,20 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             ema_readiness_raw = None
             entry_trigger_price = None
             try:
-                entry_initial_ema_dist = float(
-                    candidate.get("entry_initial_ema_dist", 0.0) or 0.0
+                entry_initial_ema_distance_fraction = float(
+                    candidate.get("entry_initial_ema_distance_fraction", 0.0) or 0.0
                 )
                 if pside == "long":
                     ema_lower = float(candidate.get("ema_lower", 0.0) or 0.0)
                     bid = float(candidate.get("bid", 0.0) or 0.0)
                     if ema_lower > 0.0 and bid > 0.0:
-                        entry_trigger_price = ema_lower * (1.0 - entry_initial_ema_dist)
+                        entry_trigger_price = ema_lower * (1.0 - entry_initial_ema_distance_fraction)
                         ema_readiness_raw = bid / entry_trigger_price - 1.0
                 else:
                     ema_upper = float(candidate.get("ema_upper", 0.0) or 0.0)
                     ask = float(candidate.get("ask", 0.0) or 0.0)
                     if ema_upper > 0.0 and ask > 0.0:
-                        entry_trigger_price = ema_upper * (1.0 + entry_initial_ema_dist)
+                        entry_trigger_price = ema_upper * (1.0 + entry_initial_ema_distance_fraction)
                         ema_readiness_raw = 1.0 - ask / entry_trigger_price
             except Exception:
                 ema_readiness_raw = None
@@ -1231,7 +1231,7 @@ def _build_monitor_runtime_market_hints(
                             continue
                         prefix, distance_key = "unstuck_", "unstuck_ema_dist"
                     else:
-                        prefix, distance_key = "", "entry_initial_ema_dist"
+                        prefix, distance_key = "", "entry_initial_ema_distance_fraction"
                     span0 = float(self.bp(pside, f"{prefix}ema_span_0", symbol))
                     span1 = float(self.bp(pside, f"{prefix}ema_span_1", symbol))
                     distance = float(self.bp(pside, distance_key, symbol))
@@ -1435,22 +1435,22 @@ def _monitor_strategy_value(
     self, pside: str, key: str, symbol: str, *, strategy_cache=None
 ) -> float:
     legacy_map = {
-        "entry_grid_double_down_factor": "entry.double_down_factor",
-        "entry_trailing_double_down_factor": "entry.double_down_factor",
-        "entry_grid_spacing_pct": "entry.threshold_base_pct",
-        "entry_trailing_threshold_pct": "entry.threshold_base_pct",
-        "entry_trailing_retracement_pct": "entry.retracement_base_pct",
-        "entry_initial_ema_dist": "entry.initial_ema_dist",
-        "entry_initial_qty_pct": "entry.initial_qty_pct",
+        "entry_grid_reentry_qty_multiplier": "entry.reentry_qty_multiplier",
+        "entry_trailing_reentry_qty_multiplier": "entry.reentry_qty_multiplier",
+        "entry_grid_threshold_base_fraction": "entry.threshold_base_fraction",
+        "entry_trailing_threshold_base_fraction": "entry.threshold_base_fraction",
+        "entry_trailing_retracement_base_fraction": "entry.retracement_base_fraction",
+        "entry_initial_ema_distance_fraction": "entry.initial_ema_distance_fraction",
+        "entry_initial_qty_fraction": "entry.initial_qty_fraction",
         "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
         "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
-        "entry_we_weight": "entry.threshold_we_weight",
+        "entry_exposure_ratio_coefficient": "entry.threshold_exposure_ratio_coefficient",
         "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
         "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
-        "close_grid_qty_pct": "close.qty_pct",
-        "close_trailing_qty_pct": "close.qty_pct",
-        "close_trailing_threshold_pct": "close.threshold_base_pct",
-        "close_trailing_retracement_pct": "close.retracement_base_pct",
+        "close_grid_qty_fraction": "close.qty_fraction",
+        "close_trailing_qty_fraction": "close.qty_fraction",
+        "close_trailing_threshold_base_fraction": "close.threshold_base_fraction",
+        "close_trailing_retracement_base_fraction": "close.retracement_base_fraction",
         "close_weight_volatility_1h": "close.threshold_volatility_1h_weight",
         "close_weight_volatility_1m": "close.threshold_volatility_1m_weight",
     }
@@ -1480,7 +1480,7 @@ def _monitor_entry_trailing_limit_cap(
     if allowed_limit <= 0.0:
         return None, None
     retracement = _monitor_strategy_value(
-        self, pside, "entry.retracement_base_pct", symbol
+        self, pside, "entry.retracement_base_fraction", symbol
     )
     if retracement > 0.0:
         return allowed_limit, "trailing_only"
@@ -1624,16 +1624,16 @@ def _build_monitor_trailing_entry_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "entry_grid_double_down_factor",
-        "entry_grid_spacing_pct",
-        "entry_initial_ema_dist",
-        "entry_initial_qty_pct",
-        "entry_trailing_double_down_factor",
-        "entry_trailing_retracement_pct",
-        "entry_trailing_threshold_pct",
+        "entry_grid_reentry_qty_multiplier",
+        "entry_grid_threshold_base_fraction",
+        "entry_initial_ema_distance_fraction",
+        "entry_initial_qty_fraction",
+        "entry_trailing_reentry_qty_multiplier",
+        "entry_trailing_retracement_base_fraction",
+        "entry_trailing_threshold_base_fraction",
         "entry_weight_volatility_1h",
         "entry_weight_volatility_1m",
-        "entry_we_weight",
+        "entry_exposure_ratio_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
             self, pside, key, symbol, strategy_cache=strategy_cache
@@ -1741,10 +1741,10 @@ def _build_monitor_trailing_close_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "close_grid_qty_pct",
-        "close_trailing_qty_pct",
-        "close_trailing_retracement_pct",
-        "close_trailing_threshold_pct",
+        "close_grid_qty_fraction",
+        "close_trailing_qty_fraction",
+        "close_trailing_retracement_base_fraction",
+        "close_trailing_threshold_base_fraction",
         "close_weight_volatility_1h",
         "close_weight_volatility_1m",
     ):
