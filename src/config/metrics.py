@@ -128,8 +128,8 @@ SHARED_METRICS = {
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_mean_1pct_ema_strategy_eq",
-    "strategy_eq_underwater_pct_mean",
-    "strategy_eq_underwater_pct_median",
+    "pain_index_strategy_eq",
+    "ulcer_index_strategy_eq",
     "strategy_eq_recovery_days_mean",
     "strategy_eq_recovery_days_median",
     "strategy_eq_recovery_days_p95",
@@ -307,6 +307,12 @@ _RETIRED_WEIGHTED_METRIC = re.compile(r"_w(?:_|$)", re.IGNORECASE)
 
 
 def reject_retired_metric(metric: str, *, path: str) -> None:
+    if str(metric).startswith("strategy_eq_underwater_pct_"):
+        raise ValueError(
+            f"{path}: daily-worst underwater metric {metric!r} is removed; "
+            "choose minute-sampled pain_index_strategy_eq or ulcer_index_strategy_eq "
+            "and re-evaluate thresholds and results"
+        )
     if _RETIRED_WEIGHTED_METRIC.search(str(metric)):
         raise ValueError(
             f"{path}: legacy weighted metric {metric!r} is retired; "

@@ -12,6 +12,13 @@ _IGNORED_BACKTEST_WARMUP_REASON = (
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
 
 
+def _is_retired_metric(name):
+    return isinstance(name, str) and (
+        bool(_RETIRED_WEIGHTED_METRIC.search(name))
+        or name.startswith("strategy_eq_underwater_pct_")
+    )
+
+
 def _released_fee_override(value, path):
     """Write released fees in the target's nullable numeric representation."""
     if value is None:
@@ -39,20 +46,23 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
         from config.ew import is_ew_metric
 
         nonlocal ew_requested
-        if not isinstance(name, str) or not _RETIRED_WEIGHTED_METRIC.search(name):
+        if not _is_retired_metric(name):
             ew_requested |= isinstance(name, str) and is_ew_metric(name)
             return name
         inferred = name not in replacements and best_effort
         if inferred:
-            candidate = re.sub(r"_w(?=_|$)", "_ew", name, flags=re.IGNORECASE)
-            if not is_ew_metric(candidate):
+            if name.startswith("strategy_eq_underwater_pct_") and name != "strategy_eq_underwater_pct_mean":
+                raise ValueError(f"{path}: no inferred replacement for {name!r}; supply --metric-replacement explicitly")
+            candidate = ("pain_index_strategy_eq" if name == "strategy_eq_underwater_pct_mean"
+                         else re.sub(r"_w(?=_|$)", "_ew", name, flags=re.IGNORECASE))
+            if candidate != "pain_index_strategy_eq" and not is_ew_metric(candidate):
                 raise ValueError(f"{path}: no supported _ew replacement for {name!r}; supply --metric-replacement explicitly")
         elif name not in replacements:
             raise ValueError(f"{path}: retired metric {name!r} requires --metric-replacement {name}=NEW and an explicit formula choice")
         if not acknowledge and not best_effort:
             raise ValueError(f"{path}: metric formula replacement requires --acknowledge-metric-formula-change")
         new = candidate if inferred else replacements[name]
-        if not isinstance(new, str) or not new or _RETIRED_WEIGHTED_METRIC.search(new):
+        if not isinstance(new, str) or not new or _is_retired_metric(new):
             raise ValueError(f"replacement for {name!r} must name a supported non-retired metric")
         used.add(name)
         ew_requested |= is_ew_metric(new)
@@ -60,7 +70,9 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
             from .best_effort_v9 import record_guess
 
             record_guess(changes, path, name, new,
-                         ("adopt exponential recency formula; retired _w formula is not equivalent"
+                         ("adopt minute-sampled Pain Index; daily-worst underwater mean is not equivalent"
+                          if inferred and candidate == "pain_index_strategy_eq" else
+                          "adopt exponential recency formula; retired _w formula is not equivalent"
                           if inferred else "accept explicit replacement formula under best-effort consent"))
         else:
             changes.append(dict(path=path, old=name, new=new,
