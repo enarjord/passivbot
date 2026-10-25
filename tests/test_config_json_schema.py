@@ -328,7 +328,7 @@ def test_grouped_operational_metadata_reuses_runtime_consumers_and_permissions()
     for field, path in LIVE_OPERATIONAL_PATHS.items():
         metadata = describe_field(path)
         assert metadata['coin_override'] == ('allowed' if path in allowed else 'forbidden')
-    for field in ('fee_pct_fallback', 'fee_pct_sanity_abs_max'):
+    for field in ('fallback_fee_fraction', 'max_abs_fee_fraction'):
         metadata = describe_field(LIVE_OPERATIONAL_PATHS[field])
         assert metadata['consumers'] == ['live', 'backtest', 'optimize']
     sparse = describe_field(('coin_overrides', 'BTC', *LIVE_OPERATIONAL_PATHS['leverage']))

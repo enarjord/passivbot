@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align operational runtime IDs, balance hysteresis and fill-fee policy arguments with their
+  public `_fraction` names; preserve released-v8 conversion through explicit source-name metadata.
+
 - Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and
   `drawdown_fraction_ema_span_minutes`, the loss gate uses `max_drawdown_fraction`, and wallet
   exposure limits use `_ratio` names. Defaults, numeric values, bounds, and native execution

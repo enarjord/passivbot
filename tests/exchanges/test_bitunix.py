@@ -27,7 +27,7 @@ from exchanges.bitunix import BitunixBot, BitunixClient, BitunixOrderStream
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from fill_events_manager import (
     BitunixFetcher,
-    DEFAULT_FEE_PCT_FALLBACK,
+    DEFAULT_FALLBACK_FEE_FRACTION,
     FillEvent,
     _build_fetcher_for_bot,
     signed_fee_paid_from_payload,
@@ -2485,7 +2485,7 @@ async def test_bitunix_missing_fee_uses_shared_fallback_and_preserves_reported_f
     event = FillEvent.from_dict(events[0])
     if fee in ("missing", None, ""):
         assert event.fee_paid == pytest.approx(
-            -abs(event.qty * event.price) * DEFAULT_FEE_PCT_FALLBACK
+            -abs(event.qty * event.price) * DEFAULT_FALLBACK_FEE_FRACTION
         )
         assert event.fee_source == "fallback_pct"
         assert event.fee_quality == "fallback"

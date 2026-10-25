@@ -497,7 +497,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "side_activation": {"long": True, "short": True},
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": False,
-                "order_match_tolerance_pct": 0.0,
+                "order_match_tolerance_fraction": 0.0,
             }
 
             async def _get_last_prices(symbols, max_age_ms=None):

@@ -234,7 +234,7 @@ def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
     }
     assert report["issues"] == [
         {
-            "code": "balance_hysteresis_snap_pct_high",
+            "code": "balance_hysteresis_snap_fraction_high",
             "message": (
                 "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
             ),

@@ -1126,7 +1126,7 @@ async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})
     bot.register_symbol(symbol)
-    bot._live_values["order_match_tolerance_pct"] = 0.001  # 0.1%
+    bot._live_values["order_match_tolerance_fraction"] = 0.001  # 0.1%
 
     bot.open_orders[symbol] = [
         {

@@ -1379,8 +1379,8 @@ class Passivbot:
         self.balance = 1e-12
         self.balance_raw = 1e-12
         self.previous_hysteresis_balance = None
-        self.balance_hysteresis_snap_pct = float(
-            get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
+        self.balance_hysteresis_snap_fraction = float(
+            get_optional_live_value(self.config, "balance_hysteresis_snap_fraction", 0.02)
         )
         # hedge_mode controls whether simultaneous long/short on same coin is allowed.
         # This is the config-level setting; exchange-specific bots may override
@@ -14320,8 +14320,8 @@ class Passivbot:
             self._balance_override_logged = False
         if not hasattr(self, "previous_hysteresis_balance"):
             self.previous_hysteresis_balance = None
-        if not hasattr(self, "balance_hysteresis_snap_pct"):
-            self.balance_hysteresis_snap_pct = 0.02
+        if not hasattr(self, "balance_hysteresis_snap_fraction"):
+            self.balance_hysteresis_snap_fraction = 0.02
         if not hasattr(self, "balance_raw"):
             self.balance_raw = self.get_raw_balance()
         if not hasattr(self, "_exchange_reported_balance_raw"):
@@ -14382,7 +14382,7 @@ class Passivbot:
             balance_snapped = pbr.hysteresis(
                 balance_raw,
                 previous_hysteresis_balance,
-                self.balance_hysteresis_snap_pct,
+                self.balance_hysteresis_snap_fraction,
             )
             return {
                 "balance_raw": balance_raw,

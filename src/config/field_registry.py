@@ -72,13 +72,13 @@ def describe_field(path):
                       "when": field.optimize_when, "recommended_bounds": field.recommended_bounds},
         "coin_override": field.coin_override.value if field.coin_override else None,
     }
-# One structural definition for operational field identities, current paths and
-# their released-v8 origins. Internal live-value APIs address these identities;
-# authored configuration accepts only the returned canonical paths.
+# Current operational runtime identities and authored paths have one owner.
+# Released-v8 source names live in migrations/operational_live.py; authored
+# configuration accepts only the canonical grouped paths.
 LIVE_OPERATIONAL_PATHS = {
     name: ("live", group, name)
     for group, names in {
-        "account": "user balance_override balance_hysteresis_snap_pct leverage margin_mode_preference",
+        "account": "user balance_override balance_hysteresis_snap_fraction leverage margin_mode_preference",
         "api": "custom_endpoints_path recv_window_ms max_concurrent_api_requests market_snapshot_ticker_strategy",
         "candles": """
             candle_lock_timeout_seconds enable_archive_candle_fetch enable_forager_ws_candles
@@ -92,13 +92,13 @@ LIVE_OPERATIONAL_PATHS = {
             startup_phase_budgets warmup_concurrency warmup_jitter_seconds
         """,
         "fills": """
-            fee_conversion_max_age_ms fee_pct_fallback fee_pct_sanity_abs_max
+            fee_conversion_max_age_ms fallback_fee_fraction max_abs_fee_fraction
             fills_confirmation_overlap_minutes fills_recent_overlap_minutes
         """,
         "execution": """
-            execution_delay_seconds limit_order_create_max_market_dist_pct
-            max_n_cancellations_per_batch max_n_creations_per_batch order_match_tolerance_pct
-            order_replacement_churn_gate_activation_count order_replacement_churn_gate_market_dist_pct
+            execution_delay_seconds limit_order_create_max_market_distance_fraction
+            max_n_cancellations_per_batch max_n_creations_per_batch order_match_tolerance_fraction
+            order_replacement_churn_gate_activation_count order_replacement_churn_gate_market_distance_fraction
             order_replacement_churn_gate_stability_minutes order_replacement_churn_gate_window_minutes
             time_in_force
         """,
@@ -115,15 +115,6 @@ LIVE_OPERATIONAL_PATHS.update(
         "fee_conversion_max_age_ms": ("live", "fills", "fee_conversion_max_age_milliseconds"),
     }
 )
-for _field_id, _public_name in {
-    "balance_hysteresis_snap_pct": "balance_hysteresis_snap_fraction",
-    "fee_pct_fallback": "fallback_fee_fraction",
-    "fee_pct_sanity_abs_max": "max_abs_fee_fraction",
-    "limit_order_create_max_market_dist_pct": "limit_order_create_max_market_distance_fraction",
-    "order_match_tolerance_pct": "order_match_tolerance_fraction",
-    "order_replacement_churn_gate_market_dist_pct": "order_replacement_churn_gate_market_distance_fraction",
-}.items():
-    LIVE_OPERATIONAL_PATHS[_field_id] = (*LIVE_OPERATIONAL_PATHS[_field_id][:-1], _public_name)
 
 
 def live_field_path(field_id: str) -> str:
@@ -159,14 +150,14 @@ _FIELDS_BY_TYPE = {
             starting_balance taker_fee_override
         """,
         "live": """
-            balance_hysteresis_snap_pct candle_lock_timeout_seconds execution_delay_seconds
-            exchange_symbol_unavailable_cooldown_hours fee_pct_fallback fee_pct_sanity_abs_max
+            balance_hysteresis_snap_fraction candle_lock_timeout_seconds execution_delay_seconds
+            exchange_symbol_unavailable_cooldown_hours fallback_fee_fraction max_abs_fee_fraction
             fills_confirmation_overlap_minutes fills_recent_overlap_minutes
             forager_ws_candle_rest_audit_minutes
-            inactive_coin_candle_ttl_minutes limit_order_create_max_market_dist_pct
+            inactive_coin_candle_ttl_minutes limit_order_create_max_market_distance_fraction
             max_active_candle_tail_gap_minutes
-            max_forager_candle_refresh_seconds order_match_tolerance_pct
-            order_replacement_churn_gate_market_dist_pct
+            max_forager_candle_refresh_seconds order_match_tolerance_fraction
+            order_replacement_churn_gate_market_distance_fraction
             order_replacement_churn_gate_stability_minutes
             order_replacement_churn_gate_window_minutes risk_bootstrap_max_lookback_minutes
             warmup_jitter_seconds
