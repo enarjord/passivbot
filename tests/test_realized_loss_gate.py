@@ -205,7 +205,7 @@ class TestRealizedPnlConsumers:
         *,
         loss_gate_max_drawdown_fraction=1.0,
         hsl_enabled=False,
-        total_wallet_exposure_limit=1.0,
+        total_wallet_exposure_limit_ratio=1.0,
         values=None,
     ):
         bot = object.__new__(Passivbot)
@@ -213,7 +213,7 @@ class TestRealizedPnlConsumers:
         bot._loss_gate_max_drawdown_fraction = lambda: loss_gate_max_drawdown_fraction
         bot._equity_hard_stop_enabled = lambda: hsl_enabled
         bot.bot_value = lambda pside, key: (
-            total_wallet_exposure_limit if key == "total_wallet_exposure_limit" else 0.0
+            total_wallet_exposure_limit_ratio if key == "total_wallet_exposure_limit_ratio" else 0.0
         )
         values = values or {}
         bot.bp = lambda pside, key, symbol=None: values.get(
@@ -263,7 +263,7 @@ class TestRealizedPnlConsumers:
             (None, "long", "unstuck_exposure_trigger_ratio"): 0.9,
         }
         bot = self._make_bot(
-            total_wallet_exposure_limit=0.0,
+            total_wallet_exposure_limit_ratio=0.0,
             values=values,
         )
 
@@ -1042,8 +1042,8 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
         config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)
-        config["bot"]["long"]["wallet_exposure_limit"] = .5
-        config["bot"]["short"]["wallet_exposure_limit"] = 0.0
+        config["bot"]["long"]["wallet_exposure_limit_ratio"] = .5
+        config["bot"]["short"]["wallet_exposure_limit_ratio"] = 0.0
         if loss_gate_max_drawdown_fraction is not None:
             config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = loss_gate_max_drawdown_fraction
         return config

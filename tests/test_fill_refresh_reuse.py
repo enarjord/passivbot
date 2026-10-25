@@ -64,7 +64,7 @@ async def test_changed_inputs_match_full_replay(tmp_path, monkeypatch, change):
     for manager in (cached, reference):
         event = manager._events[0]
         if change == 'fee_policy':
-            manager.fee_pct_sanity_abs_max = .00001
+            manager.max_abs_fee_fraction = .00001
         elif change == 'raw':
             event.raw.append({'startPosition': '4', 'dir': 'Open Long'})
         elif change == 'fees':

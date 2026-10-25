@@ -99,13 +99,15 @@ def reject_retired_v9_fields(config, *, additional_inputs=()):
     from .shared_policy import COIN_SOURCE_FIELDS, LIVE_POLICY_PATHS
     from config.field_registry import LIVE_OPERATIONAL_PATHS
 
+    from .operational_live import RELEASED_V8_LIVE_OPERATIONAL_PATHS
+
     moved = (*LIVE_POLICY_PATHS, "filter_by_min_effective_cost", *COIN_SOURCE_FIELDS)
     moved_pattern = re.compile(
         r"(?:^|\.)live\.(?:" + "|".join(map(re.escape, moved)) + r")(?:$|\.)"
     )
     operational_pattern = re.compile(
         r"(?:^|\.)live\.(?:"
-        + "|".join(map(re.escape, LIVE_OPERATIONAL_PATHS))
+        + "|".join(map(re.escape, sorted(set(LIVE_OPERATIONAL_PATHS) | set(RELEASED_V8_LIVE_OPERATIONAL_PATHS))))
         + r")(?:$|\.)"
     )
     def moved_live_path(value):

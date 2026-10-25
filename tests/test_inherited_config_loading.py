@@ -49,7 +49,7 @@ def test_nonfinite_policy_reports_an_explicit_canonical_finite_requirement(value
 def test_only_explicit_coin_file_template_extension_accepts_standalone_allocation():
     from config.authored import validate_authored_config
     raw = {"config_version": "v9.0.0", "bot": {"long": {"wallet_exposure_limit_ratio": 0.2}}}
-    with pytest.raises(ValueError, match="wallet_exposure_limit.*unknown"):
+    with pytest.raises(ValueError, match="wallet_exposure_limit_ratio.*unknown"):
         validate_authored_config(raw, get_expanded_config_prototype())
     file_schema = get_template_config()
     file_schema["bot"]["long"]["wallet_exposure_limit_ratio"] = None
@@ -126,7 +126,7 @@ def test_prepared_global_ignored_file_and_approval_survive_deleted_sources(tmp_p
 
 def test_normalization_overlay_is_not_source_or_candidate_pin_and_clears_on_gene_write():
     raw = source()
-    weights = {"volume": 2.0, "volatility": 1.0, "ema_readiness": 1.0, "unilateralness": 0.0}
+    weights = {"volume": 2.0, "log_range": 1.0, "ema_readiness": 1.0, "unilateralness": 0.0}
     raw["bot"]["global"]["forager"] = {"score_weights": weights}
     raw["bot"]["short"]["forager"] = {"score_weights": deepcopy(weights)}
     prepared = prepare_config(raw, verbose=False)

@@ -6488,7 +6488,7 @@ class CandlestickManager:
                 since_ts=since_start,
                 end_exclusive_ts=end_excl,
                 last_ts=last_ts,
-                progress_pct=f"{progressed:.1f}",
+                progress_percent=f"{progressed:.1f}",
             )
             new_since = last_ts + period_ms
             if self._ccxt_page_overlap_candles > 0:

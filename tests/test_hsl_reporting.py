@@ -137,7 +137,7 @@ def test_coin_plots_keep_each_coin_and_side_separate():
         params[key] *= 2
     for pair in args[2]:
         pair["short"]["entry_eligible"] = True
-        pair["short"]["wallet_exposure_limit"] = -1.0
+        pair["short"]["wallet_exposure_limit_ratio"] = -1.0
     policies = params["equity_hard_stop_loss"]["coins"]
     policies["BBB"] = deepcopy(policies["AAA"])
     for coin_policies in policies.values():
@@ -343,7 +343,7 @@ def test_single_side_hsl_suite_preserves_full_results_and_optimizer_metrics(inac
     # Single-side suite overrides leave the unused side's HSL policy enabled.
     side_index = 0 if inactive == "long" else 1
     for pair in args[2]:
-        pair[inactive]["total_wallet_exposure_limit"] = 0.0
+        pair[inactive]["total_wallet_exposure_limit_ratio"] = 0.0
         pair[inactive]["n_positions"] = 0
     hsl = args[-1]["equity_hard_stop_loss"]
     for policy in [hsl["sides"][side_index], *(pair[side_index] for pair in hsl["coins"].values())]:

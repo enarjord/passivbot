@@ -27,17 +27,18 @@ def test_retired_development_quantity_spelling_is_not_an_authored_alias(parts, o
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_ratio_thresholds_preserve_native_ids_and_full_float_precision(side):
+def test_ratio_thresholds_preserve_full_float_precision_in_current_native_ids(side):
     source = get_expanded_config_prototype()
-    expected = {"risk_wel_enforcer_threshold": 0.7123456789012345,
-                "risk_twel_enforcer_threshold": 0.9123456789012345}
+    expected = {"risk_wel_enforcer_threshold_ratio": 0.7123456789012345,
+                "risk_twel_enforcer_threshold_ratio": 0.9123456789012345}
     risk = source["bot"][side]["risk"]
-    risk["position_exposure_enforcer"]["threshold_ratio"] = expected["risk_wel_enforcer_threshold"]
-    risk["total_exposure_enforcer"]["threshold_ratio"] = expected["risk_twel_enforcer_threshold"]
+    risk["position_exposure_enforcer"]["threshold_ratio"] = expected["risk_wel_enforcer_threshold_ratio"]
+    risk["total_exposure_enforcer"]["threshold_ratio"] = expected["risk_twel_enforcer_threshold_ratio"]
     cleaned = cleanup_config(source)
     native = flatten_shared_bot_side(cleaned["bot"][side])
     assert {key: native[key] for key in expected} == expected
-    assert not any("threshold_ratio" in key for key in native)
+    assert "risk_wel_enforcer_threshold" not in native
+    assert "risk_twel_enforcer_threshold" not in native
 
 
 def test_ratio_units_and_denominators_are_declared_at_the_canonical_path():

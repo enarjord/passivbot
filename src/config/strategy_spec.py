@@ -6,7 +6,6 @@ from typing import Any
 
 import passivbot_rust as pbr
 
-from .strategy_paths import project_strategy_spec
 
 
 BOT_POSITION_SIDES = ("long", "short")
@@ -72,7 +71,15 @@ def get_strategy_spec(strategy_kind: str = DEFAULT_STRATEGY_KIND) -> dict:
             f"Rust strategy metadata for {normalized_kind!r} must be a dict; "
             f"got {type(spec).__name__}"
         )
-    return project_strategy_spec(normalized_kind, spec)
+    spec = deepcopy(spec)
+    paths = set()
+    for parameter in [*spec.get("parameters", []), *spec.get("fixed_parameters", [])]:
+        path = tuple(parameter.get("config_path", ()))
+        if len(path) >= 3 and path[0] == "strategy":
+            if path in paths:
+                raise ValueError(f"conflicting strategy metadata path {'.'.join(path)}")
+            paths.add(path)
+    return spec
 
 
 def _strategy_leaf_path(param: dict) -> tuple[str, ...] | None:

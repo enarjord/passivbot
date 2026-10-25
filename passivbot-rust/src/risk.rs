@@ -2,8 +2,8 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
 use crate::utils::{
-    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
-    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
+    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pside_adverse_price_change_fraction,
+    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
     round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
     RoundingMode,
 };
@@ -80,7 +80,7 @@ pub struct GateEntriesDecision {
 pub fn gate_entries_by_twel(
     pside: usize,
     balance: f64,
-    total_wallet_exposure_limit: f64,
+    total_wallet_exposure_limit_ratio: f64,
     positions: &[GateEntriesPosition],
     entries: &[GateEntriesCandidate],
 ) -> Vec<GateEntriesDecision> {
@@ -89,7 +89,7 @@ pub fn gate_entries_by_twel(
     const EXPOSURE_EPS: f64 = 1e-12;
     const QTY_EPS: f64 = 1e-12;
 
-    if balance <= 0.0 || total_wallet_exposure_limit <= 0.0 {
+    if balance <= 0.0 || total_wallet_exposure_limit_ratio <= 0.0 {
         return Vec::new();
     }
 
@@ -121,7 +121,7 @@ pub fn gate_entries_by_twel(
         current_twe += exposure;
         current_positions.insert(pos.idx, (abs_psize, pos.position_price, pos.c_mult));
     }
-    if current_twe >= total_wallet_exposure_limit - EXPOSURE_EPS {
+    if current_twe >= total_wallet_exposure_limit_ratio - EXPOSURE_EPS {
         return Vec::new();
     }
 
@@ -141,7 +141,7 @@ pub fn gate_entries_by_twel(
         } else {
             continue;
         };
-        let distance = calc_pside_price_diff_int(pside, entry.market_price, entry.price);
+        let distance = calc_pside_adverse_price_change_fraction(pside, entry.market_price, entry.price);
         candidates.push(CandidateInternal {
             data: GateEntriesCandidate {
                 qty: entry.qty.abs(),
@@ -199,7 +199,7 @@ pub fn gate_entries_by_twel(
     };
 
     let mut twe_if_filled = compute_twe_if_filled(&included);
-    if twe_if_filled < total_wallet_exposure_limit - EXPOSURE_EPS {
+    if twe_if_filled < total_wallet_exposure_limit_ratio - EXPOSURE_EPS {
         let mut decisions: Vec<(usize, GateEntriesDecision)> = included
             .into_iter()
             .map(|(cand_idx, qty)| {
@@ -233,7 +233,7 @@ pub fn gate_entries_by_twel(
 
     let mut removed_stack: Vec<(usize, f64)> = Vec::new();
     for cand_idx in removal_order {
-        if twe_if_filled < total_wallet_exposure_limit - EXPOSURE_EPS {
+        if twe_if_filled < total_wallet_exposure_limit_ratio - EXPOSURE_EPS {
             break;
         }
         if let Some(pos) = included.iter().position(|(idx, _)| *idx == cand_idx) {
@@ -243,7 +243,7 @@ pub fn gate_entries_by_twel(
         }
     }
 
-    if twe_if_filled >= total_wallet_exposure_limit - EXPOSURE_EPS {
+    if twe_if_filled >= total_wallet_exposure_limit_ratio - EXPOSURE_EPS {
         return Vec::new();
     }
 
@@ -263,7 +263,7 @@ pub fn gate_entries_by_twel(
             let mut trial = included.clone();
             trial.push((cand_idx, mid_rd));
             let twe_trial = compute_twe_if_filled(&trial);
-            if twe_trial < total_wallet_exposure_limit - EXPOSURE_EPS {
+            if twe_trial < total_wallet_exposure_limit_ratio - EXPOSURE_EPS {
                 best_qty = mid_rd;
                 lo = mid;
             } else {
@@ -280,7 +280,7 @@ pub fn gate_entries_by_twel(
         if best_qty > QTY_EPS && meets_min_qty && meets_min_cost {
             included.push((cand_idx, best_qty));
             twe_if_filled = compute_twe_if_filled(&included);
-            if twe_if_filled >= total_wallet_exposure_limit - EXPOSURE_EPS {
+            if twe_if_filled >= total_wallet_exposure_limit_ratio - EXPOSURE_EPS {
                 included.pop();
             }
         }
@@ -315,14 +315,14 @@ pub struct UnstuckPositionInput {
     pub side: usize,
     pub position_size: f64,
     pub position_price: f64,
-    pub wallet_exposure_limit: f64,
-    pub effective_we_excess_allowance_pct: f64,
+    pub wallet_exposure_limit_ratio: f64,
+    pub effective_we_excess_allowance_fraction: f64,
     pub unstuck_exposure_trigger_ratio: f64,
     pub unstuck_close_fraction: f64,
     pub unstuck_ema_gating_enabled: bool,
     pub unstuck_ema_distance_fraction: f64,
     pub unstuck_loss_allowance_fraction: f64,
-    pub total_wallet_exposure_limit: f64,
+    pub total_wallet_exposure_limit_ratio: f64,
     pub ema_band_upper: f64,
     pub ema_band_lower: f64,
     pub current_price: f64,
@@ -353,13 +353,13 @@ pub fn calc_unstucking_action_with_realized_drawdown(
 ) -> Result<Option<(usize, usize, Order)>, String> {
     let mut error = None;
     let result = calc_unstucking_action_with_allowance(balance, positions, |input| {
-        if input.unstuck_loss_allowance_fraction <= 0.0 || input.total_wallet_exposure_limit <= 0.0 {
+        if input.unstuck_loss_allowance_fraction <= 0.0 || input.total_wallet_exposure_limit_ratio <= 0.0 {
             return 0.0;
         }
         match crate::hsl_decay::allowance_for(
             balance,
             input.unstuck_loss_allowance_fraction,
-            input.total_wallet_exposure_limit,
+            input.total_wallet_exposure_limit_ratio,
             realized_drawdown,
         ) {
             Ok(value) => value,
@@ -412,8 +412,8 @@ where
 
         let wallet_exposure =
             calc_wallet_exposure(input.c_mult, balance, size_abs, input.position_price);
-        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_pct.max(0.0);
-        let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
+        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_fraction.max(0.0);
+        let effective_wel = input.wallet_exposure_limit_ratio * allowance_multiplier;
 
         let unstuck_exposure_trigger_ratio = input.unstuck_exposure_trigger_ratio;
         if unstuck_exposure_trigger_ratio < 0.0 {
@@ -481,7 +481,7 @@ where
         }
 
         let pprice_diff =
-            calc_pprice_diff_int(input.side, input.position_price, input.current_price);
+            calc_pside_adverse_price_change_fraction(input.side, input.position_price, input.current_price);
         if !pprice_diff.is_finite() {
             continue;
         }
@@ -533,8 +533,8 @@ where
             continue;
         }
         let min_entry_qty = calc_min_entry_qty(close_price, &exchange_params);
-        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_pct.max(0.0);
-        let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
+        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_fraction.max(0.0);
+        let effective_wel = input.wallet_exposure_limit_ratio * allowance_multiplier;
 
         match input.side {
             LONG => {
@@ -635,7 +635,7 @@ pub struct TwelEnforcerInputPosition {
 pub fn calc_twel_enforcer_actions(
     pside: usize,
     threshold: f64,
-    total_wallet_exposure_limit: f64,
+    total_wallet_exposure_limit_ratio: f64,
     effective_n_positions: usize,
     balance: f64,
     positions: &[TwelEnforcerInputPosition],
@@ -643,16 +643,16 @@ pub fn calc_twel_enforcer_actions(
     skip_idx: Option<usize>,
 ) -> Vec<(usize, Order)> {
     if threshold <= 0.0
-        || total_wallet_exposure_limit <= 0.0
+        || total_wallet_exposure_limit_ratio <= 0.0
         || balance <= 0.0
         || effective_n_positions == 0
         || !threshold.is_finite()
-        || !total_wallet_exposure_limit.is_finite()
+        || !total_wallet_exposure_limit_ratio.is_finite()
         || !balance.is_finite()
     {
         return Vec::new();
     }
-    let limit = total_wallet_exposure_limit * threshold;
+    let limit = total_wallet_exposure_limit_ratio * threshold;
     if !limit.is_finite() || limit <= 0.0 {
         return Vec::new();
     }
@@ -925,7 +925,7 @@ pub fn calc_twel_enforcer_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::calc_pprice_diff_int;
+    use crate::utils::calc_pside_adverse_price_change_fraction;
 
     fn pos(
         idx: usize,
@@ -997,14 +997,14 @@ mod tests {
                 side,
                 position_size,
                 position_price,
-                wallet_exposure_limit: 1.0,
-                effective_we_excess_allowance_pct: 0.0,
+                wallet_exposure_limit_ratio: 1.0,
+                effective_we_excess_allowance_fraction: 0.0,
                 unstuck_exposure_trigger_ratio: 0.5,
                 unstuck_close_fraction: 0.1,
                 unstuck_ema_gating_enabled: false,
                 unstuck_ema_distance_fraction: 0.0,
                 unstuck_loss_allowance_fraction: 0.01,
-                total_wallet_exposure_limit: 1.0,
+                total_wallet_exposure_limit_ratio: 1.0,
                 ema_band_upper: 0.0,
                 ema_band_lower: 0.0,
                 current_price: 120.003,
@@ -1202,7 +1202,7 @@ mod tests {
         // The action with the smallest price diff should target idx 1
         let price_diff = |idx: usize| -> f64 {
             let pos = positions.iter().find(|p| p.idx == idx).unwrap();
-            calc_pprice_diff_int(LONG, pos.position_price, pos.market_price)
+            calc_pside_adverse_price_change_fraction(LONG, pos.position_price, pos.market_price)
         };
         let best_idx = actions
             .iter()

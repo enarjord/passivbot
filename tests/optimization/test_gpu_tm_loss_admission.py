@@ -51,10 +51,10 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
         # Zero exposure slope makes duplicate recursive rungs one full close.
         # Its price is flat, so only the projected fee consumes the allowance.
         config["bot"][side]["strategy"]["trailing_martingale"]["close"].update(
-            qty_pct=1.0, threshold_base_pct=0.0, threshold_we_weight=0.0,
-            threshold_volatility_1h_weight=0.0, threshold_volatility_1m_weight=0.0,
-            retracement_base_pct=0.0, retracement_volatility_1h_weight=0.0,
-            retracement_volatility_1m_weight=0.0,
+            qty_fraction=1.0, threshold_base_fraction=0.0, threshold_exposure_ratio_coefficient=0.0,
+            threshold_log_range_1h_coefficient=0.0, threshold_log_range_1m_coefficient=0.0,
+            retracement_base_fraction=0.0, retracement_log_range_1h_coefficient=0.0,
+            retracement_log_range_1m_coefficient=0.0,
         )
     inputs = candles, markets, config, exchange, btc, timestamps
     proxy = SharedAccountReplay(
@@ -105,7 +105,7 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
     for side in sides:
         config['bot'][side]['risk'].update({'position_exposure_enforcer': {'enabled': reducer == 'wel', 'threshold_ratio': 0.3}, 'total_exposure_enforcer': {'enabled': reducer == 'twel', 'threshold_ratio': 0.2, 'policy': 'reduce_portfolio'}})
         config["bot"][side]["strategy"]["trailing_martingale"]["close"].update(
-            qty_pct=0.1, threshold_base_pct=0.005, threshold_we_weight=slope,
+            qty_fraction=0.1, threshold_base_fraction=0.005, threshold_exposure_ratio_coefficient=slope,
         )
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
@@ -189,7 +189,7 @@ def test_tm_loss_plan_survives_replay_scratch_reuse_and_reordering(sides):
     import numpy as np
 
     proxy, _ = fee_only_close_fixture(sides, 2, 8 / 1440, 0.0003)
-    candidates = [{}, {f"{sides[0]}_entry_initial_qty_pct": 0.3}, {}]
+    candidates = [{}, {f"{sides[0]}_entry_initial_qty_fraction": 0.3}, {}]
     runner, expected = raw(proxy, candidates)
     assert expected["balance"][0].item() != expected["balance"][1].item()
     if len(sides) == 1:
@@ -218,7 +218,7 @@ def test_native_tm_loss_admission_never_replays_on_cpu(monkeypatch, sides, coins
     from tools.gpu_parity import _native_dataset
 
     proxy, inputs = fee_only_close_fixture(sides, coins, 8 / 1440, 0.0003)
-    candidates = [{}, {f"{sides[0]}_entry_initial_qty_pct": 0.3}, {}]
+    candidates = [{}, {f"{sides[0]}_entry_initial_qty_fraction": 0.3}, {}]
     expected = proxy.evaluate_results(candidates)
 
     def forbidden(*args, **kwargs):

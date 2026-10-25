@@ -22,26 +22,26 @@ import pytest
 
 
 ADAPTIVE_STRATEGY_KEYS = {
-    "close_grid_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_qty_pct",
-    "close_trailing_threshold_pct",
-    "close_weight_volatility_1h",
-    "close_weight_volatility_1m",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_volatility_ema_span_1h",
-    "entry_volatility_ema_span_1m",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
-    "entry_we_weight",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_threshold_pct",
-    "ema_span_0",
-    "ema_span_1",
+    "close_grid_qty_fraction",
+    "close_trailing_retracement_base_fraction",
+    "close_trailing_qty_fraction",
+    "close_trailing_threshold_base_fraction",
+    "close_log_range_1h_coefficient",
+    "close_log_range_1m_coefficient",
+    "entry_grid_reentry_qty_multiplier",
+    "entry_grid_threshold_base_fraction",
+    "entry_log_range_ema_span_1h_candles",
+    "entry_log_range_ema_span_minutes",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
+    "entry_exposure_ratio_coefficient",
+    "entry_initial_ema_distance_fraction",
+    "entry_initial_qty_fraction",
+    "entry_trailing_reentry_qty_multiplier",
+    "entry_trailing_retracement_base_fraction",
+    "entry_trailing_threshold_base_fraction",
+    "ema_span_0_minutes",
+    "ema_span_1_minutes",
 }
 
 
@@ -53,56 +53,56 @@ def _set_nested(mapping, path, value):
 
 
 LEGACY_STRATEGY_KEY_MAP = {
-    "close_grid_qty_pct": ("close", "qty_pct"),
-    "close_trailing_retracement_pct": ("close", "retracement_base_pct"),
-    "close_trailing_qty_pct": ("close", "qty_pct"),
-    "close_trailing_threshold_pct": ("close", "threshold_base_pct"),
-    "close_weight_volatility_1h": ("close", "threshold_volatility_1h_weight"),
-    "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
-    "entry_grid_double_down_factor": ("entry", "double_down_factor"),
-    "entry_grid_spacing_pct": ("entry", "threshold_base_pct"),
-    "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
-    "entry_volatility_ema_span_1m": ("volatility_ema_span_1m",),
-    "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
-    "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
-    "entry_we_weight": ("entry", "threshold_we_weight"),
-    "entry_initial_ema_dist": ("entry", "initial_ema_dist"),
-    "entry_initial_qty_pct": ("entry", "initial_qty_pct"),
-    "entry_trailing_double_down_factor": ("entry", "double_down_factor"),
-    "entry_trailing_retracement_pct": ("entry", "retracement_base_pct"),
-    "entry_trailing_threshold_pct": ("entry", "threshold_base_pct"),
+    "close_grid_qty_fraction": ("close", "qty_fraction"),
+    "close_trailing_retracement_base_fraction": ("close", "retracement_base_fraction"),
+    "close_trailing_qty_fraction": ("close", "qty_fraction"),
+    "close_trailing_threshold_base_fraction": ("close", "threshold_base_fraction"),
+    "close_log_range_1h_coefficient": ("close", "threshold_log_range_1h_coefficient"),
+    "close_log_range_1m_coefficient": ("close", "threshold_log_range_1m_coefficient"),
+    "entry_grid_reentry_qty_multiplier": ("entry", "reentry_qty_multiplier"),
+    "entry_grid_threshold_base_fraction": ("entry", "threshold_base_fraction"),
+    "entry_log_range_ema_span_1h_candles": ("log_range_ema_span_1h_candles",),
+    "entry_log_range_ema_span_minutes": ("log_range_ema_span_minutes",),
+    "entry_log_range_1h_coefficient": ("entry", "threshold_log_range_1h_coefficient"),
+    "entry_log_range_1m_coefficient": ("entry", "threshold_log_range_1m_coefficient"),
+    "entry_exposure_ratio_coefficient": ("entry", "threshold_exposure_ratio_coefficient"),
+    "entry_initial_ema_distance_fraction": ("entry", "initial_ema_distance_fraction"),
+    "entry_initial_qty_fraction": ("entry", "initial_qty_fraction"),
+    "entry_trailing_reentry_qty_multiplier": ("entry", "reentry_qty_multiplier"),
+    "entry_trailing_retracement_base_fraction": ("entry", "retracement_base_fraction"),
+    "entry_trailing_threshold_base_fraction": ("entry", "threshold_base_fraction"),
 }
 
 
 def adaptive_strategy_params(**overrides):
     """Create trailing_martingale strategy params for direct JSON orchestrator tests."""
     base = {
-        "volatility_ema_span_1h": 0.0,
-        "volatility_ema_span_1m": 60.0,
+        "log_range_ema_span_1h_candles": 0.0,
+        "log_range_ema_span_minutes": 60.0,
         "entry": {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
-            "double_down_factor": 1.0,
-            "initial_ema_dist": 0.0,
-            "initial_qty_pct": 0.1,
-            "threshold_base_pct": 0.02,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "retracement_base_pct": 0.0,
-            "retracement_we_weight": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
+            "reentry_qty_multiplier": 1.0,
+            "initial_ema_distance_fraction": 0.0,
+            "initial_qty_fraction": 0.1,
+            "threshold_base_fraction": 0.02,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "retracement_base_fraction": 0.0,
+            "retracement_exposure_ratio_coefficient": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
         "close": {
-            "qty_pct": 1.0,
-            "threshold_base_pct": 0.01,
-            "threshold_we_weight": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
-            "retracement_base_pct": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "qty_fraction": 1.0,
+            "threshold_base_fraction": 0.01,
+            "threshold_exposure_ratio_coefficient": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
+            "retracement_base_fraction": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
     }
     for key, value in overrides.items():
@@ -131,33 +131,33 @@ def bot_params(**overrides):
     tests comes from `strategy_params` unless a test explicitly exercises flat BotParams parsing.
     """
     base = {
-        "close_grid_qty_pct": 1.0,
-        "close_trailing_retracement_pct": 0.0,
-        "close_trailing_qty_pct": 0.0,
-        "close_trailing_threshold_pct": 0.0,
-        "entry_grid_double_down_factor": 1.0,
-        "entry_weight_volatility_1h": 0.0,
-        "entry_weight_volatility_1m": 0.0,
-        "entry_we_weight": 0.0,
-        "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_1h": 0.0,
-        "entry_volatility_ema_span_1m": 60.0,
-        "entry_initial_ema_dist": 0.0,
-        "entry_initial_qty_pct": 0.1,
-        "entry_trailing_double_down_factor": 0.0,
-        "entry_trailing_retracement_pct": 0.0,
-        "entry_trailing_threshold_pct": 0.0,
-        "filter_volatility_ema_span_1m": 10.0,
+        "close_grid_qty_fraction": 1.0,
+        "close_trailing_retracement_base_fraction": 0.0,
+        "close_trailing_qty_fraction": 0.0,
+        "close_trailing_threshold_base_fraction": 0.0,
+        "entry_grid_reentry_qty_multiplier": 1.0,
+        "entry_log_range_1h_coefficient": 0.0,
+        "entry_log_range_1m_coefficient": 0.0,
+        "entry_exposure_ratio_coefficient": 0.0,
+        "entry_grid_threshold_base_fraction": 0.02,
+        "entry_log_range_ema_span_1h_candles": 0.0,
+        "entry_log_range_ema_span_minutes": 60.0,
+        "entry_initial_ema_distance_fraction": 0.0,
+        "entry_initial_qty_fraction": 0.1,
+        "entry_trailing_reentry_qty_multiplier": 0.0,
+        "entry_trailing_retracement_base_fraction": 0.0,
+        "entry_trailing_threshold_base_fraction": 0.0,
+        "forager_log_range_ema_span_minutes": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span_1m": 10.0,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "forager_volume_ema_span_minutes": 10.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "n_positions": 1,
-        "total_wallet_exposure_limit": 1.0,
-        "wallet_exposure_limit": 1.0,
-        "risk_wel_enforcer_threshold": 0.0,
-        "risk_twel_enforcer_threshold": 0.0,
-        "risk_we_excess_allowance_pct": 0.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
+        "wallet_exposure_limit_ratio": 1.0,
+        "risk_wel_enforcer_threshold_ratio": 0.0,
+        "risk_twel_enforcer_threshold_ratio": 0.0,
+        "risk_we_excess_allowance_fraction": 0.0,
         "unstuck_close_fraction": 0.0,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_ema_span_0_minutes": 10.0,
@@ -177,7 +177,7 @@ def bot_params_pair(long_overrides=None, short_overrides=None):
             **(
                 {
                     "n_positions": 0,
-                    "total_wallet_exposure_limit": 0.0,
+                    "total_wallet_exposure_limit_ratio": 0.0,
                 }
                 | (short_overrides or {})
             )
@@ -294,7 +294,7 @@ def make_symbol(
                 **(
                     {
                         "n_positions": 0,
-                        "total_wallet_exposure_limit": 0.0,
+                        "total_wallet_exposure_limit_ratio": 0.0,
                     }
                     | short_bot_overrides
                 )
@@ -354,10 +354,10 @@ class TestOrchestratorOrderAccuracy:
                     bid=100.0,
                     ask=100.0,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,  # Enter 1% below EMA
-                        "entry_grid_spacing_pct": 0.02,  # 2% spacing
-                        "entry_initial_qty_pct": 0.1,  # 10% of wallet
-                        "wallet_exposure_limit": 1.0,
+                        "entry_initial_ema_distance_fraction": -0.01,  # Enter 1% below EMA
+                        "entry_grid_threshold_base_fraction": 0.02,  # 2% spacing
+                        "entry_initial_qty_fraction": 0.1,  # 10% of wallet
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -385,7 +385,7 @@ class TestOrchestratorOrderAccuracy:
             global_bp=bot_params_pair(
                 short_overrides={
                     "n_positions": 1,
-                    "total_wallet_exposure_limit": 1.0,
+                    "total_wallet_exposure_limit_ratio": 1.0,
                 }
             ),
             symbols=[
@@ -394,10 +394,10 @@ class TestOrchestratorOrderAccuracy:
                     bid=100.0,
                     ask=100.0,
                     short_bp={
-                        "entry_initial_ema_dist": 0.01,  # Enter 1% above EMA
-                        "entry_grid_spacing_pct": 0.02,  # 2% spacing
-                        "entry_initial_qty_pct": 0.1,  # 10% of wallet
-                        "wallet_exposure_limit": 1.0,
+                        "entry_initial_ema_distance_fraction": 0.01,  # Enter 1% above EMA
+                        "entry_grid_threshold_base_fraction": 0.02,  # 2% spacing
+                        "entry_initial_qty_fraction": 0.1,  # 10% of wallet
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -429,7 +429,7 @@ class TestOrchestratorOrderAccuracy:
                     long_pos_size=1.0,  # Have 1.0 long position
                     long_pos_price=100.0,  # Bought at 100
                     long_strategy=adaptive_strategy_params(
-                        close={"threshold_base_pct": 0.01, "qty_pct": 0.5},
+                        close={"threshold_base_fraction": 0.01, "qty_fraction": 0.5},
                     ),
                 )
             ],
@@ -554,9 +554,9 @@ class TestOrchestratorOrderAccuracy:
                     ask=100.0,
                     long_strategy=adaptive_strategy_params(
                         entry={
-                            "threshold_base_pct": 0.02,
-                            "retracement_base_pct": 0.01,
-                            "initial_qty_pct": 0.1,
+                            "threshold_base_fraction": 0.02,
+                            "retracement_base_fraction": 0.01,
+                            "initial_qty_fraction": 0.1,
                         },
                     ),
                 )
@@ -590,8 +590,8 @@ class TestOrchestratorEdgeCases:
                     bid=100.0,
                     ask=100.0,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.001,  # Very small qty
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.001,  # Very small qty
                     },
                 )
             ],
@@ -614,8 +614,8 @@ class TestOrchestratorEdgeCases:
                     bid=1_000_000.0,
                     ask=1_000_000.0,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.1,
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.1,
                     },
                 )
             ],
@@ -633,8 +633,8 @@ class TestOrchestratorEdgeCases:
                     bid=0.0001,
                     ask=0.0001,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.1,
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.1,
                     },
                 )
             ],
@@ -657,9 +657,9 @@ class TestOrchestratorEdgeCases:
                     long_pos_size=10.0,  # Position worth 1000 (100% exposure)
                     long_pos_price=100.0,
                     long_bp={
-                        "wallet_exposure_limit": 1.0,  # Max 100% WEL
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.1,
+                        "wallet_exposure_limit_ratio": 1.0,  # Max 100% WEL
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.1,
                     },
                 )
             ],
@@ -688,7 +688,7 @@ class TestOrchestratorMultiSymbol:
         inp = make_input(
             balance=10_000.0,
             global_bp=bot_params_pair(
-                long_overrides={"total_wallet_exposure_limit": 2.0}  # 200% TWEL
+                long_overrides={"total_wallet_exposure_limit_ratio": 2.0}  # 200% TWEL
             ),
             symbols=[
                 make_symbol(
@@ -696,9 +696,9 @@ class TestOrchestratorMultiSymbol:
                     bid=100.0,
                     ask=100.0,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.1,
-                        "wallet_exposure_limit": 1.0,
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.1,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 ),
                 make_symbol(
@@ -706,9 +706,9 @@ class TestOrchestratorMultiSymbol:
                     bid=200.0,
                     ask=200.0,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.1,
-                        "wallet_exposure_limit": 1.0,
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.1,
+                        "wallet_exposure_limit_ratio": 1.0,
                     },
                 ),
             ],
@@ -739,7 +739,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volatility_ema_span_1m": 1.0,
+                        "forager_log_range_ema_span_minutes": 1.0,
                     },
                 )
             ],
@@ -764,7 +764,7 @@ class TestOrchestratorMultiSymbol:
                     index, bid=100.0, ask=100.0,
                     emas=ema_bundle(m1_volume=[[10.0, volume]]),
                     long_bp={"forager_score_weights": weights,
-                             "filter_volume_ema_span_1m": 10.0},
+                             "forager_volume_ema_span_minutes": 10.0},
                 )
                 for index, volume in [(0, 100.0), (1, 1000.0)]
             ],
@@ -865,8 +865,8 @@ class TestSignedQuantitiesConvention:
                     bid=100.0,
                     ask=100.0,
                     long_bp={
-                        "entry_initial_ema_dist": -0.01,
-                        "entry_initial_qty_pct": 0.1,
+                        "entry_initial_ema_distance_fraction": -0.01,
+                        "entry_initial_qty_fraction": 0.1,
                     },
                 )
             ],
@@ -893,10 +893,10 @@ class TestSignedQuantitiesConvention:
                     bid=100.0,
                     ask=100.0,
                     short_bp={
-                        "entry_initial_ema_dist": 0.01,
-                        "entry_initial_qty_pct": 0.1,
+                        "entry_initial_ema_distance_fraction": 0.01,
+                        "entry_initial_qty_fraction": 0.1,
                         "n_positions": 1,
-                        "total_wallet_exposure_limit": 1.0,
+                        "total_wallet_exposure_limit_ratio": 1.0,
                     },
                 )
             ],
@@ -925,7 +925,7 @@ class TestSignedQuantitiesConvention:
                     long_pos_size=1.0,
                     long_pos_price=100.0,
                     long_strategy=adaptive_strategy_params(
-                        close={"threshold_base_pct": 0.01, "qty_pct": 0.5},
+                        close={"threshold_base_fraction": 0.01, "qty_fraction": 0.5},
                     ),
                 )
             ],

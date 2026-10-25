@@ -337,7 +337,7 @@ async def test_final_churn_distance_recheck_runs_after_exchange_config_writes(
             "order_replacement_churn_gate_activation_count": 1,
             "order_replacement_churn_gate_window_minutes": 10.0,
             "max_n_creations_per_batch": 20,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "order_replacement_churn_gate_market_distance_fraction": 0.005,
         }[key]
 
     async def update_configs(symbols):
@@ -436,7 +436,7 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
             "max_n_creations_per_batch": 1,
             "order_replacement_churn_gate_activation_count": 1,
             "order_replacement_churn_gate_window_minutes": 10.0,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "order_replacement_churn_gate_market_distance_fraction": 0.005,
         }[key]
 
     async def update_configs(symbols):
@@ -573,7 +573,7 @@ async def test_account_invalidation_rechecked_inside_each_connector_task(
         "max_n_creations_per_batch": 10,
         "order_replacement_churn_gate_activation_count": 10,
         "order_replacement_churn_gate_window_minutes": 10.0,
-        "order_replacement_churn_gate_market_dist_pct": 0.005,
+        "order_replacement_churn_gate_market_distance_fraction": 0.005,
     }[key]
     ledger = FreshnessLedger()
     ledger.begin_epoch()

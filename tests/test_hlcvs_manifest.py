@@ -29,13 +29,13 @@ def _minimal_config():
             "long": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
                 "universe": {"approved_coins": ["BTC", "ETH"]},
             },
             "short": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
                 "universe": {"approved_coins": ["BTC"]},
             },
         },

@@ -15,9 +15,9 @@ def test_zero_side_cannot_block_active_initial_entries(inactive, disable, coins)
     from test_gpu_hsl_multicoin import make_proxy, raw
     active = 'short' if inactive == 'long' else 'long'
     candidate = {
-        f'{inactive}_entry_initial_ema_dist': -0.05,
-        f'{active}_entry_initial_ema_dist': -0.02,
-        f'{inactive}_total_wallet_exposure_limit': 0.0 if disable == 'exposure' else 2.0,
+        f'{inactive}_entry_initial_ema_distance_fraction': -0.05,
+        f'{active}_entry_initial_ema_distance_fraction': -0.02,
+        f'{inactive}_total_wallet_exposure_limit_ratio': 0.0 if disable == 'exposure' else 2.0,
         f'{inactive}_n_positions': 0.0 if disable == 'slots' else 1.0,
         f'{active}_hsl_drawdown_threshold_fraction': 0.0001,
         f'{active}_hsl_drawdown_fraction_ema_span_minutes': 1.0,

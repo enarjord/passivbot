@@ -1430,7 +1430,7 @@ def _startup_config_budget_projection(
             "status": "invalid_budget",
             "latest_ms": latest_ms,
             "budget_ms": None,
-            "usage_pct": None,
+            "usage_percent": None,
             "over_budget_by_ms": None,
             "source": "config",
         }
@@ -1446,7 +1446,7 @@ def _startup_config_budget_projection(
         ),
         "latest_ms": latest_ms,
         "budget_ms": budget_ms,
-        "usage_pct": _usage_pct(latest_ms, budget_ms),
+        "usage_percent": _usage_percent(latest_ms, budget_ms),
         "over_budget_by_ms": over_budget_by_ms,
         "source": "config",
     }
@@ -2782,7 +2782,7 @@ def _number_summary(values: list[int]) -> dict[str, Any]:
     }
 
 
-def _usage_pct(value: int | None, budget: int | None) -> int | None:
+def _usage_percent(value: int | None, budget: int | None) -> int | None:
     if value is None or budget is None or budget <= 0:
         return None
     return int(round(float(value) * 100.0 / float(budget)))
@@ -3169,7 +3169,7 @@ class _FillRefreshAccumulator:
                 "refresh_mode": state.get("refresh_mode"),
                 "total_events": count,
                 "failed": failed_count,
-                "failure_pct": _usage_pct(failed_count, count),
+                "failure_percent": _usage_percent(failed_count, count),
                 "latest_ts": state.get("latest_ts"),
                 "event_types": dict(state["event_types"].most_common()),
                 "statuses": dict(statuses.most_common()),
@@ -4193,7 +4193,7 @@ class _ExchangeConfigRefreshAccumulator:
             "bots": len(latest_by_bot),
             "succeeded": int(status_counts.get("succeeded", 0)),
             "failed": failed,
-            "failure_pct": (
+            "failure_percent": (
                 _rounded_float((failed / total) * 100.0, 3) if total else None
             ),
             "failed_bots": len(failed_bots),

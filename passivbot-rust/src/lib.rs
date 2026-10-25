@@ -206,7 +206,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(round_dynamic, m)?)?;
     m.add_function(wrap_pyfunction!(round_dynamic_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dynamic_dn, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_diff, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_abs_relative_difference_fraction, m)?)?;
     m.add_function(wrap_pyfunction!(qty_to_cost, m)?)?;
     m.add_function(wrap_pyfunction!(cost_to_qty, m)?)?;
     m.add_function(wrap_pyfunction!(calc_pnl_long, m)?)?;
@@ -231,10 +231,8 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
     m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_pprice_diff_int, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_pside_price_diff_int, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_price_diff_pside_int, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_order_price_diff, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_pside_adverse_price_change_fraction, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_order_price_gap_fraction, m)?)?;
     m.add_function(wrap_pyfunction!(order_type_id_to_snake, m)?)?;
     m.add_function(wrap_pyfunction!(all_order_types_ids, m)?)?;
     m.add_function(wrap_pyfunction!(order_type_snake_to_id, m)?)?;

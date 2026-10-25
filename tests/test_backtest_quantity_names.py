@@ -157,10 +157,10 @@ def test_live_acquisition_and_backtest_activation_keep_their_distinct_baselines(
         "activation_span_fraction": 0.2, "max_minutes": None,
     }}, "long": {"strategy": {"trailing_martingale": {
         "entry": {"ema_span_0_minutes": 100.0, "ema_span_1_minutes": 100.0},
-        "volatility_ema_span_minutes": 0.0, "volatility_ema_span_1h_candles": 0.0,
+        "log_range_ema_span_minutes": 0.0, "log_range_ema_span_1h_candles": 0.0,
     }}}, "short": {}}, "optimize": {"bounds": {}}}
     windows, _, _ = compute_live_warmup_windows(
-        {"long": {"BTC"}}, lambda _side, key, _coin: 100.0 if key in {"ema_span_0", "ema_span_1"} else 0.0,
+        {"long": {"BTC"}}, lambda _side, key, _coin: 100.0 if key in {"ema_span_0_minutes", "ema_span_1_minutes"} else 0.0,
         activation_span_fraction=0.2,
     )
     assert windows == {"BTC": 120}

@@ -10,6 +10,25 @@ Event emission and sink failures are observability-only unless a feature contrac
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
 eligibility, replay order, or runtime decisions.
 
+## Signed Price Diagnostics
+
+Trailing `current_price_change_from_threshold_fraction` and
+`current_price_change_from_retracement_fraction` report `current / reference - 1`.
+Monitor `next_target_price_offset_fraction` and `next_unstuck_trigger_price_offset_fraction`
+report `target / current - 1`; positive means the target is above the current price for either
+position side. These are scale-one signed fractions (`0.01` means 1%), with the existing unavailable
+values retained. Console and dashboard percentage formatting is unchanged.
+
+## Numeric Presentation Units
+
+Owned diagnostic fields ending in `_percent` use scale 100: `2.5` means 2.5%, without a numeric
+rescaling from their previous abbreviated spelling. This includes replacement price/quantity
+differences (absolute relative differences), unstuck price changes and changes from a balance peak
+(signed), memory changes, execution-distance samples, progress, budget usage and failure shares.
+CPU, memory and budget usage may exceed 100 where the producer's existing contract permits it.
+Percentile qualifiers such as `p95` describe selection, not a percent-valued output. External
+library field names remain unchanged; report producers and consumers use the owned names together.
+
 ## Canonical Payload Budget
 
 Each `LiveEvent` constructor makes a non-mutating, JSON-compatible bounded copy of its canonical

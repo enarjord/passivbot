@@ -16,8 +16,8 @@ from tools.migrate_config_v9 import migrate
 
 
 @pytest.mark.parametrize("owner,native", [
-    ("position_exposure_enforcer", "risk_wel_enforcer_threshold"),
-    ("total_exposure_enforcer", "risk_twel_enforcer_threshold"),
+    ("position_exposure_enforcer", "risk_wel_enforcer_threshold_ratio"),
+    ("total_exposure_enforcer", "risk_twel_enforcer_threshold_ratio"),
 ])
 @pytest.mark.parametrize("shape", ["flat", "object"])
 @pytest.mark.parametrize("layer", ["fixed", "scenario"])
