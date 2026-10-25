@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name the monitor snapshot's hourly entry log-range EMA `entry_log_range_ema_1h`,
+  matching the trailing inspector and snapshot validator. The underlying indicator is unchanged.
+
 - Use canonical minute and one-hour-candle EMA horizons and `log_range` sensitivities throughout
   the native strategies, optimizer coordinates and CPU/GPU packets. Remove the redundant runtime
   strategy path translation; explicit released-v8 conversion retains its own frozen names.

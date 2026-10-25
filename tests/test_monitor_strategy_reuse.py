@@ -100,5 +100,5 @@ def test_market_snapshot_reuses_h1_resolution_and_observes_changes():
     calls.clear()
     second = monitor._build_monitor_market_section(bot)
     assert calls == Counter({('long', 'A'): 1, ('short', 'A'): 1})
-    assert first['A']['entry_volatility_logrange_ema'] == {'long': .02, 'short': .02}
-    assert second['A']['entry_volatility_logrange_ema'] == {'long': .03, 'short': .03}
+    assert first['A']['entry_log_range_ema_1h'] == {'long': .02, 'short': .02}
+    assert second['A']['entry_log_range_ema_1h'] == {'long': .03, 'short': .03}

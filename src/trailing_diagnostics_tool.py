@@ -334,7 +334,7 @@ def _snapshot_seed_defaults(snapshot: dict[str, Any], *, symbol: str, pside: str
             "ema_lower": float(side_band.get("lower", out["ema_lower"]) or out["ema_lower"]),
             "ema_upper": float(side_band.get("upper", out["ema_upper"]) or out["ema_upper"]),
             "h1_log_range_ema": float(
-                market_entry.get("entry_volatility_logrange_ema", {}).get(pside, out["h1_log_range_ema"])
+                market_entry.get("entry_log_range_ema_1h", {}).get(pside, out["h1_log_range_ema"])
                 or out["h1_log_range_ema"]
             ),
         }
