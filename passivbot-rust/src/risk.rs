@@ -317,11 +317,11 @@ pub struct UnstuckPositionInput {
     pub position_price: f64,
     pub wallet_exposure_limit: f64,
     pub effective_we_excess_allowance_pct: f64,
-    pub unstuck_threshold: f64,
-    pub unstuck_close_pct: f64,
+    pub unstuck_exposure_trigger_ratio: f64,
+    pub unstuck_close_fraction: f64,
     pub unstuck_ema_gating_enabled: bool,
-    pub unstuck_ema_dist: f64,
-    pub unstuck_loss_allowance_pct: f64,
+    pub unstuck_ema_distance_fraction: f64,
+    pub unstuck_loss_allowance_fraction: f64,
     pub total_wallet_exposure_limit: f64,
     pub ema_band_upper: f64,
     pub ema_band_lower: f64,
@@ -353,12 +353,12 @@ pub fn calc_unstucking_action_with_realized_drawdown(
 ) -> Result<Option<(usize, usize, Order)>, String> {
     let mut error = None;
     let result = calc_unstucking_action_with_allowance(balance, positions, |input| {
-        if input.unstuck_loss_allowance_pct <= 0.0 || input.total_wallet_exposure_limit <= 0.0 {
+        if input.unstuck_loss_allowance_fraction <= 0.0 || input.total_wallet_exposure_limit <= 0.0 {
             return 0.0;
         }
         match crate::hsl_decay::allowance_for(
             balance,
-            input.unstuck_loss_allowance_pct,
+            input.unstuck_loss_allowance_fraction,
             input.total_wallet_exposure_limit,
             realized_drawdown,
         ) {
@@ -415,11 +415,11 @@ where
         let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_pct.max(0.0);
         let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
 
-        let unstuck_threshold = input.unstuck_threshold;
-        if unstuck_threshold < 0.0 {
+        let unstuck_exposure_trigger_ratio = input.unstuck_exposure_trigger_ratio;
+        if unstuck_exposure_trigger_ratio < 0.0 {
             continue;
         }
-        if effective_wel > 0.0 && wallet_exposure / effective_wel <= unstuck_threshold {
+        if effective_wel > 0.0 && wallet_exposure / effective_wel <= unstuck_exposure_trigger_ratio {
             continue;
         }
 
@@ -439,7 +439,7 @@ where
                     if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
                         continue;
                     }
-                    let target = input.ema_band_upper * (1.0 + input.unstuck_ema_dist);
+                    let target = input.ema_band_upper * (1.0 + input.unstuck_ema_distance_fraction);
                     let rounded = if price_step > 0.0 {
                         round_up(target, price_step)
                     } else {
@@ -454,7 +454,7 @@ where
                     if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
                         continue;
                     }
-                    let target = input.ema_band_lower * (1.0 - input.unstuck_ema_dist);
+                    let target = input.ema_band_lower * (1.0 - input.unstuck_ema_distance_fraction);
                     let rounded = if price_step > 0.0 {
                         round_dn(target, price_step)
                     } else {
@@ -543,7 +543,7 @@ where
                     continue;
                 }
                 let target_qty = cost_to_qty(
-                    balance * effective_wel * input.unstuck_close_pct,
+                    balance * effective_wel * input.unstuck_close_fraction,
                     close_price,
                     input.c_mult,
                 );
@@ -580,7 +580,7 @@ where
                     continue;
                 }
                 let target_qty = cost_to_qty(
-                    balance * effective_wel * input.unstuck_close_pct,
+                    balance * effective_wel * input.unstuck_close_fraction,
                     close_price,
                     input.c_mult,
                 );
@@ -999,11 +999,11 @@ mod tests {
                 position_price,
                 wallet_exposure_limit: 1.0,
                 effective_we_excess_allowance_pct: 0.0,
-                unstuck_threshold: 0.5,
-                unstuck_close_pct: 0.1,
+                unstuck_exposure_trigger_ratio: 0.5,
+                unstuck_close_fraction: 0.1,
                 unstuck_ema_gating_enabled: false,
-                unstuck_ema_dist: 0.0,
-                unstuck_loss_allowance_pct: 0.01,
+                unstuck_ema_distance_fraction: 0.0,
+                unstuck_loss_allowance_fraction: 0.01,
                 total_wallet_exposure_limit: 1.0,
                 ema_band_upper: 0.0,
                 ema_band_lower: 0.0,

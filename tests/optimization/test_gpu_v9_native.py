@@ -94,7 +94,7 @@ def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, los
         raw(proxy, [{f"{sides[0]}_unstuck_loss_allowance_pct": loss_pct}], end_steps=end)
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["bot"][sides[0]]["unstuck"]["loss_allowance_pct"] = loss_pct
+    config["bot"][sides[0]]["unstuck"]["loss_allowance_fraction"] = loss_pct
     with pytest.raises(
         ValueError,
         match=r"v9 (?:unstuck|realized-loss allowance) .*finite risk domain|global\.(?:unstuck_allowance|realized_pnl_drawdown_or_allowance)",

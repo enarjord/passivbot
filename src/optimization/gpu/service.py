@@ -46,6 +46,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START,
     TRAILING_MARTINGALE_COIN_OVERRIDE_ADAPTIVE_START,
     UNSTUCK_EMA_PARAM_KEYS,
+    COUPLED_UNSTUCK_EMA_SOURCE_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
@@ -681,7 +682,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
         "hedge_mode",
-        "max_realized_loss_pct",
+        "loss_gate_max_drawdown_fraction",
         "unstuck_memory_ema_span_minutes",
         "loss_gate_memory_ema_span_minutes",
         "market_order_slippage_pct",
@@ -1382,9 +1383,9 @@ def _candidate_parameter_matrix(
             if key == "unilateralness_window":
                 continue
             source_key = (
-                key.removeprefix("unstuck_")
+                COUPLED_UNSTUCK_EMA_SOURCE_KEYS[key]
                 if couple_unstuck_emas
-                and key in ("unstuck_ema_span_0", "unstuck_ema_span_1")
+                and key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
                 else key
             )
             target = side_index * len(param_keys) + column
@@ -1946,8 +1947,8 @@ class SharedAccountReplay:
         common_runner_kwargs = {
             "side_activation": validate_side_activation(backtest_params["side_activation"]),
             "forager_score_hysteresis": self.forager_score_hysteresis,
-            "max_realized_loss_pct": float(
-                backtest_params.get("max_realized_loss_pct", 1.0)
+            "loss_gate_max_drawdown_fraction": float(
+                backtest_params.get("loss_gate_max_drawdown_fraction", 1.0)
             ),
             "collect_coin_fill_counts": bool(
                 self.needed_metrics

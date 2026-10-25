@@ -43,7 +43,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
     config["live"]["lookback_ema_span_minutes"] = memory_span
-    config["live"]["max_realized_loss_pct"] = max_loss_pct
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     candles = candles.copy()
     candles[:, :, :3] = (101.0, 99.0, 100.4)
     for side in sides:
@@ -138,7 +138,7 @@ def test_tm_unstuck_and_general_loss_budget_share_one_decaying_memory(
     original, inputs = make_proxy(sides, memory_span, coins=coins)
     del original
     candles, markets, config, exchange, btc, timestamps = inputs
-    config["live"]["max_realized_loss_pct"] = max_loss_pct
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
         btc=btc, timestamps=timestamps, batch_size=2,

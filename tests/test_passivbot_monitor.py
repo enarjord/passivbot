@@ -4276,8 +4276,8 @@ def test_unstuck_status_event_emits_structured_summary():
                 "allowance": -12.3,
                 "peak": 1000.0,
                 "pct_from_peak": -1.2,
-                "loss_allowance_pct": 0.01,
-                "override_loss_allowance_pcts": {
+                "loss_allowance_fraction": 0.01,
+                "override_loss_allowance_fractions": {
                     "ETH/USDT:USDT": 0.004,
                     "BTC/USDT:USDT": 0.005,
                 },
@@ -4310,8 +4310,8 @@ def test_unstuck_status_event_emits_structured_summary():
     long = event.data["sides"]["long"]
     assert long["allowance"] == pytest.approx(-12.3)
     assert long["over_budget"] is True
-    assert long["override_loss_allowance_pct_count"] == 2
-    assert long["override_loss_allowance_pcts"] == {
+    assert long["override_loss_allowance_fraction_count"] == 2
+    assert long["override_loss_allowance_fractions"] == {
         "BTC/USDT:USDT": pytest.approx(0.005),
         "ETH/USDT:USDT": pytest.approx(0.004),
     }
@@ -6409,9 +6409,9 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
         side_effect=AssertionError("must not read nonauthoritative PnL")
     )
     bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.01,
-        "unstuck_close_pct": 0.0,
-        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
     section = bot._build_monitor_unstuck_section()
@@ -6437,9 +6437,9 @@ def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
         ]
     )
     bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.01,
-        "unstuck_close_pct": 0.0,
-        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_fraction": 0.01,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
     section = bot._build_monitor_unstuck_section()
@@ -6667,16 +6667,16 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("long", "unstuck_enabled"): True,
                 ("short", "unstuck_enabled"): False,
                 ("long", "unstuck_ema_gating_enabled"): True,
-                ("long", "unstuck_ema_span_0"): 10.0,
-                ("long", "unstuck_ema_span_1"): 20.0,
-                ("long", "unstuck_ema_dist"): 0.02,
-                ("short", "unstuck_ema_dist"): 0.02,
-                ("long", "unstuck_loss_allowance_pct"): 0.02,
-                ("short", "unstuck_loss_allowance_pct"): 0.0,
-                ("long", "unstuck_close_pct"): 0.5,
-                ("short", "unstuck_close_pct"): 0.5,
-                ("long", "unstuck_threshold"): 0.8,
-                ("short", "unstuck_threshold"): 0.8,
+                ("long", "unstuck_ema_span_0_minutes"): 10.0,
+                ("long", "unstuck_ema_span_1_minutes"): 20.0,
+                ("long", "unstuck_ema_distance_fraction"): 0.02,
+                ("short", "unstuck_ema_distance_fraction"): 0.02,
+                ("long", "unstuck_loss_allowance_fraction"): 0.02,
+                ("short", "unstuck_loss_allowance_fraction"): 0.0,
+                ("long", "unstuck_close_fraction"): 0.5,
+                ("short", "unstuck_close_fraction"): 0.5,
+                ("long", "unstuck_exposure_trigger_ratio"): 0.8,
+                ("short", "unstuck_exposure_trigger_ratio"): 0.8,
                 ("long", "entry_grid_double_down_factor"): 1.0,
                 ("short", "entry_grid_double_down_factor"): 1.0,
                 ("long", "entry_grid_spacing_pct"): 0.01,
@@ -6820,8 +6820,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                     "allowance": -20.0,
                     "peak": 1100.0,
                     "pct_from_peak": -9.1,
-                    "loss_allowance_pct": 0.02,
-                    "override_loss_allowance_pcts": {"BTC/USDT:USDT": 0.005},
+                    "loss_allowance_fraction": 0.02,
+                    "override_loss_allowance_fractions": {"BTC/USDT:USDT": 0.005},
                     "override_allowances": {"BTC/USDT:USDT": -44.75},
                 }
             return {"status": "disabled"}
@@ -6991,7 +6991,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
     assert snapshot["unstuck"]["sides"]["long"]["allowance_live"] == pytest.approx(0.0)
     assert snapshot["unstuck"]["sides"]["short"]["allowance_live"] == pytest.approx(0.0)
-    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_pcts"] == {
+    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_fractions"] == {
         "BTC/USDT:USDT": pytest.approx(0.005)
     }
     assert snapshot["unstuck"]["sides"]["long"]["override_allowances"] == {
@@ -7656,12 +7656,12 @@ def test_monitor_ema_families_are_independent(missing_family):
     values = {
         "ema_span_0": 10.0,
         "ema_span_1": 40.0,
-        "unstuck_ema_span_0": 100.0,
-        "unstuck_ema_span_1": 400.0,
+        "unstuck_ema_span_0_minutes": 100.0,
+        "unstuck_ema_span_1_minutes": 400.0,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
         "entry_initial_ema_dist": 0.01,
-        "unstuck_ema_dist": 0.02,
+        "unstuck_ema_distance_fraction": 0.02,
     }
     bot = SimpleNamespace(bp=lambda side, key, symbol: values[key])
     emas = {

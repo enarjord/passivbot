@@ -218,9 +218,9 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
         "panic",
         "unstuck_enabled",
         "unstuck_ema_gating_enabled",
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
         "total_wallet_exposure_limit",
     ],
 )
@@ -231,13 +231,13 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
     values = {
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
-        "unstuck_ema_span_0": 400_000.0,
-        "unstuck_ema_span_1": 500_000.0,
+        "unstuck_ema_span_0_minutes": 400_000.0,
+        "unstuck_ema_span_1_minutes": 500_000.0,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_loss_allowance_pct": 0.1,
-        "unstuck_close_pct": 0.1,
-        "unstuck_threshold": 0.2,
+        "unstuck_loss_allowance_fraction": 0.1,
+        "unstuck_close_fraction": 0.1,
+        "unstuck_exposure_trigger_ratio": 0.2,
         "total_wallet_exposure_limit": 1.0,
     }
     if inactive in values:

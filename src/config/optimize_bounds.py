@@ -53,12 +53,12 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
     },
     "unstuck": {
-        "close_fraction": "unstuck_close_pct",
-        "ema_distance_fraction": "unstuck_ema_dist",
-        "ema_span_0_minutes": "unstuck_ema_span_0",
-        "ema_span_1_minutes": "unstuck_ema_span_1",
-        "loss_allowance_fraction": "unstuck_loss_allowance_pct",
-        "exposure_trigger_ratio": "unstuck_threshold",
+        "close_fraction": "unstuck_close_fraction",
+        "ema_distance_fraction": "unstuck_ema_distance_fraction",
+        "ema_span_0_minutes": "unstuck_ema_span_0_minutes",
+        "ema_span_1_minutes": "unstuck_ema_span_1_minutes",
+        "loss_allowance_fraction": "unstuck_loss_allowance_fraction",
+        "exposure_trigger_ratio": "unstuck_exposure_trigger_ratio",
     },
 }
 SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY = {

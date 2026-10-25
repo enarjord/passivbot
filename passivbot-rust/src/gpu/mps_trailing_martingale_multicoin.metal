@@ -984,10 +984,10 @@ struct TrailingMartingaleMulticoinSideConfig {
     bool twel_enforcer_reduce_portfolio;
     bool unstuck_enabled;
     bool unstuck_ema_gating_enabled;
-    float unstuck_close_pct;
-    float unstuck_ema_dist;
-    float unstuck_loss_allowance_pct;
-    float unstuck_threshold;
+    float unstuck_close_fraction;
+    float unstuck_ema_distance_fraction;
+    float unstuck_loss_allowance_fraction;
+    float unstuck_exposure_trigger_ratio;
     float alpha_forager_volume;
     float alpha_forager_volatility;
     HslState hsl_template;
@@ -2053,7 +2053,7 @@ inline bool process_tm_multicoin_side_fills(
     bool alive,
     bool collect_coin_fill_counts,
     bool loss_gate_enabled,
-    float max_realized_loss_pct,
+    float loss_gate_max_drawdown_fraction,
     bool market_orders_allowed,
     float market_order_slippage_pct,
     float market_order_near_touch_threshold,
@@ -2876,10 +2876,10 @@ load_trailing_martingale_multicoin_side_config(
     config.twel_enforcer_reduce_portfolio = params[po + 40] > 0.5f;
     config.unstuck_enabled = params[po + 41] > 0.5f;
     config.unstuck_ema_gating_enabled = params[po + 42] > 0.5f;
-    config.unstuck_close_pct = params[po + 43];
-    config.unstuck_ema_dist = params[po + 44];
-    config.unstuck_loss_allowance_pct = params[po + 45];
-    config.unstuck_threshold = params[po + 46];
+    config.unstuck_close_fraction = params[po + 43];
+    config.unstuck_ema_distance_fraction = params[po + 44];
+    config.unstuck_loss_allowance_fraction = params[po + 45];
+    config.unstuck_exposure_trigger_ratio = params[po + 46];
     config.alpha_forager_volume = config.forager_volume_span > 0.0f
         ? clamp(2.0f / (config.forager_volume_span + 1.0f), 0.0f, 1.0f)
         : 0.0f;
@@ -3756,16 +3756,16 @@ inline int select_tm_multicoin_unstuck_coin(
             config.unstuck_ema_gating_enabled ? 1.0f : 0.0f
         ) > 0.5f;
         const float coin_close_pct = coin_override_or(
-            coin_overrides, c, 30, config.unstuck_close_pct
+            coin_overrides, c, 30, config.unstuck_close_fraction
         );
         const float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 31, config.unstuck_ema_dist
+            coin_overrides, c, 31, config.unstuck_ema_distance_fraction
         );
         const float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 32, config.unstuck_loss_allowance_pct
+            coin_overrides, c, 32, config.unstuck_loss_allowance_fraction
         );
         const float coin_threshold = coin_override_or(
-            coin_overrides, c, 33, config.unstuck_threshold
+            coin_overrides, c, 33, config.unstuck_exposure_trigger_ratio
         );
         const float fixed_coin_wel = coin_override_or(
             coin_overrides, c, 24, -1.0f
@@ -4006,7 +4006,7 @@ inline void generate_tm_multicoin_side_orders(
     int effective_n_positions,
     int current_hsl_mode,
     bool loss_gate_enabled,
-    float max_realized_loss_pct,
+    float loss_gate_max_drawdown_fraction,
     bool market_orders_allowed,
     float market_order_near_touch_threshold,
     float market_order_slippage_pct,
@@ -4049,11 +4049,11 @@ inline void generate_tm_multicoin_side_orders(
     const bool unstuck_enabled = config.unstuck_enabled;
     const bool unstuck_ema_gating_enabled =
         config.unstuck_ema_gating_enabled;
-    const float unstuck_close_pct = config.unstuck_close_pct;
-    const float unstuck_ema_dist = config.unstuck_ema_dist;
-    const float unstuck_loss_allowance_pct =
-        config.unstuck_loss_allowance_pct;
-    const float unstuck_threshold = config.unstuck_threshold;
+    const float unstuck_close_fraction = config.unstuck_close_fraction;
+    const float unstuck_ema_distance_fraction = config.unstuck_ema_distance_fraction;
+    const float unstuck_loss_allowance_fraction =
+        config.unstuck_loss_allowance_fraction;
+    const float unstuck_exposure_trigger_ratio = config.unstuck_exposure_trigger_ratio;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
     thread float* ema0 = side.ema0;
@@ -4294,16 +4294,16 @@ inline void generate_tm_multicoin_side_orders(
             unstuck_ema_gating_enabled ? 1.0f : 0.0f
         ) > 0.5f;
         float coin_close_pct = coin_override_or(
-            coin_overrides, c, 30, unstuck_close_pct
+            coin_overrides, c, 30, unstuck_close_fraction
         );
         float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 31, unstuck_ema_dist
+            coin_overrides, c, 31, unstuck_ema_distance_fraction
         );
         float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 32, unstuck_loss_allowance_pct
+            coin_overrides, c, 32, unstuck_loss_allowance_fraction
         );
         float coin_threshold = coin_override_or(
-            coin_overrides, c, 33, unstuck_threshold
+            coin_overrides, c, 33, unstuck_exposure_trigger_ratio
         );
         float fixed_coin_wel = coin_override_or(
             coin_overrides, c, 24, -1.0f
@@ -5544,7 +5544,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float short_score_hysteresis = fmax(run_settings[20], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && run_settings[16] > 0.5f;
-    const float max_realized_loss_pct = run_settings[5];
+    const float loss_gate_max_drawdown_fraction = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
@@ -5805,7 +5805,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
             int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_orders_allowed,
+            loss_gate_max_drawdown_fraction, market_orders_allowed,
             market_order_slippage_pct,
             market_order_near_touch_threshold,
             long_hsl_panic_market, long_hsl_equity_before_fills,
@@ -5837,7 +5837,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
             int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_orders_allowed,
+            loss_gate_max_drawdown_fraction, market_orders_allowed,
             market_order_slippage_pct,
             market_order_near_touch_threshold,
             short_hsl_panic_market, short_hsl_equity_before_fills,
@@ -6058,7 +6058,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct,
+                loss_gate_enabled, loss_gate_max_drawdown_fraction,
                 market_orders_allowed,
                 market_order_near_touch_threshold,
                 market_order_slippage_pct,
@@ -6083,7 +6083,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct,
+                loss_gate_enabled, loss_gate_max_drawdown_fraction,
                 market_orders_allowed,
                 market_order_near_touch_threshold,
                 market_order_slippage_pct,
@@ -6102,7 +6102,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_can_generate ? &long_side : nullptr,
                 short_can_generate ? &short_side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
-                k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
+                k, T, C, loss_gate_max_drawdown_fraction, market_order_slippage_pct)) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }
@@ -6863,7 +6863,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && run_settings[14] > 0.5f;
-    const float max_realized_loss_pct = run_settings[5];
+    const float loss_gate_max_drawdown_fraction = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const bool market_orders_allowed = run_settings[9] > 0.5f;
@@ -7108,7 +7108,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,
-            max_realized_loss_pct, market_orders_allowed,
+            loss_gate_max_drawdown_fraction, market_orders_allowed,
             market_order_slippage_pct,
             market_order_near_touch_threshold,
             hsl_panic_market, hsl_equity_before_fills
@@ -7260,7 +7260,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side, entries_enabled, tradable_count,
                 effective_n_positions, current_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct,
+                loss_gate_enabled, loss_gate_max_drawdown_fraction,
                 market_orders_allowed,
                 market_order_near_touch_threshold,
                 market_order_slippage_pct,
@@ -7277,7 +7277,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 market_execution_ticks,
                 short_side ? nullptr : &side, short_side ? &side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
-                k, T, C, max_realized_loss_pct, market_order_slippage_pct)) {
+                k, T, C, loss_gate_max_drawdown_fraction, market_order_slippage_pct)) {
             scalars[int(b) * SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }

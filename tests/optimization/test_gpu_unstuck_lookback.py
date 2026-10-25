@@ -42,7 +42,7 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
             enabled=True,
             ema_gating_enabled=False,
             close_pct=0.1,
-            loss_allowance_pct=0.001,
+            loss_allowance_fraction=0.001,
             threshold=0.3,
         )
         if strategy == "trailing_martingale":

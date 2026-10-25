@@ -377,41 +377,41 @@ impl RealizedMemory {
         self.d as f64
     }
 
-    pub fn allowance(&self, balance: f64, effective_pct: f64) -> Result<f64, String> {
-        allowance(balance, effective_pct, self.drawdown())
+    pub fn allowance(&self, balance: f64, effective_fraction: f64) -> Result<f64, String> {
+        allowance(balance, effective_fraction, self.drawdown())
     }
 }
 
-pub fn allowance(balance: f64, effective_pct: f64, drawdown: f64) -> Result<f64, String> {
+pub fn allowance(balance: f64, effective_fraction: f64, drawdown: f64) -> Result<f64, String> {
     let balance = number(balance, "realized-loss allowance balance")?;
-    let pct = number(effective_pct, "realized-loss allowance percentage")?;
+    let fraction = number(effective_fraction, "realized-loss allowance fraction")?;
     let d = number(drawdown, "realized-loss allowance drawdown")?;
-    if balance <= 0.0 || pct < 0.0 || d < 0.0 {
+    if balance <= 0.0 || fraction < 0.0 || d < 0.0 {
         return Err("invalid v9 realized-loss allowance input".into());
     }
     let peak = balance + d;
-    let value = pct.mul_add(peak, -d).max(0.0);
+    let value = fraction.mul_add(peak, -d).max(0.0);
     if !peak.is_finite() || !value.is_finite() {
         return Err("v9 realized-loss allowance exceeds the finite risk domain".into());
     }
     Ok(value as f64)
 }
 
-/// Preserve the authored binary32 percentage graph across CPU and devices.
+/// Preserve the authored binary32 fraction graph across CPU and devices.
 pub fn allowance_for(
     balance: f64,
-    loss_allowance_pct: f64,
+    loss_allowance_fraction: f64,
     total_wallet_exposure_limit: f64,
     drawdown: f64,
 ) -> Result<f64, String> {
-    let loss_pct = number(loss_allowance_pct, "unstuck loss allowance percentage")?;
+    let loss_fraction = number(loss_allowance_fraction, "unstuck loss allowance fraction")?;
     let twel = number(total_wallet_exposure_limit, "unstuck total exposure limit")?;
-    if loss_pct < 0.0 || twel < 0.0 {
-        return Err("negative v9 unstuck allowance percentage or exposure limit".into());
+    if loss_fraction < 0.0 || twel < 0.0 {
+        return Err("negative v9 unstuck allowance fraction or exposure limit".into());
     }
-    let effective = loss_pct * twel;
+    let effective = loss_fraction * twel;
     if !effective.is_finite() {
-        return Err("v9 unstuck effective percentage exceeds the finite risk domain".into());
+        return Err("v9 unstuck effective fraction exceeds the finite risk domain".into());
     }
     allowance(balance, effective as f64, drawdown)
 }

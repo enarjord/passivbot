@@ -229,11 +229,11 @@ def test_defaults_and_runtime_mapping():
     runtime = compile_runtime_config(
         prepare_config(c, verbose=False), runtime="backtest"
     )
-    assert runtime["bot"]["long"]["unstuck_ema_span_0"] == 790.0
+    assert runtime["bot"]["long"]["unstuck_ema_span_0_minutes"] == 790.0
     bounds = flatten_optimize_bounds(
         c["optimize"]["bounds"], strategy_kind="trailing_martingale"
     )
-    assert bounds["long_unstuck_ema_span_1"] == [60, 2880, 10]
+    assert bounds["long_unstuck_ema_span_1_minutes"] == [60, 2880, 10]
 
 
 def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
@@ -279,7 +279,7 @@ def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
     from optimization.config_adapter import get_optimization_key_paths
 
     paths = dict(get_optimization_key_paths(get_expanded_config_prototype()))
-    assert paths["long_unstuck_ema_span_0"] == ("bot", "long", "unstuck", "ema_span_0_minutes")
+    assert paths["long_unstuck_ema_span_0_minutes"] == ("bot", "long", "unstuck", "ema_span_0_minutes")
     assert paths["long_ema_span_0"] == (
         "bot",
         "long",
@@ -446,8 +446,8 @@ def test_live_warmup_ignores_disabled_unstuck(toggle):
     values = {
         "ema_span_0": 10,
         "ema_span_1": 20,
-        "unstuck_ema_span_0": 400_000,
-        "unstuck_ema_span_1": 500_000,
+        "unstuck_ema_span_0_minutes": 400_000,
+        "unstuck_ema_span_1_minutes": 500_000,
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
     }
@@ -587,7 +587,7 @@ def test_legacy_flat_optimizer_bounds_migrate_without_mixing_shapes(explicit, bo
             else 12.5
         )
     )
-    assert flat["long_unstuck_ema_span_0"] == [expected, expected]
+    assert flat["long_unstuck_ema_span_0_minutes"] == [expected, expected]
     assert set(prepared["optimize"]["bounds"]) == {"portfolio", "long", "short"}
     assert (
         prepare_config(prepared, verbose=False)["optimize"]["bounds"]

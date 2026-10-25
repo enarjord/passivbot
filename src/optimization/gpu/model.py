@@ -124,13 +124,17 @@ TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = ("twel_enforcer_enabled",)
 UNSTUCK_PARAM_KEYS = (
     "unstuck_enabled",
     "unstuck_ema_gating_enabled",
-    "unstuck_close_pct",
-    "unstuck_ema_dist",
-    "unstuck_loss_allowance_pct",
-    "unstuck_threshold",
+    "unstuck_close_fraction",
+    "unstuck_ema_distance_fraction",
+    "unstuck_loss_allowance_fraction",
+    "unstuck_exposure_trigger_ratio",
 )
 
-UNSTUCK_EMA_PARAM_KEYS = ("unstuck_ema_span_0", "unstuck_ema_span_1")
+UNSTUCK_EMA_PARAM_KEYS = ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
+COUPLED_UNSTUCK_EMA_SOURCE_KEYS = {
+    "unstuck_ema_span_0_minutes": "ema_span_0",
+    "unstuck_ema_span_1_minutes": "ema_span_1",
+}
 
 GLOBAL_RISK_PARAM_KEYS = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes")
 

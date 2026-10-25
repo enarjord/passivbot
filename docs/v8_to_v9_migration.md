@@ -64,6 +64,12 @@ is added.
 
 V9 uses separate slow EMA spans for each HSL policy, account-wide unstuck realized memory and
 account-wide loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
+
+Released flat unstuck fields and optimizer IDs are translated by a frozen versioned map,
+including root optimizer bounds, fixed selectors, referenced coin files and inline overrides.
+Current native identifiers use `_fraction`, `_ratio` and `_minutes`. Conflicting released
+spellings are rejected before defaults are applied, and conversions report final public paths.
+
 The shared span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate span is
 `bot.portfolio.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
 `memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.

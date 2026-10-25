@@ -69,7 +69,7 @@ from optimization.gpu.mps_kernel import (
     _decode_entry_interval_outputs,
     _cached_library_with_miss,
     _decode_multicoin_fused_outputs,
-    _encode_max_realized_loss_pct,
+    _encode_loss_gate_max_drawdown_fraction,
     _pack_tm_parameter_matrix,
     _TM_DECIMAL_WORDS,
     _scale_directional_minute_parameters,
@@ -240,14 +240,14 @@ def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
     "value", [0.0, 0.05, 0.999999999, float(np.nextafter(1.0, 0.0))]
 )
 def test_mps_realized_loss_fraction_matches_nearest_f32_cast(value):
-    encoded = _encode_max_realized_loss_pct(value)
+    encoded = _encode_loss_gate_max_drawdown_fraction(value)
 
     assert encoded == float(np.float32(value))
 
 
 @pytest.mark.parametrize("value", [1.0, 2.0, 1.0e100])
 def test_mps_disabled_realized_loss_limit_has_finite_float32_encoding(value):
-    assert _encode_max_realized_loss_pct(value) == 1.0
+    assert _encode_loss_gate_max_drawdown_fraction(value) == 1.0
 
 
 def test_decode_multicoin_fused_outputs_maps_directional_reductions():
@@ -2546,19 +2546,19 @@ def _tm_twel_enforcer_fields(
     enabled=False,
     unstuck_enabled=False,
     unstuck_ema_gating_enabled=True,
-    unstuck_close_pct=0.1,
-    unstuck_ema_dist=0.0,
-    unstuck_loss_allowance_pct=0.1,
-    unstuck_threshold=0.5,
+    unstuck_close_fraction=0.1,
+    unstuck_ema_distance_fraction=0.0,
+    unstuck_loss_allowance_fraction=0.1,
+    unstuck_exposure_trigger_ratio=0.5,
 ):
     return [
         float(enabled),
         float(unstuck_enabled),
         float(unstuck_ema_gating_enabled),
-        unstuck_close_pct,
-        unstuck_ema_dist,
-        unstuck_loss_allowance_pct,
-        unstuck_threshold,
+        unstuck_close_fraction,
+        unstuck_ema_distance_fraction,
+        unstuck_loss_allowance_fraction,
+        unstuck_exposure_trigger_ratio,
     ] + list(_HSL_DISABLED_VALUES.values())
 
 
@@ -2580,10 +2580,10 @@ _ADAPTIVE_DISABLED_VALUES = dict(
 _UNSTUCK_DISABLED_VALUES = {
     "unstuck_enabled": 0.0,
     "unstuck_ema_gating_enabled": 1.0,
-    "unstuck_close_pct": 0.1,
-    "unstuck_ema_dist": 0.0,
-    "unstuck_loss_allowance_pct": 0.1,
-    "unstuck_threshold": 0.5,
+    "unstuck_close_fraction": 0.1,
+    "unstuck_ema_distance_fraction": 0.0,
+    "unstuck_loss_allowance_fraction": 0.1,
+    "unstuck_exposure_trigger_ratio": 0.5,
 }
 
 _HSL_DISABLED_VALUES = {
@@ -3277,7 +3277,7 @@ def _multicoin_exposure_fixture(
     closes=(100.0, 120.0),
     highs=None,
     lows=None,
-    max_realized_loss_pct=1.0,
+    loss_gate_max_drawdown_fraction=1.0,
     first_valid_indices=(0, 0),
     last_valid_indices=None,
     liquidation_threshold=0.05,
@@ -3368,8 +3368,8 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
             **_ADAPTIVE_DISABLED_VALUES,
-            "unstuck_ema_span_0": 2.0,
-            "unstuck_ema_span_1": 3.0,
+            "unstuck_ema_span_0_minutes": 2.0,
+            "unstuck_ema_span_1_minutes": 3.0,
             **_HSL_DISABLED_VALUES,
         "unstuck_memory_ema_span_minutes": 43200.0,
         "loss_gate_memory_ema_span_minutes": 43200.0,
@@ -3381,7 +3381,7 @@ def _multicoin_exposure_fixture(
             pnl_lookback_bars=1440 if interval_minutes == 1 else 0,
             side=side,
             coin_overrides=coin_overrides,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": filter_by_min_effective_cost, "short": filter_by_min_effective_cost},
@@ -3438,8 +3438,8 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
             **_ADAPTIVE_DISABLED_VALUES,
-            "unstuck_ema_span_0": 2.0,
-            "unstuck_ema_span_1": 3.0,
+            "unstuck_ema_span_0_minutes": 2.0,
+            "unstuck_ema_span_1_minutes": 3.0,
             **_HSL_DISABLED_VALUES,
         "unstuck_memory_ema_span_minutes": 43200.0,
         "loss_gate_memory_ema_span_minutes": 43200.0,
@@ -3451,7 +3451,7 @@ def _multicoin_exposure_fixture(
             pnl_lookback_bars=1440 if interval_minutes == 1 else 0,
             side=side,
             coin_overrides=coin_overrides,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": filter_by_min_effective_cost, "short": filter_by_min_effective_cost},
@@ -3591,8 +3591,8 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         for key, value in (
             ("unstuck_enabled", 1.0),
             ("unstuck_ema_gating_enabled", 1.0),
-            ("unstuck_ema_span_0", 7.25),
-            ("unstuck_ema_span_1", 133.5),
+            ("unstuck_ema_span_0_minutes", 7.25),
+            ("unstuck_ema_span_1_minutes", 133.5),
             ("hsl_enabled", 1.0),
             ("hsl_signal_mode", 2.0),
             ("hsl_drawdown_threshold_fraction", 0.02),
@@ -4952,9 +4952,9 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
             "twel_enforcer_reduce_portfolio": 1.0,
             "unstuck_enabled": 1.0,
             "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_pct": 0.1,
-            "unstuck_loss_allowance_pct": 1.0,
-            "unstuck_threshold": 0.1,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_loss_allowance_fraction": 1.0,
+            "unstuck_exposure_trigger_ratio": 0.1,
         }
     )
     params = _tm_probe_tensor(
@@ -6243,7 +6243,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         pnl_lookback_bars=1440,
         side=side,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
-        max_realized_loss_pct=0.1,
+        loss_gate_max_drawdown_fraction=0.1,
         market_orders_allowed=True,
         market_order_near_touch_threshold=0.003,
         hsl_raw_drawdown_enabled=True,
@@ -6294,13 +6294,13 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
         )
-    with pytest.raises(ValueError, match="max_realized_loss_pct"):
+    with pytest.raises(ValueError, match="loss_gate_max_drawdown_fraction"):
         MpsEmaAnchorMulticoinRunner(
             runs[0],
             data,
             pnl_lookback_bars=1440,
             side=side,
-            max_realized_loss_pct=float("nan"),
+            loss_gate_max_drawdown_fraction=float("nan"),
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -8123,7 +8123,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
-        max_realized_loss_pct=1.0,
+        loss_gate_max_drawdown_fraction=1.0,
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
@@ -8478,7 +8478,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
                 "gate_reentry": 1.0,
             }
         )
-    values.update(unstuck_ema_span_0=17.25, unstuck_ema_span_1=211.75)
+    values.update(unstuck_ema_span_0_minutes=17.25, unstuck_ema_span_1_minutes=211.75)
     side_row = [values[key] for key in param_keys]
     params = np.asarray([side_row + side_row], dtype=np.float64)
 
@@ -8612,8 +8612,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
         **_ADAPTIVE_DISABLED_VALUES,
-        "unstuck_ema_span_0": 2.0,
-        "unstuck_ema_span_1": 3.0,
+        "unstuck_ema_span_0_minutes": 2.0,
+        "unstuck_ema_span_1_minutes": 3.0,
         **_HSL_DISABLED_VALUES,
         "unstuck_memory_ema_span_minutes": 43200.0,
         "loss_gate_memory_ema_span_minutes": 43200.0,
@@ -8785,7 +8785,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
-        max_realized_loss_pct=1.0,
+        loss_gate_max_drawdown_fraction=1.0,
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
@@ -9180,8 +9180,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
         **_ADAPTIVE_DISABLED_VALUES,
-        "unstuck_ema_span_0": 2.0,
-        "unstuck_ema_span_1": 3.0,
+        "unstuck_ema_span_0_minutes": 2.0,
+        "unstuck_ema_span_1_minutes": 3.0,
         **_HSL_DISABLED_VALUES,
         "unstuck_memory_ema_span_minutes": 43200.0,
         "loss_gate_memory_ema_span_minutes": 43200.0,
@@ -9194,7 +9194,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         pnl_lookback_bars=1440,
         side=side,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
-        max_realized_loss_pct=0.1,
+        loss_gate_max_drawdown_fraction=0.1,
         hsl_raw_drawdown_enabled=True,
         recovery_distribution_enabled=True,
         side_activation={"long": True, "short": True},
@@ -9445,7 +9445,7 @@ def _tm_parameter_row():
     values.update(_UNSTUCK_DISABLED_VALUES)
     values.update(_HSL_DISABLED_VALUES)
     values.update(_ADAPTIVE_DISABLED_VALUES)
-    values.update(unstuck_ema_span_0=2.0, unstuck_ema_span_1=3.0,
+    values.update(unstuck_ema_span_0_minutes=2.0, unstuck_ema_span_1_minutes=3.0,
                   unstuck_memory_ema_span_minutes=43200.0,
                   loss_gate_memory_ema_span_minutes=43200.0)
     return [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -9529,7 +9529,7 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
         closes=closes,
         highs=highs,
         lows=lows,
-        max_realized_loss_pct=0.05,
+        loss_gate_max_drawdown_fraction=0.05,
         market_orders_allowed=strategy_kind == "ema_anchor",
         market_order_near_touch_threshold=0.001,
         market_order_slippage_pct=0.01,
@@ -9554,12 +9554,12 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
     enabled = list(disabled)
     enabled[keys.index("unstuck_enabled")] = 1.0
     enabled[keys.index("unstuck_ema_gating_enabled")] = 0.0
-    enabled[keys.index("unstuck_close_pct")] = 0.1
-    enabled[keys.index("unstuck_loss_allowance_pct")] = 0.2
-    enabled[keys.index("unstuck_threshold")] = 0.5
+    enabled[keys.index("unstuck_close_fraction")] = 0.1
+    enabled[keys.index("unstuck_loss_allowance_fraction")] = 0.2
+    enabled[keys.index("unstuck_exposure_trigger_ratio")] = 0.5
     gated = list(enabled)
     gated[keys.index("unstuck_ema_gating_enabled")] = 1.0
-    gated[keys.index("unstuck_ema_dist")] = 0.1
+    gated[keys.index("unstuck_ema_distance_fraction")] = 0.1
     allowance_disabled = list(disabled)
     allowance_disabled[keys.index("we_excess_allowance_pct")] = 1.0
     allowance_disabled[keys.index("twel_entry_gate_enabled")] = 1.0
@@ -9605,7 +9605,7 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
         closes=closes,
         highs=highs,
         lows=lows,
-        max_realized_loss_pct=0.0005,
+        loss_gate_max_drawdown_fraction=0.0005,
         market_orders_allowed=strategy_kind == "ema_anchor",
         market_order_near_touch_threshold=0.001,
         market_order_slippage_pct=0.01,
@@ -9640,7 +9640,7 @@ def test_mps_tm_multicoin_unstuck_finalization_keeps_ordinary_close_remainder():
         closes=closes,
         highs=highs,
         lows=lows,
-        max_realized_loss_pct=0.05,
+        loss_gate_max_drawdown_fraction=0.05,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -9659,9 +9659,9 @@ def test_mps_tm_multicoin_unstuck_finalization_keeps_ordinary_close_remainder():
             "wel_enforcer_threshold": 0.2,
             "unstuck_enabled": 1.0,
             "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_pct": 0.7,
-            "unstuck_loss_allowance_pct": 0.2,
-            "unstuck_threshold": 0.5,
+            "unstuck_close_fraction": 0.7,
+            "unstuck_loss_allowance_fraction": 0.2,
+            "unstuck_exposure_trigger_ratio": 0.5,
         }
     )
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -9960,9 +9960,9 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
             "twel_enforcer_enabled": 0.0,
             "unstuck_enabled": 1.0,
             "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_pct": 0.1,
-            "unstuck_loss_allowance_pct": 0.2,
-            "unstuck_threshold": 0.5,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_loss_allowance_fraction": 0.2,
+            "unstuck_exposure_trigger_ratio": 0.5,
         }
     )
     params = _tm_probe_tensor(
@@ -10043,7 +10043,7 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
         highs = closes.copy()
         lows = closes - 0.01
 
-    def run_case(*, slippage, taker_fee, max_realized_loss_pct=1.0):
+    def run_case(*, slippage, taker_fee, loss_gate_max_drawdown_fraction=1.0):
         markets = [
             ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0, taker_fee),
             ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0, taker_fee),
@@ -10066,7 +10066,7 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
             market_orders_allowed=True,
             market_order_near_touch_threshold=0.001,
             market_order_slippage_pct=slippage,
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
         )
         values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
         values.update(
@@ -10081,9 +10081,9 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
                 "gate_initial": 1.0,
                 "unstuck_enabled": 0.0,
                 "unstuck_ema_gating_enabled": 0.0,
-                "unstuck_close_pct": 0.1,
-                "unstuck_loss_allowance_pct": 0.2,
-                "unstuck_threshold": 0.5,
+                "unstuck_close_fraction": 0.1,
+                "unstuck_loss_allowance_fraction": 0.2,
+                "unstuck_exposure_trigger_ratio": 0.5,
             }
         )
         output = runner.run(
@@ -10098,7 +10098,7 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
     no_cost = run_case(slippage=0.0, taker_fee=0.0)
     slipped = run_case(slippage=0.01, taker_fee=0.0)
     charged = run_case(slippage=0.01, taker_fee=0.002)
-    strict = run_case(slippage=0.01, taker_fee=0.002, max_realized_loss_pct=0.0)
+    strict = run_case(slippage=0.01, taker_fee=0.002, loss_gate_max_drawdown_fraction=0.0)
     position_key = "psize" if side == "long" else "short_psize"
 
     assert no_cost["fill_count"].item() > 2.0
@@ -10802,10 +10802,10 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
         "market_order_slippage_pct": 0.01,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
-        max_realized_loss_pct=1.0, **runner_kwargs
+        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.0, **runner_kwargs
+        loss_gate_max_drawdown_fraction=0.0, **runner_kwargs
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -10859,10 +10859,10 @@ def test_mps_tm_multicoin_fee_only_close_uses_loss_allowance(
         "market_order_slippage_pct": 0.001,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
-        max_realized_loss_pct=1.0, **runner_kwargs
+        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=max_loss_pct, **runner_kwargs
+        loss_gate_max_drawdown_fraction=max_loss_pct, **runner_kwargs
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -10911,7 +10911,7 @@ def test_mps_tm_multicoin_loss_gate_preserves_profitable_close_after_repair(side
         "coin_overrides": overrides,
         "count": count,
         "closes": (100.0, 100.0),
-        "max_realized_loss_pct": 0.0,
+        "loss_gate_max_drawdown_fraction": 0.0,
     }
     blocked_runner, candidate = _multicoin_exposure_fixture(
         highs=blocked_highs, lows=blocked_lows, **common
@@ -10966,7 +10966,7 @@ def test_mps_tm_multicoin_loss_gate_scans_past_blocked_recursive_rung(side):
         closes=(100.0, 100.0),
         highs=highs,
         lows=lows,
-        max_realized_loss_pct=0.0,
+        loss_gate_max_drawdown_fraction=0.0,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -11018,7 +11018,7 @@ def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
         highs=highs,
         lows=lows,
         markets=markets,
-        max_realized_loss_pct=0.0,
+        loss_gate_max_drawdown_fraction=0.0,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -11122,10 +11122,10 @@ def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
         "market_order_slippage_pct": 0.01,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
-        max_realized_loss_pct=1.0, **runner_kwargs
+        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.001, **runner_kwargs
+        loss_gate_max_drawdown_fraction=0.001, **runner_kwargs
     )
     values = dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -11165,10 +11165,10 @@ def test_mps_ema_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
         "markets": markets,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
-        max_realized_loss_pct=1.0, **runner_kwargs
+        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.0, **runner_kwargs
+        loss_gate_max_drawdown_fraction=0.0, **runner_kwargs
     )
     candidate[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
 
@@ -12014,10 +12014,10 @@ def test_mps_independent_unstuck_horizons_change_reducer_only(
         entry_cooldown_minutes=1000.0,
         unstuck_enabled=1.0,
         unstuck_ema_gating_enabled=1.0,
-        unstuck_close_pct=0.1,
-        unstuck_loss_allowance_pct=0.2,
-        unstuck_threshold=0.5,
-        unstuck_ema_dist=-0.01,
+        unstuck_close_fraction=0.1,
+        unstuck_loss_allowance_fraction=0.2,
+        unstuck_exposure_trigger_ratio=0.5,
+        unstuck_ema_distance_fraction=-0.01,
         twel_entry_gate_enabled=0.0,
     )
     if strategy_kind == "ema_anchor":
@@ -12035,8 +12035,8 @@ def test_mps_independent_unstuck_horizons_change_reducer_only(
     ]:
         values.update(
             unstuck_enabled=float(enabled),
-            unstuck_ema_span_0=span,
-            unstuck_ema_span_1=span,
+            unstuck_ema_span_0_minutes=span,
+            unstuck_ema_span_1_minutes=span,
         )
         packed = [values[key] for key in keys]
         rows.append(packed)
@@ -12077,7 +12077,7 @@ def test_mps_independent_unstuck_horizons_change_reducer_only(
 def test_unstuck_spans_fail_closed_if_not_representable_in_packed_candles(span):
     keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     row = _tm_parameter_row()
-    row[keys.index("unstuck_ema_span_0")] = span
+    row[keys.index("unstuck_ema_span_0_minutes")] = span
     with pytest.raises(ValueError, match="unstuck EMA spans"):
         _scale_directional_minute_parameters(
             np.asarray([row * 2]), keys, sides=2, interval_minutes=5

@@ -96,12 +96,12 @@ def _rust_bot_params(**overrides):
         "risk_wel_enforcer_threshold": 0.0,
         "risk_twel_enforcer_threshold": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
-        "unstuck_close_pct": 0.0,
-        "unstuck_ema_dist": 0.0,
-        "unstuck_ema_span_0": 10.0,
-        "unstuck_ema_span_1": 20.0,
-        "unstuck_loss_allowance_pct": 0.0,
-        "unstuck_threshold": 0.0,
+        "unstuck_close_fraction": 0.0,
+        "unstuck_ema_distance_fraction": 0.0,
+        "unstuck_ema_span_0_minutes": 10.0,
+        "unstuck_ema_span_1_minutes": 20.0,
+        "unstuck_loss_allowance_fraction": 0.0,
+        "unstuck_exposure_trigger_ratio": 0.0,
     }
     params.update(overrides)
     return params
@@ -172,7 +172,7 @@ def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pa
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "max_realized_loss_pct": 1.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
             "sort_global": True,
             "global_bot_params": {
                 "long": _rust_bot_params(),
@@ -3192,11 +3192,11 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
         return {
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": True,
-            "unstuck_ema_span_0": 1000.0,
-            "unstuck_ema_span_1": 2000.0,
-            "unstuck_loss_allowance_pct": 0.1,
-            "unstuck_close_pct": 0.1,
-            "unstuck_threshold": 0.2,
+            "unstuck_ema_span_0_minutes": 1000.0,
+            "unstuck_ema_span_1_minutes": 2000.0,
+            "unstuck_loss_allowance_fraction": 0.1,
+            "unstuck_close_fraction": 0.1,
+            "unstuck_exposure_trigger_ratio": 0.2,
             "total_wallet_exposure_limit": 1.0,
         }.get(key, original_bp(side, key, symbol))
 
@@ -3249,8 +3249,8 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     sym_input["long"]["position"] = {"size": 10.0 if held else 0.0, "price": 30.0 if held else 0.0}
     sym_input["long"]["bot_params"].update(
         unstuck_enabled=True, unstuck_ema_gating_enabled=True,
-        unstuck_ema_span_0=1000.0, unstuck_ema_span_1=2000.0,
-        unstuck_close_pct=0.1, unstuck_threshold=0.2, unstuck_loss_allowance_pct=0.1,
+        unstuck_ema_span_0_minutes=1000.0, unstuck_ema_span_1_minutes=2000.0,
+        unstuck_close_fraction=0.1, unstuck_exposure_trigger_ratio=0.2, unstuck_loss_allowance_fraction=0.1,
     )
     payload["global"]["unstuck_allowance_long"] = 100.0
     import passivbot_rust as pbr
@@ -3272,9 +3272,9 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     [
         "manual",
         "panic",
-        "unstuck_loss_allowance_pct",
-        "unstuck_close_pct",
-        "unstuck_threshold",
+        "unstuck_loss_allowance_fraction",
+        "unstuck_close_fraction",
+        "unstuck_exposure_trigger_ratio",
         "total_wallet_exposure_limit",
     ],
 )
@@ -3295,11 +3295,11 @@ async def test_ineligible_unstuck_consumer_does_not_read_emas(
     values = {
         "unstuck_enabled": True,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_ema_span_0": 1000.0,
-        "unstuck_ema_span_1": 2000.0,
-        "unstuck_loss_allowance_pct": 0.1,
-        "unstuck_close_pct": 0.1,
-        "unstuck_threshold": 0.2,
+        "unstuck_ema_span_0_minutes": 1000.0,
+        "unstuck_ema_span_1_minutes": 2000.0,
+        "unstuck_loss_allowance_fraction": 0.1,
+        "unstuck_close_fraction": 0.1,
+        "unstuck_exposure_trigger_ratio": 0.2,
         "total_wallet_exposure_limit": 1.0,
     }
     if skip_reason in values:
@@ -3341,11 +3341,11 @@ def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
         total_wallet_exposure_limit=0.0,
         unstuck_enabled=True,
         unstuck_ema_gating_enabled=True,
-        unstuck_ema_span_0=1000.0,
-        unstuck_ema_span_1=2000.0,
-        unstuck_close_pct=0.1,
-        unstuck_threshold=0.2,
-        unstuck_loss_allowance_pct=0.1,
+        unstuck_ema_span_0_minutes=1000.0,
+        unstuck_ema_span_1_minutes=2000.0,
+        unstuck_close_fraction=0.1,
+        unstuck_exposure_trigger_ratio=0.2,
+        unstuck_loss_allowance_fraction=0.1,
     )
     payload["global"]["global_bot_params"][pside].update(
         n_positions=1, total_wallet_exposure_limit=1.0

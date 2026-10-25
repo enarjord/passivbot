@@ -2954,7 +2954,7 @@ def prep_backtest_args(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
             "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
-            "max_realized_loss_pct": float(
+            "loss_gate_max_drawdown_fraction": float(
                 require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_fraction")
             ),
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,

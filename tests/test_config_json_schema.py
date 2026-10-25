@@ -247,7 +247,7 @@ def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
 def test_shared_metadata_matches_adapters_without_changing_special_validation_membership():
     registry = get_field_registry()
     assert get_special_optimizer_bindings() == OPTIMIZABLE_BOT_KEY_PATHS
-    assert "long_unstuck_ema_span_0" not in OPTIMIZABLE_BOT_KEY_PATHS
+    assert "long_unstuck_ema_span_0_minutes" not in OPTIMIZABLE_BOT_KEY_PATHS
     for scope in ("coin", "position_side", "portfolio"):
         config = generated_template(get_template_config(), scope)
         for key, path in get_shared_optimizer_bindings().items():

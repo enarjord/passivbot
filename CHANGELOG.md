@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native unstuck fields and optimizer IDs with explicit fractions, exposure ratios and
+  minute spans; name the native account loss gate `loss_gate_max_drawdown_fraction`.
+  Unstuck status fields use matching fraction names. Numeric behavior, signed fees and GPU
+  layouts are unchanged; explicit released-v8 migration retains its own frozen vocabulary.
+
 - Align native HSL policy fields, replay inputs, optimizer IDs and GPU fixture options with
   explicit drawdown fractions and minute spans. Public configuration values and risk arithmetic
   stay unchanged; retired native names are not accepted as aliases.

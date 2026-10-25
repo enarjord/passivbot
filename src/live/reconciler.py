@@ -1783,9 +1783,9 @@ def _submitted_rust_input_context(
                     f"symbol input {input_idx} has invalid {pside} {field}",
                 )
                 for field in (
-                    "unstuck_loss_allowance_pct",
-                    "unstuck_close_pct",
-                    "unstuck_threshold",
+                    "unstuck_loss_allowance_fraction",
+                    "unstuck_close_fraction",
+                    "unstuck_exposure_trigger_ratio",
                 )
             }
             enabled_families: set[str] = set()
@@ -2491,17 +2491,17 @@ def validate_rust_orchestrator_output(
     loss_gate_blocks = diagnostics["loss_gate_blocks"]
     if not isinstance(loss_gate_blocks, list):
         raise FatalBotException("Rust orchestrator loss_gate_blocks must be a list")
-    submitted_max_realized_loss_pct: float | None = None
+    submitted_loss_gate_max_drawdown_fraction: float | None = None
     if loss_gate_blocks:
-        submitted_max_realized_loss_pct = _validated_rust_finite_number(
-            global_input.get("max_realized_loss_pct"),
-            "submitted global input has invalid max_realized_loss_pct",
+        submitted_loss_gate_max_drawdown_fraction = _validated_rust_finite_number(
+            global_input.get("loss_gate_max_drawdown_fraction"),
+            "submitted global input has invalid loss_gate_max_drawdown_fraction",
         )
-        if submitted_max_realized_loss_pct < 0.0:
+        if submitted_loss_gate_max_drawdown_fraction < 0.0:
             raise FatalBotException(
-                "Rust orchestrator submitted global input has invalid max_realized_loss_pct"
+                "Rust orchestrator submitted global input has invalid loss_gate_max_drawdown_fraction"
             )
-        if submitted_max_realized_loss_pct >= 1.0:
+        if submitted_loss_gate_max_drawdown_fraction >= 1.0:
             raise FatalBotException(
                 "Rust orchestrator loss_gate_blocks present while submitted "
                 "realized-loss gate is disabled"
@@ -2514,7 +2514,7 @@ def validate_rust_orchestrator_output(
         "projected_balance_after",
         "balance_peak",
         "balance_floor",
-        "max_realized_loss_pct",
+        "loss_gate_max_drawdown_fraction",
     )
     for block_idx, block in enumerate(loss_gate_blocks):
         if not isinstance(block, dict):
@@ -2636,7 +2636,7 @@ def validate_rust_orchestrator_output(
         projected_balance_after = finite_values["projected_balance_after"]
         balance_peak = finite_values["balance_peak"]
         balance_floor = finite_values["balance_floor"]
-        max_realized_loss_pct = finite_values["max_realized_loss_pct"]
+        loss_gate_max_drawdown_fraction = finite_values["loss_gate_max_drawdown_fraction"]
         if projected_pnl >= 0.0:
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} must have negative projected_pnl"
@@ -2645,13 +2645,13 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid balance state"
             )
-        if not 0.0 <= max_realized_loss_pct < 1.0:
+        if not 0.0 <= loss_gate_max_drawdown_fraction < 1.0:
             raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} has invalid max_realized_loss_pct"
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid loss_gate_max_drawdown_fraction"
             )
-        if max_realized_loss_pct != submitted_max_realized_loss_pct:
+        if loss_gate_max_drawdown_fraction != submitted_loss_gate_max_drawdown_fraction:
             raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} max_realized_loss_pct "
+                f"Rust orchestrator loss_gate_block {block_idx} loss_gate_max_drawdown_fraction "
                 "is inconsistent with submitted policy"
             )
         if not math.isclose(
@@ -2665,7 +2665,7 @@ def validate_rust_orchestrator_output(
             )
         if not math.isclose(
             balance_floor,
-            balance_peak * (1.0 - max_realized_loss_pct),
+            balance_peak * (1.0 - loss_gate_max_drawdown_fraction),
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):

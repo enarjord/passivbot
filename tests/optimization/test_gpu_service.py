@@ -172,7 +172,7 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "filter_by_min_effective_cost": {"long": False, "short": False},
         "dynamic_wel_by_tradability": True,
         "hedge_mode": False,
-        "max_realized_loss_pct": 1.0,
+        "loss_gate_max_drawdown_fraction": 1.0,
         "unstuck_memory_ema_span_minutes": 43200.0,
         "loss_gate_memory_ema_span_minutes": 43200.0,
         "market_order_slippage_pct": 0.0005,
@@ -1136,7 +1136,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "first_timestamp_ms": 0,
             "liquidation_threshold": 0.05,
             "filter_by_min_effective_cost": {"long": True, "short": True},
-            "max_realized_loss_pct": 1.0,
+            "loss_gate_max_drawdown_fraction": 1.0,
             "market_order_slippage_pct": 0.0,
             "hedge_mode": config['bot']["portfolio"]['hedge_mode'],
         },
@@ -1461,24 +1461,24 @@ def test_tm_total_exposure_repair_packs_exact_rust_inputs(policy, reduce_portfol
 def test_single_coin_unstuck_packs_exact_rust_inputs():
     assert _unstuck_params(
         {
-            "unstuck_ema_span_0": 17.25,
-            "unstuck_ema_span_1": 211.75,
+            "unstuck_ema_span_0_minutes": 17.25,
+            "unstuck_ema_span_1_minutes": 211.75,
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": False,
-            "unstuck_close_pct": 0.125,
-            "unstuck_ema_dist": -0.01,
-            "unstuck_loss_allowance_pct": 0.02,
-            "unstuck_threshold": 0.85,
+            "unstuck_close_fraction": 0.125,
+            "unstuck_ema_distance_fraction": -0.01,
+            "unstuck_loss_allowance_fraction": 0.02,
+            "unstuck_exposure_trigger_ratio": 0.85,
         }
     ) == {
-        "unstuck_ema_span_0": 17.25,
-        "unstuck_ema_span_1": 211.75,
+        "unstuck_ema_span_0_minutes": 17.25,
+        "unstuck_ema_span_1_minutes": 211.75,
         "unstuck_enabled": 1.0,
         "unstuck_ema_gating_enabled": 0.0,
-        "unstuck_close_pct": 0.125,
-        "unstuck_ema_dist": -0.01,
-        "unstuck_loss_allowance_pct": 0.02,
-        "unstuck_threshold": 0.85,
+        "unstuck_close_fraction": 0.125,
+        "unstuck_ema_distance_fraction": -0.01,
+        "unstuck_loss_allowance_fraction": 0.02,
+        "unstuck_exposure_trigger_ratio": 0.85,
     }
 
 
@@ -1734,14 +1734,14 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                     "risk_entry_cooldown_minutes": 15.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
-                    "unstuck_ema_span_0": 17.25,
-                    "unstuck_ema_span_1": 211.75,
+                    "unstuck_ema_span_0_minutes": 17.25,
+                    "unstuck_ema_span_1_minutes": 211.75,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
-                    "unstuck_close_pct": 0.125,
-                    "unstuck_ema_dist": -0.01,
-                    "unstuck_loss_allowance_pct": 0.02,
-                    "unstuck_threshold": 0.85,
+                    "unstuck_close_fraction": 0.125,
+                    "unstuck_ema_distance_fraction": -0.01,
+                    "unstuck_loss_allowance_fraction": 0.02,
+                    "unstuck_exposure_trigger_ratio": 0.85,
                 }
             },
         ],
@@ -2258,10 +2258,10 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "risk_wel_enforcer_threshold": 0.8,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
-                    "unstuck_close_pct": 0.125,
-                    "unstuck_ema_dist": -0.01,
-                    "unstuck_loss_allowance_pct": 0.02,
-                    "unstuck_threshold": 0.85,
+                    "unstuck_close_fraction": 0.125,
+                    "unstuck_ema_distance_fraction": -0.01,
+                    "unstuck_loss_allowance_fraction": 0.02,
+                    "unstuck_exposure_trigger_ratio": 0.85,
                 }
             },
         ],
@@ -2515,7 +2515,7 @@ def _suite_batch_proxy():
         )
     }
     proxy.checkpoint_contract = dict(
-        base_params={"long": {"n_positions": 4}}, backtest={"max_realized_loss_pct": 1}
+        base_params={"long": {"n_positions": 4}}, backtest={"loss_gate_max_drawdown_fraction": 1}
     )
     proxy.coin_override_contract = {"coins": ["A", "B"]}
     proxy.needed_metrics = {"adg_strategy_eq"}
@@ -2560,7 +2560,7 @@ def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed, 
     elif changed == "run":
         second.run = replace(first.run, starting_balance=2000)
     elif changed == "runtime":
-        second.checkpoint_contract["backtest"]["max_realized_loss_pct"] = 0.5
+        second.checkpoint_contract["backtest"]["loss_gate_max_drawdown_fraction"] = 0.5
     elif changed in ("overrides", "btc"):
         second._runner_specs = copy.deepcopy(first._runner_specs)
         second._runner_specs["long"][1][
@@ -2619,12 +2619,12 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
 @pytest.mark.parametrize("fraction", [0.0, 0.1, 0.99999999, 1.0, 1e308])
 def test_realized_gate_fraction_uses_shared_nearest_f32_graph(fraction):
     pytest.importorskip("torch")
-    from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
+    from optimization.gpu.mps_kernel import _encode_loss_gate_max_drawdown_fraction
 
-    assert _encode_max_realized_loss_pct(fraction) == float(np.float32(min(fraction, 1.0)))
+    assert _encode_loss_gate_max_drawdown_fraction(fraction) == float(np.float32(min(fraction, 1.0)))
     if fraction == 0.99999999:
         # The separately packed configured flag must preserve this active gate.
-        assert fraction < 1.0 and _encode_max_realized_loss_pct(fraction) == 1.0
+        assert fraction < 1.0 and _encode_loss_gate_max_drawdown_fraction(fraction) == 1.0
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

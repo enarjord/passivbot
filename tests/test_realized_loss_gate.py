@@ -101,7 +101,7 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     bot = object.__new__(Passivbot)
     bot._orchestrator_uses_realized_pnl = lambda: True
     bot._unstuck_uses_realized_pnl = lambda: False
-    bot._live_max_realized_loss_pct = lambda: 0.99
+    bot._loss_gate_max_drawdown_fraction = lambda: 0.99
     bot.config = _risk_memory_config()
     bot.get_exchange_time = lambda: 0
     bot._pnls_manager = MagicMock()
@@ -203,14 +203,14 @@ class TestRealizedPnlConsumers:
     @staticmethod
     def _make_bot(
         *,
-        max_realized_loss_pct=1.0,
+        loss_gate_max_drawdown_fraction=1.0,
         hsl_enabled=False,
         total_wallet_exposure_limit=1.0,
         values=None,
     ):
         bot = object.__new__(Passivbot)
         bot.coin_overrides = {}
-        bot._live_max_realized_loss_pct = lambda: max_realized_loss_pct
+        bot._loss_gate_max_drawdown_fraction = lambda: loss_gate_max_drawdown_fraction
         bot._equity_hard_stop_enabled = lambda: hsl_enabled
         bot.bot_value = lambda pside, key: (
             total_wallet_exposure_limit if key == "total_wallet_exposure_limit" else 0.0
@@ -228,26 +228,26 @@ class TestRealizedPnlConsumers:
         assert bot._live_risk_uses_authoritative_pnl() is False
 
     @pytest.mark.parametrize(
-        "max_realized_loss_pct,hsl_enabled",
+        "loss_gate_max_drawdown_fraction,hsl_enabled",
         [(0.99, False), (1.0, True)],
     )
     def test_only_realized_loss_gate_requires_authoritative_pnl(
-        self, max_realized_loss_pct, hsl_enabled
+        self, loss_gate_max_drawdown_fraction, hsl_enabled
     ):
         bot = self._make_bot(
-            max_realized_loss_pct=max_realized_loss_pct,
+            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             hsl_enabled=hsl_enabled,
         )
 
-        assert bot._live_risk_uses_authoritative_pnl() is (max_realized_loss_pct < 1.0)
+        assert bot._live_risk_uses_authoritative_pnl() is (loss_gate_max_drawdown_fraction < 1.0)
 
     @pytest.mark.parametrize("symbol", [None, "SOL/USDT:USDT"])
     def test_enabled_unstuck_requires_authoritative_pnl(self, symbol):
         values = {
             (symbol, "long", "unstuck_enabled"): True,
-            (symbol, "long", "unstuck_loss_allowance_pct"): 0.01,
-            (symbol, "long", "unstuck_close_pct"): 0.1,
-            (symbol, "long", "unstuck_threshold"): 0.9,
+            (symbol, "long", "unstuck_loss_allowance_fraction"): 0.01,
+            (symbol, "long", "unstuck_close_fraction"): 0.1,
+            (symbol, "long", "unstuck_exposure_trigger_ratio"): 0.9,
         }
         bot = self._make_bot(values=values)
         if symbol is not None:
@@ -258,9 +258,9 @@ class TestRealizedPnlConsumers:
     def test_unstuck_with_zero_total_exposure_does_not_require_pnl(self):
         values = {
             (None, "long", "unstuck_enabled"): True,
-            (None, "long", "unstuck_loss_allowance_pct"): 0.01,
-            (None, "long", "unstuck_close_pct"): 0.1,
-            (None, "long", "unstuck_threshold"): 0.9,
+            (None, "long", "unstuck_loss_allowance_fraction"): 0.01,
+            (None, "long", "unstuck_close_fraction"): 0.1,
+            (None, "long", "unstuck_exposure_trigger_ratio"): 0.9,
         }
         bot = self._make_bot(
             total_wallet_exposure_limit=0.0,
@@ -274,7 +274,7 @@ class TestGetRealizedMemories:
     def test_no_manager_with_disabled_consumers_returns_no_filter_state(self):
         bot = _make_bot_with_events([])
         bot._pnls_manager = None
-        bot._live_max_realized_loss_pct = lambda: 1.0
+        bot._loss_gate_max_drawdown_fraction = lambda: 1.0
         assert bot._get_realized_memories() == {"unstuck": None, "loss_gate": None}
 
     def test_enabled_realized_risk_requires_manager(self):
@@ -291,7 +291,7 @@ class TestGetRealizedMemories:
         bot = _make_bot_with_events([
             _make_fill_event(-10.0, pnl_status=pnl_status, pnl_source=pnl_source)
         ])
-        bot._live_max_realized_loss_pct = lambda: 1.0
+        bot._loss_gate_max_drawdown_fraction = lambda: 1.0
         assert bot._get_realized_memories() == {"unstuck": None, "loss_gate": None}
         bot._pnls_manager.get_events.assert_not_called()
 
@@ -670,7 +670,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -200.0,
             "projected_balance_after": 9800.0,
             "balance_floor": 9900.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
         out = {"diagnostics": {"loss_gate_blocks": [block]}}
         idx_to_symbol = {0: "BTCUSDT"}
@@ -701,7 +701,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -200.0,
             "projected_balance_after": 9800.0,
             "balance_floor": 9900.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
         try:
             with caplog.at_level(logging.WARNING):
@@ -731,7 +731,7 @@ class TestLogRealizedLossGateBlocks:
         assert event.data["projected_pnl"] == pytest.approx(-200.0)
         assert event.data["projected_balance_after"] == pytest.approx(9800.0)
         assert event.data["balance_floor"] == pytest.approx(9900.0)
-        assert event.data["max_realized_loss_pct"] == pytest.approx(0.01)
+        assert event.data["loss_gate_max_drawdown_fraction"] == pytest.approx(0.01)
 
     def test_missing_pipeline_uses_legacy_warning(self, caplog):
         bot = _make_bot_for_logging()
@@ -749,7 +749,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -200.0,
             "projected_balance_after": 9800.0,
             "balance_floor": 9900.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
 
         with caplog.at_level(logging.WARNING):
@@ -785,7 +785,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -200.0,
             "projected_balance_after": 9800.0,
             "balance_floor": 9900.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
 
         try:
@@ -833,7 +833,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -200.0,
             "projected_balance_after": 9800.0,
             "balance_floor": 9900.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
 
         try:
@@ -859,7 +859,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -100.0,
             "projected_balance_after": 9900.0,
             "balance_floor": 9950.0,
-            "max_realized_loss_pct": 0.005,
+            "loss_gate_max_drawdown_fraction": 0.005,
         }
         out = {"diagnostics": {"loss_gate_blocks": [block]}}
         with caplog.at_level(logging.WARNING):
@@ -890,7 +890,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -100.0,
             "projected_balance_after": 9900.0,
             "balance_floor": 9950.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
         out = {"diagnostics": {"loss_gate_blocks": [block]}}
         idx_to_symbol = {0: "BTCUSDT"}
@@ -911,7 +911,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -100.0,
             "projected_balance_after": 9900.0,
             "balance_floor": 9950.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
         block_sui = {
             "symbol_idx": 1,
@@ -922,7 +922,7 @@ class TestLogRealizedLossGateBlocks:
             "projected_pnl": -50.0,
             "projected_balance_after": 9950.0,
             "balance_floor": 9950.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         }
         out = {"diagnostics": {"loss_gate_blocks": [block_btc, block_sui]}}
         idx_to_symbol = {0: "BTCUSDT", 1: "SUIUSDT"}
@@ -1035,7 +1035,7 @@ class TestEntryCooldownDeltaGuardEvents:
 
 
 class TestPrepBacktestArgsMaxRealizedLossPct:
-    def _make_config(self, max_realized_loss_pct=None):
+    def _make_config(self, loss_gate_max_drawdown_fraction=None):
         config = get_expanded_config_prototype()
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
                                   btc_collateral_cap=.5)
@@ -1044,8 +1044,8 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)
         config["bot"]["long"]["wallet_exposure_limit"] = .5
         config["bot"]["short"]["wallet_exposure_limit"] = 0.0
-        if max_realized_loss_pct is not None:
-            config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_realized_loss_pct
+        if loss_gate_max_drawdown_fraction is not None:
+            config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = loss_gate_max_drawdown_fraction
         return config
 
     def _make_mss(self):
@@ -1064,27 +1064,27 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
     def test_default_value_is_1(self):
         config = self._make_config()
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
-        assert bp["max_realized_loss_pct"] == pytest.approx(1.0)
+        assert bp["loss_gate_max_drawdown_fraction"] == pytest.approx(1.0)
         assert bp["loss_gate_memory_ema_span_minutes"] == pytest.approx(43200.0)
         assert bp["unstuck_memory_ema_span_minutes"] == pytest.approx(43200.0)
         assert "lookback_ema_span_minutes" not in bp
         assert "realized_loss_gate_lookback_minutes" not in bp
 
     def test_explicit_value_passthrough(self):
-        config = self._make_config(max_realized_loss_pct=0.05)
+        config = self._make_config(loss_gate_max_drawdown_fraction=0.05)
         config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 3.0
         config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 7.0
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
-        assert bp["max_realized_loss_pct"] == pytest.approx(0.05)
+        assert bp["loss_gate_max_drawdown_fraction"] == pytest.approx(0.05)
         assert "realized_loss_gate_lookback_minutes" not in bp
         assert bp["loss_gate_memory_ema_span_minutes"] == pytest.approx(7.0)
         assert bp["unstuck_memory_ema_span_minutes"] == pytest.approx(3.0)
         assert "lookback_ema_span_minutes" not in bp
 
     def test_zero_disables_lossy_closes(self):
-        config = self._make_config(max_realized_loss_pct=0.0)
+        config = self._make_config(loss_gate_max_drawdown_fraction=0.0)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
-        assert bp["max_realized_loss_pct"] == pytest.approx(0.0)
+        assert bp["loss_gate_max_drawdown_fraction"] == pytest.approx(0.0)
 
 
 class TestPrepBacktestArgsEquityHardStopLoss:

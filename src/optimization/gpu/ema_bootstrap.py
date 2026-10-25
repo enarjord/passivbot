@@ -98,7 +98,7 @@ def pack_bootstrap_counts(params, keys, coin_overrides, *, interval_minutes, ava
         unstuck_start = model.TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
     else:
         raise ValueError("Unsupported GPU EMA bootstrap parameter layout")
-    leaves = ("ema_span_0", "ema_span_1", "unstuck_ema_span_0", "unstuck_ema_span_1",
+    leaves = ("ema_span_0", "ema_span_1", "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes",
               minute, hour, "forager_volume_ema_span_1m", "forager_volatility_ema_span_1m")
     pins = (strategy_keys.index("ema_span_0"), strategy_keys.index("ema_span_1"),
             unstuck_start, unstuck_start + 1, strategy_keys.index(minute),

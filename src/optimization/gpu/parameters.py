@@ -71,10 +71,10 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
     return {
         "unstuck_enabled": float(bool(bot["unstuck_enabled"])),
         "unstuck_ema_gating_enabled": float(bool(bot["unstuck_ema_gating_enabled"])),
-        "unstuck_close_pct": float(bot["unstuck_close_pct"]),
-        "unstuck_ema_dist": float(bot["unstuck_ema_dist"]),
-        "unstuck_loss_allowance_pct": float(bot["unstuck_loss_allowance_pct"]),
-        "unstuck_threshold": float(bot["unstuck_threshold"]),
+        "unstuck_close_fraction": float(bot["unstuck_close_fraction"]),
+        "unstuck_ema_distance_fraction": float(bot["unstuck_ema_distance_fraction"]),
+        "unstuck_loss_allowance_fraction": float(bot["unstuck_loss_allowance_fraction"]),
+        "unstuck_exposure_trigger_ratio": float(bot["unstuck_exposure_trigger_ratio"]),
         **{key: float(bot[key]) for key in UNSTUCK_EMA_PARAM_KEYS},
     }
 

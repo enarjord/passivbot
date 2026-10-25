@@ -74,8 +74,8 @@ def test_canonical_coin_unstuck_trigger_matches_cpu_payload(strategy, side, trig
     patch = {"bot": {side: {"unstuck": {"exposure_trigger_ratio": trigger}}}}
     config["coin_overrides"] = {coins[0]: patch}
     payload = build_backtest_payload(candles, markets, config, "binance", btc, timestamps)
-    assert payload.bot_params_list[0][side]["unstuck_threshold"] == trigger
-    assert payload.bot_params_list[1][side]["unstuck_threshold"] == global_trigger
+    assert payload.bot_params_list[0][side]["unstuck_exposure_trigger_ratio"] == trigger
+    assert payload.bot_params_list[1][side]["unstuck_exposure_trigger_ratio"] == global_trigger
 
     matrix, contract = build_coin_override_parameters(
         config=config, mss=markets, exchange="binance", coins=coins, payload=payload,

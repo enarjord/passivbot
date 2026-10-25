@@ -115,16 +115,16 @@ def build_coin_override_parameters(
         unstuck_keys = (
             ("enabled", "unstuck_enabled"),
             ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-            ("close_fraction", "unstuck_close_pct"),
-            ("ema_distance_fraction", "unstuck_ema_dist"),
-            ("loss_allowance_fraction", "unstuck_loss_allowance_pct"),
-            ("exposure_trigger_ratio", "unstuck_threshold"),
+            ("close_fraction", "unstuck_close_fraction"),
+            ("ema_distance_fraction", "unstuck_ema_distance_fraction"),
+            ("loss_allowance_fraction", "unstuck_loss_allowance_fraction"),
+            ("exposure_trigger_ratio", "unstuck_exposure_trigger_ratio"),
         )
         for offset, (key, runtime_key) in enumerate(unstuck_keys):
             if key in unstuck_patch:
                 matrix[row, column("UNSTUCK_START_COLUMN") + offset] = float(effective_bot[runtime_key])
         for offset, key in enumerate(model.UNSTUCK_EMA_PARAM_KEYS):
-            strategy_key = key.removeprefix("unstuck_")
+            strategy_key = model.COUPLED_UNSTUCK_EMA_SOURCE_KEYS[key]
             if coupled:
                 path = ("entry", strategy_key) if strategy_kind == "trailing_martingale" else (strategy_key,)
                 # Only genuine strategy pins override a candidate's coupled spans.

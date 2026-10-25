@@ -115,12 +115,12 @@ inline bool hsl_decay_realized_allowance(
 }
 
 inline bool hsl_decay_auto_allowance(
-    float balance, float drawdown, float loss_allowance_pct, float total_exposure,
+    float balance, float drawdown, float loss_allowance_fraction, float total_exposure,
     thread float& allowance
 ) {
-    if (!isfinite(loss_allowance_pct) || loss_allowance_pct < 0.0f
+    if (!isfinite(loss_allowance_fraction) || loss_allowance_fraction < 0.0f
         || !isfinite(total_exposure) || total_exposure < 0.0f) return false;
-    const float effective_pct = loss_allowance_pct * total_exposure;
+    const float effective_pct = loss_allowance_fraction * total_exposure;
     if (!isfinite(effective_pct)) return false;
     return hsl_decay_realized_allowance(balance, effective_pct, drawdown, allowance);
 }

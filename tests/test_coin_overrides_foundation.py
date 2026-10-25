@@ -369,10 +369,10 @@ def test_canonical_grouped_patch_has_live_and_backtest_consumer_parity():
     bot.config = parsed
     bot.coin_overrides = {"BTC/USDT:USDT": parsed["coin_overrides"]["BTC"]}
 
-    assert merged["unstuck_loss_allowance_pct"] == 0.031
+    assert merged["unstuck_loss_allowance_fraction"] == 0.031
     assert (
         bot.config_get(
-            ["bot", "long", "unstuck_loss_allowance_pct"],
+            ["bot", "long", "unstuck_loss_allowance_fraction"],
             "BTC/USDT:USDT",
         )
         == 0.031

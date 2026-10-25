@@ -38,7 +38,7 @@ def test_shape_and_adapter_use_one_common_coordinate_without_losing_side_pins(sh
         assert selected[1][0] == "bot.short.unstuck.close_fraction"
         assert selected[1][2].low == selected[1][2].high == 0.041
     assert shape.key_paths == tuple(get_optimization_key_paths(config))
-    assert resolve_optimization_bound_path(config, "long_unstuck_close_pct") == selected[0][1]
+    assert resolve_optimization_bound_path(config, "long_unstuck_close_fraction") == selected[0][1]
 
 
 def test_adapter_target_fixed_selector_does_not_create_a_directional_axis():

@@ -3691,7 +3691,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -3712,7 +3712,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -3744,7 +3744,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -3764,7 +3764,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -3797,7 +3797,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "long_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -3819,7 +3819,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -5553,7 +5553,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -5574,7 +5574,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -5606,7 +5606,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -5626,7 +5626,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -5659,7 +5659,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "short_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -5681,7 +5681,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -13898,7 +13898,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -13918,7 +13918,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -13937,7 +13937,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -13956,7 +13956,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -13977,7 +13977,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -13997,7 +13997,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "long_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -15014,7 +15014,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -15034,7 +15034,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -15053,7 +15053,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -15072,7 +15072,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -15093,7 +15093,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -15113,7 +15113,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "short_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -16079,7 +16079,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -16099,7 +16099,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -16118,7 +16118,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -16137,7 +16137,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -16158,7 +16158,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -16178,7 +16178,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "long_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -17072,7 +17072,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -17092,7 +17092,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -17111,7 +17111,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -17130,7 +17130,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -17151,7 +17151,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -17171,7 +17171,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "short_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,

@@ -3309,7 +3309,7 @@ def test_console_format_summarizes_realized_loss_gate_block():
             "projected_pnl": -12.5,
             "projected_balance_after": 987.5,
             "balance_floor": 990.0,
-            "max_realized_loss_pct": 0.01,
+            "loss_gate_max_drawdown_fraction": 0.01,
         },
     )
 

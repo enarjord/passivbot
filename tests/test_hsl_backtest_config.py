@@ -240,7 +240,7 @@ def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
     args = payload("position_side")
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
         policy.update(enabled=False)
-    args[-1]["max_realized_loss_pct"] = 0.1
+    args[-1]["loss_gate_max_drawdown_fraction"] = 0.1
     result = run(args)
     assert result[4]["hsl"]["summary"]["triggers"] == 0
     assert result[4]["hsl"]["samples"] == []

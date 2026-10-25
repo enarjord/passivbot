@@ -516,10 +516,10 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
-                "unstuck_close_pct": 0.01,
-                "unstuck_ema_dist": 0.0,
-                "unstuck_loss_allowance_pct": 0.1,
-                "unstuck_threshold": 1.0,
+                "unstuck_close_fraction": 0.01,
+                "unstuck_ema_distance_fraction": 0.0,
+                "unstuck_loss_allowance_fraction": 0.1,
+                "unstuck_exposure_trigger_ratio": 1.0,
             }
 
         def bot_value(self, _pside, key):
@@ -600,14 +600,14 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_twel_entry_gate_enabled": True,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
-                        "unstuck_close_pct": 0.01,
-                        "unstuck_ema_dist": 0.0,
-                        "unstuck_ema_span_0": 2.0,
-                        "unstuck_ema_span_1": 4.0,
+                        "unstuck_close_fraction": 0.01,
+                        "unstuck_ema_distance_fraction": 0.0,
+                        "unstuck_ema_span_0_minutes": 2.0,
+                        "unstuck_ema_span_1_minutes": 4.0,
                         "unstuck_enabled": True,
                         "unstuck_ema_gating_enabled": True,
-                        "unstuck_loss_allowance_pct": 0.1,
-                        "unstuck_threshold": 1.0,
+                        "unstuck_loss_allowance_fraction": 0.1,
+                        "unstuck_exposure_trigger_ratio": 1.0,
                     },
                     "short": {},
                 }
@@ -622,7 +622,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                     "bot": {
                         "long": {
                             "entry_grid_inflation_enabled": False,
-                            "unstuck_loss_allowance_pct": 0.025,
+                            "unstuck_loss_allowance_fraction": 0.025,
                         }
                     }
                 }
@@ -646,7 +646,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
     assert "entry_grid_inflation_enabled" not in out
-    assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
+    assert out["unstuck_loss_allowance_fraction"] == pytest.approx(0.025)
 
 
 def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():

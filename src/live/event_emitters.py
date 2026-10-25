@@ -4692,7 +4692,7 @@ def emit_realized_loss_gate_blocked_event(
     projected_pnl: float,
     projected_balance: float,
     balance_floor: float,
-    max_realized_loss_pct: float,
+    loss_gate_max_drawdown_fraction: float,
 ) -> None:
     try:
         bot._emit_live_event(
@@ -4712,7 +4712,7 @@ def emit_realized_loss_gate_blocked_event(
                 "projected_pnl": _safe_float(projected_pnl),
                 "projected_balance_after": _safe_float(projected_balance),
                 "balance_floor": _safe_float(balance_floor),
-                "max_realized_loss_pct": _safe_float(max_realized_loss_pct),
+                "loss_gate_max_drawdown_fraction": _safe_float(loss_gate_max_drawdown_fraction),
             },
         )
     except Exception as exc:
@@ -4813,25 +4813,25 @@ def _unstuck_status_side_summary(
 ) -> dict[str, Any]:
     status = str(info.get("status") or "unknown")
     out: dict[str, Any] = {"status": status}
-    for key in ("allowance", "peak", "pct_from_peak", "loss_allowance_pct"):
+    for key in ("allowance", "peak", "pct_from_peak", "loss_allowance_fraction"):
         value = _safe_float(info.get(key))
         if value is not None:
             out[key] = value
     allowance = _safe_float(info.get("allowance"))
     if allowance is not None:
         out["over_budget"] = allowance < 0.0
-    override_pcts = info.get("override_loss_allowance_pcts")
-    if isinstance(override_pcts, dict):
+    override_fractions = info.get("override_loss_allowance_fractions")
+    if isinstance(override_fractions, dict):
         items = sorted(
-            (str(symbol), _safe_float(pct)) for symbol, pct in override_pcts.items()
+            (str(symbol), _safe_float(fraction)) for symbol, fraction in override_fractions.items()
         )
-        clean_items = [(symbol, pct) for symbol, pct in items if pct is not None]
+        clean_items = [(symbol, fraction) for symbol, fraction in items if fraction is not None]
         if clean_items:
-            out["override_loss_allowance_pct_count"] = len(clean_items)
-            out["override_loss_allowance_pcts"] = {
-                symbol: pct for symbol, pct in clean_items[:override_limit]
+            out["override_loss_allowance_fraction_count"] = len(clean_items)
+            out["override_loss_allowance_fractions"] = {
+                symbol: fraction for symbol, fraction in clean_items[:override_limit]
             }
-            out["override_loss_allowance_pcts_truncated"] = max(
+            out["override_loss_allowance_fractions_truncated"] = max(
                 0, len(clean_items) - override_limit
             )
     override_allowances = info.get("override_allowances")

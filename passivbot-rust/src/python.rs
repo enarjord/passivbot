@@ -1058,13 +1058,13 @@ pub fn calc_unstucking_close_py(
                     })?
                     .extract::<f64>()?
             };
-        let unstuck_threshold = dict
-            .get_item("unstuck_threshold")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_threshold'"))?
+        let unstuck_exposure_trigger_ratio = dict
+            .get_item("unstuck_exposure_trigger_ratio")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_exposure_trigger_ratio'"))?
             .extract::<f64>()?;
-        let unstuck_close_pct = dict
-            .get_item("unstuck_close_pct")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_pct'"))?
+        let unstuck_close_fraction = dict
+            .get_item("unstuck_close_fraction")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_fraction'"))?
             .extract::<f64>()?;
         let unstuck_ema_gating_enabled =
             if let Some(value) = dict.get_item("unstuck_ema_gating_enabled")? {
@@ -1072,9 +1072,9 @@ pub fn calc_unstucking_close_py(
             } else {
                 true
             };
-        let unstuck_ema_dist = dict
-            .get_item("unstuck_ema_dist")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_dist'"))?
+        let unstuck_ema_distance_fraction = dict
+            .get_item("unstuck_ema_distance_fraction")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_distance_fraction'"))?
             .extract::<f64>()?;
         let ema_band_upper = dict
             .get_item("ema_band_upper")?
@@ -1116,11 +1116,11 @@ pub fn calc_unstucking_close_py(
             position_price,
             wallet_exposure_limit,
             effective_we_excess_allowance_pct,
-            unstuck_threshold,
-            unstuck_close_pct,
+            unstuck_exposure_trigger_ratio,
+            unstuck_close_fraction,
             unstuck_ema_gating_enabled,
-            unstuck_ema_dist,
-            unstuck_loss_allowance_pct: 0.0,
+            unstuck_ema_distance_fraction,
+            unstuck_loss_allowance_fraction: 0.0,
             total_wallet_exposure_limit: 0.0,
             ema_band_upper,
             ema_band_lower,
@@ -2459,8 +2459,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(true),
-        max_realized_loss_pct: dict
-            .get_item("max_realized_loss_pct")?
+        loss_gate_max_drawdown_fraction: dict
+            .get_item("loss_gate_max_drawdown_fraction")?
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(1.0),
@@ -2884,12 +2884,12 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             "unstuck_ema_gating_enabled",
             true,
         )?,
-        unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
-        unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
-        unstuck_ema_span_0: extract_value(dict, "unstuck_ema_span_0")?,
-        unstuck_ema_span_1: extract_value(dict, "unstuck_ema_span_1")?,
-        unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
-        unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
+        unstuck_close_fraction: extract_value(dict, "unstuck_close_fraction")?,
+        unstuck_ema_distance_fraction: extract_value(dict, "unstuck_ema_distance_fraction")?,
+        unstuck_ema_span_0_minutes: extract_value(dict, "unstuck_ema_span_0_minutes")?,
+        unstuck_ema_span_1_minutes: extract_value(dict, "unstuck_ema_span_1_minutes")?,
+        unstuck_loss_allowance_fraction: extract_value(dict, "unstuck_loss_allowance_fraction")?,
+        unstuck_exposure_trigger_ratio: extract_value(dict, "unstuck_exposure_trigger_ratio")?,
     };
     crate::entry_cooldown::validate(&params).map_err(PyValueError::new_err)?;
     crate::unilateralness::warmup_returns(params.unilateralness_ema_span_1m)
@@ -3030,29 +3030,29 @@ fn validate_hsl_risk_unstuck_bot_params(
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_close_pct"),
-        params.unstuck_close_pct,
+        &format!("{path_prefix}.unstuck_close_fraction"),
+        params.unstuck_close_fraction,
         0.0,
         Some(1.0),
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_loss_allowance_pct"),
-        params.unstuck_loss_allowance_pct,
+        &format!("{path_prefix}.unstuck_loss_allowance_fraction"),
+        params.unstuck_loss_allowance_fraction,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_threshold"),
-        params.unstuck_threshold,
+        &format!("{path_prefix}.unstuck_exposure_trigger_ratio"),
+        params.unstuck_exposure_trigger_ratio,
         0.0,
         None,
         true,
     )?;
     for (key, span) in [
-        ("unstuck_ema_span_0", params.unstuck_ema_span_0),
-        ("unstuck_ema_span_1", params.unstuck_ema_span_1),
+        ("unstuck_ema_span_0_minutes", params.unstuck_ema_span_0_minutes),
+        ("unstuck_ema_span_1_minutes", params.unstuck_ema_span_1_minutes),
     ] {
         if !span.is_finite() || span <= 0.0 {
             return Err(PyValueError::new_err(format!(
@@ -3060,19 +3060,19 @@ fn validate_hsl_risk_unstuck_bot_params(
             )));
         }
     }
-    if !params.unstuck_ema_dist.is_finite() {
+    if !params.unstuck_ema_distance_fraction.is_finite() {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.unstuck_ema_dist must be finite"
+            "{path_prefix}.unstuck_ema_distance_fraction must be finite"
         )));
     }
-    if pside == "long" && params.unstuck_ema_dist <= -1.0 {
+    if pside == "long" && params.unstuck_ema_distance_fraction <= -1.0 {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.unstuck_ema_dist must be > -1.0"
+            "{path_prefix}.unstuck_ema_distance_fraction must be > -1.0"
         )));
     }
-    if pside == "short" && params.unstuck_ema_dist >= 1.0 {
+    if pside == "short" && params.unstuck_ema_distance_fraction >= 1.0 {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.unstuck_ema_dist must be < 1.0"
+            "{path_prefix}.unstuck_ema_distance_fraction must be < 1.0"
         )));
     }
     Ok(())
@@ -3113,8 +3113,8 @@ fn validate_orchestrator_account_risk_inputs(
     };
     validate_finite_range("balance_raw", balance_raw, 0.0, None, false)?;
     validate_finite_range(
-        "global.max_realized_loss_pct",
-        input.global.max_realized_loss_pct,
+        "global.loss_gate_max_drawdown_fraction",
+        input.global.loss_gate_max_drawdown_fraction,
         0.0,
         None,
         true,

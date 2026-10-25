@@ -4,25 +4,28 @@ from copy import deepcopy
 import math
 import re
 
+from .released_v8_unstuck import RELEASED_V8_UNSTUCK_FLAT_PATHS
+
 
 _RETIRED_WEIGHTED_METRIC = re.compile(r"_w(?:_|$)", re.IGNORECASE)
 _IGNORED_BACKTEST_WARMUP_REASON = (
     "removed unused released-v8 backtest warmup cap; live.max_warmup_minutes owned the shared cap"
 )
 _BACKTEST_FEE_OVERRIDES = frozenset({"maker_fee_override", "taker_fee_override"})
-_RELEASED_HSL_FLAT_PATHS = {
+_RELEASED_SHARED_FLAT_PATHS = {
+    **RELEASED_V8_UNSTUCK_FLAT_PATHS,
     "hsl_red_threshold": ("hsl", "drawdown_threshold_fraction"),
     "hsl_ema_span_minutes": ("hsl", "drawdown_fraction_ema_span_minutes"),
 }
 
 
 def released_shared_bot_paths():
-    """Keep released flat HSL source keys independent of current native IDs."""
+    """Keep released flat shared source keys independent of current native IDs."""
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
     return {
         **FLAT_BOT_KEY_TO_GROUP_PATH,
-        **_RELEASED_HSL_FLAT_PATHS,
+        **_RELEASED_SHARED_FLAT_PATHS,
     }
 
 
@@ -31,7 +34,7 @@ def canonicalize_released_shared_bot_side(values):
     from config.shared_bot import canonicalize_shared_bot_side
 
     if isinstance(values, dict):
-        for flat, path in _RELEASED_HSL_FLAT_PATHS.items():
+        for flat, path in _RELEASED_SHARED_FLAT_PATHS.items():
             if flat not in values:
                 continue
             target = values
@@ -326,8 +329,8 @@ def canonical_released_v8_path(parts):
     if len(parts) >= 3 and parts[-3:-1] == ["optimize", "bounds"]:
         side, separator, flat = parts[-1].partition("_")
         if separator and side in {"long", "short"}:
-            if flat in _RELEASED_HSL_FLAT_PATHS:
-                return (*parts[:-1], side, *_RELEASED_HSL_FLAT_PATHS[flat])
+            if flat in _RELEASED_SHARED_FLAT_PATHS:
+                return (*parts[:-1], side, *_RELEASED_SHARED_FLAT_PATHS[flat])
             for group, mapping in SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY.items():
                 if flat in mapping:
                     local = mapping[flat]
@@ -552,7 +555,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
     bound_values = result.get("optimize", {}).get("bounds", {})
     if isinstance(bound_values, dict):
         for side in ("long", "short"):
-            for old, target in _RELEASED_HSL_FLAT_PATHS.items():
+            for old, target in _RELEASED_SHARED_FLAT_PATHS.items():
                 source_key = f"{side}_{old}"
                 if source_key not in bound_values:
                     continue
@@ -560,7 +563,7 @@ def finalize_v8_layout(source, *, span, changes, acknowledge_search_backend_chan
                 put(bound_values, (side, *target), value, f"optimize.bounds.{source_key}")
                 record(f"optimize.bounds.{source_key}", value,
                        {f"optimize.bounds.{side}.{'.'.join(target)}": value},
-                       "explicit released-v8 HSL bound source conversion")
+                       "explicit released-v8 shared bound source conversion")
 
     def policy_scope(node, inherited):
         mode = node.get("live", {}).get("hsl_signal_mode", inherited)

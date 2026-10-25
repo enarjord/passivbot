@@ -155,7 +155,7 @@ def test_cleanup_extracts_prepared_membership_only_from_result_records():
 
 
 @pytest.mark.parametrize("selector", [
-    "bot.long.unstuck_ema_span_0", "long.unstuck_ema_span_0",
+    "bot.long.unstuck_ema_span_0_minutes", "long.unstuck_ema_span_0_minutes",
     "bot.long.n_positions", "bot.long.strategy.trailing_martingale.ema_span_0",
 ])
 @pytest.mark.parametrize("container", ["pins", "scenario"])
