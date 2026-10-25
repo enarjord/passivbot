@@ -1,6 +1,6 @@
 """Service-owned batch adaptation using successful production work only.
 
-The existing evidence controller supplies smoothing, cold-shape rejection,
+The existing evidence controller supplies smoothing, cold-compilation rejection,
 cooldowns and rollback. Dataset classes do not share timing evidence; no search
 policy, simulations, device imports or checkpoint state live here.
 """
@@ -8,11 +8,13 @@ policy, simulations, device imports or checkpoint state live here.
 import math
 import time
 
-from optimization.gpu.autotune import BatchController
+from optimization.gpu.autotune import BatchController, compilation_cold
 
 
 EVIDENCE_SAMPLES = 6
 EVIDENCE_SECONDS = 3.0
+LONG_EVIDENCE_SAMPLES = 3
+LONG_EVIDENCE_SECONDS = 30.0
 
 
 class ExecutionBatchTuner:
@@ -74,6 +76,8 @@ class ExecutionBatchTuner:
                 allow_partial_batches=True,
                 window_samples=EVIDENCE_SAMPLES,
                 min_seconds=EVIDENCE_SECONDS,
+                long_window_samples=LONG_EVIDENCE_SAMPLES,
+                long_window_seconds=LONG_EVIDENCE_SECONDS,
                 rate_aggregation="per_count",
                 growth_limit=lambda: self._demand[dataset_id],
                 can_grow=lambda: self.headroom(),
@@ -82,31 +86,33 @@ class ExecutionBatchTuner:
             self.controllers[dataset_id] = controller
         return controller.width
 
-    def observe(self, dataset_id, count, seconds, *, backlog, closing):
+    def observe(self, dataset_id, count, seconds, *, backlog, closing, cold=None):
         if not self.enabled:
             return
+        if cold is None:
+            cold = compilation_cold()
         controller = self.controllers.get(dataset_id)
         diagnostic = self._diagnostics
         if controller is None:
             if diagnostic is not None:
                 self._record_diagnostics(dataset_id, count, seconds, None, None, False,
-                                         diagnostic, 0, backlog, closing)
+                                         diagnostic, 0, backlog, closing, cold)
             return  # Capacity changed during replay; next claim creates fresh evidence.
         if diagnostic is not None:
             before = (controller.width, controller.baseline, controller.cooldown,
-                      count not in controller.seen)
+                      cold if cold is not None else count not in controller.seen)
         # A finite cohort's final replay may have no remaining backlog even
         # when this window repeatedly had enough compatible work for growth.
         if 1 <= count <= controller.width and math.isfinite(seconds) and seconds > 0:
             self._demand[dataset_id] = max(self._demand[dataset_id], count + backlog)
         peak_demand = self._demand[dataset_id] if diagnostic is not None else 0
         self._allow_trial = not closing
-        completed_window = controller.observe(count, seconds)
+        completed_window = controller.observe(count, seconds, cold=cold)
         if completed_window:
             self._demand[dataset_id] = 0
         if diagnostic is not None:
             self._record_diagnostics(dataset_id, count, seconds, controller, before,
-                                     bool(completed_window), diagnostic, peak_demand, backlog, closing)
+                                     bool(completed_window), diagnostic, peak_demand, backlog, closing, cold)
 
     def _record_diagnostics(self, *args):
         # Keep optional presentation failures outside policy/future delivery.
@@ -116,7 +122,8 @@ class ExecutionBatchTuner:
             self._diagnostics = None
 
     def _observe_diagnostics(self, dataset_id, count, seconds, controller, before,
-                             completed_window, previous, peak_demand, backlog, closing):
+                             completed_window, previous, peak_demand, backlog, closing,
+                             reported_cold=None):
         if count < 1 or not math.isfinite(seconds) or seconds <= 0:
             return
         value = dict(previous)
@@ -128,6 +135,9 @@ class ExecutionBatchTuner:
             # this replay. Count its actual work, without inventing evidence.
             value["untrained_observations"] += 1
             value["latest"] = dict(dataset_id=dataset_id, count=count, evidence_available=False,
+                                    cold_observation=None, cold_compilation=reported_cold,
+                                    compilation_evidence_available=reported_cold is not None,
+                                    cold_source="reported" if reported_cold is not None else "unknown",
                                     ceiling=self._ceilings.get(dataset_id), backlog_rows=backlog,
                                     closing=closing)
             self._diagnostics = value
@@ -151,10 +161,16 @@ class ExecutionBatchTuner:
         value["latest"] = dict(
             dataset_id=dataset_id, dataset_classes=len(self.controllers),
             evidence_available=True,
+            cold_observation=cold, cold_compilation=reported_cold,
+            compilation_evidence_available=reported_cold is not None,
+            cold_source="reported" if reported_cold is not None else "count_history",
             count=count, width=controller.width, ceiling=controller.ceiling,
             trial=controller.baseline is not None, retained_samples=len(controller.samples),
             required_samples=controller.window_samples, evidence_seconds=controller.seconds,
             required_seconds=controller.min_seconds, peak_demand=self._demand[dataset_id],
+            long_required_samples=controller.long_window_samples,
+            long_required_seconds=controller.long_window_seconds,
+            long_required_median_seconds=controller.long_window_seconds / controller.long_window_samples,
             backlog_rows=backlog, closing=closing,
         )
         # One replacement publishes a coherent snapshot to the CPU reader.

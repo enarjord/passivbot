@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 import math
@@ -26,6 +26,7 @@ import time
 from typing import ContextManager, Protocol
 
 from optimization.gpu.coalescing import BatchCoalescer
+from optimization.gpu.autotune import collect_compilation
 
 
 class BatchReplay(Protocol):
@@ -415,26 +416,28 @@ class GpuBacktestService:
                 replay = self._replays[dataset_id]
                 timed = self._batch_policy is not None or self._coalescing is not None
                 started = time.perf_counter() if timed else self._diagnostic_time(time.perf_counter)
-                try:
-                    rows = replay.evaluate([dict(item.request.parameters) for item in batch])
-                finally:
-                    del replay
-                # Validate the whole producer batch before releasing any success.
-                results = self._results(batch, rows)
-                if timed:
-                    seconds = time.perf_counter() - started
-                    with self._condition:
-                        if self._coalescing is not None:
-                            self._coalescing.observe(dataset_id, len(batch), seconds)
-                        backlog = sum(item.request.dataset_id == dataset_id for item in self._queue)
-                        closing = self._closing
-                else:
-                    finished = self._diagnostic_time(time.perf_counter)
-                    seconds = None if finished is None else finished - started
-                if self._batch_policy is not None:
-                    self._batch_policy.observe(
-                        dataset_id, len(batch), seconds, backlog=backlog, closing=closing,
-                    )
+                compilation = collect_compilation() if self._batch_policy is not None else nullcontext()
+                with compilation:
+                    try:
+                        rows = replay.evaluate([dict(item.request.parameters) for item in batch])
+                    finally:
+                        del replay
+                    # Validate the whole producer batch before releasing any success.
+                    results = self._results(batch, rows)
+                    if timed:
+                        seconds = time.perf_counter() - started
+                        with self._condition:
+                            if self._coalescing is not None:
+                                self._coalescing.observe(dataset_id, len(batch), seconds)
+                            backlog = sum(item.request.dataset_id == dataset_id for item in self._queue)
+                            closing = self._closing
+                    else:
+                        finished = self._diagnostic_time(time.perf_counter)
+                        seconds = None if finished is None else finished - started
+                    if self._batch_policy is not None:
+                        self._batch_policy.observe(
+                            dataset_id, len(batch), seconds, backlog=backlog, closing=closing,
+                        )
                 if self._diagnostics is not None:
                     with self._condition:
                         self._diagnostics["batches"] += 1

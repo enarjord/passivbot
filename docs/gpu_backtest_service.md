@@ -346,24 +346,35 @@ batches use that limit. This prevents several serial scratch/work splits from de
 the return of an oversized outer batch. Preparation retains no inactive runner references;
 switching datasets can release their tensors and mutable scratch.
 
-Automatic widths start at 256 on Metal and 64 on CUDA, bounded by the prepared ceiling
-and service admission limit. The GPU owner selects the device before creating a prepared
-controller; producer-side construction remains device-independent. Explicit widths and
+Automatic Metal widths start at the existing replay cap of 512 candidates, clamped by the
+prepared memory/history ceiling and service admission limit. CUDA starts at 64. The GPU
+owner selects the device before creating a prepared controller; producer-side construction
+remains device-independent. Explicit widths and
 tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
-counts, including partial request cohorts. Failed work and each actual count's first cold
-use do not contribute to throughput trials. A window requires at least six successful warm
-observations and three seconds of completed work, so ordinary finite searches can assess
-width trials without waiting for a 24-sample/30-second window. Timing samples are grouped
-by actual candidate count. Each group retains up to six durations; its median duration is
-weighted by its number of warm occurrences. Total actual candidates divided by the sum of
+counts, including partial request cohorts. Failed work and replays reporting a compiled
+library cache miss do not contribute to throughput trials. Warm new counts contribute
+immediately; compilation evidence aggregates feature variants and nested replay work
+without enabling profiling or adding synchronization. Callers without reported compilation
+evidence retain first-use rejection per count: an empty collector means unknown, not warm.
+Diagnostics distinguish reported compilation from count-history rejection with `cold_source`
+and keep compilation-evidence availability separate from controller readiness.
+A window requires six successful warm
+observations and three seconds of completed work, or three observations totaling at least
+30 seconds with a median replay duration of at least ten seconds. The median requirement
+prevents an isolated stall from shortening a fast workload's smoothing window. Timing
+samples are grouped by actual candidate count. Each group retains up to six durations;
+its median duration is weighted by its number of warm occurrences. Total actual candidates divided by the sum of
 those weighted durations supplies the decision rate. This smooths stalls within like-sized
 work without giving a singleton the same influence as a nearly full batch. A rarely seen
 count has fewer samples to smooth. The decision rate is a robust replay-cost estimate,
 not measured end-to-end optimizer throughput. The growth threshold, smaller-plateau
 preference, cooldown and rollback apply. Growth also requires
-observed request demand and device memory headroom. A growth trial is bounded by the
-largest compatible demand observed in that evidence window, so it can try an intermediate
+observed request demand and device memory headroom. Metal growth also requires available
+RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Missing
+or invalid OS telemetry denies a growth trial without failing completed replay work.
+A growth trial is bounded by the largest compatible demand observed in that evidence
+window, so it can try an intermediate
 width when demand is less than twice the current width. This demand bound does not raise
 the prepared physical ceiling. When growth is blocked, the service
 can probe a smaller width using subsequent submitted work; a slower trial rolls back. This prevents deduplication,

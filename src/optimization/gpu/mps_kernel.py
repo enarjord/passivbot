@@ -32,7 +32,7 @@ from optimization.gpu.decimal import (
     _tm_modifier_masks,
 )
 from optimization.gpu.replay_progress import TemporalReplayProgress
-from optimization.gpu.autotune import record_replay_chunk, ReplayDurationController
+from optimization.gpu.autotune import record_compilation, record_replay_chunk, ReplayDurationController
 from optimization.gpu.runtime import (
     gpu_device,
     compile_shader,
@@ -632,7 +632,9 @@ def _lookup_replay_kernel(library, name, *, profile):
 def _cached_library_with_miss(loader, *args):
     misses_before = loader.cache_info().misses
     library = loader(*args)
-    return library, loader.cache_info().misses > misses_before
+    cold = loader.cache_info().misses > misses_before
+    record_compilation(cold)
+    return library, cold
 
 
 

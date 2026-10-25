@@ -7,7 +7,9 @@ performance only; exceptions from evaluation are deliberately not intercepted.
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 import math
 import statistics
 from optimization.progress import log_tokens
@@ -15,6 +17,41 @@ from optimization.progress import log_tokens
 WINDOW = 24
 MIN_SECONDS = 30.0
 _REPLAY_SAMPLES = ContextVar("gpu_tuning_replay_samples", default=None)
+_COMPILATION_EVIDENCE = ContextVar("gpu_compilation_evidence", default=None)
+
+
+@dataclass
+class CompilationEvidence:
+    observed: bool = False
+    cold: bool = False
+
+
+@contextmanager
+def collect_compilation():
+    """Collect actual library cache misses without enabling replay profiling."""
+    evidence = CompilationEvidence()
+    parent = _COMPILATION_EVIDENCE.get()
+    token = _COMPILATION_EVIDENCE.set(evidence)
+    try:
+        yield evidence
+    finally:
+        _COMPILATION_EVIDENCE.reset(token)
+        if parent is not None:
+            parent.observed |= evidence.observed
+            parent.cold |= evidence.cold
+
+
+def record_compilation(cold):
+    evidence = _COMPILATION_EVIDENCE.get()
+    if evidence is not None:
+        evidence.observed = True
+        evidence.cold |= bool(cold)
+
+
+def compilation_cold():
+    """Return None when a caller does not supply compilation evidence."""
+    evidence = _COMPILATION_EVIDENCE.get()
+    return None if evidence is None or not evidence.observed else evidence.cold
 
 
 class ReplayDurationController:
@@ -75,6 +112,8 @@ class BatchController:
 
     An optional ``growth_limit`` callback caps the next doubled trial. It does
     not replace the physical ceiling or the no-argument ``can_grow`` guard.
+    A long window can finish with fewer sustained, expensive observations;
+    callers that omit it retain the normal sample and duration requirements.
     """
 
     def __init__(
@@ -90,6 +129,8 @@ class BatchController:
         window_samples=None,
         min_seconds=None,
         rate_aggregation="median",
+        long_window_samples=None,
+        long_window_seconds=None,
     ):
         window_samples = WINDOW if window_samples is None else window_samples
         min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
@@ -102,6 +143,17 @@ class BatchController:
             raise ValueError("batch rate aggregation must be median or per_count")
         if growth_limit is not None and not callable(growth_limit):
             raise TypeError("batch growth limit must be callable")
+        if (long_window_samples is None) != (long_window_seconds is None):
+            raise ValueError("long batch evidence requires both samples and duration")
+        if long_window_samples is not None:
+            if (type(long_window_samples) is not int
+                    or not 1 <= long_window_samples <= window_samples):
+                raise ValueError("long batch evidence samples must fit the evidence window")
+            if (isinstance(long_window_seconds, bool)
+                    or not isinstance(long_window_seconds, (int, float))
+                    or not math.isfinite(long_window_seconds)
+                    or long_window_seconds < min_seconds):
+                raise ValueError("long batch evidence duration must be finite and at least the minimum")
         self.ceiling = max(1, int(ceiling))
         self.width = max(1, min(int(initial), self.ceiling))
         self.save = save
@@ -112,8 +164,11 @@ class BatchController:
         self.window_samples = window_samples
         self.min_seconds = min_seconds
         self.rate_aggregation = rate_aggregation
+        self.long_window_samples = long_window_samples
+        self.long_window_seconds = long_window_seconds
         self.last_window_rate = None
         self.samples = deque(maxlen=window_samples)
+        self._replay_durations = deque(maxlen=window_samples)
         # Only execution tuning groups actual integer batch sizes. Frequencies
         # cover the complete window; retained durations stay bounded per count.
         self._durations_by_count = {}
@@ -124,7 +179,7 @@ class BatchController:
         self.direction = -1 if self.width == self.ceiling else 1
         self.cooldown = 0
 
-    def observe(self, count, seconds, *, evidence_seconds=None):
+    def observe(self, count, seconds, *, evidence_seconds=None, cold=None):
         """Return true when a complete evidence window has been consumed."""
         # Callers can require full batches. The async service learns actual
         # dispatch shapes, including warm partial request cohorts.
@@ -132,10 +187,16 @@ class BatchController:
                 or (not self.allow_partial_batches and count != self.width)
                 or not math.isfinite(seconds) or seconds <= 0):
             return
-        if count not in self.seen:
-            self.seen.add(count)
+        if cold is not None and type(cold) is not bool:
+            raise TypeError("batch compilation evidence must be a boolean or None")
+        new_count = count not in self.seen
+        self.seen.add(count)
+        # Explicit evidence identifies actual compiled feature variants. Legacy
+        # callers without that evidence retain first-use rejection per count.
+        if cold is True or (cold is None and new_count):
             return
         self.samples.append(count / seconds)
+        self._replay_durations.append(seconds)
         if self.rate_aggregation == "per_count":
             durations = self._durations_by_count.get(count)
             if durations is None:
@@ -143,7 +204,15 @@ class BatchController:
             durations.append(seconds)
             self._count_frequencies[count] = self._count_frequencies.get(count, 0) + 1
         self.seconds += seconds if evidence_seconds is None else evidence_seconds
-        if len(self.samples) < self.window_samples or self.seconds < self.min_seconds:
+        complete = len(self.samples) >= self.window_samples and self.seconds >= self.min_seconds
+        long_complete = (self.long_window_samples is not None
+                         and len(self.samples) >= self.long_window_samples
+                         and self.seconds >= self.long_window_seconds
+                         # A lone scheduling stall cannot make an otherwise
+                         # fast workload consume its smoothing window early.
+                         and statistics.median(self._replay_durations)
+                         >= self.long_window_seconds / self.long_window_samples)
+        if not (complete or long_complete):
             return
         if self.rate_aggregation == "per_count":
             candidates = sum(count * frequency for count, frequency in self._count_frequencies.items())
@@ -155,6 +224,7 @@ class BatchController:
         self.last_window_rate = rate
         evidence_seconds = self.seconds
         self.samples.clear()
+        self._replay_durations.clear()
         self._durations_by_count.clear()
         self._count_frequencies.clear()
         self.seconds = 0.0
