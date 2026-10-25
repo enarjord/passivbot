@@ -39,9 +39,10 @@ def _has_unstuck_span(mapping, legacy_key):
 
 def _migrate_inactive_zero_span(value, bot, default, path):
     unstuck = bot.get("unstuck", {})
+    risk = bot.get("risk", {})
     if value == 0 and (
-        bot.get("risk", {}).get("total_wallet_exposure_limit") == 0
-        or bot.get("wallet_exposure_limit") == 0
+        risk.get("total_wallet_exposure_limit_ratio", risk.get("total_wallet_exposure_limit")) == 0
+        or bot.get("wallet_exposure_limit_ratio", bot.get("wallet_exposure_limit")) == 0
         or unstuck.get("enabled") is False
         or unstuck.get("ema_gating_enabled") is False
     ):

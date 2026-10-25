@@ -395,6 +395,21 @@ def test_inactive_coin_wel_zero_span_migrates(caplog):
     assert "Cannot copy zero strategy span" in caplog.text
 
 
+@pytest.mark.parametrize("scope", ["coin", "side"])
+@pytest.mark.parametrize("canonical", [0, None, 1.25])
+def test_released_zero_span_fallback_uses_converted_exposure_by_presence(scope, canonical):
+    from config.migrations.unstuck_ema import _migrate_inactive_zero_span
+
+    key = "wallet_exposure_limit" if scope == "coin" else "total_wallet_exposure_limit"
+    values = {key: 0, f"{key}_ratio": canonical}
+    bot = values if scope == "coin" else {"risk": values}
+    original = deepcopy(bot)
+    assert _migrate_inactive_zero_span(0, bot, 17.5, "converted.unstuck.span") == (
+        17.5 if canonical == 0 else 0
+    )
+    assert bot == original
+
+
 @pytest.mark.parametrize("explicit", [False, True])
 def test_nested_scenario_spans_migrate_and_explicit_unstuck_wins(explicit):
     from suite_runner import _normalize_scenario_overrides
