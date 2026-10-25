@@ -5,15 +5,13 @@ from difflib import get_close_matches
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config.limits import resolve_limit_basis
-from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, METRIC_ALIASES, canonical_metric_name
+from config.metrics import (
+    ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, CURRENCY_METRIC_VARIANTS, canonical_metric_name,
+)
 
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
 _KNOWN_LIMIT_METRICS = (
-    set(ANALYSIS_SHARED_KEYS)
-    | set(CURRENCY_METRICS)
-    | {f"{metric}_usd" for metric in CURRENCY_METRICS}
-    | {f"{metric}_btc" for metric in CURRENCY_METRICS}
-    | set(METRIC_ALIASES)
+    set(ANALYSIS_SHARED_KEYS) | set(CURRENCY_METRICS) | set(CURRENCY_METRIC_VARIANTS)
 )
 
 

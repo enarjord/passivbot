@@ -19,11 +19,11 @@ GPU = pytest.mark.skipif(
 
 
 def test_candidate_fractional_span_window_and_cooldown_pins():
-    base = adaptive_params({"unilateralness_ema_span_1m": 4.25})
+    base = adaptive_params({"unilateralness_ema_span_minutes": 4.25})
     rows = _candidate_parameter_matrix(
         [
             {
-                "long_unilateralness_ema_span_1m": 7.00000001,
+                "long_unilateralness_ema_span_minutes": 7.00000001,
                 "long_entry_cooldown_exposure_weight": 9.0,
             }
         ],
@@ -190,7 +190,7 @@ def test_unilateralness_ranking_selects_bouncy_coin(strategy, side):
         bot["risk"].pop("entry_cooldown_minutes", None)
         bot["entry_cooldown"]["base_duration_minutes"] = 0
         bot["forager"].update(
-            unilateralness_ema_span_1m=3.25,
+            unilateralness_ema_span_minutes=3.25,
             score_weights=dict(
                 volume=0, log_range=0, ema_readiness=0, unilateralness=1
             ),
@@ -232,7 +232,7 @@ def test_adaptive_temporal_chunks_preserve_all_native_outputs():
         entry_cooldown_max_duration_minutes=30,
         entry_cooldown_exposure_weight=7,
         entry_cooldown_adverse_weight=11,
-        unilateralness_ema_span_1m=3.25,
+        unilateralness_ema_span_minutes=3.25,
         unilateralness_window=65,
     ).items():
         row[keys.index(key)] = value
@@ -322,7 +322,7 @@ def test_cooldown_coin_override_pins_and_null_ceiling(strategy):
         timestamps=ts,
         exchange="bybit",
         batch_size=1,
-        needed_metrics={"adg_strategy_eq"},
+        needed_metrics={"adg_fraction_strategy_equity"},
     )
     start = (
         EMA_ANCHOR_COIN_OVERRIDE_ADAPTIVE_START
@@ -375,7 +375,7 @@ def test_multicoin_adaptive_checkpoint_preserves_every_output(side):
         entry_cooldown_max_duration_minutes=30,
         entry_cooldown_exposure_weight=7,
         entry_cooldown_adverse_weight=11,
-        unilateralness_ema_span_1m=3.25,
+        unilateralness_ema_span_minutes=3.25,
         unilateralness_window=65,
         forager_score_weights_unilateralness=1,
         n_positions=1,
@@ -434,7 +434,7 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
         bot["risk"].pop("entry_cooldown_minutes", None)
         bot["entry_cooldown"]["base_duration_minutes"] = 0.0
         bot["forager"].update(
-            unilateralness_ema_span_1m=1.0,
+            unilateralness_ema_span_minutes=1.0,
             score_weights=dict(volume=1, log_range=0, ema_readiness=0, unilateralness=1),
         )
         if strategy == "ema_anchor":
@@ -472,7 +472,7 @@ def test_gpu_dormant_ranking_accepts_five_minute_candles(strategy, side):
         cfg["bot"][s]["risk"].pop("entry_cooldown_minutes", None)
         cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg["bot"][side]["forager"].update(
-        unilateralness_ema_span_1m=100000,
+        unilateralness_ema_span_minutes=100000,
         score_weights=dict(volume=0, log_range=0, ema_readiness=0, unilateralness=1),
     )
     active, fills = _evaluate(side, (cfg, candles, mss, btc, ts))
@@ -523,12 +523,12 @@ def test_fused_dormant_scoring_respects_each_sides_eligible_count(strategy):
     cls = (mps_kernel.MpsEmaAnchorMulticoinFusedRunner if strategy == "ema_anchor"
            else mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner)
     short_overrides = np.full((2, getattr(model, prefix + "_COIN_OVERRIDE_COLS")), np.nan)
-    short_overrides[1, getattr(model, prefix + "_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN")] = 0
+    short_overrides[1, getattr(model, prefix + "_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN")] = 0
     runner = cls(run, data, short_coin_overrides=short_overrides, dynamic_wel_by_tradability=False, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     assert runner.rms_ranking_coin_counts == (2, 1)
     row[keys.index("n_positions")] = 2
     row[keys.index("forager_score_weights_unilateralness")] = 1
-    row[keys.index("unilateralness_ema_span_1m")] = 100000
+    row[keys.index("unilateralness_ema_span_minutes")] = 100000
     matrix = np.asarray([row + row], dtype=float)
     active = {key: value.cpu().clone() for key, value in runner.run(matrix).items()
               if isinstance(value, torch.Tensor)}

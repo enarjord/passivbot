@@ -87,7 +87,7 @@ def validate_hsl_gpu_inputs(config: dict) -> None:
 
 def validate_gpu_backtest_config(config: dict) -> None:
     """Reject unsupported simulation contracts without importing a device runtime."""
-    from config.validate import validate_limit_order_fill_buffer_pct
+    from config.validate import validate_limit_order_fill_buffer_fraction
 
     strategy = config['bot']["portfolio"]['strategy_kind']
     if strategy not in {"ema_anchor", "trailing_martingale"}:
@@ -109,8 +109,8 @@ def validate_gpu_backtest_config(config: dict) -> None:
                     "position_exposure_enforcer.enabled; disable it or use a CPU backend"
                 )
     backtest = config["backtest"]
-    collateral = float(backtest["btc_collateral_cap"])
+    collateral = float(backtest["btc_collateral_target_ratio"])
     if not math.isfinite(collateral) or collateral != 0.0:
-        raise ValueError("GPU backtests require backtest.btc_collateral_cap=0; use a CPU backend")
-    validate_limit_order_fill_buffer_pct(backtest["limit_order_fill_buffer_fraction"])
+        raise ValueError("GPU backtests require backtest.btc_collateral_target_ratio=0; use a CPU backend")
+    validate_limit_order_fill_buffer_fraction(backtest["limit_order_fill_buffer_fraction"])
     validate_hsl_gpu_inputs(config)

@@ -14,7 +14,7 @@ from optimization.native_session import CandidateQueueFull, NativeEvaluationSess
 from optimize import Evaluator, SuiteEvaluator
 
 
-METRICS = ("adg_strategy_eq", "drawdown_worst_usd")
+METRICS = ("adg_fraction_strategy_equity", "drawdown_max_fraction_usd")
 
 
 class Service:
@@ -35,12 +35,12 @@ class Service:
             future.set_exception(failure)
         else:
             future.set_result(BacktestResult(request.request_id, request.dataset_id,
-                                            {"adg_strategy_eq": 0.01, "drawdown_worst_usd": 0.1}, False, metadata))
+                                            {"adg_fraction_strategy_equity": 0.01, "drawdown_max_fraction_usd": 0.1}, False, metadata))
 
 
 def scorer():
     config = get_expanded_config_prototype()
-    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
     config["optimize"]["limits"] = []
     return CanonicalResultScorer(Evaluator({"binance": None, "bybit": None}, {}, {}, prepare_config(config, verbose=False)))
 
@@ -377,7 +377,7 @@ def test_row_cache_eviction_only_repeats_work_and_cached_rows_are_snapshots():
     session.poll()
     assert len(session._row_cache) == 1
     # Mutation after consumption must not corrupt retained simulator evidence.
-    service.futures["0:base:bybit"].result().metrics["adg_strategy_eq"] = 999
+    service.futures["0:base:bybit"].result().metrics["adg_fraction_strategy_equity"] = 999
     session.admit(suite_plan(1))
     session.poll()
     assert len(service.requests) == 5  # One evicted base row repeats on the service.
@@ -397,7 +397,7 @@ def test_misbound_future_result_is_rejected_before_it_can_enter_row_cache():
     session.poll()
     first, second = candidate.requests
     service.futures[first.request_id].set_result(BacktestResult(
-        second.request_id, second.dataset_id, {"adg_strategy_eq":0.01, "drawdown_worst_usd":0.1}, False,
+        second.request_id, second.dataset_id, {"adg_fraction_strategy_equity":0.01, "drawdown_max_fraction_usd":0.1}, False,
     ))
     with pytest.raises(RuntimeError, match="submitted request"):
         session.poll()

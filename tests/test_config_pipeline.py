@@ -67,8 +67,8 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     for key, expected in {
         "start_date": "2023-01-01", "end_date": "2023-01-15",
         "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
-        "starting_balance": 100000.0, "maker_fee_override": 0.0004,
-        "btc_collateral_cap": 0.0, "suite_enabled": False,
+        "starting_balance": 100000.0, "maker_fee_override_fraction": 0.0004,
+        "btc_collateral_target_ratio": 0.0, "suite_enabled": False,
     }.items():
         assert config["backtest"][key] == expected
     expected_native_strategy = {
@@ -243,10 +243,10 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
-        validate_optimizer_metrics(config, ["hard_stop_restarts"])
+        validate_optimizer_metrics(config, ["hsl_restart_count"])
     else:
         with pytest.raises(ValueError, match="no enabled controller"):
-            validate_optimizer_metrics(config, ["hard_stop_restarts"])
+            validate_optimizer_metrics(config, ["hsl_restart_count"])
 
 
 @pytest.mark.parametrize(
@@ -258,7 +258,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
         (
             {
                 "bot.long.risk.total_wallet_exposure_limit_ratio": 1.0,
-                "bot.long.total_wallet_exposure_limit": 2.0,
+                "bot.long.total_wallet_exposure_limit_ratio": 2.0,
             },
             ValueError,
             "unknown configuration field",
@@ -432,15 +432,14 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     )
 
     assert "n_positions" not in prepared["bot"]["long"]
-    assert "total_wallet_exposure_limit" not in prepared["bot"]["long"]
-    assert "risk_wel_enforcer_threshold" not in prepared["bot"]["long"]
-    assert "unstuck_threshold" not in prepared["bot"]["long"]
-    assert "hsl_red_threshold" not in prepared["bot"]["long"]
-    assert "forager_volume_ema_span_1m" not in prepared["bot"]["long"]
-    assert "filter_volume_ema_span_1m" not in prepared["bot"]["long"]
-    assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
-    assert "long_filter_volume_ema_span_1m" not in prepared["optimize"]["bounds"]
-    assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
+    assert "total_wallet_exposure_limit_ratio" not in prepared["bot"]["long"]
+    assert "risk_wel_enforcer_threshold_ratio" not in prepared["bot"]["long"]
+    assert "unstuck_exposure_trigger_ratio" not in prepared["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in prepared["bot"]["long"]
+    assert "forager_volume_ema_span_minutes" not in prepared["bot"]["long"]
+    assert "forager_log_range_ema_span_minutes" not in prepared["bot"]["long"]
+    assert "long_forager_volume_ema_span_minutes" not in prepared["optimize"]["bounds"]
+    assert "long_forager_log_range_ema_span_minutes" not in prepared["optimize"]["bounds"]
     assert prepared['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
     assert "ema_span_0_minutes" not in get_template_config()["bot"]["long"]
     assert "entry_grid_threshold_base_fraction" not in get_template_config()["bot"]["short"]
@@ -553,31 +552,31 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         == canonical["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
-        compiled["bot"]["long"]["total_wallet_exposure_limit"]
+        compiled["bot"]["long"]["total_wallet_exposure_limit_ratio"]
         == canonical["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
+        compiled["bot"]["long"]["risk_wel_enforcer_threshold_ratio"]
         == canonical['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
-        compiled["bot"]["long"]["unstuck_threshold"]
+        compiled["bot"]["long"]["unstuck_exposure_trigger_ratio"]
         == canonical["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["hsl_red_threshold"]
+        compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
         == canonical["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
-        compiled["bot"]["long"]["forager_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volume_ema_span_1m"]
+        compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        compiled["bot"]["long"]["filter_volatility_ema_span_1m"]
+        compiled["bot"]["long"]["forager_log_range_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
@@ -794,7 +793,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
         == template["backtest"]["market_order_slippage_fraction"]
     )
     assert (
-        prepared["bot"]["long"]["filter_volume_ema_span_1m"]
+        prepared["bot"]["long"]["forager_volume_ema_span_minutes"]
         == template["bot"]["global"]["forager"]["volume_ema_span_minutes"]
     )
     assert (
@@ -841,9 +840,9 @@ def test_prepare_config_preserves_backtest_visible_metrics():
         "config_version": CONFIG_SCHEMA_VERSION,
         "backtest": {
             "visible_metrics": [
-                "gain",
-                "drawdown_worst_hsl",
-                "hard_stop_restarts_short",
+                "gain_multiplier",
+                "drawdown_max_fraction_strategy_equity",
+                "hsl_restart_count_short",
             ]
         },
         "bot": {"long": {}, "short": {}},
@@ -855,9 +854,9 @@ def test_prepare_config_preserves_backtest_visible_metrics():
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["backtest"]["visible_metrics"] == [
-        "gain",
-        "drawdown_worst_hsl",
-        "hard_stop_restarts_short",
+        "gain_multiplier",
+        "drawdown_max_fraction_strategy_equity",
+        "hsl_restart_count_short",
     ]
 
 
@@ -878,7 +877,7 @@ def test_prepare_config_rejects_unknown_backtest_visible_metrics():
 def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
     source = {
         "config_version": CONFIG_SCHEMA_VERSION,
-        "backtest": {"visible_metrics": "adg"},
+        "backtest": {"visible_metrics": "adg_fraction"},
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
         "live": {},
@@ -1079,9 +1078,9 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
             "config\\.live\\.api\\.market_snapshot_ticker_strategy must be one of",
         ),
         (
-            "forager_score_hysteresis_pct",
+            "forager_score_hysteresis_margin",
             -0.1,
-            "config\\.live\\.forager_score_hysteresis_pct must be finite and >= 0\\.0",
+            "config\\.live\\.forager_score_hysteresis_margin must be finite and >= 0\\.0",
         ),
         (
             "max_active_candle_tail_gap_minutes",
@@ -1137,7 +1136,7 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
 )
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):
     source = get_template_config()
-    if field == "forager_score_hysteresis_pct":
+    if field == "forager_score_hysteresis_margin":
         source["bot"]["global"]["forager"]["score_hysteresis_margin"] = value
         match = r"bot\.global\.forager\.score_hysteresis_margin.*finite"
     else:
@@ -1252,7 +1251,7 @@ def test_prepare_config_preserves_live_custom_endpoints_path():
     "field,value",
     [
         ("market_orders_allowed", False),
-        ("market_order_near_touch_threshold", 0.0),
+        ("market_order_near_touch_fraction", 0.0),
         ("lookback_ema_span_minutes", 0.0),
         ("realized_loss_gate_lookback_minutes", 0.0),
     ],
@@ -1273,8 +1272,8 @@ def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
 
 def test_prepare_config_rejects_legacy_backtest_market_slippage_key():
     source = get_template_config()
-    source["backtest"]["panic_market_slippage_pct"] = 0.0015
-    with pytest.raises(ValueError, match="panic_market_slippage_pct.*unknown configuration field"):
+    source["backtest"]["panic_market_slippage_fraction"] = 0.0015
+    with pytest.raises(ValueError, match="panic_market_slippage_fraction.*unknown configuration field"):
         prepare_config(source, verbose=False)
 
 

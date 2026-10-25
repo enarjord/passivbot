@@ -233,7 +233,7 @@ def test_exclusive_end_lookahead_preserves_disabled_results(tmp_path, strategy, 
             enabled_metrics.pop(held_hours), rel=0.0, abs=1e-14
         )
         assert baseline_metrics == enabled_metrics
-        assert enabled[2]["backtest_completion_ratio"] == 1.0
+        assert enabled[2]["backtest_completion_fraction"] == 1.0
     else:
         from contextlib import ExitStack
         from tools.gpu_parity import _native_dataset
@@ -242,7 +242,7 @@ def test_exclusive_end_lookahead_preserves_disabled_results(tmp_path, strategy, 
         def forbidden(*_args, **_kwargs):
             pytest.fail("native eligibility cannot invoke CPU simulation")
         monkeypatch.setattr("backtest.execute_backtest", forbidden)
-        metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+        metrics = ("adg_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction")
         with ExitStack() as resources:
             with NativeBacktestService(batch_size=1, tuning_mode="off") as service:
                 for key, current in (("disabled", config), ("ones", ones)):
@@ -252,7 +252,7 @@ def test_exclusive_end_lookahead_preserves_disabled_results(tmp_path, strategy, 
                 baseline = service.submit(BacktestRequest("disabled", "disabled", {})).result(timeout=180)
                 enabled = service.submit(BacktestRequest("ones", "ones", {})).result(timeout=180)
                 assert baseline.metrics == enabled.metrics
-                assert enabled.metrics["backtest_completion_ratio"] == 1.0
+                assert enabled.metrics["backtest_completion_fraction"] == 1.0
 
 
 def idle_clock_inputs(strategy, sides="both"):
@@ -328,17 +328,17 @@ def test_initial_idle_schedule_keeps_full_accounting_period(tmp_path, strategy, 
             assert min(float(fill[1]) for fill in fills) >= first_admission
         daily = list({int(row[0]) // DAY_MS: float(row[1]) for row in equities}.values())
         expected_adg = (np.mean(daily[-3:]) / daily[0]) ** (1.0 / len(daily)) - 1.0
-        assert analysis["adg_strategy_eq"] == pytest.approx(expected_adg, abs=1e-12)
+        assert analysis["adg_fraction_strategy_equity"] == pytest.approx(expected_adg, abs=1e-12)
         observed = analysis
     else:
-        metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+        metrics = ("adg_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction")
         observed = native_clock_metrics(inputs, metrics, monkeypatch)
-        for name, atol in (("adg_strategy_eq", 1e-7), ("fills_per_day", 1e-6)):
+        for name, atol in (("adg_fraction_strategy_equity", 1e-7), ("fills_per_day", 1e-6)):
             assert observed[name] == pytest.approx(analysis[name], abs=atol, rel=1e-4)
     if backend == "cpu":
-        assert observed["fills_analysis_duration_days"] == pytest.approx(expected_duration)
+        assert observed["analysis_duration_days"] == pytest.approx(expected_duration)
     assert observed["fills_per_day"] == pytest.approx(len(fills) / expected_duration, abs=1e-6)
-    assert observed["backtest_completion_ratio"] == 1.0
+    assert observed["backtest_completion_fraction"] == 1.0
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
@@ -370,7 +370,7 @@ def test_idle_clock_preserves_unmasked_capacity_and_readiness(tmp_path, strategy
         if condition == "delayed_readiness":
             assert baseline[1][0, 0] > stamps[0] + 120 * 60_000
     else:
-        metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+        metrics = ("adg_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction")
         if condition != "delayed_readiness":
             # The native backend rejects a configuration with no enabled side.
             for current in (inputs, (ones, candles, markets, btc, stamps)):
@@ -391,7 +391,7 @@ def test_idle_prefix_hsl_observations_follow_accounting_clock(tmp_path, strategy
     from tools.gpu_parity import build_parser, fixture_inputs as prepare
     config, candles, markets, btc, stamps = prepare(build_parser().parse_args([
         "--fixture", strategy, "--sides", sides, "--coins", "2", "--bars", "2880",
-        "--hsl", hsl, "--hsl-red-threshold", "0.002"]))
+        "--hsl", hsl, "--hsl-drawdown-threshold-fraction", "0.002"]))
     candles = np.concatenate((candles, candles[-1:]), axis=0)
     btc = np.concatenate((btc, btc[-1:]))
     stamps = np.concatenate((stamps, stamps[-1:] + 60_000))
@@ -404,17 +404,17 @@ def test_idle_prefix_hsl_observations_follow_accounting_clock(tmp_path, strategy
         candles, markets, config, "binance", btc, stamps), config)
     if policy == "zero":
         assert len(_fills) == 0
-        assert analysis["hard_stop_triggers_per_year"] == 0.0
-        assert analysis["hard_stop_time_in_red_pct"] == 0.0
+        assert analysis["hsl_triggers_per_year"] == 0.0
+        assert analysis["hsl_red_time_fraction"] == 0.0
     else:
         assert len(_fills) > 0
         first_admission = (int(stamps[0]) // DAY_MS + 1) * DAY_MS
         assert min(float(fill[1]) for fill in _fills) >= first_admission
-    metrics = ("adg_strategy_eq", "hard_stop_time_in_red_pct",
-               "hard_stop_triggers_per_year", "drawdown_worst_mean_1pct_ema_strategy_eq",
-               "backtest_completion_ratio")
+    metrics = ("adg_fraction_strategy_equity", "hsl_red_time_fraction",
+               "hsl_triggers_per_year", "hsl_signal_ema_worst_1pct_mean_fraction",
+               "backtest_completion_fraction")
     observed = native_clock_metrics(inputs, metrics, monkeypatch)
-    assert observed["backtest_completion_ratio"] == 1.0
+    assert observed["backtest_completion_fraction"] == 1.0
     for name in metrics:
         assert observed[name] == pytest.approx(analysis[name], abs=1e-5, rel=1e-4), name
 
@@ -448,7 +448,7 @@ def test_disabled_cpu_and_native_preparation_allocate_no_schedule(
     for name in ("read_csv", "freeze_config", "prepare_selection", "share_selection"):
         monkeypatch.setattr("organillo." + name, unexpected)
     config, candles, markets, btc, timestamps = fixture_inputs(bars=512)
-    config["optimize"].update(scoring=[{"metric": "adg_strategy_eq", "goal": "max"}], limits=[])
+    config["optimize"].update(scoring=[{"metric": "adg_fraction_strategy_equity", "goal": "max"}], limits=[])
     payload = build_backtest_payload(candles, markets, config, "binance", btc, timestamps)
     assert payload.bundle.eligibility is None
     manager = SharedArrayManager()
@@ -516,7 +516,7 @@ def test_prepared_buffer_hash_must_match_config(tmp_path, require_real_passivbot
     config["backtest"]["organillo_sha256"] = None
     from tools.gpu_parity import _native_dataset
     with pytest.raises(ValueError, match="validated SHA-256"):
-        with _native_dataset(inputs, "binance", ["adg_strategy_eq"]):
+        with _native_dataset(inputs, "binance", ["adg_fraction_strategy_equity"]):
             pytest.fail("unidentified prepared schedule accepted")
 
 
@@ -609,8 +609,8 @@ def test_native_gpu_rotating_schedule_parity(tmp_path, strategy, sides, dynamic,
     inputs[0]["backtest"]["dynamic_wel_by_tradability"] = dynamic
     inputs[0]["backtest"]["hedge_mode"] = hedge
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0], [0, 1], [1, 1]])
-    report = run_comparison(inputs, "binance", ["adg_strategy_eq", "drawdown_worst_strategy_eq",
-                            "backtest_completion_ratio", "fills_per_day"], DEFAULT_TOLERANCES)
+    report = run_comparison(inputs, "binance", ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity",
+                            "backtest_completion_fraction", "fills_per_day"], DEFAULT_TOLERANCES)
     assert report["passed"], report["metrics"]
 
 
@@ -624,11 +624,11 @@ def test_native_gpu_zero_schedule_and_hsl_replay(tmp_path, strategy,
     for policy in ([[0, 0]], [[1, 0]]):
         args = build_parser().parse_args(["--fixture", strategy, "--sides", "both", "--coins", "2",
                                          "--bars", "512", "--hsl", "portfolio",
-                                         "--hsl-red-threshold", "0.002"])
+                                         "--hsl-drawdown-threshold-fraction", "0.002"])
         inputs = prepare(args)
         write_schedule(tmp_path / f"selection_{len(policy)}.csv", inputs, policy)
-        report = run_comparison(inputs, "binance", ["adg_strategy_eq", "drawdown_worst_strategy_eq",
-                                "backtest_completion_ratio", "fills_per_day"], DEFAULT_TOLERANCES)
+        report = run_comparison(inputs, "binance", ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity",
+                                "backtest_completion_fraction", "fills_per_day"], DEFAULT_TOLERANCES)
         assert report["passed"], report["metrics"]
 
 
@@ -673,7 +673,7 @@ def test_registry_reuses_shared_selection_and_fallback_handles_sliced_timestamps
     inputs = fixture_inputs(bars=512)
     config, candles, markets, btc, timestamps = inputs
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0]])
-    config["optimize"].update(scoring=[{"metric": "adg_strategy_eq", "goal": "max"}], limits=[])
+    config["optimize"].update(scoring=[{"metric": "adg_fraction_strategy_equity", "goal": "max"}], limits=[])
     manager = SharedArrayManager()
     base = None
     try:
@@ -745,7 +745,7 @@ def test_native_service_disabled_ones_zero_eviction_and_no_cpu_replay(tmp_path, 
     def forbidden(*_args, **_kwargs):
         pytest.fail("native GPU eligibility cannot invoke CPU simulation")
     monkeypatch.setattr("backtest.execute_backtest", forbidden)
-    metrics = ("adg_strategy_eq", "fills_per_day", "backtest_completion_ratio")
+    metrics = ("adg_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction")
     with ExitStack() as resources:
         datasets = {key: resources.enter_context(_native_dataset(value, "binance", metrics))
                     for key, value in (("disabled", inputs), ("ones", ones), ("zero", zero))}
@@ -759,7 +759,7 @@ def test_native_service_disabled_ones_zero_eviction_and_no_cpu_replay(tmp_path, 
                     assert actual[key] == result.metrics
                 actual[key] = result.metrics
             assert actual["disabled"] == actual["ones"]
-            assert actual["zero"]["fills_per_day"] == actual["zero"]["adg_strategy_eq"] == 0.0
+            assert actual["zero"]["fills_per_day"] == actual["zero"]["adg_fraction_strategy_equity"] == 0.0
         assert not service._prepared_cache and not service._subset_cache
 
 
@@ -772,12 +772,12 @@ def test_gpu_chunk_and_factual_hsl_preserve_eligibility_schedule(tmp_path, strat
     from optimization.gpu.service import SharedAccountReplay
     from tools.gpu_parity import build_parser, fixture_inputs as prepare
     inputs = prepare(build_parser().parse_args(["--fixture", strategy, "--sides", "both",
-        "--coins", "2", "--bars", "1600", "--hsl", "portfolio", "--hsl-red-threshold", ".002"]))
+        "--coins", "2", "--bars", "1600", "--hsl", "portfolio", "--hsl-drawdown-threshold-fraction", ".002"]))
     write_schedule(tmp_path / "selection.csv", inputs, [[1, 0], [0, 0]])
     config, candles, markets, btc, timestamps = inputs
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="binance", batch_size=1,
-        needed_metrics={"adg_strategy_eq", "fills_per_day", "backtest_completion_ratio"}, factual_hsl=True)
+        needed_metrics={"adg_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction"}, factual_hsl=True)
     runner = proxy.fused_runner
     parameters = np.concatenate([proxy._parameter_matrix([{}], side) for side in proxy.sides], axis=1)
     runner.max_dispatch_candidate_bars = None

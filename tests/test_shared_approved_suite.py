@@ -140,7 +140,7 @@ def test_scenario_keeps_unchanged_prepared_fields_and_source_pins(
     monkeypatch.setattr(Path, "open", no_old_source_read)
     overrides = {
         "none": {},
-        "numeric": {"bot.portfolio.warmup.span_multiplier": 0.8},
+        "numeric": {"bot.portfolio.warmup.activation_span_fraction": 0.8},
         "approved": {"bot.global.universe.approved_coins": allowed},
         "ignored": {
             f"bot.{side}.universe.ignored_coins": ["COIN01"]
@@ -494,7 +494,7 @@ async def test_optimizer_producer_freezes_memberships_through_format_context_and
     from shared_arrays import SharedArrayManager
 
     config, data, files, allowed = prepared(tmp_path, kind, source_kind)
-    config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
+    config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
     config["optimize"]["limits"] = []
     suite_config = {
         "scenarios": [

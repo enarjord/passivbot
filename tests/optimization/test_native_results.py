@@ -11,24 +11,24 @@ from optimize import Evaluator, SuiteEvaluator
 from suite_runner import ScenarioResult, SuiteScenario
 
 
-METRICS = ("adg_strategy_eq", "drawdown_worst_usd")
+METRICS = ("adg_fraction_strategy_equity", "drawdown_max_fraction_usd")
 
 
 def evaluator(*, suite=False, selected=None):
     config = get_expanded_config_prototype()
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max", "scenario": selected},
-        {"metric": "drawdown_worst_usd", "goal": "min", "scenario": None, "reducer": "max"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": selected},
+        {"metric": "drawdown_max_fraction_usd", "goal": "min", "scenario": None, "reducer": "max"},
     ]
     config["optimize"]["limits"] = [
-        {"metric": "drawdown_worst_usd", "penalize_if": "greater_than", "value": 0.2},
+        {"metric": "drawdown_max_fraction_usd", "penalize_if": "greater_than", "value": 0.2},
     ]
     base = Evaluator(hlcvs_specs={"binance": None, "bybit": None}, btc_usd_specs={}, msss={}, config=prepare_config(config, verbose=False))
     if not suite:
         return base
     contexts = [SimpleNamespace(label=label, exchanges=["binance", "bybit"])
                 for label in ("base", "stress")]
-    return SuiteEvaluator(base, contexts, {"default": "mean", "drawdown_worst_usd": "max"})
+    return SuiteEvaluator(base, contexts, {"default": "mean", "drawdown_max_fraction_usd": "max"})
 
 
 def slots(*labels):
@@ -36,9 +36,9 @@ def slots(*labels):
             for label in labels for venue in ("binance", "bybit")]
 
 
-def result(slot, *, gain=0.01, drawdown=0.1, liquidated=False):
+def result(slot, *, gain_multiplier=0.01, drawdown=0.1, liquidated=False):
     return BacktestResult(slot.request_id, slot.dataset_id,
-                          {"adg_strategy_eq": gain, "drawdown_worst_usd": drawdown}, liquidated)
+                          {"adg_fraction_strategy_equity": gain_multiplier, "drawdown_max_fraction_usd": drawdown}, liquidated)
 
 
 def prohibit_simulation(monkeypatch, value):
@@ -56,16 +56,16 @@ def test_incremental_candidate_completion_reuses_canonical_single_scoring(monkey
     scorer = CanonicalResultScorer(value)
     graph = slots("base")
     pending = CandidateEvaluation("candidate", [0.5], graph, scorer)
-    second = result(graph[1], gain=0.03, drawdown=0.4, liquidated=True)
+    second = result(graph[1], gain_multiplier=0.03, drawdown=0.4, liquidated=True)
     assert pending.add_result(second) is None
     assert pending.pending_request_ids == (graph[0].request_id,)
-    second.metrics["adg_strategy_eq"] = 999
+    second.metrics["adg_fraction_strategy_equity"] = 999
     first = result(graph[0])
     complete = pending.add_result(first)
     assert not pending.pending_request_ids
     payload = complete.require_full()
     analyses = {"binance": dict(first.metrics, liquidated=False),
-                "bybit": {"adg_strategy_eq": 0.03, "drawdown_worst_usd": 0.4, "liquidated": True}}
+                "bybit": {"adg_fraction_strategy_equity": 0.03, "drawdown_max_fraction_usd": 0.4, "liquidated": True}}
     expected_stats = build_scenario_metrics(analyses)
     expected = value.calc_fitness(flatten_metric_stats(expected_stats["stats"]), return_raw_objectives=True)
     assert payload["fitness"] == expected[0]
@@ -85,7 +85,7 @@ def test_suite_completion_uses_canonical_reducers_limits_and_objective_order(mon
     prohibit_simulation(monkeypatch, value)
     prohibit_simulation(monkeypatch, value.base)
     graph = slots("base", "stress")
-    rows = [result(slot, gain=0.01 * (index + 1), drawdown=0.1 * (index + 1))
+    rows = [result(slot, gain_multiplier=0.01 * (index + 1), drawdown=0.1 * (index + 1))
             for index, slot in enumerate(graph)]
     pending = CandidateEvaluation("suite", [1, 2], graph, CanonicalResultScorer(value))
     for index in order[:-1]:
@@ -125,30 +125,30 @@ def test_partial_suite_screening_is_scored_but_cannot_be_recorded_as_full(monkey
 @pytest.mark.parametrize("required_by", ["objective", "limit"])
 def test_ew_screening_ranks_selected_subset_without_weakening_full_coverage(required_by):
     config = get_expanded_config_prototype()
-    ew_metric = "adg_strategy_eq_ew"
+    ew_metric = "adg_fraction_strategy_equity_ew"
     config["backtest"]["ew_half_life_days"] = 30.0
     config["optimize"]["scoring"] = [{"metric": ew_metric, "goal": "max"}]
     config["optimize"]["limits"] = []
     if required_by == "limit":
-        config["optimize"]["scoring"] = [{"metric": "adg_strategy_eq", "goal": "max"}]
+        config["optimize"]["scoring"] = [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]
         config["optimize"]["limits"] = [{"metric": ew_metric, "penalize_if": "less_than", "value": .05}]
     base = Evaluator({"binance": None}, {}, {}, prepare_config(config, verbose=False))
     suite = SuiteEvaluator(base, [SimpleNamespace(label=label, exchanges=["binance"])
                                  for label in ("base", "stress")], {"default": "mean"})
     scorer = CanonicalResultScorer(suite)
-    graph = [ResultSlot("request", "dataset", "base", "binance", (ew_metric, "adg_strategy_eq"))]
+    graph = [ResultSlot("request", "dataset", "base", "binance", (ew_metric, "adg_fraction_strategy_equity"))]
     rows = []
-    for gain in (.01, .1):
-        pending = CandidateEvaluation("candidate", [gain], graph, scorer, stage="screening")
+    for gain_multiplier in (.01, .1):
+        pending = CandidateEvaluation("candidate", [gain_multiplier], graph, scorer, stage="screening")
         complete = pending.add_result(BacktestResult("request", "dataset",
-            {ew_metric: gain, "adg_strategy_eq": gain}, False))
+            {ew_metric: gain_multiplier, "adg_fraction_strategy_equity": gain_multiplier}, False))
         assert complete.stage == "screening"
         assert "error" not in complete.payload["metrics"]
         rows.append(complete.payload)
     assert rows[0]["fitness"] != rows[1]["fitness"]
     if required_by == "limit":
         assert rows[0]["constraint_violation"] > rows[1]["constraint_violation"] == 0
-    invalid = scorer.score([], {"base": {"binance": {ew_metric: .1, "adg_strategy_eq": .1,
+    invalid = scorer.score([], {"base": {"binance": {ew_metric: .1, "adg_fraction_strategy_equity": .1,
                                                      "liquidated": False}}})
     assert "required EW scenario" in invalid["metrics"]["error"]
     assert invalid["constraint_violation"] > 0
@@ -159,7 +159,7 @@ def test_ew_screening_ranks_selected_subset_without_weakening_full_coverage(requ
 def test_unavailable_selected_ew_metrics_still_penalize_screening():
     from test_gpu_suite_invalid_metrics import assert_invalid
     config = get_expanded_config_prototype()
-    metric = "adg_strategy_eq_ew"
+    metric = "adg_fraction_strategy_equity_ew"
     config["backtest"]["ew_half_life_days"] = 30.0
     config["optimize"].update(scoring=[{"metric": metric, "goal": "max"}], limits=[])
     base = Evaluator({"binance": None}, {}, {}, prepare_config(config, verbose=False))
@@ -176,8 +176,8 @@ def test_invalid_result_does_not_satisfy_a_slot(problem):
     pending = CandidateEvaluation("candidate", [], graph, CanonicalResultScorer(evaluator()))
     changes = {
         "request": {"request_id": "other"}, "dataset": {"dataset_id": "other"},
-        "status": {"liquidated": None}, "missing": {"metrics": {"adg_strategy_eq": 0.1}},
-        "nan": {"metrics": {"adg_strategy_eq": float("nan"), "drawdown_worst_usd": 0.1}},
+        "status": {"liquidated": None}, "missing": {"metrics": {"adg_fraction_strategy_equity": 0.1}},
+        "nan": {"metrics": {"adg_fraction_strategy_equity": float("nan"), "drawdown_max_fraction_usd": 0.1}},
     }
     row = result(graph[0])
     row = BacktestResult(**(vars(row) | changes[problem]))
@@ -218,7 +218,7 @@ def test_nonfinite_metric_sentinel_uses_canonical_invalid_candidate_policy(suite
     graph = slots("base", "stress") if suite else slots("base")
     pending = CandidateEvaluation("invalid", [], graph, CanonicalResultScorer(value))
     for slot in graph:
-        complete = pending.add_result(result(slot, gain=float("inf"), liquidated=True))
+        complete = pending.add_result(result(slot, gain_multiplier=float("inf"), liquidated=True))
     payload = complete.require_full()
     assert payload["constraint_violation"] > 0
     assert "non-finite metric" in payload["metrics"]["error"]
@@ -237,7 +237,7 @@ def test_invalid_evaluation_plan_is_rejected_before_simulation(change):
     elif change == "unknown":
         graph = slots("other")
     else:
-        graph[1] = ResultSlot(graph[1].request_id, graph[1].dataset_id, "base", "bybit", ("adg_strategy_eq",))
+        graph[1] = ResultSlot(graph[1].request_id, graph[1].dataset_id, "base", "bybit", ("adg_fraction_strategy_equity",))
     with pytest.raises(ValueError):
         CandidateEvaluation("invalid", [], graph, CanonicalResultScorer(evaluator()))
 

@@ -114,10 +114,10 @@ def test_limit_history_uses_canonical_reducer_key(tmp_path):
     session = ib.IterativeBacktestSession(Path("config.json"), None, False)
     session.session_dir = tmp_path
     limit = ib.LimitInfo(
-        metric="drawdown_worst_strategy_eq",
+        metric="drawdown_max_fraction_strategy_equity",
         reducer="max",
         mode="greater_than",
-        metric_key="drawdown_worst_strategy_eq_max",
+        metric_key="drawdown_max_fraction_strategy_equity_max",
         value=0.4,
         bound=0.5,
     )
@@ -282,10 +282,10 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                 },
                 "universe": {"minimum_coin_age_days": 365, "approved_coins": []},
             },
-            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"span_multiplier": 1.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"activation_span_fraction": 1.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
     }
     base["bot"]["long"]["enabled"] = True
     base["bot"]["short"]["enabled"] = False
@@ -335,10 +335,10 @@ def test_run_signature_changes_for_optimize_changes():
                 "universe": {"minimum_coin_age_days": 365, "approved_coins": ["BTC"]},
             },
             "short": {"universe": {"minimum_coin_age_days": 365, "approved_coins": []}},
-            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"strategy_kind": "ema_anchor", "warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_strategy_pnl_rebased", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
     }
     optimize_changed = {
         **base,
@@ -391,10 +391,10 @@ def test_load_config_rejects_scenario_limits_before_loading_markets(
     config = {
         "backtest": {"exchanges": ["binance"]},
         "optimize": {
-            "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+            "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
             "limits": [
                 {
-                    "metric": "drawdown_worst_strategy_eq",
+                    "metric": "drawdown_max_fraction_strategy_equity",
                     "penalize_if": "greater_than",
                     "scenario": "base",
                     "value": 0.5,

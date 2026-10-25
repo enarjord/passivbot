@@ -62,11 +62,11 @@ class TestConfigAdapter:
         assert isinstance(bounds[0], Bound)
 
         short_param_idx = next(
-            idx for idx, (key, _) in enumerate(key_paths) if key == "short_unstuck_close_pct"
+            idx for idx, (key, _) in enumerate(key_paths) if key == "short_unstuck_close_fraction"
         )
         assert bounds[short_param_idx].low == bounds[short_param_idx].high == 0.01
         long_param_idx = next(idx for idx, (key, _) in enumerate(key_paths)
-                              if key == "long_unstuck_close_pct")
+                              if key == "long_unstuck_close_fraction")
         assert bounds[long_param_idx].high == 0.12
 
     def test_get_optimization_key_paths_includes_pside_hsl_keys_when_bounded(self):
@@ -79,10 +79,10 @@ class TestConfigAdapter:
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
+        assert ("long_hsl_drawdown_threshold_fraction", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
         assert ("long_hsl_memory_ema_span_minutes",
                 ("bot", "long", "hsl", "memory_ema_span_minutes")) in key_paths
-        assert ("short_hsl_drawdown_ratio_ema_span_minutes",
+        assert ("short_hsl_drawdown_fraction_ema_span_minutes",
                 ("bot", "short", "hsl", "drawdown_fraction_ema_span_minutes")) in key_paths
 
     def test_get_optimization_key_paths_rejects_empty_bounds(self):
@@ -109,14 +109,14 @@ class TestConfigAdapter:
         ("bound_key", "bound_value", "expected"),
         [
             (
-                "long_unstuck_ema_dist",
+                "long_unstuck_ema_distance_fraction",
                 [-1.0, -0.5, 0.01],
-                r"optimize\.bounds\.long_unstuck_ema_dist lower bound must be > -1\.0",
+                r"optimize\.bounds\.long_unstuck_ema_distance_fraction lower bound must be > -1\.0",
             ),
             (
-                "short_unstuck_ema_dist",
+                "short_unstuck_ema_distance_fraction",
                 [-0.99, 1.0, 0.01],
-                r"optimize\.bounds\.short_unstuck_ema_dist upper bound must be < 1\.0",
+                r"optimize\.bounds\.short_unstuck_ema_distance_fraction upper bound must be < 1\.0",
             ),
         ],
     )
@@ -209,7 +209,7 @@ class TestConfigAdapter:
                 "threshold_base_fraction",
             ),
         ) in key_paths
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
+        assert ("long_hsl_drawdown_threshold_fraction", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
 
     def test_get_optimization_key_paths_routes_ema_anchor_fields_to_strategy_section(self):
         config = _canonical_config_with_bounds({

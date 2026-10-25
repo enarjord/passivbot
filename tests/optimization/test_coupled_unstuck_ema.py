@@ -121,7 +121,7 @@ def test_independent_default_and_mirror_fixed_override_order():
     candidate = _finalize_optimizer_vector_config(deepcopy(config))
     for side in ("long", "short"):
         assert candidate["bot"][side]["unstuck"]["ema_span_0_minutes"] == 61.25
-        assert "unstuck_ema_span_0" not in candidate["bot"][side]
+        assert "unstuck_ema_span_0_minutes" not in candidate["bot"][side]
 
 
 def test_coupling_materializes_scenario_dependencies_for_plain_saved_suite_replay():
@@ -251,20 +251,20 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
     proxy.couple_unstuck_emas = True
     proxy.base_params = {side: {key: 1.0 for key in keys} for side in proxy.sides}
     sources = model.COUPLED_UNSTUCK_EMA_SOURCE_KEYS[kind]
-    span0, span1 = sources["unstuck_ema_span_0"], sources["unstuck_ema_span_1"]
+    span0, span1 = sources["unstuck_ema_span_0_minutes"], sources["unstuck_ema_span_1_minutes"]
     proxy.static_coin_override_params = {
-        "long": {span0: 71.5, "unstuck_ema_span_0": 4.0}
+        "long": {span0: 71.5, "unstuck_ema_span_0_minutes": 4.0}
     }
     candidates = [
         {
             f"long_{span0}": 17.25,
             f"long_{span1}": 211.75,
-            "long_unstuck_ema_span_1": 9.0,
+            "long_unstuck_ema_span_1_minutes": 9.0,
         }
     ]
     matrix = proxy._parameter_matrix(candidates, side="long")
-    assert matrix[0, keys.index("unstuck_ema_span_0")] == 17.25
-    assert matrix[0, keys.index("unstuck_ema_span_1")] == 211.75
+    assert matrix[0, keys.index("unstuck_ema_span_0_minutes")] == 17.25
+    assert matrix[0, keys.index("unstuck_ema_span_1_minutes")] == 211.75
 
 
 @pytest.mark.parametrize("kind", ["ema_anchor", "trailing_martingale"])
@@ -319,7 +319,7 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
             {
                 side: {
                     "risk_entry_cooldown_minutes": 0,
-                    "total_wallet_exposure_limit": 1,
+                    "total_wallet_exposure_limit_ratio": 1,
                     "n_positions": 1,
                 }
             }
@@ -347,7 +347,7 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
 
 def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins():
     config = config_for()
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 900_000.5}}}}

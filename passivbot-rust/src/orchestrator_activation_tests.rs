@@ -184,7 +184,7 @@ fn side_activation_zero_capacity_preserves_held_closes_and_authored_budget() {
                     if zero_positions {
                         global.n_positions = 0;
                     } else {
-                        global.total_wallet_exposure_limit = 0.0;
+                        global.total_wallet_exposure_limit_ratio = 0.0;
                     }
                     // The real held symbol retains its explicitly configured WEL.
                     // Zero portfolio capacity is not a replacement sizing budget.
@@ -251,18 +251,18 @@ fn side_activation_preserves_independently_enabled_risk_reducers() {
                 symbol_side.position.size *= 20.0;
                 let bot = &mut symbol_side.bot_params;
                 bot.risk_wel_enforcer_enabled = risk == "wel";
-                bot.risk_wel_enforcer_threshold = 1.0;
+                bot.risk_wel_enforcer_threshold_ratio = 1.0;
                 bot.unstuck_enabled = risk == "unstuck";
                 bot.unstuck_ema_gating_enabled = false;
-                bot.unstuck_close_pct = 0.1;
-                bot.unstuck_loss_allowance_pct = 0.1;
-                bot.unstuck_threshold = 0.5;
+                bot.unstuck_close_fraction = 0.1;
+                bot.unstuck_loss_allowance_fraction = 0.1;
+                bot.unstuck_exposure_trigger_ratio = 0.5;
                 let global = match side {
                     PositionSide::Long => &mut input.global.global_bot_params.long,
                     PositionSide::Short => &mut input.global.global_bot_params.short,
                 };
                 global.risk_twel_enforcer_enabled = risk == "twel";
-                global.risk_twel_enforcer_threshold = 1.0;
+                global.risk_twel_enforcer_threshold_ratio = 1.0;
                 let expected = match (risk, side) {
                     ("wel", PositionSide::Long) => OrderType::CloseAutoReduceWelLong,
                     ("wel", PositionSide::Short) => OrderType::CloseAutoReduceWelShort,
@@ -298,14 +298,14 @@ fn side_activation_does_not_fabricate_ema_anchor_zero_allocation_close_sizing() 
             PositionSide::Long => &mut input.symbols[0].long,
             PositionSide::Short => &mut input.symbols[0].short,
         };
-        held.bot_params.wallet_exposure_limit = 0.0;
-        held.bot_params.total_wallet_exposure_limit = 0.0;
+        held.bot_params.wallet_exposure_limit_ratio = 0.0;
+        held.bot_params.total_wallet_exposure_limit_ratio = 0.0;
         held.bot_params.n_positions = 0;
         let global = match side {
             PositionSide::Long => &mut input.global.global_bot_params.long,
             PositionSide::Short => &mut input.global.global_bot_params.short,
         };
-        global.total_wallet_exposure_limit = 0.0;
+        global.total_wallet_exposure_limit_ratio = 0.0;
         global.n_positions = 0;
         // EA's existing clip policy returns zero with an actual zero budget.
         // Deactivation must neither invent allocation nor imply panic.
@@ -333,10 +333,10 @@ fn side_activation_does_not_fabricate_ema_anchor_zero_allocation_close_sizing() 
             PositionSide::Long => &mut input.global.global_bot_params.long,
             PositionSide::Short => &mut input.global.global_bot_params.short,
         };
-        global.total_wallet_exposure_limit = 0.05;
+        global.total_wallet_exposure_limit_ratio = 0.05;
         global.n_positions = 1;
         global.risk_twel_enforcer_enabled = true;
-        global.risk_twel_enforcer_threshold = 1.0;
+        global.risk_twel_enforcer_threshold_ratio = 1.0;
         let output = super::compute_ideal_orders(&input).unwrap();
         assert!(output.orders.iter().any(|o| matches!(
             o.order_type,

@@ -3,13 +3,13 @@
 import math
 from collections.abc import Mapping
 
-from .metrics import canonicalize_metric_name, split_metric_stat_suffix
+from .metrics import canonicalize_metric_name, metric_with_curve, split_metric_stat_suffix
 
 EW_DEFINITION_VERSION = 1
-EW_METRIC_BASES = frozenset({"adg", "sharpe_ratio", "sortino_ratio", "omega_ratio"})
+EW_METRIC_BASES = frozenset({"adg_fraction", "sharpe_ratio", "sortino_ratio", "omega_ratio"})
 EW_METRICS = frozenset(
-    [f"{base}_strategy_eq_ew" for base in EW_METRIC_BASES]
-    + [f"{base}_ew_{currency}" for base in EW_METRIC_BASES for currency in ("usd", "btc")]
+    [metric_with_curve(f"{base}_ew", "strategy_equity") for base in EW_METRIC_BASES]
+    + [metric_with_curve(f"{base}_ew", currency) for base in EW_METRIC_BASES for currency in ("usd", "btc")]
 )
 
 

@@ -88,7 +88,7 @@ def test_metal_prepared_service_switches_subset_datasets_and_reuses_results(monk
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--coins", "3", "--sides", "both", "--bars", "512",
     ]))
-    requested = ("adg_strategy_eq", "backtest_completion_ratio", "fills_per_day")
+    requested = ("adg_fraction_strategy_equity", "backtest_completion_fraction", "fills_per_day")
     subset_config = deepcopy(config)
     subset_config["backtest"]["coins"]["binance"] = ["COIN00", "COIN02"]
     def forbidden(*args, **kwargs):

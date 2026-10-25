@@ -63,10 +63,10 @@ def config():
     return result
 
 
-def policy(metric="entry_close_span", **bounds):
+def policy(metric="entry_close_span_fraction", **bounds):
     return resolve_prefilter(
         {
-            "exposure_ratios": [0.8],
+            "exposure_probe_fractions": [0.8],
             "checks": [
                 {"metric": metric, "enabled": True, "sides": ["long"], **bounds},
             ],
@@ -84,14 +84,14 @@ def test_every_check_is_disabled_unless_explicitly_enabled(monkeypatch):
     assert config_prefilter({}, None) == 0
     assert (
         config_prefilter(
-            {}, {"checks": [{"metric": "grid_span", "min": 0.1, "max": 0.35}]}
+            {}, {"checks": [{"metric": "grid_span_fraction", "min": 0.1, "max": 0.35}]}
         )
         == 0
     )
     assert (
         config_prefilter(
             {},
-            {"checks": [{"metric": "entry_close_span", "enabled": False, "max": 0.1}]},
+            {"checks": [{"metric": "entry_close_span_fraction", "enabled": False, "max": 0.1}]},
         )
         == 0
     )
@@ -119,10 +119,10 @@ def test_independent_retracement_and_cooldown_checks(
 ):
     candidate = config()
     assert config_prefilter(
-        candidate, policy("entry_retracement", max=0.001)
+        candidate, policy("entry_retracement_fraction", max=0.001)
     ) == pytest.approx(80)
     assert config_prefilter(
-        candidate, policy("close_retracement", max=0.001)
+        candidate, policy("close_retracement_fraction", max=0.001)
     ) == pytest.approx(1000)
     cooldown = candidate["bot"]["long"]["entry_cooldown"]
     cooldown.update(
@@ -141,12 +141,12 @@ def test_grid_span_checks_both_bounds_and_incomplete_ladders(
     entry = candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]
     entry.update(threshold_exposure_ratio_coefficient=0, retracement_base_fraction=0, initial_ema_distance_fraction=0)
     entry["threshold_base_fraction"] = 0.0001
-    assert config_prefilter(candidate, policy("grid_span", min=0.1, max=0.35)) > 0
+    assert config_prefilter(candidate, policy("grid_span_fraction", min=0.1, max=0.35)) > 0
     entry["threshold_base_fraction"] = 0.05
-    assert config_prefilter(candidate, policy("grid_span", min=0.05, max=0.35)) == 0
+    assert config_prefilter(candidate, policy("grid_span_fraction", min=0.05, max=0.35)) == 0
     entry["threshold_base_fraction"] = 0.3
-    assert config_prefilter(candidate, policy("grid_span", max=0.1)) > 0
-    limited = policy("grid_span", max=100)
+    assert config_prefilter(candidate, policy("grid_span_fraction", max=0.1)) > 0
+    limited = policy("grid_span_fraction", max=100)
     limited["grid_max_entries"] = 2
     value, findings = inspect_config_prefilter(candidate, limited)
     assert value > 0 and findings[0]["grid_incomplete"]
@@ -188,7 +188,7 @@ def test_trailing_grid_completes_on_both_sides(
     candidate['bot'][side]['universe']['approved_coins'] = ["TEST"]
     entry = candidate["bot"][side]["strategy"]["trailing_martingale"]["entry"]
     entry.update(threshold_base_fraction=0.03, threshold_exposure_ratio_coefficient=0, initial_ema_distance_fraction=0)
-    params = policy("grid_span", min=100)
+    params = policy("grid_span_fraction", min=100)
     params["checks"][0]["sides"] = [side]
     constraint, findings = inspect_config_prefilter(candidate, params)
     assert constraint > 0
@@ -243,9 +243,9 @@ def test_zero_global_wel_derives_capacity_but_zero_coin_wel_disables_entry(
     require_real_passivbot_rust_module,
 ):
     candidate = config()
-    candidate["bot"]["long"]["wallet_exposure_limit"] = 0
+    candidate["bot"]["long"]["wallet_exposure_limit_ratio"] = 0
     assert config_prefilter(candidate, policy(max=0.1)) > 0
-    candidate["bot"]["long"]["wallet_exposure_limit"] = 100
+    candidate["bot"]["long"]["wallet_exposure_limit_ratio"] = 100
     assert config_prefilter(candidate, policy(max=0.1)) == pytest.approx(56000)
     candidate["coin_overrides"] = {
         "TEST": {"bot": {"long": {"wallet_exposure_limit_ratio": 0}}}
@@ -306,7 +306,7 @@ def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
     from pareto_explorer import _extract_suite_metrics
 
     base = SimpleNamespace(
-        scoring_specs=extract_objective_specs(["adg_strategy_eq"]), limit_checks=[]
+        scoring_specs=extract_objective_specs(["adg_fraction_strategy_equity"]), limit_checks=[]
     )
     payload = build_prefilter_payload(
         base, [1], 25, [], suite=True, scenario_labels=("base", "stress")
@@ -317,8 +317,8 @@ def test_rejected_suite_metrics_are_consumable_by_pareto_reducers():
         _extract_suite_metrics(entry, {"default": "min"}),
         _extract_suite_metrics(entry, {"default": "mean"}, scenario_labels=["stress"]),
     ):
-        assert flat["adg_strategy_eq_mean"] == -25
-        assert values["drawdown_worst_strategy_eq"] == 25
+        assert flat["adg_fraction_strategy_equity_mean"] == -25
+        assert values["drawdown_max_fraction_strategy_equity"] == 25
 
 
 def test_single_coin_dynamic_wel_matches_capacity_and_exposure_cooldown(
@@ -361,7 +361,7 @@ def test_ambiguous_dynamic_multicoin_wel_fails_instead_of_guessing(
 def test_defaults_and_clean_roundtrip_keep_explicit_policy():
     candidate = config()
     assert candidate["optimize"]["prefilter"]["checks"] == []
-    candidate["optimize"]["prefilter"] = policy("grid_span", min=0.1, max=0.35)
+    candidate["optimize"]["prefilter"] = policy("grid_span_fraction", min=0.1, max=0.35)
     assert (
         clean_config(candidate)["optimize"]["prefilter"]
         == candidate["optimize"]["prefilter"]
@@ -372,12 +372,12 @@ def test_defaults_and_clean_roundtrip_keep_explicit_policy():
     "bad",
     [
         {"checks": [{"metric": "unknown", "enabled": True, "max": 1}]},
-        {"checks": [{"metric": "grid_span", "enabled": 1, "max": 1}]},
-        {"checks": [{"metric": "grid_span", "enabled": True}]},
-        {"checks": [{"metric": "grid_span", "enabled": True, "min": 2, "max": 1}]},
-        {"checks": [{"metric": "grid_span", "scale": 0}]},
-        {"exposure_ratios": [1]},
-        {"volatility_ema_1m": float("nan")},
+        {"checks": [{"metric": "grid_span_fraction", "enabled": 1, "max": 1}]},
+        {"checks": [{"metric": "grid_span_fraction", "enabled": True}]},
+        {"checks": [{"metric": "grid_span_fraction", "enabled": True, "min": 2, "max": 1}]},
+        {"checks": [{"metric": "grid_span_fraction", "scale": 0}]},
+        {"exposure_probe_fractions": [1]},
+        {"log_range_ema_1m": float("nan")},
         {"grid_max_entries": True},
         {"typo": True},
     ],
@@ -390,8 +390,8 @@ def test_invalid_policy_is_an_error_not_a_candidate_penalty(bad):
 def test_penalty_defaults_follow_explicit_objective_directions_without_rescoring():
     specs = extract_objective_specs(
         [
-            {"metric": "adg_strategy_eq", "goal": "max"},
-            {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
         ]
     )
     base = SimpleNamespace(scoring_specs=specs, limit_checks=[])
@@ -400,11 +400,12 @@ def test_penalty_defaults_follow_explicit_objective_directions_without_rescoring
     assert payload["constraint_violation"] == 25
     assert payload["evaluation_vector"] == [1, 2]
     assert payload["metrics"]["objectives"] == {
-        "adg_strategy_eq": -25,
-        "drawdown_worst_strategy_eq": 25,
+        "adg_fraction_strategy_equity": -25,
+        "drawdown_max_fraction_strategy_equity": 25,
     }
     assert payload["metrics"]["stats"]["fills_count"]["mean"] == -25
-    assert payload["metrics"]["stats"]["win_rate"]["mean"] == -25
-    assert payload["metrics"]["stats"]["adg_usd"]["mean"] == -25
-    assert payload["metrics"]["stats"]["drawdown_worst_btc"]["mean"] == 25
+    assert payload["metrics"]["stats"]["trade_win_fraction"]["mean"] == -25
+    assert payload["metrics"]["stats"]["adg_fraction_usd"]["mean"] == -25
+    assert payload["metrics"]["stats"]["drawdown_max_fraction_btc"]["mean"] == 25
     assert payload["metrics"]["backtest_performed"] is False
+    assert payload["metrics"]["prefilter"]["version"] == 2

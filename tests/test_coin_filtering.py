@@ -276,7 +276,7 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot.positions = {}
     bot.bot_value = (
         lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span_1m", "filter_volume_ema_span_1m")
+        if key in ("forager_log_range_ema_span_minutes", "forager_volume_ema_span_minutes")
         else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
@@ -299,7 +299,7 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
     bot.positions = {}
     bot.bot_value = (
         lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span_1m", "filter_volume_ema_span_1m")
+        if key in ("forager_log_range_ema_span_minutes", "forager_volume_ema_span_minutes")
         else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
@@ -714,7 +714,7 @@ async def test_live_selection_uses_each_side_flag_even_with_simulation_override(
     )
     from types import MethodType
     bot.effective_min_cost_is_low_enough = MethodType(Passivbot.effective_min_cost_is_low_enough, bot)
-    bot.get_wallet_exposure_limit = lambda *args: 1.0
+    bot.get_wallet_exposure_limit_ratio = lambda *args: 1.0
     bot.bp = lambda *args: 0.0
     bot._strategy_initial_sizing_fraction = lambda *args: 0.001
     bot.get_hysteresis_snapped_balance = lambda: 1000.0

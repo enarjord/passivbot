@@ -191,12 +191,12 @@ def test_native_portfolio_ema_maximum_is_independent_of_zero_unified_sides():
         "hsl_drawdown_ema_max_portfolio": torch.tensor([.2, .12, 0.]),
     }
     metrics = _hard_stop_ema_drawdown_metrics(output)
-    np.testing.assert_array_equal(metrics["drawdown_worst_ema_strategy_eq"],
+    np.testing.assert_array_equal(metrics["hsl_signal_ema_max_fraction"],
                                   output["hsl_drawdown_ema_max_portfolio"].double())
-    assert metrics["drawdown_worst_ema_strategy_eq_long"][0] == 0
-    assert metrics["drawdown_worst_ema_strategy_eq_short"][0] == 0
+    assert metrics["hsl_signal_ema_max_fraction_long"][0] == 0
+    assert metrics["hsl_signal_ema_max_fraction_short"][0] == 0
     # Zero unified drawdown also remains independent of nonzero side signals.
-    assert metrics["drawdown_worst_ema_strategy_eq"][2] == 0
+    assert metrics["hsl_signal_ema_max_fraction"][2] == 0
 
 
 @pytest.mark.parametrize("fused", [False, True])

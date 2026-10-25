@@ -24,7 +24,7 @@ def prepared(source, tmp_path, strategy_kind="trailing_martingale"):
     config['bot']['long']['universe']['approved_coins']=None
     config['bot']['short']['universe']['approved_coins']=['COIN01']
     config['bot']['long']['universe']['ignored_coins']=['COIN01']
-    config['optimize']['scoring']=[{'metric':'adg_strategy_eq','goal':'max'}]
+    config['optimize']['scoring']=[{'metric':'adg_fraction_strategy_equity','goal':'max'}]
     config['optimize']['limits']=[]
     membership=deepcopy(config['backtest']['coins'])
     from config_utils import clean_config
@@ -50,7 +50,7 @@ def test_dataset_policy_identity_and_native_masks_survive_file_change_and_deleti
     specs=[SharedArraySpec(name,arr.shape,arr.dtype.str) for name,arr in [('candles',candles),('btc',btc),('time',timestamps)]]
     dataset=PreparedGpuDataset(config=config,markets=markets,exchange='binance',
         hlcvs=specs[0],btc=specs[1],timestamps=specs[2],
-        candle_coins=config['backtest']['coins']['binance'],metrics=('adg_strategy_eq',))
+        candle_coins=config['backtest']['coins']['binance'],metrics=('adg_fraction_strategy_equity',))
     assert json.loads(dataset.config_json)['bot']['long']['universe']['approved_coins'] is None
     assert execution_key(dataset.policy_config())==execution_key(config)
     path.write_text('["COIN01"]')

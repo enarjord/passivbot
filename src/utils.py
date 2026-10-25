@@ -326,7 +326,7 @@ def trim_analysis_aliases(analysis: dict) -> dict:
        the explicit ``*_usd`` key is retained.
     2. Within the remaining items, if multiple keys are permutations of the same
        underscore-separated tokens and share the exact value (e.g.
-       ``"drawdown_btc_worst"`` vs ``"drawdown_worst_btc"``), only a single key
+       ``"drawdown_btc_worst"`` vs ``"drawdown_max_fraction_btc"``), only a single key
        is kept. Preference is given to keys whose trailing token is a currency
        tag (``usd``/``btc``); ties fall back to key length and lexical order.
 

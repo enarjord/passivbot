@@ -118,5 +118,5 @@ def test_direct_entry_keywords_keep_ignored_mirrors_in_their_original_positions(
         "entry_initial_ema_distance_fraction", "entry_initial_qty_fraction",
         "entry_trailing_reentry_qty_multiplier", "entry_trailing_retracement_base_fraction",
         "entry_trailing_threshold_base_fraction", "entry_log_range_1h_coefficient",
-        "entry_log_range_1m_coefficient", "entry_exposure_ratio_coefficient", "wallet_exposure_limit",
+        "entry_log_range_1m_coefficient", "entry_exposure_ratio_coefficient", "wallet_exposure_limit_ratio",
     )

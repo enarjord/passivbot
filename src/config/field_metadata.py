@@ -55,8 +55,40 @@ def enrich_fields(fields):
         elif path[:1] == ("backtest",):
             data["consumers"] = ("backtest", "optimize")
             data.update(_operational_fraction_metadata(path))
+            data.update(_backtest_quantity_metadata(path))
         elif path[:1] == ("optimize",):
             data["consumers"] = ("optimize",)
+            if path[:2] == ("optimize", "prefilter"):
+                if path[2:3] == ("exposure_probe_fractions",):
+                    data.update(unit="fraction", denominator="effective per-position allowance including bounded excess allowance",
+                                description="Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.")
+                    if path[-1] == "*":
+                        data["domain"] = FieldDomain(minimum=0.0, maximum=0.999, exclusive_maximum=True, finite=True)
+                elif path[-1] in {"log_range_ema_1m", "log_range_ema_1h"}:
+                    data.update(unit="log range", denominator="candle low, inside ln(high / low)",
+                                domain=FieldDomain(minimum=0.0, finite=True),
+                                description="Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.")
+                elif path[-1] == "adverse_directionality_score":
+                    data.update(unit="score", domain=FieldDomain(minimum=0.0, maximum=1.0, finite=True),
+                                description="Declared adverse RMS directionality score for hypothetical cooldown measurements.")
+                elif path[-1] == "metric":
+                    from .prefilter import PREFILTER_METRICS
+
+                    data["domain"] = FieldDomain(choices=tuple(sorted(PREFILTER_METRICS)))
+            if path[:3] == ("optimize", "pymoo", "shared"):
+                if path[-1].endswith("_distribution_index"):
+                    data.update(unit="distribution index", domain=FieldDomain(minimum=0.0, exclusive_minimum=True),
+                                description="Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.")
+                elif path[-1].endswith(("_probability", "_probability_per_variable")):
+                    data.update(unit="probability", domain=FieldDomain(minimum=0.0, maximum=1.0),
+                                denominator=("offspring candidates" if path[-1] == "mutation_probability" else
+                                             "candidate coordinates conditional on mutation" if path[-1].startswith("mutation_") else
+                                             "parent-pair coordinates conditional on crossover"),
+                                description=("Per-candidate polynomial-mutation gate; auto is 1 / max(1, vector length)."
+                                             if path[-1] == "mutation_probability" else
+                                             "Conditional per-variable polynomial-mutation gate; auto is min(0.5, 1 / max(1, vector length))."
+                                             if path[-1].startswith("mutation_") else
+                                             "Per-variable simulated-binary-crossover gate; external pymoo candidate crossover policy is unchanged."))
         elif path[:1] == ("live",):
             # Reuse the command/runtime owner's declarations without copying
             # their shared-field classification into a second static list.
@@ -109,6 +141,25 @@ def _operational_fraction_metadata(path):
     }
     if path in denominators:
         return dict(unit="fraction", denominator=denominators[path])
+    return {}
+
+
+def _backtest_quantity_metadata(path):
+    name = path[-1]
+    if name == "btc_collateral_target_ratio":
+        return dict(unit="ratio", denominator="current BTC market value plus USD cash, excluding unrealized trading PnL",
+                    description="Target BTC collateral value / total wallet value; values above one retain leveraged BTC collateral and negative USD balances.")
+    if name == "max_usd_debt_to_wallet_value_ratio":
+        return dict(unit="ratio", denominator="current BTC market value plus USD cash, excluding unrealized trading PnL",
+                    description="Optional USD debt / total wallet value ceiling when topping up BTC collateral; null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.")
+    if name in {"maker_fee_override_fraction", "taker_fee_override_fraction"}:
+        return dict(unit="fraction", denominator="absolute fill quote notional",
+                    domain=FieldDomain(finite=True),
+                    description="Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.")
+    if name == "equity_floor_fraction":
+        return dict(unit="fraction", denominator="starting balance",
+                    domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_maximum=True, finite=True),
+                    description="Early-stop floor: equity at or below this fraction of starting balance ends replay.")
     return {}
 
 
@@ -181,11 +232,13 @@ def _bot_metadata(path):
     elif local == "forager.score_hysteresis_margin":
         data.update(unit="normalized score gap", domain=FieldDomain(minimum=0.0, finite=True),
                     description="Absolute challenger-minus-incumbent ranking score margin required for replacement.")
-    elif local in {"warmup.span_multiplier", "execution.market_order_near_touch_fraction"}:
-        denominators = {"warmup.span_multiplier": "indicator span",
+    elif local in {"warmup.activation_span_fraction", "execution.market_order_near_touch_fraction"}:
+        denominators = {"warmup.activation_span_fraction": "indicator span",
                         "execution.market_order_near_touch_fraction": "market price"}
-        data.update(unit="multiplier" if local == "warmup.span_multiplier" else "fraction", denominator=denominators[local],
+        data.update(unit="fraction", denominator=denominators[local],
                     domain=FieldDomain(minimum=0.0, finite=True))
+        if local == "warmup.activation_span_fraction":
+            data["description"] = "Activation and backtest span term is span times this fraction; live acquisition uses span times (1 + fraction), subject to the existing cap and independent history requirements."
     elif local == "warmup.max_minutes":
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True),
                     description="Null leaves history warmup uncapped; positive finite values cap its existing calculation.")

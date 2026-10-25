@@ -20,7 +20,7 @@ def _config():
     config = {
         "backtest": {}, "bot": {"long": {}, "short": {}},
         "optimize": {"backend": "pymoo", "bounds": {"long_n_positions": [1, 1, 1]},
-                     "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+                     "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
                      "objective_scenario": None},
     }
     config[CONTRACT_CACHE_KEY] = {

@@ -36,7 +36,7 @@ fn input_value(input: &Input) -> Value {
         "mode":mode,"symbol":snapshot.symbol,"pside":snapshot.pside,"pairs":pairs},
         "slots":input.slots,"scale_budget_with_excess_allowance":input.scale_budget_with_excess_allowance,
         "exposure_budget":input.exposure_budget,"memory_ema_span_minutes":input.memory_ema_span_minutes,
-        "drawdown_ratio_ema_span_minutes":input.drawdown_ratio_ema_span_minutes,"threshold":input.threshold,"cooldown_ms":input.cooldown_ms,
+        "drawdown_fraction_ema_span_minutes":input.drawdown_fraction_ema_span_minutes,"drawdown_threshold_fraction":input.drawdown_threshold_fraction,"cooldown_ms":input.cooldown_ms,
         "budget_observations":input.budget_observations,"invalidated_price_symbols":input.invalidated_price_symbols})
 }
 
@@ -182,8 +182,8 @@ impl Ledger {
             value["snapshot"]["symbol"],
             value["snapshot"]["pside"],
             value["memory_ema_span_minutes"],
-            value["drawdown_ratio_ema_span_minutes"],
-            value["threshold"],
+            value["drawdown_fraction_ema_span_minutes"],
+            value["drawdown_threshold_fraction"],
             value["cooldown_ms"]
         ])
     }
@@ -1426,8 +1426,8 @@ impl HslV9Replay {
     fn evaluate_inner(&mut self, raw: Value, input: Input) -> Result<Output, String> {
         let policy = Policy::new(
             input.memory_ema_span_minutes,
-            input.drawdown_ratio_ema_span_minutes,
-            input.threshold,
+            input.drawdown_fraction_ema_span_minutes,
+            input.drawdown_threshold_fraction,
             input.cooldown_ms,
         )?;
         if input
@@ -1708,8 +1708,8 @@ impl HslV9Replay {
             } else {
                 "green"
             },
-            raw: preview.raw,
-            ema: preview.ema,
+            signal_raw_fraction: preview.signal_raw_fraction,
+            signal_ema_fraction: preview.signal_ema_fraction,
             numeric_range_approximation: false,
         };
         Ok(Output {
@@ -1842,7 +1842,7 @@ mod tests {
                 "fills_started_at":null,"fills_at":null,"prices_at":now,"prices":{},"fills":[],
                 "revisions":[0,0,0,0],"fills_position_anchor":null}]},
             "slots":1,"scale_budget_with_excess_allowance":false,"exposure_budget":null,
-            "memory_ema_span_minutes":43200.0,"drawdown_ratio_ema_span_minutes":1000000.0,"threshold":0.005,"cooldown_ms":60000,
+            "memory_ema_span_minutes":43200.0,"drawdown_fraction_ema_span_minutes":1000000.0,"drawdown_threshold_fraction":0.005,"cooldown_ms":60000,
             "budget_observations":[{"timestamp":0,"order":-1,"balance":1000.0,"slots":1,
                 "scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":true}]})
     }
@@ -1855,7 +1855,6 @@ mod tests {
         serde_json::to_value(&value.risk).unwrap()
     }
 
-
     fn sparse_account_facts(now: i64, size: f64, mode: &str, short: bool, slow: f64) -> Value {
         let mut value = facts(now, 0, if short { 110.0 } else { 90.0 });
         value["snapshot"]["balance"] = json!(100.0);
@@ -1865,14 +1864,18 @@ mod tests {
         } else {
             json!(if short { "short" } else { "long" })
         };
-        value["snapshot"]["symbol"] = if mode == "coin" { json!("A") } else { Value::Null };
+        value["snapshot"]["symbol"] = if mode == "coin" {
+            json!("A")
+        } else {
+            Value::Null
+        };
         let pair = &mut value["snapshot"]["pairs"][0];
         pair["position"]["pside"] = json!(if short { "short" } else { "long" });
         pair["position"]["size"] = json!(if short { -size } else { size });
         pair["position"]["basis"] = json!(if size == 0.0 { 0.0 } else { 100.0 });
         value["memory_ema_span_minutes"] = json!(slow);
-        value["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-        value["threshold"] = json!(0.05);
+        value["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+        value["drawdown_threshold_fraction"] = json!(0.05);
         value["budget_observations"][0]["balance"] = json!(100.0);
         value
     }
@@ -1884,11 +1887,17 @@ mod tests {
                 let mut replay = HslV9Replay::default();
                 let first = run(&mut replay, sparse_account_facts(1, 1.0, mode, short, 1.0));
                 assert_eq!(first.risk.as_ref().unwrap().action, Action::Panic);
-                assert_eq!(first.risk.as_ref().unwrap().drawdown, 10.0);
+                assert_eq!(first.risk.as_ref().unwrap().drawdown_memory_usd, 10.0);
                 let advances = replay.advances;
-                let query = run(&mut replay, sparse_account_facts(60001, 1.0, mode, short, 1.0));
+                let query = run(
+                    &mut replay,
+                    sparse_account_facts(60001, 1.0, mode, short, 1.0),
+                );
                 assert_eq!(query.risk.as_ref().unwrap().action, Action::Normal);
-                assert_eq!(replay.advances, advances, "quote preview must remain disposable");
+                assert_eq!(
+                    replay.advances, advances,
+                    "quote preview must remain disposable"
+                );
                 let flat = sparse_account_facts(120001, 0.0, mode, short, 1.0);
                 let output = run(&mut replay, flat.clone());
                 assert_eq!(output.risk.as_ref().unwrap().action, Action::Normal);
@@ -1907,19 +1916,31 @@ mod tests {
         for mode in ["coin", "pside", "portfolio"] {
             for short in [false, true] {
                 let mut replay = HslV9Replay::default();
-                run(&mut replay, sparse_account_facts(1, 1.0, mode, short, 43200.0));
+                run(
+                    &mut replay,
+                    sparse_account_facts(1, 1.0, mode, short, 43200.0),
+                );
                 let flat = sparse_account_facts(60001, 0.0, mode, short, 43200.0);
                 let stopped = run(&mut replay, flat.clone());
-                assert!(!stopped.risk.as_ref().unwrap().red, "post-accounting is GREEN");
+                assert!(
+                    !stopped.risk.as_ref().unwrap().red,
+                    "post-accounting is GREEN"
+                );
                 assert_eq!(stopped.risk.as_ref().unwrap().action, Action::Halted);
                 assert_eq!(stopped.risk.as_ref().unwrap().cooldown_until, Some(120001));
                 let expected = risk(&stopped);
                 assert_eq!(risk(&run(&mut replay, flat)), expected);
                 replay.clear_derived_cache();
-                let later = run(&mut replay, sparse_account_facts(90001, 0.0, mode, short, 43200.0));
+                let later = run(
+                    &mut replay,
+                    sparse_account_facts(90001, 0.0, mode, short, 43200.0),
+                );
                 assert_eq!(later.risk.as_ref().unwrap().cooldown_until, Some(120001));
                 assert_eq!(later.risk.as_ref().unwrap().action, Action::Halted);
-                let expired = run(&mut replay, sparse_account_facts(120001, 0.0, mode, short, 43200.0));
+                let expired = run(
+                    &mut replay,
+                    sparse_account_facts(120001, 0.0, mode, short, 43200.0),
+                );
                 assert_eq!(expired.risk.as_ref().unwrap().cooldown_until, Some(120001));
                 assert_eq!(expired.risk.as_ref().unwrap().action, Action::Normal);
             }
@@ -1949,14 +1970,20 @@ mod tests {
         for mode in ["coin", "pside", "portfolio"] {
             for short in [false, true] {
                 let mut replay = HslV9Replay::default();
-                run(&mut replay, sparse_account_facts(1, 1.0, mode, short, 43200.0));
+                run(
+                    &mut replay,
+                    sparse_account_facts(1, 1.0, mode, short, 43200.0),
+                );
                 let mut flat = sparse_account_facts(60001, 0.0, mode, short, 43200.0);
                 flat["snapshot"]["balance"] = json!(10000.0);
-                flat["budget_observations"].as_array_mut().unwrap().push(json!({
-                    "timestamp":60001,"observed_at":60001,"order":i64::MAX,
-                    "balance":10000.0,"slots":1,"scale_budget_with_excess_allowance":false,
-                    "exposure_budget":null,"estimated":false
-                }));
+                flat["budget_observations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "timestamp":60001,"observed_at":60001,"order":i64::MAX,
+                        "balance":10000.0,"slots":1,"scale_budget_with_excess_allowance":false,
+                        "exposure_budget":null,"estimated":false
+                    }));
                 // The phase1 account fact precedes this current-account budget.
                 // Backdating the deposit would turn the genuine pre-RED GREEN.
                 let stopped = run(&mut replay, flat);
@@ -1971,7 +1998,10 @@ mod tests {
         for mode in ["coin", "pside", "portfolio"] {
             for short in [false, true] {
                 let mut replay = HslV9Replay::default();
-                run(&mut replay, sparse_account_facts(1, 1.0, mode, short, 43200.0));
+                run(
+                    &mut replay,
+                    sparse_account_facts(1, 1.0, mode, short, 43200.0),
+                );
                 let mut flat = sparse_account_facts(60001, 0.0, mode, short, 43200.0);
                 flat["snapshot"]["pairs"][0]["position_at"] = json!(60000);
                 flat["snapshot"]["pairs"][0]["prices"] = json!({"60000":100.0});
@@ -1990,14 +2020,28 @@ mod tests {
                     let mut value = sparse_account_facts(now, first_size, mode, short, 1.0);
                     let mut second = value["snapshot"]["pairs"][0].clone();
                     second["symbol"] = json!("B");
-                    second["position"]["size"] = json!(if short { -second_size } else { second_size });
-                    second["position"]["basis"] = json!(if second_size == 0.0 { 0.0 } else { 100.0 });
-                    value["snapshot"]["pairs"].as_array_mut().unwrap().push(second);
+                    second["position"]["size"] =
+                        json!(if short { -second_size } else { second_size });
+                    second["position"]["basis"] =
+                        json!(if second_size == 0.0 { 0.0 } else { 100.0 });
+                    value["snapshot"]["pairs"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(second);
                     value
                 };
                 let mut replay = HslV9Replay::default();
-                assert_eq!(run(&mut replay, make(1, 1.0, 1.0)).risk.unwrap().drawdown, 20.0);
-                assert_eq!(run(&mut replay, make(60001, 1.0, 1.0)).risk.unwrap().action, Action::Normal);
+                assert_eq!(
+                    run(&mut replay, make(1, 1.0, 1.0))
+                        .risk
+                        .unwrap()
+                        .drawdown_memory_usd,
+                    20.0
+                );
+                assert_eq!(
+                    run(&mut replay, make(60001, 1.0, 1.0)).risk.unwrap().action,
+                    Action::Normal
+                );
                 let flat = run(&mut replay, make(120001, 0.0, 0.0));
                 assert!(!flat.risk.as_ref().unwrap().exposed);
                 assert_eq!(flat.risk.as_ref().unwrap().cooldown_until, None);
@@ -2012,7 +2056,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn sparse_phase3_partial_fill_flat_account_preserves_cooldown_before_max_deposit() {
@@ -2045,7 +2088,10 @@ mod tests {
                     value
                 };
                 let mut replay = HslV9Replay::default();
-                run(&mut replay, sparse_account_facts(1, 1.0, mode, short, 43200.0));
+                run(
+                    &mut replay,
+                    sparse_account_facts(1, 1.0, mode, short, 43200.0),
+                );
                 // The supported partial fill leaves gross exposure and has its
                 // own causal post-fill budget100. The equal-clock flat account
                 // is phase3; MAX is a later current-account deposit, phase4.
@@ -2119,7 +2165,7 @@ mod tests {
         for size in [0.0, 2.0] {
             let mut replay = HslV9Replay::default();
             let mut first = facts(60001, 0, 90.0);
-            first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             run(&mut replay, first.clone());
             let initial_steps = replay.steps.clone();
             let advances = replay.advances;
@@ -2152,7 +2198,7 @@ mod tests {
     fn same_anchor_inventory_correction_follows_fill_and_its_budget() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(60001, 0, 90.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, first.clone());
         let mut corrected = first.clone();
         corrected["snapshot"]["balance"] = json!(999.0);
@@ -2219,11 +2265,11 @@ mod tests {
     fn state_age_is_not_limited_by_each_acquisition_window() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 90.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, first);
         let now = 90 * 86_400_000 + 60001;
         let mut next = facts(now, 60001, 90.0);
-        next["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        next["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         let output = run(&mut replay, next);
         assert!(output.continuity.unwrap().initialized);
         assert_eq!(replay.ledger.as_ref().unwrap().origin, 0);
@@ -2234,7 +2280,7 @@ mod tests {
         let now = minute * 60_000 + 1;
         let mut value = facts(now, start, 90.0);
         value["memory_ema_span_minutes"] = json!(41.0);
-        value["drawdown_ratio_ema_span_minutes"] = json!(7.0);
+        value["drawdown_fraction_ema_span_minutes"] = json!(7.0);
         value["cooldown_ms"] = json!(180_000);
         let prices: BTreeMap<_, _> = (0..=minute)
             .filter(|i| i * 60_000 >= start)
@@ -2330,7 +2376,7 @@ mod tests {
         assert_eq!(status.reconstruction, "request_before_retained_support");
         assert_eq!(status.bootstrap_origin_ms, Some(boundary - 60_000));
         assert_eq!(status.boundary_at_ms, None);
-        assert!(rebuilt.risk.unwrap().drawdown > 0.0);
+        assert!(rebuilt.risk.unwrap().drawdown_memory_usd > 0.0);
     }
 
     #[test]
@@ -2396,7 +2442,7 @@ mod tests {
         let counts = replay.cache_info();
         let origin = replay.ledger.as_ref().unwrap().origin;
         let mut malformed = input.clone();
-        malformed["threshold"] = json!(0.99);
+        malformed["drawdown_threshold_fraction"] = json!(0.99);
         malformed["snapshot"]["pairs"][0]["position"]["basis"] = json!(-1.0);
         assert!(replay
             .consume(
@@ -2415,11 +2461,11 @@ mod tests {
         for minute in 1..=16 {
             let now = minute * 60_000 + 1;
             let mut input = bounded_facts(minute, (now - 180_000).max(0));
-            input["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            input["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             run(&mut replay, input);
         }
         let mut close = bounded_facts(16, 16 * 60_000 + 1 - 180_000);
-        close["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        close["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         let flattened = 16 * 60_000 + 2;
         close["snapshot"]["now"] = json!(flattened + 1);
         close["snapshot"]["balance_at"] = json!(flattened + 1);
@@ -2494,14 +2540,14 @@ mod tests {
     #[test]
     fn forward_fills_preserve_individual_clipping_and_proven_sequence() {
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         first["snapshot"]["pairs"][0]["fills"] = json!([execution("entry", 0, Some(1.0), 0.0, 0)]);
         let mut loss_last = HslV9Replay::default();
         let mut profit_last = HslV9Replay::default();
         run(&mut loss_last, first.clone());
         run(&mut profit_last, first);
         let mut next = facts(60001, 0, 100.0);
-        next["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        next["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         next["snapshot"]["pairs"][0]["fills"] = json!([
             execution("entry", 0, Some(1.0), 0.0, 0),
             execution("profit", 60000, None, 100.0, 0),
@@ -2511,8 +2557,8 @@ mod tests {
         next["snapshot"]["pairs"][0]["fills"][1]["sequence"] = json!(1);
         next["snapshot"]["pairs"][0]["fills"][2]["sequence"] = json!(0);
         let b = run(&mut profit_last, next);
-        assert_eq!(a.risk.unwrap().drawdown, 50.0);
-        assert_eq!(b.risk.unwrap().drawdown, 0.0);
+        assert_eq!(a.risk.unwrap().drawdown_memory_usd, 50.0);
+        assert_eq!(b.risk.unwrap().drawdown_memory_usd, 0.0);
         assert_eq!(loss_last.rebuilds, 1);
         assert_eq!(profit_last.rebuilds, 1);
     }
@@ -2521,16 +2567,16 @@ mod tests {
     fn unchanged_prewrite_snapshot_cannot_reopen_a_later_same_clock_fill() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, first.clone());
         let mut before_write = facts(60000, 0, 100.0);
-        before_write["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        before_write["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         before_write["snapshot"]["pairs"][0]["fills"] =
             json!([execution("loss", 30000, None, -10.0, 0)]);
         before_write["snapshot"]["pairs"][0]["position_at"] = json!(59999);
         run(&mut replay, before_write.clone());
         let mut flat = facts(60001, 0, 100.0);
-        flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["fills"] = json!([
@@ -2576,10 +2622,10 @@ mod tests {
     fn unchanged_postfill_account_fact_still_reconciles_missing_inventory() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, first);
         let mut observed = facts(60001, 0, 90.0);
-        observed["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        observed["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         observed["snapshot"]["pairs"][0]["fills"] =
             json!([execution("unbalanced-entry", 59999, Some(1.0), 0.0, 0)]);
         observed["snapshot"]["pairs"][0]["prices"] = json!({"60000":90.0});
@@ -2618,20 +2664,20 @@ mod tests {
     fn unchanged_snapshot_preserves_true_same_quantity_roundtrip_and_entry_fee() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, first);
         let mut before_write = facts(60000, 0, 100.0);
-        before_write["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        before_write["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, before_write.clone());
         let mut after = facts(60001, 0, 100.0);
-        after["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        after["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         after["snapshot"]["pairs"][0]["fills"] = json!([
             execution("exit", 60000, Some(-1.0), -10.0, 0),
             execution("entry", 60000, Some(1.0), -1.0, 1)
         ]);
         let result = run(&mut replay, after);
         assert!(result.risk.as_ref().unwrap().exposed);
-        assert_eq!(result.risk.as_ref().unwrap().drawdown, 1.0);
+        assert_eq!(result.risk.as_ref().unwrap().drawdown_memory_usd, 1.0);
         let net: Vec<_> = replay
             .steps
             .iter()
@@ -2645,10 +2691,10 @@ mod tests {
     fn newly_discovered_fill_at_anchor_follows_immutable_account_initializer() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(60001, 0, 90.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         run(&mut replay, first.clone());
         let mut flat = facts(60002, 0, 90.0);
-        flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
         let mut exit = execution("exit", 60001, Some(-1.0), -10.0, 0);
@@ -2669,12 +2715,12 @@ mod tests {
     fn forward_flatten_cooldown_survives_sliding_tape_and_balance_change() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         first["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         first["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
         run(&mut replay, first);
         let mut open = facts(60001, 0, 90.0);
-        open["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        open["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         open["snapshot"]["pairs"][0]["prices"] = json!({"60000":90.0});
         open["snapshot"]["pairs"][0]["fills"] =
             json!([execution("entry", 10000, Some(1.0), -1.0, 0)]);
@@ -2683,7 +2729,7 @@ mod tests {
             crate::hsl_intent::Action::Panic
         );
         let mut close = facts(60003, 0, 90.0);
-        close["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        close["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         close["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         close["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
         let mut exit = execution("exit", 60002, Some(-1.0), -11.0, 0);
@@ -2713,10 +2759,10 @@ mod tests {
     fn budget_observation_commits_retained_mark_and_next_ema_baseline() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 90.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(3.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(3.0);
         run(&mut replay, first);
         let mut changed = facts(60001, 0, 90.0);
-        changed["drawdown_ratio_ema_span_minutes"] = json!(3.0);
+        changed["drawdown_fraction_ema_span_minutes"] = json!(3.0);
         changed["snapshot"]["balance"] = json!(2000.0);
         let fact = json!({"timestamp":60001,"order":i64::MAX,"balance":2000.0,"slots":1,
             "scale_budget_with_excess_allowance":false,"exposure_budget":null,"estimated":false});
@@ -2730,8 +2776,8 @@ mod tests {
             .iter()
             .any(|s| s.timestamp == 60001 && s.budget == 2000.0));
         assert_eq!(
-            replay.recorder.state.current(60001).ema,
-            observed.risk.as_ref().unwrap().ema
+            replay.recorder.state.current(60001).signal_ema_fraction,
+            observed.risk.as_ref().unwrap().signal_ema_fraction
         );
         let mut reference = replay.recorder.state.clone();
         let policy = Policy::new(43200.0, 3.0, 0.005, 60000).unwrap();
@@ -2748,7 +2794,7 @@ mod tests {
             )
             .unwrap();
         let mut next = facts(120001, 0, 90.0);
-        next["drawdown_ratio_ema_span_minutes"] = json!(3.0);
+        next["drawdown_fraction_ema_span_minutes"] = json!(3.0);
         next["snapshot"]["balance"] = json!(2000.0);
         next["budget_observations"]
             .as_array_mut()
@@ -2756,8 +2802,8 @@ mod tests {
             .push(fact);
         next["snapshot"]["pairs"][0]["prices"] = json!({"120000":90.0});
         let output = run(&mut replay, next).risk.unwrap();
-        assert_eq!(output.drawdown, expected.drawdown);
-        assert_eq!(output.ema, expected.ema);
+        assert_eq!(output.drawdown_memory_usd, expected.drawdown_memory_usd);
+        assert_eq!(output.signal_ema_fraction, expected.signal_ema_fraction);
     }
 
     #[test]
@@ -2769,8 +2815,8 @@ mod tests {
             crate::hsl_intent::Action::Panic
         );
         let mut changed = facts(60002, 0, 90.0);
-        changed["threshold"] = json!(0.5);
-        changed["drawdown_ratio_ema_span_minutes"] = json!(3.0);
+        changed["drawdown_threshold_fraction"] = json!(0.5);
+        changed["drawdown_fraction_ema_span_minutes"] = json!(3.0);
         changed["memory_ema_span_minutes"] = json!(288.0);
         changed["cooldown_ms"] = json!(12345);
         let output = run(&mut replay, changed);
@@ -2809,14 +2855,14 @@ mod tests {
         for known in [false, true] {
             let mut replay = HslV9Replay::default();
             let mut first = facts(1, 0, 100.0);
-            first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             let entry = execution("entry", 0, Some(1.0), 0.0, 0);
             if known {
                 first["snapshot"]["pairs"][0]["fills"] = json!([entry.clone()]);
             }
             run(&mut replay, first.clone());
             let mut before = facts(60000, 0, 90.0);
-            before["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            before["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             before["snapshot"]["pairs"][0]["position"]["size"] = json!(2.0);
             before["snapshot"]["pairs"][0]["position_at"] = json!(59999);
             let addition = execution("addition", 59999, Some(1.0), 0.0, 0);
@@ -2827,7 +2873,7 @@ mod tests {
             let mut exit = execution("exit", 60000, Some(-2.0), -20.0, 0);
             exit["price"] = json!(90.0);
             let mut flat = facts(90000, 0, 90.0);
-            flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
             flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
             flat["snapshot"]["pairs"][0]["fills"] = if known {
@@ -2876,12 +2922,12 @@ mod tests {
     fn causal_balance_before_exit_prevents_false_red_terminal_reclassification() {
         let mut replay = HslV9Replay::default();
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         let entry = execution("entry", 0, Some(1.0), 0.0, 0);
         first["snapshot"]["pairs"][0]["fills"] = json!([entry.clone()]);
         run(&mut replay, first.clone());
         let mut before = facts(60000, 0, 90.0);
-        before["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        before["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         before["snapshot"]["balance"] = json!(10000.0);
         before["snapshot"]["balance_at"] = json!(59999);
         before["snapshot"]["pairs"][0]["position_at"] = json!(59999);
@@ -2895,7 +2941,7 @@ mod tests {
             .push(budget.clone());
         assert!(!run(&mut replay, before).risk.unwrap().red);
         let mut flat = facts(90000, 0, 90.0);
-        flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         flat["snapshot"]["balance"] = json!(10000.0);
         flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
@@ -2990,7 +3036,7 @@ mod tests {
         let seed = replay.steps.iter().find(|s| s.seed).unwrap();
         assert_eq!(seed.timestamp, 120001);
         assert_eq!(seed.upnl, -10.0);
-        assert_eq!(output.risk.as_ref().unwrap().drawdown, 10.0);
+        assert_eq!(output.risk.as_ref().unwrap().drawdown_memory_usd, 10.0);
         assert!(replay
             .steps
             .iter()
@@ -3087,8 +3133,8 @@ mod tests {
                 let side = if short { "short" } else { "long" };
                 let make = |now, size, mark| {
                     let mut value = facts(now, 0, mark);
-                    value["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-                    value["threshold"] = json!(0.012);
+                    value["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+                    value["drawdown_threshold_fraction"] = json!(0.012);
                     value["snapshot"]["pside"] = json!(side);
                     value["snapshot"]["pairs"][0]["position"]["pside"] = json!(side);
                     value["snapshot"]["pairs"][0]["position"]["size"] = json!(dir * size);
@@ -3133,7 +3179,7 @@ mod tests {
                 recovered["snapshot"]["pairs"][0]["fills"] = json!([exit]);
                 let output = run(&mut replay, recovered.clone());
                 assert_eq!(output.unavailable_reason, None);
-                assert_eq!(output.risk.as_ref().unwrap().drawdown, 10.0);
+                assert_eq!(output.risk.as_ref().unwrap().drawdown_memory_usd, 10.0);
                 assert_eq!(
                     output.risk.as_ref().unwrap().action,
                     crate::hsl_intent::Action::Normal
@@ -3154,12 +3200,12 @@ mod tests {
         for reverse in [false, true] {
             let mut replay = HslV9Replay::default();
             let mut first = facts(1, 0, 100.0);
-            first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-            first["threshold"] = json!(0.012);
+            first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+            first["drawdown_threshold_fraction"] = json!(0.012);
             run(&mut replay, first.clone());
             let mut account = facts(60001, 0, 90.0);
-            account["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-            account["threshold"] = json!(0.012);
+            account["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+            account["drawdown_threshold_fraction"] = json!(0.012);
             let mut partial = execution("partial", 60000, Some(-0.5), -5.0, 0);
             partial["price"] = json!(90.0);
             account["snapshot"]["pairs"][0]["fills"] = json!([partial.clone()]);
@@ -3178,7 +3224,7 @@ mod tests {
                     );
                 } else {
                     assert_eq!(output.unavailable_reason, None);
-                    assert_eq!(output.risk.unwrap().drawdown, 15.0);
+                    assert_eq!(output.risk.unwrap().drawdown_memory_usd, 15.0);
                 }
             }
             let reconciliation = replay.steps.iter().find(|s| s.timestamp == 60001).unwrap();
@@ -3198,8 +3244,8 @@ mod tests {
                 stable
             );
             let mut flat = facts(60002, 0, 90.0);
-            flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-            flat["threshold"] = json!(0.012);
+            flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+            flat["drawdown_threshold_fraction"] = json!(0.012);
             flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
             flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
             let mut exit = execution("rebated_exit", 60002, Some(-1.0), 0.0, 0);
@@ -3207,7 +3253,7 @@ mod tests {
             flat["snapshot"]["pairs"][0]["fills"] = json!([partial, exit]);
             let terminal = run(&mut replay, flat.clone());
             assert_eq!(terminal.risk.as_ref().unwrap().cooldown_until, Some(120002));
-            assert_eq!(terminal.risk.as_ref().unwrap().drawdown, 5.0);
+            assert_eq!(terminal.risk.as_ref().unwrap().drawdown_memory_usd, 5.0);
             let stable = serde_json::to_value(terminal).unwrap();
             replay.clear_derived_cache();
             assert_eq!(
@@ -3223,8 +3269,8 @@ mod tests {
         let mut ordered = HslV9Replay::default();
         let mut corrected = HslV9Replay::default();
         let mut first = facts(1, 0, 100.0);
-        first["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-        first["threshold"] = json!(0.012);
+        first["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+        first["drawdown_threshold_fraction"] = json!(0.012);
         run(&mut ordered, first.clone());
         run(&mut corrected, first.clone());
         for (replay, readings) in [
@@ -3233,8 +3279,8 @@ mod tests {
         ] {
             for (i, (source, size)) in readings.into_iter().enumerate() {
                 let mut account = facts(60001 + i as i64 * 10000, 0, 90.0);
-                account["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-                account["threshold"] = json!(0.012);
+                account["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+                account["drawdown_threshold_fraction"] = json!(0.012);
                 account["snapshot"]["pairs"][0]["position_at"] = json!(source);
                 account["snapshot"]["pairs"][0]["position"]["size"] = json!(size);
                 run(replay, account);
@@ -3243,8 +3289,8 @@ mod tests {
         assert_eq!(corrected.steps, ordered.steps);
         assert_eq!(corrected.ledger.as_ref().unwrap().anchor, first);
         let mut flat = facts(90001, 0, 90.0);
-        flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
-        flat["threshold"] = json!(0.012);
+        flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
+        flat["drawdown_threshold_fraction"] = json!(0.012);
         flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
         let mut exit = execution("exit", 90000, Some(-1.0), -10.0, 0);
@@ -3302,7 +3348,7 @@ mod tests {
         run(&mut replay, facts(1, 0, 100.0));
         run(&mut reference, facts(1, 0, 100.0));
         let mut captured = facts(200, 0, 100.0);
-        captured["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        captured["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         captured["snapshot"]["pairs"][0]["fills_at"] = json!(100);
         captured["snapshot"]["pairs"][0]["fills"] =
             json!([execution("outside_capture", 110, Some(0.0), -100.0, 0)]);
@@ -3311,10 +3357,10 @@ mod tests {
         let excluded = run(&mut replay, captured.clone());
         assert_eq!(risk(&excluded), risk(&run(&mut reference, causal)));
         assert!(excluded.reasons.contains("post_capture_fill"));
-        assert_eq!(excluded.risk.unwrap().drawdown, 0.0);
+        assert_eq!(excluded.risk.unwrap().drawdown_memory_usd, 0.0);
         captured["snapshot"]["pairs"][0]["fills_at"] = json!(200);
         let included = run(&mut replay, captured.clone());
-        assert_eq!(included.risk.as_ref().unwrap().drawdown, 100.0);
+        assert_eq!(included.risk.as_ref().unwrap().drawdown_memory_usd, 100.0);
         let committed = replay.steps.clone();
         assert_eq!(risk(&run(&mut replay, captured.clone())), risk(&included));
         assert_eq!(replay.steps, committed);
@@ -3332,13 +3378,16 @@ mod tests {
         let mut earlier = facts(100, 0, 100.0);
         earlier["snapshot"]["pairs"][0]["fills"] =
             json!([execution("revision", 50, Some(0.0), -10.0, 0)]);
-        assert_eq!(run(&mut replay, earlier).risk.unwrap().drawdown, 10.0);
+        assert_eq!(
+            run(&mut replay, earlier).risk.unwrap().drawdown_memory_usd,
+            10.0
+        );
         let mut later = facts(200, 60, 100.0);
         later["snapshot"]["pairs"][0]["fills_at"] = json!(100);
         later["snapshot"]["pairs"][0]["fills"] =
             json!([execution("revision", 150, Some(0.0), -100.0, 0)]);
         let quarantined = run(&mut replay, later.clone());
-        assert_eq!(quarantined.risk.as_ref().unwrap().drawdown, 0.0);
+        assert_eq!(quarantined.risk.as_ref().unwrap().drawdown_memory_usd, 0.0);
         assert!(replay
             .ledger
             .as_ref()
@@ -3360,9 +3409,18 @@ mod tests {
         let mut input = facts(200, 0, 100.0);
         input["snapshot"]["pairs"][0]["fills_at"] = json!(100);
         input["snapshot"]["pairs"][0]["fills"] = json!([old, corrected]);
-        assert_eq!(run(&mut replay, input.clone()).risk.unwrap().drawdown, 10.0);
+        assert_eq!(
+            run(&mut replay, input.clone())
+                .risk
+                .unwrap()
+                .drawdown_memory_usd,
+            10.0
+        );
         input["snapshot"]["pairs"][0]["fills_at"] = json!(200);
-        assert_eq!(run(&mut replay, input).risk.unwrap().drawdown, 20.0);
+        assert_eq!(
+            run(&mut replay, input).risk.unwrap().drawdown_memory_usd,
+            20.0
+        );
     }
 
     #[test]
@@ -3372,12 +3430,18 @@ mod tests {
         first["snapshot"]["pairs"][0]["fills_at"] = json!(90);
         first["snapshot"]["pairs"][0]["fills"] =
             json!([execution("not_captured", 100, Some(0.0), -100.0, 0)]);
-        assert_eq!(run(&mut replay, first.clone()).risk.unwrap().drawdown, 0.0);
+        assert_eq!(
+            run(&mut replay, first.clone())
+                .risk
+                .unwrap()
+                .drawdown_memory_usd,
+            0.0
+        );
         let mut admitted = facts(200, 0, 100.0);
         admitted["snapshot"]["pairs"][0]["fills"] = first["snapshot"]["pairs"][0]["fills"].clone();
         admitted["snapshot"]["pairs"][0]["fills_at"] = json!(200);
         let output = run(&mut replay, admitted.clone());
-        assert_eq!(output.risk.as_ref().unwrap().drawdown, 100.0);
+        assert_eq!(output.risk.as_ref().unwrap().drawdown_memory_usd, 100.0);
         assert!(output.reasons.contains("ambiguous_bootstrap_fill_phase"));
         assert_eq!(replay.ledger.as_ref().unwrap().anchor, first);
         replay.clear_derived_cache();
@@ -3401,7 +3465,7 @@ mod tests {
             0
         )]);
         let repaired = run(&mut replay, later.clone());
-        assert_eq!(repaired.risk.as_ref().unwrap().drawdown, 100.0);
+        assert_eq!(repaired.risk.as_ref().unwrap().drawdown_memory_usd, 100.0);
         assert_eq!(replay.ledger.as_ref().unwrap().anchor, first);
         assert_eq!(
             replay
@@ -3424,7 +3488,10 @@ mod tests {
         run(&mut prices, initial.clone());
         let mut later = facts(120001, 0, 100.0);
         later["snapshot"]["pairs"][0]["prices"] = json!({"60000":150.0});
-        assert_eq!(run(&mut prices, later).risk.unwrap().drawdown, 50.0);
+        assert_eq!(
+            run(&mut prices, later).risk.unwrap().drawdown_memory_usd,
+            50.0
+        );
         assert_eq!(prices.ledger.as_ref().unwrap().anchor, initial);
     }
 
@@ -3434,7 +3501,7 @@ mod tests {
         let mut exit = execution("exit", 95, Some(-1.0), -10.0, 1);
         exit["price"] = json!(90.0);
         let mut initial = facts(100, 0, 100.0);
-        initial["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        initial["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         initial["snapshot"]["pairs"][0]["position_at"] = json!(90);
         initial["snapshot"]["pairs"][0]["fills_at"] = json!(90);
         initial["snapshot"]["pairs"][0]["prices"] = json!({"0":100.0});
@@ -3442,13 +3509,13 @@ mod tests {
         let mut replay = HslV9Replay::default();
         run(&mut replay, initial.clone());
         let mut flat = facts(200, 0, 90.0);
-        flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
         flat["snapshot"]["pairs"][0]["fills"] = json!([entry, exit]);
         flat["snapshot"]["pairs"][0]["prices"] = json!({"0":100.0});
         let stopped = run(&mut replay, flat.clone());
-        assert_eq!(stopped.risk.as_ref().unwrap().drawdown, 10.0);
+        assert_eq!(stopped.risk.as_ref().unwrap().drawdown_memory_usd, 10.0);
         assert_eq!(stopped.risk.as_ref().unwrap().cooldown_until, Some(60095));
         assert_eq!(stopped.decision.as_ref().unwrap().flat_at, Some(95));
         assert!(!replay.steps.iter().any(|step| step.timestamp == 100));
@@ -3483,7 +3550,7 @@ mod tests {
         partial["snapshot"]["pairs"][0]["position_at"] = json!(200);
         partial["snapshot"]["pairs"][0]["position"]["size"] = json!(0.5);
         let recovered = run(&mut replay, partial.clone());
-        assert_eq!(recovered.risk.as_ref().unwrap().drawdown, 10.0);
+        assert_eq!(recovered.risk.as_ref().unwrap().drawdown_memory_usd, 10.0);
         replay.clear_derived_cache();
         assert_eq!(risk(&run(&mut replay, partial)), risk(&recovered));
     }
@@ -3492,7 +3559,7 @@ mod tests {
     fn unknown_source_inventory_precedes_its_exit_and_waits_for_a_causal_mark() {
         for earlier_mark in [false, true] {
             let mut initial = facts(100, 0, 100.0);
-            initial["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            initial["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             initial["snapshot"]["pairs"][0]["position_at"] = json!(90);
             initial["snapshot"]["pairs"][0]["fills_at"] = json!(90);
             if earlier_mark {
@@ -3501,7 +3568,7 @@ mod tests {
             let mut replay = HslV9Replay::default();
             run(&mut replay, initial.clone());
             let mut flat = facts(200, 0, 90.0);
-            flat["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            flat["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             flat["snapshot"]["pairs"][0]["position"]["size"] = json!(0.0);
             flat["snapshot"]["pairs"][0]["position"]["basis"] = json!(0.0);
             let mut exit = execution("unknown_exit", 95, Some(-1.0), -10.0, 0);
@@ -3511,7 +3578,7 @@ mod tests {
                 flat["snapshot"]["pairs"][0]["prices"] = json!({"0":100.0});
             }
             let result = run(&mut replay, flat.clone());
-            assert_eq!(result.risk.as_ref().unwrap().drawdown, 10.0);
+            assert_eq!(result.risk.as_ref().unwrap().drawdown_memory_usd, 10.0);
             assert_eq!(result.risk.as_ref().unwrap().cooldown_until, Some(60095));
             assert_eq!(result.decision.as_ref().unwrap().flat_at, Some(95));
             assert!(!replay.steps.iter().any(|s| s.timestamp == 100));
@@ -3527,7 +3594,7 @@ mod tests {
     #[test]
     fn bootstrap_source_tail_does_not_borrow_another_held_pairs_capture_quote() {
         let mut initial = aggregate(facts(100, 0, 100.0));
-        initial["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        initial["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         initial["snapshot"]["pairs"][0]["position_at"] = json!(90);
         initial["snapshot"]["pairs"][0]["fills_at"] = json!(90);
         let mut other = initial["snapshot"]["pairs"][0].clone();
@@ -3540,7 +3607,7 @@ mod tests {
         let mut replay = HslV9Replay::default();
         run(&mut replay, initial);
         let mut later = aggregate(facts(200, 0, 90.0));
-        later["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+        later["drawdown_fraction_ema_span_minutes"] = json!(1.0);
         later["snapshot"]["pairs"][0]["position"]["size"] = json!(0.5);
         later["snapshot"]["pairs"][0]["prices"] = json!({"0":100.0});
         let mut exit = execution("partial", 95, Some(-0.5), -5.0, 0);
@@ -3560,7 +3627,7 @@ mod tests {
         assert!(unavailable.risk.is_none());
         later["snapshot"]["pairs"][1]["prices"] = json!({"0":100.0});
         let recovered = run(&mut replay, later.clone());
-        assert_eq!(recovered.risk.as_ref().unwrap().drawdown, 30.0);
+        assert_eq!(recovered.risk.as_ref().unwrap().drawdown_memory_usd, 30.0);
         replay.clear_derived_cache();
         assert_eq!(risk(&run(&mut replay, later)), risk(&recovered));
     }
@@ -3569,7 +3636,7 @@ mod tests {
     fn bootstrap_terminal_unknown_episode_uses_only_its_own_supported_quote_clock() {
         for partial in [false, true] {
             let mut initial = aggregate(facts(100, 0, 100.0));
-            initial["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            initial["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             initial["snapshot"]["pairs"][0]["position_at"] = json!(90);
             initial["snapshot"]["pairs"][0]["fills_at"] = json!(90);
             let mut other = initial["snapshot"]["pairs"][0].clone();
@@ -3583,7 +3650,7 @@ mod tests {
             let mut replay = HslV9Replay::default();
             run(&mut replay, initial.clone());
             let mut later = aggregate(facts(200, 0, 90.0));
-            later["drawdown_ratio_ema_span_minutes"] = json!(1.0);
+            later["drawdown_fraction_ema_span_minutes"] = json!(1.0);
             later["snapshot"]["pairs"][0]["position"]["size"] =
                 json!(if partial { 0.5 } else { 0.0 });
             if !partial {
@@ -3613,7 +3680,7 @@ mod tests {
                 );
                 assert!(result.risk.is_none());
             } else {
-                assert_eq!(result.risk.as_ref().unwrap().drawdown, 20.0);
+                assert_eq!(result.risk.as_ref().unwrap().drawdown_memory_usd, 20.0);
                 let seed = replay
                     .steps
                     .iter()
@@ -3647,7 +3714,7 @@ mod tests {
         assert!(excluded.reasons.contains("post_capture_price"));
         input["snapshot"]["pairs"][0]["prices_at"] = json!(120001);
         let included = run(&mut replay, input.clone());
-        assert_eq!(included.risk.as_ref().unwrap().drawdown, 50.0);
+        assert_eq!(included.risk.as_ref().unwrap().drawdown_memory_usd, 50.0);
         replay.clear_derived_cache();
         assert_eq!(risk(&run(&mut replay, input)), risk(&included));
     }
@@ -3664,10 +3731,16 @@ mod tests {
         let mut older = facts(300, 0, 100.0);
         older["snapshot"]["pairs"][0]["fills_at"] = json!(100);
         let retained = run(&mut replay, older.clone());
-        assert_eq!(retained.risk.as_ref().unwrap().drawdown, 20.0);
+        assert_eq!(retained.risk.as_ref().unwrap().drawdown_memory_usd, 20.0);
         older["snapshot"]["pairs"][0]["fills"] =
             json!([execution("supported", 150, Some(0.0), -20.0, 0)]);
-        assert_eq!(run(&mut replay, older.clone()).risk.unwrap().drawdown, 20.0);
+        assert_eq!(
+            run(&mut replay, older.clone())
+                .risk
+                .unwrap()
+                .drawdown_memory_usd,
+            20.0
+        );
         replay.clear_derived_cache();
         assert_eq!(risk(&run(&mut replay, older)), risk(&retained));
 
@@ -3680,7 +3753,10 @@ mod tests {
         older["invalidated_price_symbols"] = json!(["A"]);
         older["snapshot"]["pairs"][0]["prices_at"] = json!(59999);
         older["snapshot"]["pairs"][0]["prices"] = json!({"60000":50.0});
-        assert_eq!(run(&mut prices, older).risk.unwrap().drawdown, 50.0);
+        assert_eq!(
+            run(&mut prices, older).risk.unwrap().drawdown_memory_usd,
+            50.0
+        );
     }
 
     #[test]
@@ -3696,14 +3772,14 @@ mod tests {
         supported["snapshot"]["pairs"][0]["fills"] = variants.clone();
         let conflict = run(&mut replay, supported);
         assert!(conflict.reasons.contains("conflicting_identity"));
-        assert_eq!(conflict.risk.unwrap().drawdown, 0.0);
+        assert_eq!(conflict.risk.unwrap().drawdown_memory_usd, 0.0);
 
         let mut older = facts(300, 0, 100.0);
         older["snapshot"]["pairs"][0]["fills_at"] = json!(100);
         older["snapshot"]["pairs"][0]["fills"] = variants;
         let repeated = run(&mut replay, older.clone());
         assert!(repeated.reasons.contains("conflicting_identity"));
-        assert_eq!(repeated.risk.as_ref().unwrap().drawdown, 0.0);
+        assert_eq!(repeated.risk.as_ref().unwrap().drawdown_memory_usd, 0.0);
         assert_eq!(
             replay
                 .ledger

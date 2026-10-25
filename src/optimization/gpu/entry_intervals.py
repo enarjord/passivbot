@@ -3,8 +3,8 @@
 import torch
 
 ENTRY_INTERVAL_NAMES = (
-    "entry_interval_hours_mean", "entry_interval_hours_median",
-    "entry_interval_hours_p95", "entry_interval_hours_p99", "entry_interval_hours_max",
+    "entry_interval_mean_hours", "entry_interval_median_hours",
+    "entry_interval_p95_hours", "entry_interval_p99_hours", "entry_interval_max_hours",
 )
 MAX_EXACT_ENTRY_BARS = 1 << 24
 

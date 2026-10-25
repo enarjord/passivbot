@@ -492,34 +492,34 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "entry_trailing_reentry_qty_multiplier": 1.0,
                 "entry_trailing_retracement_base_fraction": 0.001,
                 "entry_trailing_threshold_base_fraction": 0.001,
-                "filter_volatility_ema_span_1m": 0.0,
-                "filter_volume_ema_span_1m": 1.0,
+                "forager_log_range_ema_span_minutes": 0.0,
+                "forager_volume_ema_span_minutes": 1.0,
                 "forager_score_weights": {
                     "unilateralness": 0.0,
                     "volume": 1.0,
                     "ema_readiness": 0.0,
-                    "volatility": 0.0,
+                    "log_range": 0.0,
                 },
                 "ema_span_0_minutes": 2.0,
                 "ema_span_1_minutes": 4.0,
                 "hsl_enabled": True,
                 "hsl_panic_close_order_type": "market",
                 "n_positions": 1.0,
-                "total_wallet_exposure_limit": 5.0,
-                "wallet_exposure_limit": 5.0,
+                "total_wallet_exposure_limit_ratio": 5.0,
+                "wallet_exposure_limit_ratio": 5.0,
                 "risk_entry_cooldown_minutes": 0.0,
                 "entry_cooldown_min_duration_minutes": 0.0,
                 "entry_cooldown_max_duration_minutes": None,
                 "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-                "unilateralness_ema_span_1m": 60.0,
-                "risk_wel_enforcer_threshold": 1.0,
+                "unilateralness_ema_span_minutes": 60.0,
+                "risk_wel_enforcer_threshold_ratio": 1.0,
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
-                "risk_twel_enforcer_threshold": 1.0,
-                "risk_we_excess_allowance_pct": 0.0,
-                "unstuck_close_pct": 0.01,
-                "unstuck_ema_dist": 0.0,
-                "unstuck_loss_allowance_pct": 0.1,
-                "unstuck_threshold": 1.0,
+                "risk_twel_enforcer_threshold_ratio": 1.0,
+                "risk_we_excess_allowance_fraction": 0.0,
+                "unstuck_close_fraction": 0.01,
+                "unstuck_ema_distance_fraction": 0.0,
+                "unstuck_loss_allowance_fraction": 0.1,
+                "unstuck_exposure_trigger_ratio": 1.0,
             }
 
         def bot_value(self, _pside, key):
@@ -538,7 +538,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
         "unilateralness": pytest.approx(0.0),
         "volume": pytest.approx(1.0),
         "ema_readiness": pytest.approx(0.0),
-        "volatility": pytest.approx(0.0),
+        "log_range": pytest.approx(0.0),
     }
 
     stub = _Stub()
@@ -573,41 +573,41 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "entry_trailing_reentry_qty_multiplier": 1.0,
                         "entry_trailing_retracement_base_fraction": 0.001,
                         "entry_trailing_threshold_base_fraction": 0.001,
-                        "forager_volatility_ema_span_1m": 0.0,
-                        "forager_volume_ema_span_1m": 1.0,
+                        "forager_log_range_ema_span_minutes": 0.0,
+                        "forager_volume_ema_span_minutes": 1.0,
                         "forager_score_weights": {
                             "unilateralness": 0.0,
                             "volume": 1.0,
                             "ema_readiness": 0.0,
-                            "volatility": 0.0,
+                            "log_range": 0.0,
                         },
                         "ema_span_0_minutes": 2.0,
                         "ema_span_1_minutes": 4.0,
                         "hsl_enabled": True,
                         "hsl_panic_close_order_type": "market",
                         "n_positions": 1.0,
-                        "total_wallet_exposure_limit": 5.0,
-                        "wallet_exposure_limit": 5.0,
+                        "total_wallet_exposure_limit_ratio": 5.0,
+                        "wallet_exposure_limit_ratio": 5.0,
                         "risk_entry_cooldown_minutes": 0.0,
                         "entry_cooldown_min_duration_minutes": 0.0,
                         "entry_cooldown_max_duration_minutes": None,
                         "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-                        "unilateralness_ema_span_1m": 60.0,
+                        "unilateralness_ema_span_minutes": 60.0,
                         "risk_wel_enforcer_enabled": True,
-                        "risk_wel_enforcer_threshold": 1.0,
+                        "risk_wel_enforcer_threshold_ratio": 1.0,
                         "risk_twel_enforcer_enabled": True,
                         "risk_twel_enforcer_policy": "reduce_overweight",
                         "risk_twel_entry_gate_enabled": True,
-                        "risk_twel_enforcer_threshold": 1.0,
-                        "risk_we_excess_allowance_pct": 0.0,
-                        "unstuck_close_pct": 0.01,
-                        "unstuck_ema_dist": 0.0,
-                        "unstuck_ema_span_0": 2.0,
-                        "unstuck_ema_span_1": 4.0,
+                        "risk_twel_enforcer_threshold_ratio": 1.0,
+                        "risk_we_excess_allowance_fraction": 0.0,
+                        "unstuck_close_fraction": 0.01,
+                        "unstuck_ema_distance_fraction": 0.0,
+                        "unstuck_ema_span_0_minutes": 2.0,
+                        "unstuck_ema_span_1_minutes": 4.0,
                         "unstuck_enabled": True,
                         "unstuck_ema_gating_enabled": True,
-                        "unstuck_loss_allowance_pct": 0.1,
-                        "unstuck_threshold": 1.0,
+                        "unstuck_loss_allowance_fraction": 0.1,
+                        "unstuck_exposure_trigger_ratio": 1.0,
                     },
                     "short": {},
                 }
@@ -622,7 +622,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                     "bot": {
                         "long": {
                             "entry_grid_inflation_enabled": False,
-                            "unstuck_loss_allowance_pct": 0.025,
+                            "unstuck_loss_allowance_fraction": 0.025,
                         }
                     }
                 }
@@ -646,7 +646,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
     assert "entry_grid_inflation_enabled" not in out
-    assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
+    assert out["unstuck_loss_allowance_fraction"] == pytest.approx(0.025)
 
 
 def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():

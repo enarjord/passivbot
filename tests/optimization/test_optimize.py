@@ -353,7 +353,7 @@ class TestLiquidationHelpers:
         assert _analysis_indicates_liquidation({"liquidated": False}, config) is False
         assert (
             _analysis_indicates_liquidation(
-                {"drawdown_worst": 0.999, "liquidated": False}, config
+                {"drawdown_max_fraction": 0.999, "liquidated": False}, config
             )
             is False
         )
@@ -445,8 +445,8 @@ class TestNormalizeOptionalBoolFlag:
     "flags,expected",
     [
         (["--clear-limits"], []),
-        (["--limit", "adg > 0.0008"], ["drawdown_worst_usd", "adg_usd"]),
-        (["--clear-limits", "--limit", "adg > 0.0008"], ["adg_usd"]),
+        (["--limit", "adg_fraction > 0.0008"], ["drawdown_max_fraction_usd", "adg_fraction_usd"]),
+        (["--clear-limits", "--limit", "adg_fraction > 0.0008"], ["adg_fraction_usd"]),
     ],
 )
 async def test_optimizer_cli_applies_special_limits_before_preparation(
@@ -454,7 +454,7 @@ async def test_optimizer_cli_applies_special_limits_before_preparation(
 ):
     config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
-        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.3}
+        {"metric": "drawdown_max_fraction", "penalize_if": "greater_than", "value": 0.3}
     ]
     path = tmp_path / "input.json"
     path.write_text(json.dumps({"config": config} if wrapped else config))
@@ -489,7 +489,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": None,
-                "limit_entries": ["adg > 0.0008"],
+                "limit_entries": ["adg_fraction > 0.0008"],
                 "clear_limits": False,
             }
         )
@@ -497,18 +497,18 @@ class TestResolveCliLimitsOverride:
         result = _resolve_cli_limits_override(
             args,
             existing_limits=[
-                {"metric": "drawdown_worst", "penalize_if": ">", "value": 0.35}
+                {"metric": "drawdown_max_fraction", "penalize_if": ">", "value": 0.35}
             ],
         )
 
         assert result == [
             {
-                "metric": "drawdown_worst_usd",
+                "metric": "drawdown_max_fraction_usd",
                 "penalize_if": "greater_than",
                 "value": 0.35,
             },
             {
-                "metric": "adg_usd",
+                "metric": "adg_fraction_usd",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
             },
@@ -517,8 +517,8 @@ class TestResolveCliLimitsOverride:
     def test_combines_limits_payload_and_repeatable_limit_entries(self):
         args = argparse.Namespace(
             **{
-                "optimize.limits": '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]',
-                "limit_entries": ["adg > 0.0008 stat=mean"],
+                "optimize.limits": '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]',
+                "limit_entries": ["adg_fraction > 0.0008 stat=mean"],
                 "clear_limits": False,
             }
         )
@@ -527,12 +527,12 @@ class TestResolveCliLimitsOverride:
 
         assert result == [
             {
-                "metric": "drawdown_worst_usd",
+                "metric": "drawdown_max_fraction_usd",
                 "penalize_if": "greater_than",
                 "value": 0.35,
             },
             {
-                "metric": "adg_usd",
+                "metric": "adg_fraction_usd",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
                 "reducer": "mean",
@@ -562,8 +562,8 @@ class TestResolveCliLimitsOverride:
     def test_limits_payload_replaces_existing_config_limits_before_appending(self):
         args = argparse.Namespace(
             **{
-                "optimize.limits": '[{"metric":"backtest_completion_ratio","penalize_if":"<","value":1.0}]',
-                "limit_entries": ["adg > 0.0008"],
+                "optimize.limits": '[{"metric":"backtest_completion_fraction","penalize_if":"<","value":1.0}]',
+                "limit_entries": ["adg_fraction > 0.0008"],
                 "clear_limits": False,
             }
         )
@@ -571,18 +571,18 @@ class TestResolveCliLimitsOverride:
         result = _resolve_cli_limits_override(
             args,
             existing_limits=[
-                {"metric": "drawdown_worst", "penalize_if": ">", "value": 0.35}
+                {"metric": "drawdown_max_fraction", "penalize_if": ">", "value": 0.35}
             ],
         )
 
         assert result == [
             {
-                "metric": "backtest_completion_ratio",
+                "metric": "backtest_completion_fraction",
                 "penalize_if": "less_than",
                 "value": 1.0,
             },
             {
-                "metric": "adg_usd",
+                "metric": "adg_fraction_usd",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
             },
@@ -598,7 +598,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": None,
-                "limit_entries": ["adg > 0.0008"],
+                "limit_entries": ["adg_fraction > 0.0008"],
                 "clear_limits": True,
             }
         )
@@ -606,13 +606,13 @@ class TestResolveCliLimitsOverride:
         result = _resolve_cli_limits_override(
             args,
             existing_limits=[
-                {"metric": "drawdown_worst", "penalize_if": ">", "value": 0.35}
+                {"metric": "drawdown_max_fraction", "penalize_if": ">", "value": 0.35}
             ],
         )
 
         assert result == [
             {
-                "metric": "adg_usd",
+                "metric": "adg_fraction_usd",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
             }
@@ -674,34 +674,34 @@ class TestStartingConfigSelectionArgs:
 def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     config = get_expanded_config_prototype()
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = [
         {
-            "metric": "adg_strategy_eq",
+            "metric": "adg_fraction_strategy_equity",
             "penalize_if": "less_than_or_equal",
             "value": 0.0015,
         }
     ]
     pareto_dir = tmp_path / "pareto"
     pareto_dir.mkdir()
-    for idx, adg in enumerate((0.001, 0.002)):
+    for idx, adg_fraction in enumerate((0.001, 0.002)):
         artifact = deepcopy(config)
         artifact["metrics"] = {
             "objectives": {
-                "adg_strategy_eq": adg,
-                "drawdown_worst_strategy_eq": 0.3 - idx * 0.1,
+                "adg_fraction_strategy_equity": adg_fraction,
+                "drawdown_max_fraction_strategy_equity": 0.3 - idx * 0.1,
             },
             "stats": {
-                "adg_strategy_eq": {
-                    "mean": adg,
-                    "min": adg,
-                    "max": adg,
+                "adg_fraction_strategy_equity": {
+                    "mean": adg_fraction,
+                    "min": adg_fraction,
+                    "max": adg_fraction,
                     "std": 0.0,
-                    "median": adg,
+                    "median": adg_fraction,
                 },
-                "drawdown_worst_strategy_eq": {
+                "drawdown_max_fraction_strategy_equity": {
                     "mean": 0.3 - idx * 0.1,
                     "min": 0.3 - idx * 0.1,
                     "max": 0.3 - idx * 0.1,
@@ -710,7 +710,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
                 },
             },
         }
-        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0 + adg
+        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0 + adg_fraction
         (pareto_dir / f"candidate_{idx}.json").write_text(
             json.dumps(artifact),
             encoding="utf-8",
@@ -735,12 +735,12 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     config = get_expanded_config_prototype()
     config["backtest"]["reducer"] = {"default": "max"}
     config["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max"},
-        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+        {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = [
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "value": 0.5,
         }
@@ -748,18 +748,18 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     artifact = deepcopy(config)
     artifact["metrics"] = {
         "objectives": {
-            "adg_strategy_eq": 0.002,
-            "drawdown_worst_strategy_eq": 0.8,
+            "adg_fraction_strategy_equity": 0.002,
+            "drawdown_max_fraction_strategy_equity": 0.8,
         },
         "stats": {
-            "adg_strategy_eq": {
+            "adg_fraction_strategy_equity": {
                 "mean": 0.002,
                 "min": 0.002,
                 "max": 0.002,
                 "std": 0.0,
                 "median": 0.002,
             },
-            "drawdown_worst_strategy_eq": {
+            "drawdown_max_fraction_strategy_equity": {
                 "mean": 0.2,
                 "min": 0.2,
                 "max": 0.8,
@@ -770,13 +770,13 @@ def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     }
     artifact["suite_metrics"] = {
         "metrics": {
-            "adg_strategy_eq": {
+            "adg_fraction_strategy_equity": {
                 "aggregated": 0.002,
-                "stats": artifact["metrics"]["stats"]["adg_strategy_eq"],
+                "stats": artifact["metrics"]["stats"]["adg_fraction_strategy_equity"],
             },
-            "drawdown_worst_strategy_eq": {
+            "drawdown_max_fraction_strategy_equity": {
                 "aggregated": 0.8,
-                "stats": artifact["metrics"]["stats"]["drawdown_worst_strategy_eq"],
+                "stats": artifact["metrics"]["stats"]["drawdown_max_fraction_strategy_equity"],
             },
         }
     }
@@ -870,7 +870,7 @@ def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
     config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "pymoo"
     config['bot']["portfolio"]['strategy_kind'] = "trailing_grid_v7"
-    config["backtest"]["btc_collateral_cap"] = 1.0
+    config["backtest"]["btc_collateral_target_ratio"] = 1.0
 
     original_import = builtins.__import__
 
@@ -930,12 +930,12 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
     config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["optimize"]["fixed_runtime_overrides"] = {
-        "backtest.btc_collateral_cap": 0.5,
+        "backtest.btc_collateral_target_ratio": 0.5,
     }
 
     with pytest.raises(
         ValueError,
-        match=r"btc_collateral_cap=0.*CPU",
+        match=r"btc_collateral_target_ratio=0.*CPU",
     ):
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
@@ -1074,7 +1074,7 @@ def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
     config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": "base",
             "value": 0.50,
@@ -1104,7 +1104,7 @@ def test_validate_optimizer_limit_suite_mode_rejects_unknown_scenario_early():
     config = get_expanded_config_prototype()
     config["optimize"]["limits"] = [
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": "stres",
             "value": 0.50,
@@ -1168,9 +1168,9 @@ def test_optimize_parser_accepts_short_limit_alias():
         dest="clear_limits",
     )
 
-    args = parser.parse_args(["-l", "adg_strategy_pnl_rebased > 0.0"])
+    args = parser.parse_args(["-l", "adg_fraction_strategy_equity > 0.0"])
 
-    assert args.limit_entries == ["adg_strategy_pnl_rebased > 0.0"]
+    assert args.limit_entries == ["adg_fraction_strategy_equity > 0.0"]
 
 
 @pytest.mark.parametrize(
@@ -1238,11 +1238,11 @@ def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
             "--optimize.bounds.long.risk.total_wallet_exposure_limit_ratio",
             "0",
             "-l",
-            "adg_strategy_pnl_rebased>0.0",
+            "adg_fraction_strategy_equity>0.0",
         ]
     )
 
-    assert args.limit_entries == ["adg_strategy_pnl_rebased>0.0"]
+    assert args.limit_entries == ["adg_fraction_strategy_equity>0.0"]
     assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit_ratio") == [
         0.0
     ]
@@ -1298,11 +1298,21 @@ def test_optimize_parser_accepts_polish_bounds_mode():
     optimize.add_extra_options(advanced_group, help_all=True)
 
     args = parser.parse_args(
-        ["--polish-pct", "0.2", "--polish-bounds-mode", "override-all"]
+        ["--polish-bounds-fraction", "0.2", "--polish-bounds-mode", "override-all"]
     )
 
-    assert args.polish_bounds_pct == 0.2
+    assert args.polish_bounds_fraction == 0.2
     assert args.polish_bounds_mode == "override-all"
+    assert "0.1 means plus/minus 10 percent" in " ".join(parser.format_help().split())
+
+
+@pytest.mark.parametrize("retired_flag", ["--polish-pct", "--polish-bounds-pct"])
+def test_optimize_parser_rejects_retired_percentage_polish_flags(retired_flag):
+    parser = argparse.ArgumentParser()
+    optimize.add_extra_options(parser, help_all=True)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([retired_flag, "0.2"])
 
 
 def test_starting_configs_option_is_visible_in_default_help():
@@ -1348,16 +1358,16 @@ class TestFormatObjectives:
     def test_dict_uses_scoring_keys_for_weighted_suite_objectives(self):
         result = _format_objectives(
             {"w_0": -0.00123, "w_1": 58.0},
-            scoring_keys=["adg_strategy_eq", "peak_recovery_days_strategy_eq"],
+            scoring_keys=["adg_fraction_strategy_equity", "recovery_max_days_strategy_equity"],
         )
-        assert result == "[adg_strategy_eq=-0.00123, peak_recovery_days_strategy_eq=58]"
+        assert result == "[adg_fraction_strategy_equity=-0.00123, recovery_max_days_strategy_equity=58]"
 
     def test_dict_uses_named_objectives_before_weighted_suite_fallback(self):
         result = _format_objectives(
-            {"adg_strategy_eq": 0.00123, "w_0": -999.0},
-            scoring_keys=["adg_strategy_eq"],
+            {"adg_fraction_strategy_equity": 0.00123, "w_0": -999.0},
+            scoring_keys=["adg_fraction_strategy_equity"],
         )
-        assert result == "[adg_strategy_eq=0.00123]"
+        assert result == "[adg_fraction_strategy_equity=0.00123]"
 
 
 class TestIndividualToConfig:
@@ -1489,7 +1499,7 @@ class TestIndividualToConfig:
                         "short_entry_initial_qty_fraction": [0.0, 10.0],
                         "short_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
                         "long_hsl_memory_ema_span_minutes": [30.0, 180.0, 5.0],
-                        "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                        "short_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
             },
@@ -1528,7 +1538,7 @@ class TestIndividualToConfig:
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
                         "short_entry_initial_qty_fraction": [0.0, 10.0],
                         "short_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
-                        "long_hsl_red_threshold": [0.15, 0.35, 0.01],
+                        "long_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
                 "fixed_runtime_overrides": {"bot.long.hsl.cooldown_after_red_minutes": 1.0},
@@ -1989,9 +1999,9 @@ class TestIndividualToConfig:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -2118,9 +2128,9 @@ class TestIndividualToConfig:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
             },
@@ -2286,7 +2296,7 @@ class TestConfigToIndividual:
                         "short_entry_initial_qty_fraction": [0.0, 1000.0],
                         "short_entry_threshold_exposure_ratio_coefficient": [0.0, 1000.0],
                         "long_hsl_memory_ema_span_minutes": [30.0, 180.0, 5.0],
-                        "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                        "short_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
             },
@@ -2362,9 +2372,9 @@ class TestConfigToIndividual:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
             },
@@ -2894,7 +2904,7 @@ class TestApplyPolishBounds:
             "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.04, 0.06])
 
-    def test_invalid_percentage_raises(self):
+    def test_invalid_fraction_raises(self):
         with pytest.raises(ValueError, match="finite non-negative"):
             apply_polish_bounds({"optimize": {"bounds": {}}}, -0.1)
 
@@ -3043,7 +3053,7 @@ class TestApplyFineTuneBounds:
         ) in caplog.text
         assert "  long.risk.we_excess_allowance_fraction" in caplog.text
         assert "  long.risk.total_wallet_exposure_limit_ratio" in caplog.text
-        assert "long_risk_we_excess_allowance_pct" not in caplog.text
+        assert "long_risk_we_excess_allowance_fraction" not in caplog.text
 
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
@@ -3424,9 +3434,9 @@ class TestApplyFineTuneBounds:
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_close_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
                 "fixed_params": ["bot.long.strategy.trailing_martingale.close.qty_fraction"],
@@ -3459,9 +3469,9 @@ class TestApplyFineTuneBounds:
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_close_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 ),
                 "fixed_params": ["long.strategy.trailing_martingale.close.qty_fraction"],
@@ -3538,9 +3548,9 @@ class TestApplyFineTuneBounds:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3587,9 +3597,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 ),
                 "round_to_n_significant_digits": 6,
@@ -3658,9 +3668,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3723,9 +3733,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3783,9 +3793,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3859,7 +3869,7 @@ class TestExtractConfigs:
             import json
 
             template["optimize"]["limits"] = [
-                {"metric": "drawdown_worst_hsl", "enabled": False}
+                {"metric": "drawdown_max_fraction_strategy_equity", "enabled": False}
             ]
             f.write(json.dumps(template))
             path = f.name
@@ -4361,7 +4371,7 @@ class TestEvaluator:
     """Test Evaluator class initialization and basic methods."""
 
     def test_perturb_step_digits(self):
-        """Test perturbation with different change probabilities."""
+        """Test perturbation with probabilities of keeping values unchanged."""
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4379,13 +4389,13 @@ class TestEvaluator:
 
         # Use a simple individual matching bounds length
         individual = [1.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_step_digits(individual, change_chance=0.5)
+        perturbed = evaluator.perturb_step_digits(individual, keep_value_probability=0.5)
 
         # Should have same length
         assert len(perturbed) == len(individual)
 
-    def test_perturb_x_pct(self):
-        """Test percentage-based perturbation."""
+    def test_perturb_relative_fraction(self):
+        """Test relative-fraction perturbation."""
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4401,9 +4411,41 @@ class TestEvaluator:
         )
 
         individual = [5.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_x_pct(individual, magnitude=0.01)
+        perturbed = evaluator.perturb_relative_fraction(individual, magnitude_fraction=0.01)
 
         assert len(perturbed) == len(individual)
+
+    @pytest.mark.parametrize("keep_value_probability,expected", [(1.0, 5.0), (0.0, 6.0)])
+    def test_step_perturbation_probability_describes_unchanged_values(
+        self, monkeypatch, keep_value_probability, expected
+    ):
+        from types import SimpleNamespace
+
+        evaluator = SimpleNamespace(
+            bounds=[SimpleNamespace(low=0.0, high=10.0, is_stepped=True, step=1.0)]
+        )
+        monkeypatch.setattr(np.random, "random", lambda: 0.5)
+        monkeypatch.setattr(np.random, "choice", lambda values: 1.0)
+
+        assert optimize.Evaluator.perturb_step_digits(
+            evaluator, [5.0], keep_value_probability=keep_value_probability
+        ) == [expected]
+
+    def test_relative_perturbation_fraction_preserves_scale_one_magnitude(self, monkeypatch):
+        from types import SimpleNamespace
+
+        evaluator = SimpleNamespace(
+            bounds=[SimpleNamespace(low=0.0, high=10.0, is_stepped=True)]
+        )
+
+        def positive_edge(low, high):
+            assert (low, high) == (-0.01, 0.01)
+            return high
+
+        monkeypatch.setattr(np.random, "uniform", positive_edge)
+        assert optimize.Evaluator.perturb_relative_fraction(
+            evaluator, [5.0], magnitude_fraction=0.01
+        ) == pytest.approx([5.05])
 
     def test_perturb_random_subset(self):
         """Test random subset perturbation."""
@@ -4434,7 +4476,7 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "drawdown_worst_usd",
+                "metric": "drawdown_max_fraction_usd",
                 "penalize_if": "greater_than",
                 "value": 0.3,
             }
@@ -4449,18 +4491,18 @@ class TestEvaluator:
 
         assert len(evaluator.limit_checks) > 0
         # Check that metric key is created (could be max, mean, etc.)
-        assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
+        assert "drawdown_max_fraction_usd" in evaluator.limit_checks[0]["metric_key"]
 
     def test_optimizer_can_skip_btc_analysis_when_no_btc_metrics_are_needed(self):
         from optimize import Evaluator, _optimizer_can_skip_btc_analysis
         from config.schema import get_expanded_config_prototype
 
         mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_cap"] = 0.0
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "fills_gap_p95_hours"]
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "fills_gap_p95_hours"]
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.3,
             }
@@ -4484,8 +4526,8 @@ class TestEvaluator:
         from config.schema import get_expanded_config_prototype
 
         mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_cap"] = 0.0
-        mock_config["optimize"]["scoring"] = ["adg_btc"]
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
+        mock_config["optimize"]["scoring"] = ["adg_fraction_btc"]
         mock_config["optimize"]["limits"] = []
         evaluator = Evaluator(
             hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config
@@ -4496,10 +4538,10 @@ class TestEvaluator:
             evaluator.limit_checks,
         )
 
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "drawdown_worst_btc",
+                "metric": "drawdown_max_fraction_btc",
                 "penalize_if": "greater_than",
                 "value": 0.3,
             }
@@ -4513,7 +4555,7 @@ class TestEvaluator:
             evaluator.limit_checks,
         )
 
-        mock_config["backtest"]["btc_collateral_cap"] = 1.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 1.0
         mock_config["optimize"]["limits"] = []
         evaluator = Evaluator(
             hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config
@@ -4531,12 +4573,12 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "adg_strategy_pnl_rebased",
+                "metric": "adg_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0,
             },
             {
-                "metric": "peak_recovery_hours_hsl",
+                "metric": "recovery_max_hours_strategy_equity",
                 "penalize_if": "greater_than_or_equal",
                 "value": 5000,
             },
@@ -4550,16 +4592,16 @@ class TestEvaluator:
         )
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_eq_mean",
-            "peak_recovery_hours_strategy_eq_mean",
+            "adg_fraction_strategy_equity_mean",
+            "recovery_max_hours_strategy_equity_mean",
         ]
 
         _suite = SuiteEvaluator(
-            base, [], {"default": "mean", "peak_recovery_hours_hsl": "mean"}
+            base, [], {"default": "mean", "recovery_max_hours_strategy_equity": "mean"}
         )
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_eq_mean",
-            "peak_recovery_hours_strategy_eq_mean",
+            "adg_fraction_strategy_equity_mean",
+            "recovery_max_hours_strategy_equity_mean",
         ]
 
     def test_suite_limit_checks_keep_explicit_stat_override(self):
@@ -4569,13 +4611,13 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "adg_strategy_pnl_rebased",
+                "metric": "adg_fraction_strategy_equity",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0,
                 "reducer": "min",
             },
             {
-                "metric": "drawdown_worst_hsl",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "value": 0.8,
             },
@@ -4588,12 +4630,12 @@ class TestEvaluator:
             config=mock_config,
         )
         _suite = SuiteEvaluator(
-            base, [], {"default": "mean", "drawdown_worst_hsl": "max"}
+            base, [], {"default": "mean", "drawdown_max_fraction_strategy_equity": "max"}
         )
 
         assert [check["metric_key"] for check in base.limit_checks] == [
-            "adg_strategy_eq_min",
-            "drawdown_worst_strategy_eq_max",
+            "adg_fraction_strategy_equity_min",
+            "drawdown_max_fraction_strategy_equity_max",
         ]
 
     def test_suite_objective_scenario_must_match_context_label(self):
@@ -4622,7 +4664,7 @@ class TestEvaluator:
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = [
             {
-                "metric": "drawdown_worst_strategy_eq",
+                "metric": "drawdown_max_fraction_strategy_equity",
                 "penalize_if": "greater_than",
                 "scenario": "base",
                 "value": 0.5,
@@ -4652,20 +4694,20 @@ class TestEvaluator:
         mock_config["optimize"]["limits"] = []
         mock_config["optimize"]["objective_scenario"] = "base"
         mock_config["optimize"]["scoring"] = [
-            {"metric": "adg_strategy_eq", "goal": "max"},
+            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
             {
-                "metric": "pain_index_strategy_eq",
+                "metric": "pain_index_fraction_strategy_equity",
                 "goal": "min",
                 "scenario": None,
             },
             {
-                "metric": "strategy_eq_recovery_days_max",
+                "metric": "recovery_max_days_strategy_equity",
                 "goal": "min",
                 "scenario": None,
                 "aggregate": "max",
             },
             {
-                "metric": "position_held_days_max",
+                "metric": "position_held_max_days",
                 "goal": "min",
                 "scenario": "stress",
             },
@@ -4720,18 +4762,18 @@ class TestEvaluator:
         scenario_metric_payloads = [
             {
                 "stats": {
-                    "adg_strategy_eq": metric_stats(0.01),
-                    "pain_index_strategy_eq": metric_stats(0.1),
-                    "strategy_eq_recovery_days_max": metric_stats(10.0),
-                    "position_held_days_max": metric_stats(5.0),
+                    "adg_fraction_strategy_equity": metric_stats(0.01),
+                    "pain_index_fraction_strategy_equity": metric_stats(0.1),
+                    "recovery_max_days_strategy_equity": metric_stats(10.0),
+                    "position_held_max_days": metric_stats(5.0),
                 }
             },
             {
                 "stats": {
-                    "adg_strategy_eq": metric_stats(0.002),
-                    "pain_index_strategy_eq": metric_stats(0.5),
-                    "strategy_eq_recovery_days_max": metric_stats(50.0),
-                    "position_held_days_max": metric_stats(20.0),
+                    "adg_fraction_strategy_equity": metric_stats(0.002),
+                    "pain_index_fraction_strategy_equity": metric_stats(0.5),
+                    "recovery_max_days_strategy_equity": metric_stats(50.0),
+                    "position_held_max_days": metric_stats(20.0),
                 }
             },
         ]
@@ -4752,7 +4794,7 @@ class TestEvaluator:
         assert metrics["objectives"] == pytest.approx(
             {"w_0": -0.01, "w_1": 0.3, "w_2": 50.0, "w_3": 20.0}
         )
-        assert metrics["suite_metrics"]["metrics"]["adg_strategy_eq"]["scenarios"] == {
+        assert metrics["suite_metrics"]["metrics"]["adg_fraction_strategy_equity"]["scenarios"] == {
             "base": 0.01,
             "stress": 0.002,
         }
@@ -4769,7 +4811,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "drawdown_worst_usd"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "drawdown_max_fraction_usd"]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4813,7 +4855,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "drawdown_worst_usd"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "drawdown_max_fraction_usd"]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4859,7 +4901,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4911,7 +4953,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "drawdown_worst_usd"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity", "drawdown_max_fraction_usd"]
 
         evaluator = Evaluator(
             hlcvs_specs={"binance": object()},
@@ -4975,7 +5017,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
 
         base = Evaluator(
             hlcvs_specs={},
@@ -5031,7 +5073,7 @@ class TestEvaluator:
 
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {
@@ -5084,7 +5126,7 @@ class TestEvaluator:
         ), patch(
             "tools.iterative_backtester.combine_analyses",
             return_value={
-                "stats": {"adg_strategy_eq": {"mean": 0.1}},
+                "stats": {"adg_fraction_strategy_equity": {"mean": 0.1}},
                 "exchanges": {
                     "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
                     "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
@@ -5120,7 +5162,7 @@ class TestEvaluator:
         monkeypatch.setenv("PASSIVBOT_OPTIMIZE_PROFILE", "1")
         mock_config = get_expanded_config_prototype()
         mock_config["optimize"]["limits"] = []
-        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["scoring"] = ["adg_fraction_strategy_equity"]
         mock_config["backtest"]["start_date"] = "2023-01-01"
         mock_config["backtest"]["end_date"] = "2023-01-02"
         mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
@@ -5169,7 +5211,7 @@ class TestEvaluator:
             return_value=(None, None, {"liquidated": False}),
         ), patch(
             "tools.iterative_backtester.combine_analyses",
-            return_value={"stats": {"adg_strategy_eq": {"mean": 0.1}}},
+            return_value={"stats": {"adg_fraction_strategy_equity": {"mean": 0.1}}},
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
@@ -5382,7 +5424,7 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
             },
         },
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
     metrics = entry.pop("suite_metrics")
@@ -5401,7 +5443,7 @@ def test_resume_config_mismatches_treats_reducer_aliases_as_equivalent():
     entry["backtest"]["aggregate"] = {"default": "max"}
     entry["optimize"]["scoring"] = [
         {
-            "metric": "adg_strategy_eq",
+            "metric": "adg_fraction_strategy_equity",
             "goal": "max",
             "scenario": None,
             "aggregate": "max",
@@ -5409,7 +5451,7 @@ def test_resume_config_mismatches_treats_reducer_aliases_as_equivalent():
     ]
     entry["optimize"]["limits"] = [
         {
-            "metric": "strategy_eq_recovery_days_max",
+            "metric": "recovery_max_days_strategy_equity",
             "penalize_if": "greater_than",
             "stat": "max",
             "value": 100,
@@ -5437,7 +5479,7 @@ def test_resume_config_mismatches_rejects_changed_suite_scenarios():
         },
         "bot": {},
         "live": {},
-        "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
+        "optimize": {"scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
     config = deepcopy(entry)
@@ -5492,7 +5534,7 @@ def _resume_validation_entry():
             "bounds": _bounds_from_flat({"long_entry_initial_qty_fraction": [0.001, 0.01]}),
             "iters": 2,
             "population_size": 2,
-            "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+            "scoring": [{"metric": "adg_fraction_strategy_equity", "goal": "max"}],
         },
     }
 
@@ -5550,14 +5592,14 @@ def test_resume_config_mismatches_allows_machine_local_optimizer_settings():
     entry["optimize"]["write_all_results"] = True
     entry["backtest"]["base_dir"] = "/old/backtests"
     entry["backtest"]["ohlcv_source_dir"] = "/input/ohlcvs"
-    entry["backtest"]["visible_metrics"] = ["adg_strategy_eq"]
+    entry["backtest"]["visible_metrics"] = ["adg_fraction_strategy_equity"]
     config = deepcopy(entry)
     config["optimize"]["n_cpus"] = 8
     config["optimize"]["pareto_max_size"] = 250
     config["optimize"]["write_all_results"] = False
     config["backtest"]["base_dir"] = "/new/backtests"
     # Input dataset selectors remain unchanged; they are validated separately.
-    config["backtest"]["visible_metrics"] = ["drawdown_worst_strategy_eq"]
+    config["backtest"]["visible_metrics"] = ["drawdown_max_fraction_strategy_equity"]
 
     assert optimize._resume_config_mismatches(entry, config) == []
 
@@ -5717,7 +5759,7 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
 def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path):
     seed_entry = _resume_validation_entry()
     seed_entry["metrics"] = {
-        "objectives": {"adg_strategy_eq": 0.1},
+        "objectives": {"adg_fraction_strategy_equity": 0.1},
         "constraint_violation": 0.0,
         "gpu_seed_bootstrap": {"mode": "exact", "source_index": 0},
     }
@@ -5735,7 +5777,7 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
         results_dir=str(tmp_path),
         sig_digits=6,
         flush_interval=60,
-        scoring_keys=["adg_strategy_eq"],
+        scoring_keys=["adg_fraction_strategy_equity"],
         compress=True,
         write_all_results=True,
         starting_iters=1,
@@ -5744,7 +5786,7 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
     recorder.store.add_entry = Mock(return_value=False)
     evolution_entry = deepcopy(seed_entry)
     evolution_entry["metrics"].pop("gpu_seed_bootstrap")
-    evolution_entry["metrics"]["objectives"]["adg_strategy_eq"] = 0.2
+    evolution_entry["metrics"]["objectives"]["adg_fraction_strategy_equity"] = 0.2
     recorder.record(evolution_entry)
     recorder.close()
 
@@ -5756,7 +5798,7 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
 def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Path):
     seed_entry = _resume_validation_entry()
     seed_entry["metrics"] = {
-        "objectives": {"adg_strategy_eq": 0.1},
+        "objectives": {"adg_fraction_strategy_equity": 0.1},
         "constraint_violation": 0.0,
         "gpu_seed_bootstrap": {"mode": "exact", "source_index": 99},
     }
@@ -5765,7 +5807,7 @@ def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Pat
         results_dir=str(tmp_path),
         sig_digits=6,
         flush_interval=60,
-        scoring_keys=["adg_strategy_eq"],
+        scoring_keys=["adg_fraction_strategy_equity"],
         compress=True,
         write_all_results=True,
         starting_iters=100,
@@ -5774,7 +5816,7 @@ def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Pat
     recorder.store.add_entry = Mock(return_value=False)
     evolution_entry = deepcopy(seed_entry)
     evolution_entry["metrics"].pop("gpu_seed_bootstrap")
-    evolution_entry["metrics"]["objectives"]["adg_strategy_eq"] = 0.2
+    evolution_entry["metrics"]["objectives"]["adg_fraction_strategy_equity"] = 0.2
     recorder.record(evolution_entry)
     recorder.close()
 
@@ -5864,15 +5906,15 @@ def test_result_recorder_preserves_unquantized_saved_param_values():
         target = target[part]
     original = float(target[path[-1]])
     target[path[-1]] = original + 0.000321
-    entry["metrics"] = {"adg": 0.1}
-    entry["optimize"]["scoring"] = ["adg"]
+    entry["metrics"] = {"adg_fraction": 0.1}
+    entry["optimize"]["scoring"] = ["adg_fraction"]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         recorder = ResultRecorder(
             results_dir=tmpdir,
             sig_digits=6,
             flush_interval=60,
-            scoring_keys=["adg"],
+            scoring_keys=["adg_fraction"],
             compress=False,
             write_all_results=False,
             bounds=bounds,

@@ -104,8 +104,8 @@ def test_templates_and_canonical_roundtrips_match_schema(validator, strategy, sc
         "coins": {"long": ["BTC"], "short": None}, "ignored_coins": "ETH",
         "coin_sources": {"BTC": None},
     }]}),
-    source(optimize={"scoring": ["adg", {"metric": "adg_strategy_eq", "goal": "max", "scenario": None}],
-                     "limits": [{"metric": "adg", "penalize_if": "less_than", "value": 0.0}]}),
+    source(optimize={"scoring": ["adg_fraction", {"metric": "adg_fraction_strategy_equity", "goal": "max", "scenario": None}],
+                     "limits": [{"metric": "adg_fraction", "penalize_if": "less_than", "value": 0.0}]}),
     source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_milliseconds": 123, "since_previous_milliseconds": 0}}}}),
     source(backtest={"market_settings": {"overrides": {"BTC": {"min_cost": 0.1}},
                                         "overrides_by_exchange": {"bybit": {"ETH": {"c_mult": 1.0}}}}}),
@@ -124,7 +124,7 @@ def test_sparse_dynamic_forms_validate_without_default_insertion(validator, payl
     source(live={"startup": {"startup_phase_budgets": {"account": {"elapsed_milliseconds": 1.5}}}}),
     source(live={"startup": {"startup_phase_budgets": {"account": {"bad_key": 1}}}}),
     source(bot={"long": {"universe": {"approved_coins": {"long": ["BTC"], "wrong_side": []}}}}),
-    source(optimize={"scoring": [{"metric": "adg", "surprise": True}]}),
+    source(optimize={"scoring": [{"metric": "adg_fraction", "surprise": True}]}),
     source(backtest={"scenarios": [{"unknown": True}]}),
     source(backtest={"market_settings": {"overrides": {"BTC": {"minimum_cost": 1}}}}),
 ])
@@ -247,7 +247,7 @@ def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
 def test_shared_metadata_matches_adapters_without_changing_special_validation_membership():
     registry = get_field_registry()
     assert get_special_optimizer_bindings() == OPTIMIZABLE_BOT_KEY_PATHS
-    assert "long_unstuck_ema_span_0" not in OPTIMIZABLE_BOT_KEY_PATHS
+    assert "long_unstuck_ema_span_0_minutes" not in OPTIMIZABLE_BOT_KEY_PATHS
     for scope in ("coin", "position_side", "portfolio"):
         config = generated_template(get_template_config(), scope)
         for key, path in get_shared_optimizer_bindings().items():
@@ -293,7 +293,7 @@ def test_schema_cli_is_offline_and_registered():
     "bot.portfolio.strategy_kind", "bot.portfolio.hedge_mode",
     "bot.long.universe.minimum_coin_age_days", "bot.long.universe.filter_by_min_effective_cost",
     "bot.portfolio.execution.market_orders_allowed", "bot.portfolio.execution.market_order_near_touch_fraction",
-    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.span_multiplier", "bot.portfolio.warmup.max_minutes",
+    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.activation_span_fraction", "bot.portfolio.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
     "bot.long.forager.always_include",
 ])
@@ -328,7 +328,7 @@ def test_grouped_operational_metadata_reuses_runtime_consumers_and_permissions()
     for field, path in LIVE_OPERATIONAL_PATHS.items():
         metadata = describe_field(path)
         assert metadata['coin_override'] == ('allowed' if path in allowed else 'forbidden')
-    for field in ('fee_pct_fallback', 'fee_pct_sanity_abs_max'):
+    for field in ('fallback_fee_fraction', 'max_abs_fee_fraction'):
         metadata = describe_field(LIVE_OPERATIONAL_PATHS[field])
         assert metadata['consumers'] == ['live', 'backtest', 'optimize']
     sparse = describe_field(('coin_overrides', 'BTC', *LIVE_OPERATIONAL_PATHS['leverage']))

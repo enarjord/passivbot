@@ -23,8 +23,8 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
     config['bot']["portfolio"]['strategy_kind'] = strategy_kind
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = True
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0
-    config["backtest"].update(hsl_detailed_report=False, market_order_slippage_pct=0.,
-                              maker_fee_override=0., taker_fee_override=0.)
+    config["backtest"].update(hsl_detailed_report=False, market_order_slippage_fraction=0.,
+                              maker_fee_override_fraction=0., taker_fee_override_fraction=0.)
     for direction in ("long", "short"):
         policy = config["bot"][direction]["hsl"]
         policy.update(enabled=direction == side and mode != "portfolio",
@@ -80,12 +80,12 @@ def test_recovered_panic_execution_mark_has_no_unobserved_red_minute(side, mode,
     assert report["summary"]["triggers"] > 0
     assert report["summary"]["red_minutes"] == 0
     assert report["summary"]["observed_minutes"] > 0
-    metrics = {"fills_per_day", "hard_stop_triggers_per_year", "hard_stop_time_in_red_pct"}
+    metrics = {"fills_per_day", "hsl_triggers_per_year", "hsl_red_time_fraction"}
     proxy = SharedAccountReplay(config=config, hlcvs=candles, mss=markets, btc=btc,
         timestamps=timestamps, exchange="bybit", batch_size=1,
         needed_metrics=metrics, factual_hsl=True)
     actual = proxy.evaluate([prepare_candidate_parameters(config, markets, "bybit")])[0]
-    assert actual["hard_stop_time_in_red_pct"] == 0.
+    assert actual["hsl_red_time_fraction"] == 0.
     for name in metrics:
         expected = resolve_metric_value(analysis, name)
         assert actual[name] == pytest.approx(expected, abs=0., rel=8*np.finfo(float).eps), name

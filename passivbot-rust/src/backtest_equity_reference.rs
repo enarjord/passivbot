@@ -48,8 +48,8 @@ fn equity_shared_references_match_current_producers() {
     let mut bp_pair = BotParamsPair::default();
     bp_pair.long.n_positions = 1;
     bp_pair.short.n_positions = 1;
-    bp_pair.long.total_wallet_exposure_limit = 1.0;
-    bp_pair.short.total_wallet_exposure_limit = 1.0;
+    bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+    bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
     bp_pair.long.ema_span_0_minutes = 10.0;
     bp_pair.long.ema_span_1_minutes = 20.0;
     bp_pair.short.ema_span_0_minutes = 10.0;
@@ -64,8 +64,8 @@ fn equity_shared_references_match_current_producers() {
         minimum_coin_age_days: [0.0; 2],
         inception_timestamps_ms: vec![],
         starting_balance: 100.0,
-        maker_fee: 0.0,
-        taker_fee: 0.0,
+        maker_fee_fraction: 0.0,
+        taker_fee_fraction: 0.0,
         coins: vec!["TEST".to_string()],
         active_coin_indices: None,
         first_timestamp_ms: 0,
@@ -75,8 +75,8 @@ fn equity_shared_references_match_current_producers() {
         warmup_minutes: vec![0],
         trade_start_indices: vec![0],
         global_warmup_bars: 0,
-        btc_collateral_cap: 0.0,
-        btc_collateral_ltv_cap: None,
+        btc_collateral_target_ratio: 0.0,
+        max_usd_debt_to_wallet_value_ratio: None,
         metrics_only: true,
         ew_half_life_days: None,
         hsl_detailed_report: false,
@@ -84,14 +84,14 @@ fn equity_shared_references_match_current_producers() {
         filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
         dynamic_wel_by_tradability: true,
         hedge_mode: true,
-        max_realized_loss_pct: 1.0,
+        loss_gate_max_drawdown_fraction: 1.0,
         unstuck_memory_ema_span_minutes: 43_200.0,
         loss_gate_memory_ema_span_minutes: 43_200.0,
-        liquidation_threshold: 0.05,
+        equity_floor_fraction: 0.05,
         market_orders_allowed: false,
-        market_order_near_touch_threshold: 0.001,
-        market_order_slippage_pct: 0.0,
-        limit_order_fill_buffer_pct: 0.0,
+        market_order_near_touch_fraction: 0.001,
+        market_order_slippage_fraction: 0.0,
+        limit_order_fill_buffer_fraction: 0.0,
         forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
         equity_hard_stop_loss: hs,
         candle_interval_minutes: 1,
@@ -136,28 +136,49 @@ fn equity_shared_references_match_current_producers() {
                 name,
                 &[
                     (
-                        "adg_rolling_hmean_strategy_eq",
-                        raw.adg_rolling_hmean_strategy_eq,
+                        "adg_rolling_hmean_fraction_strategy_equity",
+                        raw.adg_rolling_hmean_fraction_strategy_equity,
                     ),
-                    ("adg_strategy_eq", raw.adg_strategy_eq),
                     (
-                        "adg_time_integrated_strategy_eq",
-                        raw.adg_time_integrated_strategy_eq,
+                        "adg_fraction_strategy_equity",
+                        raw.adg_fraction_strategy_equity,
                     ),
-                    ("calmar_ratio_strategy_eq", raw.calmar_ratio_strategy_eq),
                     (
-                        "expected_shortfall_1pct_strategy_eq",
-                        raw.expected_shortfall_1pct_strategy_eq,
+                        "adg_time_integrated_fraction_strategy_equity",
+                        raw.adg_time_integrated_fraction_strategy_equity,
                     ),
-                    ("mdg_strategy_eq", raw.mdg_strategy_eq),
-                    ("omega_ratio_strategy_eq", raw.omega_ratio_strategy_eq),
                     (
-                        "positive_gain_participation_strategy_eq",
-                        raw.positive_gain_participation_strategy_eq,
+                        "calmar_ratio_strategy_equity",
+                        raw.calmar_ratio_strategy_equity,
                     ),
-                    ("sharpe_ratio_strategy_eq", raw.sharpe_ratio_strategy_eq),
-                    ("sortino_ratio_strategy_eq", raw.sortino_ratio_strategy_eq),
-                    ("sterling_ratio_strategy_eq", raw.sterling_ratio_strategy_eq),
+                    (
+                        "expected_shortfall_1pct_fraction_strategy_equity",
+                        raw.expected_shortfall_1pct_fraction_strategy_equity,
+                    ),
+                    (
+                        "mdg_fraction_strategy_equity",
+                        raw.mdg_fraction_strategy_equity,
+                    ),
+                    (
+                        "omega_ratio_strategy_equity",
+                        raw.omega_ratio_strategy_equity,
+                    ),
+                    (
+                        "positive_log_return_participation_score_strategy_equity",
+                        raw.positive_log_return_participation_score_strategy_equity,
+                    ),
+                    (
+                        "sharpe_ratio_strategy_equity",
+                        raw.sharpe_ratio_strategy_equity,
+                    ),
+                    (
+                        "sortino_ratio_strategy_equity",
+                        raw.sortino_ratio_strategy_equity,
+                    ),
+                    (
+                        "sterling_ratio_strategy_equity",
+                        raw.sterling_ratio_strategy_equity,
+                    ),
                 ],
                 &case[expected_full],
             );
@@ -200,9 +221,15 @@ fn equity_shared_references_match_current_producers() {
                 assert_metrics_with_tolerance(
                     name,
                     &[
-                        ("equity_choppiness_usd", account.equity_choppiness),
-                        ("equity_jerkiness_usd", account.equity_jerkiness),
-                        ("exponential_fit_error_usd", account.exponential_fit_error),
+                        (
+                            "equity_choppiness_ratio_usd",
+                            account.equity_choppiness_ratio,
+                        ),
+                        ("equity_jerkiness_ratio_usd", account.equity_jerkiness_ratio),
+                        (
+                            "exponential_fit_mse_log_ratio_squared_usd",
+                            account.exponential_fit_mse_log_ratio_squared,
+                        ),
                     ],
                     &case[expected_shape][variant],
                     1e-10,

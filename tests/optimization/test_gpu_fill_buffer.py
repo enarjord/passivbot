@@ -40,14 +40,14 @@ def test_buffered_suite_cache_separates_fill_assumptions(monkeypatch):
     from test_gpu_prepared_data import _inputs
     calls = []
     def build(*args, **kwargs):
-        calls.append(kwargs['limit_order_fill_buffer_pct'])
+        calls.append(kwargs['limit_order_fill_buffer_fraction'])
         return dict(n_coins=2, n=10, invariant_bytes=1)
     monkeypatch.setattr(service, 'build_mps_multicoin_data', build)
     cache = {}
     original = service._prepared_multicoin_data(**_inputs(), cache=cache)
-    buffered = service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_pct=0.0015)
+    buffered = service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_fraction=0.0015)
     assert buffered is not original
-    assert service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_pct=0.0015) is buffered
+    assert service._prepared_multicoin_data(**_inputs(), cache=cache, limit_order_fill_buffer_fraction=0.0015) is buffered
     assert calls == [0.0, 0.0015]
 
 
@@ -55,13 +55,13 @@ def test_buffer_changes_gpu_checkpoint_identity():
     from optimization.gpu.service import _gpu_proxy_execution_checkpoint_contract
     args = dict(strategy_kind='trailing_martingale', exchange='bybit', enabled_sides=['long'],
                 hlcvs=np.ones((3, 1, 4)), timestamps=np.arange(3),
-                backtest_params={'coins': ['BTC'], 'limit_order_fill_buffer_pct': 0.0},
+                backtest_params={'coins': ['BTC'], 'limit_order_fill_buffer_fraction': 0.0},
                 exchange_params=[], base_params={})
     zero = _gpu_proxy_execution_checkpoint_contract(**args)
-    args['backtest_params']['limit_order_fill_buffer_pct'] = 0.0015
+    args['backtest_params']['limit_order_fill_buffer_fraction'] = 0.0015
     buffered = _gpu_proxy_execution_checkpoint_contract(**args)
     assert zero != buffered
-    assert buffered['backtest']['limit_order_fill_buffer_pct'] == 0.0015
+    assert buffered['backtest']['limit_order_fill_buffer_fraction'] == 0.0015
 
 
 def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
@@ -74,9 +74,9 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     coins = ['BTC', 'ETH'][:coin_count]
     set_side_universe_sources(cfg, 'approved_coins', {s: coins if s == side else [] for s in ['long', 'short']})
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
-                          starting_balance=1000.0, limit_order_fill_buffer_pct=buffer)
+                          starting_balance=1000.0, limit_order_fill_buffer_fraction=buffer)
     for s in ['long', 'short']:
-        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_pct': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
+        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'n_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
         cfg['bot'][s]['hsl']['enabled'] = False
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
@@ -158,7 +158,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
     for buffer in [0.0, 0.0015]:
         cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
         proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
-                    exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_usd'})
+                    exchange='bybit', batch_size=1, needed_metrics={'fills_per_day', 'adg_fraction_usd'})
         result = proxy.evaluate([{}])[0]
         fills, _, exact = run_backtest(candles, mss, cfg, 'bybit', btc, ts)
         assert len(fills) == 2 * coin_count
@@ -166,7 +166,7 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
         assert len(close_fills) == coin_count
         assert all(int(f[0]) == (21 if buffer else 11) for f in close_fills)
         assert result['fills_per_day'] == pytest.approx(exact['fills_per_day'], rel=1e-5)
-        assert result['adg_usd'] == pytest.approx(exact['adg_usd'], abs=1e-5, rel=1e-3)
+        assert result['adg_fraction_usd'] == pytest.approx(exact['adg_fraction_usd'], abs=1e-5, rel=1e-3)
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

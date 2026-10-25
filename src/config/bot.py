@@ -25,32 +25,21 @@ from .tree_ops import add_missing_keys_recursively
 DEFAULT_FORAGER_SCORE_WEIGHTS = {
     "volume": 0.0,
     "ema_readiness": 0.0,
-    "volatility": 1.0,
+    "log_range": 1.0,
     "unilateralness": 0.0,
 }
 REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
-    "risk_wel_enforcer_threshold",
-    "risk_twel_enforcer_threshold",
-    "unstuck_threshold",
+    "risk_wel_enforcer_threshold_ratio",
+    "risk_twel_enforcer_threshold_ratio",
+    "unstuck_exposure_trigger_ratio",
 )
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
 CLIFF_EDGE_DUST_EPS = 1e-9
 CLIFF_EDGE_WARNING_THRESHOLD = 0.1
-FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
-    "forager_volatility_ema_span_1m": "filter_volatility_ema_span_1m",
-    "forager_volume_ema_span_1m": "filter_volume_ema_span_1m",
-}
-
-FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
-    "long_forager_volatility_ema_span_1m": "long_filter_volatility_ema_span_1m",
-    "long_forager_volume_ema_span_1m": "long_filter_volume_ema_span_1m",
-    "short_forager_volatility_ema_span_1m": "short_filter_volatility_ema_span_1m",
-    "short_forager_volume_ema_span_1m": "short_filter_volume_ema_span_1m",
-}
 
 
-def validate_unstuck_ema_dist_value(value, *, path: str, pside: str) -> None:
+def validate_unstuck_ema_distance_fraction_value(value, *, path: str, pside: str) -> None:
     try:
         numeric = float(value)
     except (TypeError, ValueError) as exc:
@@ -125,7 +114,7 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
-                bot_side, "risk_wel_enforcer_threshold"
+                bot_side, "risk_wel_enforcer_threshold_ratio"
             ),
             enabled_path=f"bot.{pside}.risk.position_exposure_enforcer.enabled",
             threshold_path=f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
@@ -133,14 +122,14 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
-                bot_side, "risk_twel_enforcer_threshold"
+                bot_side, "risk_twel_enforcer_threshold_ratio"
             ),
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer.enabled",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=True,
-            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold_ratio"),
             enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
@@ -148,7 +137,7 @@ def validate_bot_config(result: dict) -> None:
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
             path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
-        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
+        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit_ratio"))
         raw_n_positions = get_grouped_bot_value(bot_side, "n_positions")
         try:
             n_positions_value = float(raw_n_positions)
@@ -174,8 +163,8 @@ def validate_bot_config(result: dict) -> None:
             get_grouped_bot_value(bot_side, "unstuck_ema_gating_enabled"),
             path=f"bot.{pside}.unstuck.ema_gating_enabled",
         )
-        validate_unstuck_ema_dist_value(
-            get_grouped_bot_value(bot_side, "unstuck_ema_dist"),
+        validate_unstuck_ema_distance_fraction_value(
+            get_grouped_bot_value(bot_side, "unstuck_ema_distance_fraction"),
             path=f"bot.{pside}.unstuck.ema_distance_fraction",
             pside=pside,
         )
@@ -272,16 +261,16 @@ def _derive_close_grid_qty_fraction(bot_cfg: dict, *, path: str) -> Optional[flo
 
 
 def _bot_side_enabled(bot_cfg: dict, *, pside: str) -> bool:
-    path = _bot_path(pside, "total_wallet_exposure_limit")
+    path = _bot_path(pside, "total_wallet_exposure_limit_ratio")
     try:
-        total_wallet_exposure_limit = float(bot_cfg["total_wallet_exposure_limit"])
+        total_wallet_exposure_limit_ratio = float(bot_cfg["total_wallet_exposure_limit_ratio"])
     except KeyError:
         return False
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{path} must be numeric") from exc
-    if not math.isfinite(total_wallet_exposure_limit):
+    if not math.isfinite(total_wallet_exposure_limit_ratio):
         raise ValueError(f"{path} must be finite")
-    return total_wallet_exposure_limit > 0.0
+    return total_wallet_exposure_limit_ratio > 0.0
 
 
 def _hydrate_forager_score_weights(
@@ -446,25 +435,25 @@ def normalize_hsl_risk_unstuck_numerics(
         risk_path = f"bot.{pside}.risk"
         unstuck_path = f"bot.{pside}.unstuck"
         for key in ("ema_span_0", "ema_span_1"):
-            raw = get_grouped_bot_value(bot_side, f"unstuck_{key}")
+            raw = get_grouped_bot_value(bot_side, f"unstuck_{key}_minutes")
             if isinstance(raw, bool):
                 raise ValueError(f"{unstuck_path}.{key}_minutes must be positive and finite")
             value = float(raw)
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{unstuck_path}.{key}_minutes must be positive and finite")
-            set_grouped_bot_value(bot_side, f"unstuck_{key}", value)
+            set_grouped_bot_value(bot_side, f"unstuck_{key}_minutes", value)
 
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_fraction"),
             path=f"{risk_path}.we_excess_allowance_fraction",
         )
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "unstuck_close_pct"),
+            get_grouped_bot_value(bot_side, "unstuck_close_fraction"),
             path=f"{unstuck_path}.close_fraction",
             max_value=1.0,
         )
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "unstuck_loss_allowance_pct"),
+            get_grouped_bot_value(bot_side, "unstuck_loss_allowance_fraction"),
             path=f"{unstuck_path}.loss_allowance_fraction",
         )
 
@@ -896,7 +885,7 @@ def format_bot_config(
             if isinstance(seeded.get("risk"), dict):
                 seeded["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
             else:
-                seeded["total_wallet_exposure_limit"] = 0.0
+                seeded["total_wallet_exposure_limit_ratio"] = 0.0
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)
@@ -916,12 +905,6 @@ def format_bot_config(
 def apply_forager_internal_aliases(result: dict) -> None:
     def _alias_bot_cfg(bot_cfg: dict) -> None:
         inject_flattened_shared_bot_side(bot_cfg)
-        for (
-            canonical_key,
-            internal_key,
-        ) in FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS.items():
-            if canonical_key in bot_cfg and internal_key not in bot_cfg:
-                bot_cfg[internal_key] = deepcopy(bot_cfg[canonical_key])
         bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)
 
     for pside in BOT_POSITION_SIDES:
@@ -939,10 +922,3 @@ def apply_forager_internal_aliases(result: dict) -> None:
             bot_cfg = override_bot.get(pside, {})
             if isinstance(bot_cfg, dict):
                 _alias_bot_cfg(bot_cfg)
-
-    bounds = result.get("optimize", {}).get("bounds", {})
-    if not isinstance(bounds, dict):
-        return
-    for canonical_key, internal_key in FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS.items():
-        if canonical_key in bounds and internal_key not in bounds:
-            bounds[internal_key] = deepcopy(bounds[canonical_key])

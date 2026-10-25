@@ -29,7 +29,7 @@ class Replay:
 
     def evaluate(self, candidates):
         self.calls.append(candidates)
-        return [ReplayResult({"gain": item["value"]}, False) for item in candidates]
+        return [ReplayResult({"gain_multiplier": item["value"]}, False) for item in candidates]
 
 
 class GatedReplay(Replay):
@@ -57,7 +57,7 @@ def test_fixed_service_remains_untimed_without_optional_diagnostics(monkeypatch)
     monkeypatch.setattr(module.time, "perf_counter", forbidden)
     with GpuBacktestService(batch_size=1, max_batch_delay=0) as service:
         service.register_dataset("market", Replay())
-        assert service.submit(request(1)).result(timeout=3).metrics == {"gain": 1}
+        assert service.submit(request(1)).result(timeout=3).metrics == {"gain_multiplier": 1}
         assert service.diagnostics_snapshot() is None
 
 
@@ -81,7 +81,7 @@ def test_optional_owner_diagnostics_separate_preparation_and_validated_execution
     with GpuBacktestService(batch_size=1, max_batch_delay=0, worker_context=worker,
                              diagnostics=True) as service:
         service.register_dataset_factory("market", factory)
-        assert service.submit(request(1)).result(timeout=3).metrics == {"gain": 1}
+        assert service.submit(request(1)).result(timeout=3).metrics == {"gain_multiplier": 1}
         snapshot = service.diagnostics_snapshot()
         assert snapshot["batches"] == snapshot["rows"] == snapshot["last_count"] == 1
         assert snapshot["execution_seconds"] == 7
@@ -121,7 +121,7 @@ def test_optional_owner_clock_failure_does_not_fail_successful_futures(monkeypat
     monkeypatch.setattr(module.time, clock, unavailable)
     with GpuBacktestService(batch_size=1, max_batch_delay=0, diagnostics=True) as service:
         service.register_dataset("market", Replay())
-        assert service.submit(request(1)).result(timeout=3).metrics == {"gain": 1}
+        assert service.submit(request(1)).result(timeout=3).metrics == {"gain_multiplier": 1}
         assert service.diagnostics_snapshot() is None
 
 
@@ -167,7 +167,7 @@ def test_service_changes_batch_width_only_between_successful_dispatches():
         ))
         replay.release.set()
         assert [future.result(timeout=3).metrics for future in futures] == [
-            {"gain": i} for i in range(10)
+            {"gain_multiplier": i} for i in range(10)
         ]
     finally:
         replay.release.set()
@@ -220,7 +220,7 @@ def test_first_dispatch_uses_prepared_capacity_without_repeating_or_reordering_w
         assert cancelled.cancel()
         release.set()
         assert [future.result(timeout=3).metrics for future in [first, *remaining]] == [
-            {"gain": i} for i in (0, 2, 3, 4)
+            {"gain_multiplier": i} for i in (0, 2, 3, 4)
         ]
     finally:
         release.set()
@@ -258,7 +258,7 @@ def test_cancel_pending_during_preparation_does_not_fill_first_dispatch():
         assert cancelled.wait(3)
         assert pending.cancelled()
         release.set()
-        assert first.result(timeout=3).metrics == {"gain": 0}
+        assert first.result(timeout=3).metrics == {"gain_multiplier": 0}
     finally:
         release.set()
         if closer is not None:
@@ -313,7 +313,7 @@ def test_failed_producer_work_never_supplies_tuning_evidence(malformed):
     class FailingReplay:
         def evaluate(self, _candidates):
             if malformed:
-                return [ReplayResult({"gain": float("nan")}, False)]
+                return [ReplayResult({"gain_multiplier": float("nan")}, False)]
             raise failure
     with GpuBacktestService(batch_policy=Policy()) as service:
         service.register_dataset("market", FailingReplay())
@@ -343,7 +343,7 @@ def test_worker_context_surrounds_all_dataset_resources_on_owner():
         service.register_dataset_factory("b", lambda: context("b"))
         assert events == []
         for i, name in enumerate(("a", "b", "a")):
-            assert service.submit(request(i, name)).result(timeout=3).metrics == {"gain": i}
+            assert service.submit(request(i, name)).result(timeout=3).metrics == {"gain_multiplier": i}
     owner = service._thread.ident
     assert events == [("enter", name, owner) for name in ("worker", "a", "b")] + [
         ("exit", name, owner) for name in ("b", "a", "worker")
@@ -381,7 +381,7 @@ def test_worker_context_failures_poison_admission_and_surface_cleanup(stage):
             service.submit(request(2))
         service.close()
     else:
-        assert future.result(timeout=3).metrics == {"gain": 1}
+        assert future.result(timeout=3).metrics == {"gain_multiplier": 1}
         with pytest.raises(RuntimeError, match="context cleanup"):
             service.close()
         with pytest.raises(RuntimeError, match="service failed"):
@@ -405,7 +405,7 @@ def test_factory_constructs_reuses_and_releases_resources_on_worker():
     service.register_dataset_factory("market", factory)
     assert not events
     for i in range(2):
-        assert service.submit(request(i)).result(timeout=3).metrics == {"gain": i}
+        assert service.submit(request(i)).result(timeout=3).metrics == {"gain_multiplier": i}
     assert len(events) == 1
     service.close()
     assert events == [("enter", service._thread.ident), ("exit", service._thread.ident, 2)]
@@ -507,7 +507,7 @@ def test_factory_cleanup_failure_is_reported_without_replacing_producer_error(pr
     if producer_fails:
         assert result.exception(timeout=3) is producer_error
     else:
-        assert result.result(timeout=3).metrics == {"gain": 0}
+        assert result.result(timeout=3).metrics == {"gain_multiplier": 0}
     expected = producer_error if producer_fails else cleanup_error
     with pytest.raises(type(expected)) as raised:
         service.close()
@@ -592,7 +592,7 @@ def test_adjacent_requests_microbatch_and_keep_identity():
         results = [future.result(timeout=3) for future in futures]
     assert len(replay.calls) == 1
     assert [result.request_id for result in results] == ["0", "1", "2"]
-    assert [result.metrics for result in results] == [{"gain": float(i)} for i in range(3)]
+    assert [result.metrics for result in results] == [{"gain_multiplier": float(i)} for i in range(3)]
     assert all(result.dataset_id == "market" for result in results)
     assert all(result.liquidated is False for result in results)
 
@@ -606,14 +606,14 @@ def test_structured_replay_preserves_terminal_status_per_request():
         service.register_dataset("market", StructuredReplay())
         futures = [service.submit(request(i)) for i in range(3)]
         results = [future.result(timeout=3) for future in futures]
-    assert [row.metrics for row in results] == [{"gain": float(i)} for i in range(3)]
+    assert [row.metrics for row in results] == [{"gain_multiplier": float(i)} for i in range(3)]
     assert [row.liquidated for row in results] == [False, True, False]
 
 
 def test_metric_only_producer_cannot_supply_execution_results():
     class MetricOnlyReplay:
         def evaluate(self, candidates):
-            return [{"gain": item["value"]} for item in candidates]
+            return [{"gain_multiplier": item["value"]} for item in candidates]
 
     with GpuBacktestService(batch_size=2, max_batch_delay=1) as service:
         service.register_dataset("market", MetricOnlyReplay())
@@ -650,12 +650,12 @@ def test_completion_does_not_wait_for_all_accepted_requests():
         first = service.submit(request(1, "fast"))
         second = service.submit(request(2, "slow"))
         assert slow.started.wait(3)
-        assert first.result(timeout=1).metrics == {"gain": 1.0}
+        assert first.result(timeout=1).metrics == {"gain_multiplier": 1.0}
         assert not second.done()
     finally:
         slow.release.set()
         service.close()
-    assert second.result().metrics == {"gain": 2.0}
+    assert second.result().metrics == {"gain_multiplier": 2.0}
 
 
 def test_automatic_coalescing_tracks_accepted_arrivals_and_successful_work():
@@ -712,7 +712,7 @@ def test_mixed_datasets_preserve_order_within_dataset_and_never_share_replay():
         ]
         # Close ends batch accumulation and drains the remaining singleton.
         service.close()
-    assert [future.result().metrics["gain"] for future in futures] == [1, 2, 3]
+    assert [future.result().metrics["gain_multiplier"] for future in futures] == [1, 2, 3]
     assert [row["value"] for batch in first.calls for row in batch] == [1, 3]
     assert [row["value"] for batch in second.calls for row in batch] == [2]
 
@@ -825,13 +825,13 @@ def test_queued_request_snapshots_caller_parameters():
     finally:
         replay.release.set()
         service.close()
-    assert future.result().metrics == {"gain": 1.0}
+    assert future.result().metrics == {"gain_multiplier": 1.0}
     assert replay.calls[-1][0]["nested"] == {"setting": 7}
 
 
 @pytest.mark.parametrize(
-    "bad_rows", [[], [ReplayResult({"gain": 1}, False), ReplayResult({}, False)],
-                 [ReplayResult({"gain": 1}, False), ReplayResult({"gain": float("nan")}, False)]]
+    "bad_rows", [[], [ReplayResult({"gain_multiplier": 1}, False), ReplayResult({}, False)],
+                 [ReplayResult({"gain_multiplier": 1}, False), ReplayResult({"gain_multiplier": float("nan")}, False)]]
 )
 def test_malformed_batch_has_no_partial_success_and_poisoned_admission(bad_rows):
     class BrokenReplay:
@@ -884,7 +884,7 @@ def test_cancel_pending_close_preserves_running_completion_and_joins():
     replay.release.set()
     closer.join(timeout=3)
     assert not closer.is_alive()
-    assert first.result().metrics == {"gain": 1.0}
+    assert first.result().metrics == {"gain_multiplier": 1.0}
     with pytest.raises(RuntimeError, match="closed"):
         service.submit(request(3))
 
@@ -930,7 +930,7 @@ def test_explicit_infinite_metric_sentinels_are_not_fabricated():
     with GpuBacktestService(batch_size=1) as service:
         service.register_dataset("market", Replay())
         result = service.submit(request(float("inf"))).result(timeout=3)
-    assert result.metrics["gain"] == float("inf")
+    assert result.metrics["gain_multiplier"] == float("inf")
 
 
 @pytest.mark.parametrize("automatic", [False, True])
@@ -981,7 +981,7 @@ def test_automatic_close_drains_accepted_work_without_waiting_for_deadline(monke
     future = service.submit(request(1))
     assert accumulating.wait(3)
     service.close()
-    assert future.result().metrics == {"gain": 1.0}
+    assert future.result().metrics == {"gain_multiplier": 1.0}
     assert len(replay.calls) == 1
 
 
@@ -1032,7 +1032,7 @@ def test_completed_future_releases_capacity_before_notifying_consumers(monkeypat
     try:
         first = service.submit(request(1))
         assert publishing.wait(3)
-        assert first.result(timeout=1).metrics == {"gain": 1.0}
+        assert first.result(timeout=1).metrics == {"gain_multiplier": 1.0}
         # Publication happened, but no cleanup callback has run yet.
         replacement = service.submit(request(1))
     finally:

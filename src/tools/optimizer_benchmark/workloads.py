@@ -10,7 +10,7 @@ import random
 from .catalogue import declared_gpu_support, select_cases
 
 VERSION = 2
-CORE_METRICS = ["adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day", "backtest_completion_ratio"]
+CORE_METRICS = ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day", "backtest_completion_fraction"]
 
 
 def _is_distance_sensitivity(key):
@@ -74,7 +74,7 @@ def apply_features(config, case, coins, markets, bars):
     if "slippage" in flags:
         config["backtest"]["market_order_slippage_fraction"] = 0.003
     if "btc_collateral" in flags:
-        config["backtest"]["btc_collateral_cap"] = 0.25
+        config["backtest"]["btc_collateral_target_ratio"] = 0.25
     if "eligibility" in flags and len(coins) > 1:
         markets[coins[-1]]["first_valid_index"] = bars // 2
         markets[coins[0]]["last_valid_index"] = bars - bars // 4 - 1
@@ -234,7 +234,7 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             options = ["--fixture", case.strategy,
                        "--sides", case.sides, "--coins", str(1 if case.topology == "single" else coins),
                        "--bars", str(bars), "--seed", str(seed), "--hsl", hsl,
-                       "--hsl-red-threshold", "0.005", "--hsl-drawdown-ratio-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
+                       "--hsl-drawdown-threshold-fraction", "0.005", "--hsl-drawdown-fraction-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
             config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
             source_coins = config["backtest"]["coins"]
             # A frozen benchmark candidate is a concrete execution snapshot,
@@ -262,9 +262,9 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             population, vectors, bounds = sampled_population(config, case, candidates, seed, bounds_config, boundary_candidates)
             metrics = list(CORE_METRICS)
             if any(f.startswith("hsl") for f in case.features):
-                metrics += ["hard_stop_triggers_per_year", "hard_stop_time_in_red_pct"]
+                metrics += ["hsl_triggers_per_year", "hsl_red_time_fraction"]
             if "equity_metrics" in case.features:
-                metrics += ["adg_strategy_eq", "fills_gap_p95_hours", "strategy_eq_recovery_days_p95"]
+                metrics += ["adg_fraction_strategy_equity", "fills_gap_p95_hours", "recovery_p95_days_strategy_equity"]
             entry = dict(case=case.record(), seed=seed, metrics=metrics, configs=population,
                          vectors=vectors, bounds=bounds, markets=markets, exchange="binance",
                          data_sha256=array_digest(candles, btc, timestamps),

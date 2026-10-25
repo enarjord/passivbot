@@ -48,7 +48,7 @@ def test_native_ew_only_omits_legacy_history_and_nested_analysis(monkeypatch, st
         return result
     monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", observed_run)
     completions = {}
-    ordinary_names = {"adg_strategy_eq", "adg_usd"}
+    ordinary_names = {"adg_fraction_strategy_equity", "adg_fraction_usd"}
     for ordinary in (False, True):
         phase["ordinary"] = ordinary
         requested = EW_METRICS | ordinary_names if ordinary else EW_METRICS

@@ -16,12 +16,12 @@ def test_numeric_tolerance_fields_reject_json_booleans(field, value):
 
 def test_metric_specific_tolerances_and_cpu_reference_scale():
     report = compare_metrics(
-        {"adg": 0.0, "drawdown": 0.5},
-        {"adg": 1e-8, "drawdown": 0.501},
-        {"adg": MetricTolerance(1e-7, 0), "drawdown": MetricTolerance(0, 1e-4)},
+        {"adg_fraction": 0.0, "drawdown": 0.5},
+        {"adg_fraction": 1e-8, "drawdown": 0.501},
+        {"adg_fraction": MetricTolerance(1e-7, 0), "drawdown": MetricTolerance(0, 1e-4)},
     )
     assert not report["passed"]
-    assert report["metrics"]["adg"]["status"] == "match"
+    assert report["metrics"]["adg_fraction"]["status"] == "match"
     assert report["metrics"]["drawdown"]["status"] == "mismatch"
     assert report["metrics"]["drawdown"]["allowed_error"] == 5e-5
 
@@ -85,11 +85,11 @@ def test_invalid_tolerances_rejected(value):
 
 
 def test_small_metric_error_can_still_flip_limit_feasibility():
-    check = {"metric": "drawdown_worst_strategy_eq", "metric_key": "drawdown_worst_strategy_eq_mean",
+    check = {"metric": "drawdown_max_fraction_strategy_equity", "metric_key": "drawdown_max_fraction_strategy_equity_mean",
              "mode": "greater_than", "bound": 0.5, "penalty_weight": 1}
-    cpu = {"drawdown_worst_strategy_eq": 0.5}
-    gpu = {"drawdown_worst_strategy_eq": 0.500001}
-    assert compare_metrics(cpu, gpu, {"drawdown_worst_strategy_eq": MetricTolerance(1e-5, 0)})["passed"]
+    cpu = {"drawdown_max_fraction_strategy_equity": 0.5}
+    gpu = {"drawdown_max_fraction_strategy_equity": 0.500001}
+    assert compare_metrics(cpu, gpu, {"drawdown_max_fraction_strategy_equity": MetricTolerance(1e-5, 0)})["passed"]
     report = compare_limits(cpu, gpu, [check])
     assert not report["passed"]
     assert report["cpu_feasible"] is True

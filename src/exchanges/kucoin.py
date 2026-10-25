@@ -14,7 +14,7 @@ import hashlib
 import base64
 from urllib.parse import parse_qs, urlsplit
 
-calc_order_price_diff = pbr.calc_order_price_diff
+calc_order_price_gap_fraction = pbr.calc_order_price_gap_fraction
 
 # ---------------------------------------------------------------------------
 # Broker mixin classes for injecting KC-BROKER-NAME on KuCoin futures requests.
@@ -374,7 +374,7 @@ class KucoinBot(CCXTBot):
                 continue
             market_price = market_prices[symbol]
             for order in orders:
-                price_diff = calc_order_price_diff(order["side"], order["price"], market_price)
+                price_diff = calc_order_price_gap_fraction(order["side"], order["price"], market_price)
                 flattened.append((price_diff, symbol, order))
         limit = getattr(self, "MAX_OPEN_ORDERS", 150)
         flattened.sort(key=lambda x: x[0])

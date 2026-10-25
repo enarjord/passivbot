@@ -50,28 +50,28 @@ def test_v9_native_risk_scopes_use_the_real_cpu_contract(mode):
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "2",
         "--bars", "256", "--seed", "43", "--hsl", mode,
-        "--hsl-red-threshold", ".01", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".01", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--price-shock", "0", "120", ".8", "--price-shock", "1", "170", "1.2",
         "--unstuck",
     ]))
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year",
-               "hard_stop_time_in_red_pct")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "hsl_triggers_per_year", "hsl_restarts_per_year",
+               "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hard_stop_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_time_in_red_pct": MetricTolerance(1e-8, 1e-5)}
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     _save_evidence(mode, report, inputs)
-    assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
+    assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
     assert report["passed"], report
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", [("long",), ("long", "short")])
-@pytest.mark.parametrize("loss_pct", [2e38, 1e36], ids=["product", "fused-result"])
-def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, loss_pct):
+@pytest.mark.parametrize("loss_allowance_fraction", [2e38, 1e36], ids=["product", "fused-result"])
+def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, loss_allowance_fraction):
     """Both single-side generation and fused preselection must publish failure."""
     _require_device()
     from copy import deepcopy
@@ -89,12 +89,15 @@ def test_v9_native_allowance_overflow_rejects_the_candidate(strategy, sides, los
     _, ordinary = raw(proxy, [{}], end_steps=end)
     assert ordinary["fill_count"].item() > 0, "the allowance consumer requires actual exposure"
     # The unchanged fixture has TWEL=2 and a positive ordinary balance. Each
-    # supplied percentage is finite f32; the authored product or FMA overflows.
+    # supplied fraction is finite f32; the authored product or FMA overflows.
+    candidate = {f"{sides[0]}_unstuck_loss_allowance_fraction": loss_allowance_fraction}
+    allowance_column = proxy.param_keys.index("unstuck_loss_allowance_fraction")
+    assert proxy._parameter_matrix([candidate], sides[0])[0, allowance_column] == loss_allowance_fraction
     with pytest.raises(ValueError, match="realized-loss memory or allowance"):
-        raw(proxy, [{f"{sides[0]}_unstuck_loss_allowance_pct": loss_pct}], end_steps=end)
+        raw(proxy, [candidate], end_steps=end)
     candles, markets, config, exchange, btc, timestamps = inputs
     config = deepcopy(config)
-    config["bot"][sides[0]]["unstuck"]["loss_allowance_pct"] = loss_pct
+    config["bot"][sides[0]]["unstuck"]["loss_allowance_fraction"] = loss_allowance_fraction
     with pytest.raises(
         ValueError,
         match=r"v9 (?:unstuck|realized-loss allowance) .*finite risk domain|global\.(?:unstuck_allowance|realized_pnl_drawdown_or_allowance)",
@@ -120,7 +123,7 @@ def test_v9_native_selected_shapes(strategy, mode, sides, coins, rebate, expecte
     recipe = [
         "--fixture", strategy, "--sides", sides, "--coins", str(coins),
         "--bars", "256", "--seed", "43", "--hsl", mode,
-        "--hsl-red-threshold", ".01", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".01", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--price-shock", "0", "120", "1.2" if sides == "short" else ".8",
         "--unstuck",
@@ -132,16 +135,16 @@ def test_v9_native_selected_shapes(strategy, mode, sides, coins, rebate, expecte
         for market in inputs[2].values():
             if isinstance(market, dict) and "maker" in market:
                 market["maker"] = -.0002
-    metrics = ("adg_strategy_eq", "drawdown_worst_strategy_eq", "fills_per_day",
-               "hard_stop_triggers_per_year", "hard_stop_restarts_per_year",
-               "hard_stop_time_in_red_pct")
+    metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
+               "hsl_triggers_per_year", "hsl_restarts_per_year",
+               "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hard_stop_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_time_in_red_pct": MetricTolerance(1e-8, 1e-5)}
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     _save_evidence(f"{strategy}-{mode}-{sides}-c{coins}-rebate{int(rebate)}", report, inputs)
-    assert (report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0) == expected_stop
+    assert (report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0) == expected_stop
     assert report["passed"], report
 
 
@@ -157,18 +160,18 @@ def test_v9_native_ema_entry_fee_forces_a_stop_and_restart(mode, sides):
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "ema_anchor", "--sides", sides, "--coins", "2",
         "--bars", "128", "--seed", "43", "--hsl", mode,
-        "--hsl-red-threshold", "1e-8", "--hsl-drawdown-ratio-ema-span-minutes", "1",
+        "--hsl-drawdown-threshold-fraction", "1e-8", "--hsl-drawdown-fraction-ema-span-minutes", "1",
         "--hsl-memory-ema-span-minutes", "30.5", "--hsl-cooldown-minutes", "2.0000083",
         "--unstuck",
     ]))
-    metrics = ("drawdown_worst_strategy_eq", "fills_per_day", "hard_stop_triggers_per_year",
-               "hard_stop_restarts_per_year", "hard_stop_time_in_red_pct")
+    metrics = ("drawdown_max_fraction_strategy_equity", "fills_per_day", "hsl_triggers_per_year",
+               "hsl_restarts_per_year", "hsl_red_time_fraction")
     policies = {**DEFAULT_TOLERANCES,
-                "hard_stop_triggers_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_restarts_per_year": MetricTolerance(1e-6, 1e-6),
-                "hard_stop_time_in_red_pct": MetricTolerance(1e-8, 1e-5)}
+                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_restarts_per_year": MetricTolerance(1e-6, 1e-6),
+                "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
     _save_evidence(f"ema-fee-forcing-{mode}-{sides}", report, inputs)
-    assert report["metrics"]["hard_stop_triggers_per_year"]["cpu"] > 0
-    assert report["metrics"]["hard_stop_restarts_per_year"]["cpu"] > 0
+    assert report["metrics"]["hsl_triggers_per_year"]["cpu"] > 0
+    assert report["metrics"]["hsl_restarts_per_year"]["cpu"] > 0
     assert report["passed"], report

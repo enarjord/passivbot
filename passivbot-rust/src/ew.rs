@@ -6,7 +6,7 @@ const DAY_MS: u64 = 86_400_000;
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct EwMetrics {
-    pub adg: f64,
+    pub adg_fraction: f64,
     pub sharpe_ratio: f64,
     pub sortino_ratio: f64,
     pub omega_ratio: f64,
@@ -146,13 +146,13 @@ pub fn analyze_ew_equity(
         .sum::<f64>()
         / sum_w;
     let metrics = EwMetrics {
-        adg: log_mean.exp_m1(),
+        adg_fraction: log_mean.exp_m1(),
         sharpe_ratio: (mean / variance.sqrt().max(1e-12)).clamp(-1000.0, 1000.0),
         sortino_ratio: (mean / downside.sqrt().max(1e-12)).clamp(-1000.0, 1000.0),
         omega_ratio: (gains / losses.max(1e-12)).clamp(0.0, 1000.0),
     };
     if [
-        metrics.adg,
+        metrics.adg_fraction,
         metrics.sharpe_ratio,
         metrics.sortino_ratio,
         metrics.omega_ratio,
@@ -187,7 +187,9 @@ mod tests {
         let m = a.metrics.unwrap();
         let mean = (-0.1 + 0.5 * 0.1) / 1.5;
         let std = ((0.5 * (0.1_f64 - mean).powi(2) + (-0.1_f64 - mean).powi(2)) / 1.5).sqrt();
-        assert!((m.adg - ((0.5 * 1.1_f64.ln() + 0.9_f64.ln()) / 1.5).exp_m1()).abs() < 1e-12);
+        assert!(
+            (m.adg_fraction - ((0.5 * 1.1_f64.ln() + 0.9_f64.ln()) / 1.5).exp_m1()).abs() < 1e-12
+        );
         assert!((m.sharpe_ratio - mean / std).abs() < 1e-12);
         assert!((m.sortino_ratio - mean / (0.01_f64 / 1.5).sqrt()).abs() < 1e-12);
         assert!((m.omega_ratio - 0.5).abs() < 1e-12);
@@ -202,11 +204,11 @@ mod tests {
                 .metrics
                 .unwrap();
             if daily[1] == 100.0 {
-                assert_eq!(m.adg, 0.0);
+                assert_eq!(m.adg_fraction, 0.0);
                 assert_eq!(m.sharpe_ratio, 0.0);
                 assert_eq!(m.omega_ratio, 0.0);
             } else {
-                assert!((m.adg - 0.1).abs() < 1e-12);
+                assert!((m.adg_fraction - 0.1).abs() < 1e-12);
                 assert_eq!(m.sharpe_ratio, 1000.0);
                 assert_eq!(m.sortino_ratio, 1000.0);
                 assert_eq!(m.omega_ratio, 1000.0);

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from config.validate import validate_limit_order_fill_buffer_pct
+from config.validate import validate_limit_order_fill_buffer_fraction
 
 GAP_BINS = 512
 GAP_MAX_MINUTES = 4_000_000.0
@@ -62,7 +62,7 @@ ADAPTIVE_PARAM_KEYS = (
     "entry_cooldown_max_duration_minutes",
     "entry_cooldown_exposure_weight",
     "entry_cooldown_adverse_weight",
-    "unilateralness_ema_span_1m",
+    "unilateralness_ema_span_minutes",
     "forager_score_weights_unilateralness",
     "unilateralness_window",
 )
@@ -74,7 +74,7 @@ def adaptive_params(bot: dict) -> dict:
     from math import ceil
 
     weights = bot.get("entry_cooldown_weights_minutes", {})
-    span = float(bot.get("unilateralness_ema_span_1m", 60.0))
+    span = float(bot.get("unilateralness_ema_span_minutes", 60.0))
     maximum = bot.get("entry_cooldown_max_duration_minutes")
     return dict(
         zip(
@@ -104,19 +104,19 @@ EMA_ANCHOR_PARAM_KEYS = (
     "offset_log_range_ema_span_1h_candles",
     "offset_log_range_ema_span_minutes",
     "entry_cooldown_minutes",
-    "total_wallet_exposure_limit",
+    "total_wallet_exposure_limit_ratio",
 )
 
 EXPOSURE_PARAM_KEYS = (
-    "we_excess_allowance_pct",
+    "we_excess_allowance_fraction",
     "hsl_scale_budget_with_excess_allowance",
     "twel_entry_gate_enabled",
-    "twel_enforcer_threshold",
+    "twel_enforcer_threshold_ratio",
 )
 
 POSITION_EXPOSURE_ENFORCER_PARAM_KEYS = (
     "wel_enforcer_enabled",
-    "wel_enforcer_threshold",
+    "wel_enforcer_threshold_ratio",
 )
 
 TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = ("twel_enforcer_enabled",)
@@ -124,23 +124,22 @@ TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = ("twel_enforcer_enabled",)
 UNSTUCK_PARAM_KEYS = (
     "unstuck_enabled",
     "unstuck_ema_gating_enabled",
-    "unstuck_close_pct",
-    "unstuck_ema_dist",
-    "unstuck_loss_allowance_pct",
-    "unstuck_threshold",
+    "unstuck_close_fraction",
+    "unstuck_ema_distance_fraction",
+    "unstuck_loss_allowance_fraction",
+    "unstuck_exposure_trigger_ratio",
 )
 
-UNSTUCK_EMA_PARAM_KEYS = ("unstuck_ema_span_0", "unstuck_ema_span_1")
-
+UNSTUCK_EMA_PARAM_KEYS = ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes")
 # Coupling binds each destination to the active strategy's canonical source ID.
 COUPLED_UNSTUCK_EMA_SOURCE_KEYS = {
     "trailing_martingale": {
-        "unstuck_ema_span_0": "entry_ema_span_0_minutes",
-        "unstuck_ema_span_1": "entry_ema_span_1_minutes",
+        "unstuck_ema_span_0_minutes": "entry_ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes": "entry_ema_span_1_minutes",
     },
     "ema_anchor": {
-        "unstuck_ema_span_0": "ema_span_0_minutes",
-        "unstuck_ema_span_1": "ema_span_1_minutes",
+        "unstuck_ema_span_0_minutes": "ema_span_0_minutes",
+        "unstuck_ema_span_1_minutes": "ema_span_1_minutes",
     },
 }
 
@@ -149,8 +148,8 @@ GLOBAL_RISK_PARAM_KEYS = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_e
 
 HSL_PARAM_KEYS = (
     "hsl_enabled",
-    "hsl_red_threshold",
-    "hsl_drawdown_ratio_ema_span_minutes",
+    "hsl_drawdown_threshold_fraction",
+    "hsl_drawdown_fraction_ema_span_minutes",
     "hsl_cooldown_ms_lo",
     "hsl_memory_ema_span_minutes",
     "hsl_signal_mode",
@@ -159,8 +158,8 @@ HSL_PARAM_KEYS = (
 
 HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_enabled", ("enabled",)),
-    ("hsl_red_threshold", ("drawdown_threshold_fraction",)),
-    ("hsl_drawdown_ratio_ema_span_minutes", ("drawdown_fraction_ema_span_minutes",)),
+    ("hsl_drawdown_threshold_fraction", ("drawdown_threshold_fraction",)),
+    ("hsl_drawdown_fraction_ema_span_minutes", ("drawdown_fraction_ema_span_minutes",)),
     ("hsl_cooldown_ms_lo", ("cooldown_after_red_minutes",)),
     ("hsl_cooldown_ms_hi", ("cooldown_after_red_minutes",)),
     ("hsl_panic_market", ("panic_close_order_type",)),
@@ -170,10 +169,10 @@ HSL_COIN_OVERRIDE_PATHS = (
 
 EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
 EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN = len(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS)
-EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
 )
-EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
+EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 2
 )
 EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
@@ -215,11 +214,11 @@ MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *EMA_ANCHOR_PARAM_KEYS,
-    "forager_volume_ema_span_1m",
-    "forager_volatility_ema_span_1m",
+    "forager_volume_ema_span_minutes",
+    "forager_log_range_ema_span_minutes",
     "forager_score_weights_volume",
     "forager_score_weights_ema_readiness",
-    "forager_score_weights_volatility",
+    "forager_score_weights_log_range",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
     *MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
@@ -255,7 +254,7 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
     "close_retracement_log_range_1h_coefficient",
     "close_retracement_log_range_1m_coefficient",
     "entry_cooldown_minutes",
-    "total_wallet_exposure_limit",
+    "total_wallet_exposure_limit_ratio",
     "gate_initial",
     "gate_reentry",
 )
@@ -263,11 +262,11 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *TRAILING_MARTINGALE_PARAM_KEYS,
-    "forager_volume_ema_span_1m",
-    "forager_volatility_ema_span_1m",
+    "forager_volume_ema_span_minutes",
+    "forager_log_range_ema_span_minutes",
     "forager_score_weights_volume",
     "forager_score_weights_ema_readiness",
-    "forager_score_weights_volatility",
+    "forager_score_weights_log_range",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
     *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
@@ -333,20 +332,20 @@ TRAILING_MARTINGALE_GATE_MODE_OVERRIDE_PATH = ("entry", "ema_gate_mode")
 TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN = len(
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN + 1
+TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN = (
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN + 1
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN + 1
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN + 6
@@ -415,7 +414,7 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             )
             or 0.0
         ),
-        "total_wallet_exposure_limit": float(risk["total_wallet_exposure_limit"]),
+        "total_wallet_exposure_limit_ratio": float(risk["total_wallet_exposure_limit_ratio"]),
         "gate_initial": float(mode in {"all", "initial"}),
         "gate_reentry": float(mode in {"all", "reentry"}),
     }
@@ -486,8 +485,8 @@ class ProxyMarket:
     min_qty: float
     min_cost: float
     c_mult: float
-    maker_fee: float
-    taker_fee: float = 0.0
+    maker_fee_fraction: float
+    taker_fee_fraction: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -499,7 +498,7 @@ class ProxyRun:
     guard_ts_ms: int
     first_ts_ms: int
     interval_ms: int
-    liquidation_threshold: float
+    equity_floor_fraction: float
     first_valid_idx: int
     last_valid_idx: int
     requested_end_ts_ms: int | None = None
@@ -581,7 +580,7 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
 
 
 def _strict_fill_tick_boundaries(
-    high, low, price_step: float, limit_order_fill_buffer_pct: float = 0.0
+    high, low, price_step: float, limit_order_fill_buffer_fraction: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Encode Rust's strict candle/order comparisons as integer tick boundaries."""
 
@@ -594,7 +593,7 @@ def _strict_fill_tick_boundaries(
     finite = np.isfinite(high) & np.isfinite(low)
     safe_high = np.where(finite, high, 0.0)
     safe_low = np.where(finite, low, 0.0)
-    buffer = validate_limit_order_fill_buffer_pct(limit_order_fill_buffer_pct)
+    buffer = validate_limit_order_fill_buffer_fraction(limit_order_fill_buffer_fraction)
     sell_factor, buy_factor = 1.0 + buffer, 1.0 - buffer
     # Solve the strict Rust price comparisons once, before uploading immutable
     # ticks. Kernels, raw candles, and market-order touch prices stay unchanged.
@@ -827,22 +826,22 @@ def _require_contiguous_mps_hlc(high, low, close, run: ProxyRun, *, coin: int = 
 
 
 
-def validate_market_order_slippage_pct(value):
+def validate_market_order_slippage_fraction(value):
     value = float(value)
     if not np.isfinite(value) or value < 0.0:
-        raise ValueError("market_order_slippage_pct must be finite and non-negative")
+        raise ValueError("market_order_slippage_fraction must be finite and non-negative")
     return value
 
 
 def _pack_multicoin_price_arrays(values, markets, relation_dtype, fill_buffer,
-                                 runs, market_order_slippage_pct, row_offset=0):
+                                 runs, market_order_slippage_fraction, row_offset=0):
     from passivbot_rust import prepare_gpu_market_execution_ticks
 
     candle_count, coin_count = values.shape[:2]
     market_execution_ticks = prepare_gpu_market_execution_ticks(
         np.asarray(values[:, :, 2], dtype=np.float64),
         [float(market.price_step) for market in markets],
-        market_order_slippage_pct,
+        market_order_slippage_fraction,
         [int(run.first_valid_idx) for run in runs],
         [int(run.last_valid_idx) for run in runs],
         row_offset,
@@ -884,7 +883,7 @@ def _pack_multicoin_price_arrays(values, markets, relation_dtype, fill_buffer,
 
 
 def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
-                          fill_buffer, market_order_slippage_pct,
+                          fill_buffer, market_order_slippage_fraction,
                           include_hourly_ranges, directory, *, compact_hourly_ranges=False):
     from contextlib import ExitStack
     from tempfile import TemporaryDirectory
@@ -939,7 +938,7 @@ def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
             end = min(start + chunk_rows, n)
             arrays, costs = _pack_multicoin_price_arrays(
                 values[start:end], markets, relation_dtype, fill_buffer,
-                runs, market_order_slippage_pct, row_offset=start,
+                runs, market_order_slippage_fraction, row_offset=start,
             )
             max_costs = np.maximum(max_costs, costs)
             if include_hourly_ranges and not compact_hourly_ranges:
@@ -984,8 +983,8 @@ def build_mps_multicoin_data(
     markets: list[ProxyMarket],
     *,
     include_hourly_ranges: bool = True,
-    limit_order_fill_buffer_pct: float = 0.0,
-    market_order_slippage_pct: float = 0.0,
+    limit_order_fill_buffer_fraction: float = 0.0,
+    market_order_slippage_fraction: float = 0.0,
     spill_dir=None,
     stream_tick_inputs=False,
     compact_hourly_ranges=False,
@@ -1009,7 +1008,7 @@ def build_mps_multicoin_data(
         ) from exc
 
     values = np.asarray(hlcvs)
-    market_order_slippage_pct = validate_market_order_slippage_pct(market_order_slippage_pct)
+    market_order_slippage_fraction = validate_market_order_slippage_fraction(market_order_slippage_fraction)
     if values.ndim != 3 or values.shape[2] < 4:
         raise ValueError(
             "MPS multicoin proxy expects HLCVs shaped (candles, coins, >=4); "
@@ -1085,13 +1084,13 @@ def build_mps_multicoin_data(
     if spill_dir is not None:
         arrays, max_costs, first_hour_observed = _spill_multicoin_arrays(
             values, timestamps, runs, markets, relation_dtype,
-            limit_order_fill_buffer_pct, market_order_slippage_pct,
+            limit_order_fill_buffer_fraction, market_order_slippage_fraction,
             include_hourly_ranges, spill_dir, compact_hourly_ranges=compact_hourly_ranges,
         )
     else:
         arrays, max_costs = _pack_multicoin_price_arrays(
-            values, markets, relation_dtype, limit_order_fill_buffer_pct,
-            runs, market_order_slippage_pct,
+            values, markets, relation_dtype, limit_order_fill_buffer_fraction,
+            runs, market_order_slippage_fraction,
         )
         if include_hourly_ranges:
             hourly = np.full((candle_count, coin_count), -1.0, dtype=np.float32)
@@ -1127,13 +1126,13 @@ def build_mps_multicoin_data(
             market.min_qty,
             market.min_cost,
             market.c_mult,
-            market.maker_fee,
+            market.maker_fee_fraction,
             run.first_valid_idx,
             run.last_valid_idx,
             run.trade_start_idx,
             seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
             volume_seed * typical_seed,
-            market.taker_fee,
+            market.taker_fee_fraction,
             max_effective_min_cost,
             *run.age_eligible_indices,
         )
@@ -1166,7 +1165,7 @@ def build_mps_multicoin_data(
         "hourly_range_rows": (compact_hourly_rows(candle_count, start_minute_of_hour=start_minute_of_hour)
                               if compact_hourly_ranges else candle_count),
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
-        "market_order_slippage_pct": market_order_slippage_pct,
+        "market_order_slippage_fraction": market_order_slippage_fraction,
         # Compact factual admission metadata, retained on the host even when
         # invariant tensors are spilled or moved between GPU datasets.
         "hourly_first_observed": tuple(map(int, first_hour_observed)),

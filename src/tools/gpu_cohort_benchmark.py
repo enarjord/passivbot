@@ -25,7 +25,7 @@ DISPATCH_BUDGET = 500_000_000
 # Identical float32 replay summaries can differ in the last float64 reduction
 # bits across batch shapes. This does not admit a float32 ULP of replay drift.
 MAX_FLOAT64_REDUCTION_ULPS = 8
-DEFAULT_OBJECTIVES = {"adg_strategy_eq": "max", "drawdown_worst_strategy_eq": "min"}
+DEFAULT_OBJECTIVES = {"adg_fraction_strategy_equity": "max", "drawdown_max_fraction_strategy_equity": "min"}
 
 
 def build_parser():
@@ -172,9 +172,9 @@ def _ranking(cpu, gpu, objectives=None):
                   cpu_front=cpu_front, gpu_front=gpu_front, front_members_match=cpu_front == gpu_front,
                   pair_order_disagreements=flips, pairs=len(cpu) * (len(cpu) - 1) // 2,
                   gpu_best_candidates=best, cpu_regret_at_gpu_best=regret)
-    if objectives.get("adg_strategy_eq") == "max":
-        result.update(gpu_max_adg_candidate=best["adg_strategy_eq"],
-                      cpu_adg_regret_of_gpu_max=regret["adg_strategy_eq"])
+    if objectives.get("adg_fraction_strategy_equity") == "max":
+        result.update(gpu_max_adg_candidate=best["adg_fraction_strategy_equity"],
+                      cpu_adg_regret_of_gpu_max=regret["adg_fraction_strategy_equity"])
     return result
 
 
@@ -182,11 +182,11 @@ def _checks(args):
     from limit_utils import expand_limit_checks
 
     entries = list(args.limits)
-    for metric, mode, bound in (("adg_strategy_eq", "less_than", args.adg_floor),
-                                ("drawdown_worst_strategy_eq", "greater_than", args.drawdown_ceiling)):
+    for metric, mode, bound in (("adg_fraction_strategy_equity", "less_than", args.adg_floor),
+                                ("drawdown_max_fraction_strategy_equity", "greater_than", args.drawdown_ceiling)):
         if bound is not None:
             entries.append(dict(metric=metric, penalize_if=mode, value=bound))
-    return expand_limit_checks(entries, {"adg_strategy_eq": -1.0, "drawdown_worst_strategy_eq": 1.0},
+    return expand_limit_checks(entries, {"adg_fraction_strategy_equity": -1.0, "drawdown_max_fraction_strategy_equity": 1.0},
                                penalty_weight=1.0)
 
 
@@ -341,7 +341,7 @@ def _native_runs(torch, dataset, parameters, reference, width, warm_runs):
 
 def _measure(torch, args, strategy, seed):
     from backtest import build_backtest_payload, execute_backtest
-    from config.metrics import resolve_metric_value
+    from config.metrics import resolve_metric_value, split_metric_curve
     from optimization.gpu.service import SharedAccountReplay
 
     inputs, configs, parameters = _cohort(args, strategy, seed)
@@ -353,7 +353,7 @@ def _measure(torch, args, strategy, seed):
         for candidate in configs:
             payload = build_backtest_payload(candles, markets, candidate, "binance", btc, timestamps,
                                              metrics_only=True,
-                                             skip_btc_analysis=not any(name.endswith("_btc") for name in args.metrics))
+                                             skip_btc_analysis=not any(split_metric_curve(name)[1] == "btc" for name in args.metrics))
             _, _, analysis = execute_backtest(payload, candidate)
             rows.append({name: value for name in args.metrics
                          if (value := resolve_metric_value(analysis, name)) is not None})

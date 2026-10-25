@@ -383,7 +383,7 @@ def test_unresolved_historical_fallback_keeps_its_original_amount(old_source):
     payload = fill({"currency": "BNB", "cost": 1.0}, 1)
     payload.update(fee_paid=-0.7, fee_source=old_source,
                    fee_quality=fem.FEE_QUALITY_FALLBACK, pnl_contract=fem.PNL_CONTRACT_CURRENT)
-    paid, meta = fem._normalize_fee_paid_from_payload(payload, fee_pct_fallback=0.0001)
+    paid, meta = fem._normalize_fee_paid_from_payload(payload, fallback_fee_fraction=0.0001)
     assert paid == -0.7
     assert meta["fee_source"] == old_source
 

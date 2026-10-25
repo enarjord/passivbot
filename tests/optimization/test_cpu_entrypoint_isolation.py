@@ -97,11 +97,11 @@ def test_cpu_optimizer_and_resume_use_real_workers_without_gpu_imports(tmp_path,
         backend = sys.argv[3]
         config["optimize"].update(backend=backend, population_size=4, iters=8, seed=12, n_cpus=2)
         config["optimize"]["scoring"] = [
-            dict(metric="adg_strategy_eq", goal="max"),
-            dict(metric="drawdown_worst_strategy_eq", goal="min"),
+            dict(metric="adg_fraction_strategy_equity", goal="max"),
+            dict(metric="drawdown_max_fraction_strategy_equity", goal="min"),
         ]
         config["optimize"]["limits"] = [
-            dict(metric="backtest_completion_ratio", penalize_if="less_than", value=0.99),
+            dict(metric="backtest_completion_fraction", penalize_if="less_than", value=0.99),
         ]
         config["optimize"]["bounds"] = {}
         for side in ("long", "short"):

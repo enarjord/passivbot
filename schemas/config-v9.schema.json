@@ -26,20 +26,12 @@
                 "optimize"
               ]
             },
-            "btc_collateral_cap": {
+            "btc_collateral_target_ratio": {
               "type": "number",
               "default": 0.0,
-              "x-passivbot-consumers": [
-                "backtest",
-                "optimize"
-              ]
-            },
-            "btc_collateral_ltv_cap": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "default": null,
+              "description": "Target BTC collateral value / total wallet value; values above one retain leveraged BTC collateral and negative USD balances.",
+              "x-passivbot-unit": "ratio",
+              "x-passivbot-denominator": "current BTC market value plus USD cash, excluding unrealized trading PnL",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -96,9 +88,14 @@
                 "optimize"
               ]
             },
-            "equity_floor_ratio": {
+            "equity_floor_fraction": {
               "type": "number",
               "default": 0.05,
+              "description": "Early-stop floor: equity at or below this fraction of starting balance ends replay.",
+              "minimum": 0.0,
+              "exclusiveMaximum": 1.0,
+              "x-passivbot-unit": "fraction",
+              "x-passivbot-denominator": "starting balance",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -185,12 +182,15 @@
                 "optimize"
               ]
             },
-            "maker_fee_override": {
+            "maker_fee_override_fraction": {
               "type": [
                 "number",
                 "null"
               ],
               "default": 0.0004,
+              "description": "Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.",
+              "x-passivbot-unit": "fraction",
+              "x-passivbot-denominator": "absolute fill quote notional",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -334,6 +334,20 @@
                   "optimize"
                 ]
               }
+            },
+            "max_usd_debt_to_wallet_value_ratio": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "default": null,
+              "description": "Optional USD debt / total wallet value ceiling when topping up BTC collateral; null or nonpositive values leave top-up debt uncapped; initial collateral allocation follows the target ratio.",
+              "x-passivbot-unit": "ratio",
+              "x-passivbot-denominator": "current BTC market value plus USD cash, excluding unrealized trading PnL",
+              "x-passivbot-consumers": [
+                "backtest",
+                "optimize"
+              ]
             },
             "offline": {
               "type": "boolean",
@@ -744,12 +758,15 @@
                 "optimize"
               ]
             },
-            "taker_fee_override": {
+            "taker_fee_override_fraction": {
               "type": [
                 "number",
                 "null"
               ],
               "default": 0.00055,
+              "description": "Signed scale-one fee override; negative values are rebates and null uses exchange-derived per-coin fees.",
+              "x-passivbot-unit": "fraction",
+              "x-passivbot-denominator": "absolute fill quote notional",
               "x-passivbot-consumers": [
                 "backtest",
                 "optimize"
@@ -761,19 +778,19 @@
                 "null"
               ],
               "default": [
-                "adg_strategy_eq",
-                "mdg_strategy_eq",
-                "strategy_eq_recovery_days_max",
-                "position_held_days_max",
-                "drawdown_worst_strategy_eq",
-                "volume_pct_per_day_avg",
-                "sortino_ratio_strategy_eq",
-                "sharpe_ratio_strategy_eq",
+                "adg_fraction_strategy_equity",
+                "mdg_fraction_strategy_equity",
+                "recovery_max_days_strategy_equity",
+                "position_held_max_days",
+                "drawdown_max_fraction_strategy_equity",
+                "active_day_turnover_proxy_mean_ratio",
+                "sortino_ratio_strategy_equity",
+                "sharpe_ratio_strategy_equity",
                 "loss_profit_ratio",
-                "pain_index_strategy_eq",
-                "ulcer_index_strategy_eq",
-                "hard_stop_restarts_per_year",
-                "hard_stop_panic_close_loss_drawdown_pct_mean"
+                "pain_index_fraction_strategy_equity",
+                "ulcer_index_fraction_strategy_equity",
+                "hsl_restarts_per_year",
+                "hsl_panic_episode_loss_mean_fraction"
               ],
               "x-passivbot-consumers": [
                 "backtest",
@@ -2484,7 +2501,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_forager_volatility_ema_span_1m",
+                      "x-passivbot-optimizer-key": "long_forager_log_range_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         10,
@@ -2546,7 +2563,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_forager_score_weights_volatility",
+                          "x-passivbot-optimizer-key": "long_forager_score_weights_log_range",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
@@ -2609,7 +2626,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unilateralness_ema_span_1m",
+                      "x-passivbot-optimizer-key": "long_unilateralness_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-coin-override": "forbidden"
                     },
@@ -2624,7 +2641,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_forager_volume_ema_span_1m",
+                      "x-passivbot-optimizer-key": "long_forager_volume_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         180,
@@ -2672,7 +2689,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -2696,7 +2713,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -2816,7 +2833,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -2872,7 +2889,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_twel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_twel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -2896,7 +2913,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_total_wallet_exposure_limit",
+                      "x-passivbot-optimizer-key": "long_total_wallet_exposure_limit_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         1.5,
@@ -2917,7 +2934,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -3795,7 +3812,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -3816,7 +3833,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -3848,7 +3865,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -3868,7 +3885,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -3901,7 +3918,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "long_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -3923,7 +3940,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -4020,7 +4037,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "portfolio HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -4043,7 +4060,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "portfolio HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -4205,15 +4222,13 @@
                 "warmup": {
                   "type": "object",
                   "properties": {
-                    "max_minutes": {
-                      "type": [
-                        "number",
-                        "null"
-                      ],
-                      "default": null,
-                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
-                      "exclusiveMinimum": 0.0,
-                      "x-passivbot-unit": "minutes",
+                    "activation_span_fraction": {
+                      "type": "number",
+                      "default": 0.3,
+                      "description": "Activation and backtest span term is span times this fraction; live acquisition uses span times (1 + fraction), subject to the existing cap and independent history requirements.",
+                      "minimum": 0.0,
+                      "x-passivbot-unit": "fraction",
+                      "x-passivbot-denominator": "indicator span",
                       "x-passivbot-scope": "portfolio",
                       "x-passivbot-consumers": [
                         "live",
@@ -4223,12 +4238,15 @@
                       "x-passivbot-optimizable": false,
                       "x-passivbot-coin-override": "forbidden"
                     },
-                    "span_multiplier": {
-                      "type": "number",
-                      "default": 0.3,
-                      "minimum": 0.0,
-                      "x-passivbot-unit": "multiplier",
-                      "x-passivbot-denominator": "indicator span",
+                    "max_minutes": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "default": null,
+                      "description": "Null leaves history warmup uncapped; positive finite values cap its existing calculation.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "minutes",
                       "x-passivbot-scope": "portfolio",
                       "x-passivbot-consumers": [
                         "live",
@@ -4399,7 +4417,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_forager_volatility_ema_span_1m",
+                      "x-passivbot-optimizer-key": "short_forager_log_range_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         10,
@@ -4461,7 +4479,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_forager_score_weights_volatility",
+                          "x-passivbot-optimizer-key": "short_forager_score_weights_log_range",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0,
@@ -4524,7 +4542,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unilateralness_ema_span_1m",
+                      "x-passivbot-optimizer-key": "short_unilateralness_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-coin-override": "forbidden"
                     },
@@ -4539,7 +4557,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_forager_volume_ema_span_1m",
+                      "x-passivbot-optimizer-key": "short_forager_volume_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         180,
@@ -4587,7 +4605,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -4611,7 +4629,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -4731,7 +4749,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -4787,7 +4805,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_twel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_twel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -4811,7 +4829,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_total_wallet_exposure_limit",
+                      "x-passivbot-optimizer-key": "short_total_wallet_exposure_limit_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -4831,7 +4849,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -5709,7 +5727,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -5730,7 +5748,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -5762,7 +5780,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -5782,7 +5800,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -5815,7 +5833,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "short_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -5837,7 +5855,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -6514,14 +6532,14 @@
               "default": [
                 {
                   "enabled": true,
-                  "metric": "drawdown_worst_strategy_eq",
+                  "metric": "drawdown_max_fraction_strategy_equity",
                   "penalize_if": "greater_than",
                   "reducer": "mean",
                   "value": 0.8
                 },
                 {
                   "enabled": true,
-                  "metric": "backtest_completion_ratio",
+                  "metric": "backtest_completion_fraction",
                   "penalize_if": "less_than",
                   "value": 0.99
                 }
@@ -6631,9 +6649,13 @@
             "prefilter": {
               "type": "object",
               "properties": {
-                "adverse_directionality": {
+                "adverse_directionality_score": {
                   "type": "number",
                   "default": 0.0,
+                  "description": "Declared adverse RMS directionality score for hypothetical cooldown measurements.",
+                  "minimum": 0.0,
+                  "maximum": 1.0,
+                  "x-passivbot-unit": "score",
                   "x-passivbot-consumers": [
                     "optimize"
                   ]
@@ -6664,6 +6686,13 @@
                       },
                       "metric": {
                         "type": "string",
+                        "enum": [
+                          "close_retracement_fraction",
+                          "entry_close_span_fraction",
+                          "entry_cooldown_minutes",
+                          "entry_retracement_fraction",
+                          "grid_span_fraction"
+                        ],
                         "x-passivbot-consumers": [
                           "optimize"
                         ]
@@ -6702,7 +6731,7 @@
                     "additionalProperties": false
                   }
                 },
-                "exposure_ratios": {
+                "exposure_probe_fractions": {
                   "type": "array",
                   "default": [
                     0.25,
@@ -6710,11 +6739,19 @@
                     0.8,
                     0.95
                   ],
+                  "description": "Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.",
+                  "x-passivbot-unit": "fraction",
+                  "x-passivbot-denominator": "effective per-position allowance including bounded excess allowance",
                   "x-passivbot-consumers": [
                     "optimize"
                   ],
                   "items": {
                     "type": "number",
+                    "description": "Declared hypothetical exposure probes; measurements retain Rust's separate base-WEL denominator where applicable.",
+                    "minimum": 0.0,
+                    "exclusiveMaximum": 0.999,
+                    "x-passivbot-unit": "fraction",
+                    "x-passivbot-denominator": "effective per-position allowance including bounded excess allowance",
                     "x-passivbot-consumers": [
                       "optimize"
                     ]
@@ -6727,23 +6764,31 @@
                     "optimize"
                   ]
                 },
+                "log_range_ema_1h": {
+                  "type": "number",
+                  "default": 0.0,
+                  "description": "Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.",
+                  "minimum": 0.0,
+                  "x-passivbot-unit": "log range",
+                  "x-passivbot-denominator": "candle low, inside ln(high / low)",
+                  "x-passivbot-consumers": [
+                    "optimize"
+                  ]
+                },
+                "log_range_ema_1m": {
+                  "type": "number",
+                  "default": 0.0,
+                  "description": "Declared log-range EMA value at the named candle horizon; this assumption is not inferred from configured EMA spans.",
+                  "minimum": 0.0,
+                  "x-passivbot-unit": "log range",
+                  "x-passivbot-denominator": "candle low, inside ln(high / low)",
+                  "x-passivbot-consumers": [
+                    "optimize"
+                  ]
+                },
                 "penalty_weight": {
                   "type": "number",
                   "default": 1000000.0,
-                  "x-passivbot-consumers": [
-                    "optimize"
-                  ]
-                },
-                "volatility_ema_1h": {
-                  "type": "number",
-                  "default": 0.0,
-                  "x-passivbot-consumers": [
-                    "optimize"
-                  ]
-                },
-                "volatility_ema_1m": {
-                  "type": "number",
-                  "default": 0.0,
                   "x-passivbot-consumers": [
                     "optimize"
                   ]
@@ -6808,16 +6853,24 @@
                 "shared": {
                   "type": "object",
                   "properties": {
-                    "crossover_eta": {
+                    "crossover_distribution_index": {
                       "type": "number",
                       "default": 20.0,
+                      "description": "Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "distribution index",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
                     },
-                    "crossover_prob_var": {
+                    "crossover_probability_per_variable": {
                       "type": "number",
                       "default": 0.5,
+                      "description": "Per-variable simulated-binary-crossover gate; external pymoo candidate crossover policy is unchanged.",
+                      "minimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "probability",
+                      "x-passivbot-denominator": "parent-pair coordinates conditional on crossover",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
@@ -6829,29 +6882,42 @@
                         "optimize"
                       ]
                     },
-                    "mutation_eta": {
+                    "mutation_distribution_index": {
                       "type": "number",
                       "default": 20.0,
+                      "description": "Pymoo distribution-shape index; larger values keep offspring changes closer to their parents.",
+                      "exclusiveMinimum": 0.0,
+                      "x-passivbot-unit": "distribution index",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
                     },
-                    "mutation_prob": {
+                    "mutation_probability": {
                       "type": [
                         "number",
                         "string"
                       ],
                       "default": "auto",
+                      "description": "Per-candidate polynomial-mutation gate; auto is 1 / max(1, vector length).",
+                      "minimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "probability",
+                      "x-passivbot-denominator": "offspring candidates",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
                     },
-                    "mutation_prob_per_variable": {
+                    "mutation_probability_per_variable": {
                       "type": [
                         "number",
                         "string"
                       ],
                       "default": "auto",
+                      "description": "Conditional per-variable polynomial-mutation gate; auto is min(0.5, 1 / max(1, vector length)).",
+                      "minimum": 0.0,
+                      "maximum": 1.0,
+                      "x-passivbot-unit": "probability",
+                      "x-passivbot-denominator": "candidate coordinates conditional on mutation",
                       "x-passivbot-consumers": [
                         "optimize"
                       ]
@@ -6874,35 +6940,35 @@
               "default": [
                 {
                   "goal": "max",
-                  "metric": "adg_strategy_eq"
+                  "metric": "adg_fraction_strategy_equity"
                 },
                 {
                   "goal": "max",
-                  "metric": "mdg_strategy_eq"
+                  "metric": "mdg_fraction_strategy_equity"
                 },
                 {
                   "goal": "max",
-                  "metric": "sortino_ratio_strategy_eq"
+                  "metric": "sortino_ratio_strategy_equity"
                 },
                 {
                   "goal": "max",
-                  "metric": "volume_pct_per_day_avg"
+                  "metric": "active_day_turnover_proxy_mean_ratio"
                 },
                 {
                   "goal": "max",
-                  "metric": "sharpe_ratio_strategy_eq"
+                  "metric": "sharpe_ratio_strategy_equity"
                 },
                 {
                   "goal": "min",
-                  "metric": "strategy_eq_recovery_days_max"
+                  "metric": "recovery_max_days_strategy_equity"
                 },
                 {
                   "goal": "min",
-                  "metric": "position_held_days_max"
+                  "metric": "position_held_max_days"
                 },
                 {
                   "goal": "min",
-                  "metric": "drawdown_worst_strategy_eq"
+                  "metric": "drawdown_max_fraction_strategy_equity"
                 },
                 {
                   "goal": "min",
@@ -6910,7 +6976,7 @@
                 },
                 {
                   "goal": "min",
-                  "metric": "pain_index_strategy_eq"
+                  "metric": "pain_index_fraction_strategy_equity"
                 }
               ],
               "x-passivbot-consumers": [
@@ -13808,7 +13874,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -13831,7 +13897,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "long_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -13994,7 +14060,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -14027,7 +14093,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -14054,7 +14120,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -14074,7 +14140,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -14093,7 +14159,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -14112,7 +14178,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -14133,7 +14199,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -14153,7 +14219,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "long_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -14976,7 +15042,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_drawdown_ratio_ema_span_minutes",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_fraction_ema_span_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -14999,7 +15065,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_hsl_red_threshold",
+                      "x-passivbot-optimizer-key": "short_hsl_drawdown_threshold_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-optimize-when": "coin or position_side HSL scope",
                       "x-passivbot-recommended-bounds": [
@@ -15162,7 +15228,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -15195,7 +15261,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -15222,7 +15288,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -15242,7 +15308,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -15261,7 +15327,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -15280,7 +15346,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -15301,7 +15367,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -15321,7 +15387,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "short_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -16279,7 +16345,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "long_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             1,
@@ -16312,7 +16378,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -16339,7 +16405,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -16359,7 +16425,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -16378,7 +16444,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -16397,7 +16463,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "long_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -16418,7 +16484,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "long_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -16438,7 +16504,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "long_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "long_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -17324,7 +17390,7 @@
                             "backtest",
                             "optimize"
                           ],
-                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold",
+                          "x-passivbot-optimizer-key": "short_risk_wel_enforcer_threshold_ratio",
                           "x-passivbot-optimizable": true,
                           "x-passivbot-recommended-bounds": [
                             0.8,
@@ -17357,7 +17423,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_risk_we_excess_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0,
@@ -17384,7 +17450,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_close_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_close_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.01,
@@ -17404,7 +17470,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_dist",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_distance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         -0.2,
@@ -17423,7 +17489,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_0_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -17442,7 +17508,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1",
+                      "x-passivbot-optimizer-key": "short_unstuck_ema_span_1_minutes",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         60,
@@ -17463,7 +17529,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_pct",
+                      "x-passivbot-optimizer-key": "short_unstuck_loss_allowance_fraction",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.005,
@@ -17483,7 +17549,7 @@
                         "backtest",
                         "optimize"
                       ],
-                      "x-passivbot-optimizer-key": "short_unstuck_threshold",
+                      "x-passivbot-optimizer-key": "short_unstuck_exposure_trigger_ratio",
                       "x-passivbot-optimizable": true,
                       "x-passivbot-recommended-bounds": [
                         0.4,
@@ -18271,11 +18337,8 @@
         "backtest.base_dir": {
           "$ref": "#/$defs/config/properties/backtest/properties/base_dir"
         },
-        "backtest.btc_collateral_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_cap"
-        },
-        "backtest.btc_collateral_ltv_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_ltv_cap"
+        "backtest.btc_collateral_target_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_target_ratio"
         },
         "backtest.candle_interval_minutes": {
           "$ref": "#/$defs/config/properties/backtest/properties/candle_interval_minutes"
@@ -18292,8 +18355,8 @@
         "backtest.end_date": {
           "$ref": "#/$defs/config/properties/backtest/properties/end_date"
         },
-        "backtest.equity_floor_ratio": {
-          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_ratio"
+        "backtest.equity_floor_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_fraction"
         },
         "backtest.ew_half_life_days": {
           "$ref": "#/$defs/config/properties/backtest/properties/ew_half_life_days"
@@ -18319,8 +18382,8 @@
         "backtest.limit_order_fill_buffer_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/limit_order_fill_buffer_fraction"
         },
-        "backtest.maker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override"
+        "backtest.maker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override_fraction"
         },
         "backtest.market_order_slippage_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_order_slippage_fraction"
@@ -18336,6 +18399,9 @@
         },
         "backtest.market_settings_sources": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_settings_sources"
+        },
+        "backtest.max_usd_debt_to_wallet_value_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_wallet_value_ratio"
         },
         "backtest.offline": {
           "$ref": "#/$defs/config/properties/backtest/properties/offline"
@@ -18364,8 +18430,8 @@
         "backtest.suite_enabled": {
           "$ref": "#/$defs/config/properties/backtest/properties/suite_enabled"
         },
-        "backtest.taker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override"
+        "backtest.taker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override_fraction"
         },
         "backtest.visible_metrics": {
           "$ref": "#/$defs/config/properties/backtest/properties/visible_metrics"
@@ -18988,11 +19054,11 @@
         "bot.portfolio.warmup": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup"
         },
+        "bot.portfolio.warmup.activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "bot.portfolio.warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "bot.portfolio.warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         },
         "bot.short": {
           "$ref": "#/$defs/config/properties/bot/properties/short"
@@ -19582,26 +19648,26 @@
         "optimize.prefilter": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter"
         },
-        "optimize.prefilter.adverse_directionality": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality"
+        "optimize.prefilter.adverse_directionality_score": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality_score"
         },
         "optimize.prefilter.checks": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/checks"
         },
-        "optimize.prefilter.exposure_ratios": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_ratios"
+        "optimize.prefilter.exposure_probe_fractions": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_probe_fractions"
         },
         "optimize.prefilter.grid_max_entries": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/grid_max_entries"
         },
+        "optimize.prefilter.log_range_ema_1h": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1h"
+        },
+        "optimize.prefilter.log_range_ema_1m": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1m"
+        },
         "optimize.prefilter.penalty_weight": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/penalty_weight"
-        },
-        "optimize.prefilter.volatility_ema_1h": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1h"
-        },
-        "optimize.prefilter.volatility_ema_1m": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1m"
         },
         "optimize.pymoo": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo"
@@ -19630,23 +19696,23 @@
         "optimize.pymoo.shared": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared"
         },
-        "optimize.pymoo.shared.crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "optimize.pymoo.shared.crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "optimize.pymoo.shared.crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "optimize.pymoo.shared.crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "optimize.pymoo.shared.eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "optimize.pymoo.shared.mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "optimize.pymoo.shared.mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "optimize.pymoo.shared.mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "optimize.pymoo.shared.mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "optimize.pymoo.shared.mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "optimize.pymoo.shared.mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         },
         "optimize.round_to_n_significant_digits": {
           "$ref": "#/$defs/config/properties/optimize/properties/round_to_n_significant_digits"
@@ -20829,11 +20895,8 @@
         "base_dir": {
           "$ref": "#/$defs/config/properties/backtest/properties/base_dir"
         },
-        "btc_collateral_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_cap"
-        },
-        "btc_collateral_ltv_cap": {
-          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_ltv_cap"
+        "btc_collateral_target_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/btc_collateral_target_ratio"
         },
         "candle_interval_minutes": {
           "$ref": "#/$defs/config/properties/backtest/properties/candle_interval_minutes"
@@ -20850,8 +20913,8 @@
         "end_date": {
           "$ref": "#/$defs/config/properties/backtest/properties/end_date"
         },
-        "equity_floor_ratio": {
-          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_ratio"
+        "equity_floor_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/equity_floor_fraction"
         },
         "ew_half_life_days": {
           "$ref": "#/$defs/config/properties/backtest/properties/ew_half_life_days"
@@ -20877,8 +20940,8 @@
         "limit_order_fill_buffer_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/limit_order_fill_buffer_fraction"
         },
-        "maker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override"
+        "maker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/maker_fee_override_fraction"
         },
         "market_order_slippage_fraction": {
           "$ref": "#/$defs/config/properties/backtest/properties/market_order_slippage_fraction"
@@ -20894,6 +20957,9 @@
         },
         "market_settings_sources": {
           "$ref": "#/$defs/scenarioPatch:backtest.market_settings_sources"
+        },
+        "max_usd_debt_to_wallet_value_ratio": {
+          "$ref": "#/$defs/config/properties/backtest/properties/max_usd_debt_to_wallet_value_ratio"
         },
         "offline": {
           "$ref": "#/$defs/config/properties/backtest/properties/offline"
@@ -20922,8 +20988,8 @@
         "suite_enabled": {
           "$ref": "#/$defs/config/properties/backtest/properties/suite_enabled"
         },
-        "taker_fee_override": {
-          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override"
+        "taker_fee_override_fraction": {
+          "$ref": "#/$defs/config/properties/backtest/properties/taker_fee_override_fraction"
         },
         "visible_metrics": {
           "$ref": "#/$defs/config/properties/backtest/properties/visible_metrics"
@@ -21593,11 +21659,11 @@
         "portfolio.warmup": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup"
         },
+        "portfolio.warmup.activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "portfolio.warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "portfolio.warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         },
         "short": {
           "$ref": "#/$defs/scenarioPatch:bot.short"
@@ -23621,11 +23687,11 @@
         "warmup": {
           "$ref": "#/$defs/scenarioPatch:bot.portfolio.warmup"
         },
+        "warmup.activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "warmup.max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "warmup.span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -23701,11 +23767,11 @@
     "scenarioPatch:bot.portfolio.warmup": {
       "type": "object",
       "properties": {
+        "activation_span_fraction": {
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/activation_span_fraction"
+        },
         "max_minutes": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/max_minutes"
-        },
-        "span_multiplier": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/warmup/properties/span_multiplier"
         }
       },
       "patternProperties": {},
@@ -25073,26 +25139,26 @@
         "prefilter": {
           "$ref": "#/$defs/scenarioPatch:optimize.prefilter"
         },
-        "prefilter.adverse_directionality": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality"
+        "prefilter.adverse_directionality_score": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality_score"
         },
         "prefilter.checks": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/checks"
         },
-        "prefilter.exposure_ratios": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_ratios"
+        "prefilter.exposure_probe_fractions": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_probe_fractions"
         },
         "prefilter.grid_max_entries": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/grid_max_entries"
         },
+        "prefilter.log_range_ema_1h": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1h"
+        },
+        "prefilter.log_range_ema_1m": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1m"
+        },
         "prefilter.penalty_weight": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/penalty_weight"
-        },
-        "prefilter.volatility_ema_1h": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1h"
-        },
-        "prefilter.volatility_ema_1m": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1m"
         },
         "pymoo": {
           "$ref": "#/$defs/scenarioPatch:optimize.pymoo"
@@ -25121,23 +25187,23 @@
         "pymoo.shared": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared"
         },
-        "pymoo.shared.crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "pymoo.shared.crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "pymoo.shared.crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "pymoo.shared.crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "pymoo.shared.eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "pymoo.shared.mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "pymoo.shared.mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "pymoo.shared.mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "pymoo.shared.mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "pymoo.shared.mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "pymoo.shared.mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         },
         "round_to_n_significant_digits": {
           "$ref": "#/$defs/config/properties/optimize/properties/round_to_n_significant_digits"
@@ -25913,26 +25979,26 @@
     "scenarioPatch:optimize.prefilter": {
       "type": "object",
       "properties": {
-        "adverse_directionality": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality"
+        "adverse_directionality_score": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/adverse_directionality_score"
         },
         "checks": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/checks"
         },
-        "exposure_ratios": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_ratios"
+        "exposure_probe_fractions": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/exposure_probe_fractions"
         },
         "grid_max_entries": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/grid_max_entries"
         },
+        "log_range_ema_1h": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1h"
+        },
+        "log_range_ema_1m": {
+          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/log_range_ema_1m"
+        },
         "penalty_weight": {
           "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/penalty_weight"
-        },
-        "volatility_ema_1h": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1h"
-        },
-        "volatility_ema_1m": {
-          "$ref": "#/$defs/config/properties/optimize/properties/prefilter/properties/volatility_ema_1m"
         }
       },
       "patternProperties": {},
@@ -25965,23 +26031,23 @@
         "shared": {
           "$ref": "#/$defs/scenarioPatch:optimize.pymoo.shared"
         },
-        "shared.crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "shared.crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "shared.crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "shared.crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "shared.eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "shared.mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "shared.mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "shared.mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "shared.mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "shared.mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "shared.mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         }
       },
       "patternProperties": {},
@@ -26047,23 +26113,23 @@
     "scenarioPatch:optimize.pymoo.shared": {
       "type": "object",
       "properties": {
-        "crossover_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_eta"
+        "crossover_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_distribution_index"
         },
-        "crossover_prob_var": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_prob_var"
+        "crossover_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/crossover_probability_per_variable"
         },
         "eliminate_duplicates": {
           "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/eliminate_duplicates"
         },
-        "mutation_eta": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_eta"
+        "mutation_distribution_index": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_distribution_index"
         },
-        "mutation_prob": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob"
+        "mutation_probability": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability"
         },
-        "mutation_prob_per_variable": {
-          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_prob_per_variable"
+        "mutation_probability_per_variable": {
+          "$ref": "#/$defs/config/properties/optimize/properties/pymoo/properties/shared/properties/mutation_probability_per_variable"
         }
       },
       "patternProperties": {},
@@ -29143,13 +29209,13 @@
                 "optimize.gpu",
                 "optimize.gpu.screening",
                 "optimize.prefilter",
-                "optimize.prefilter.adverse_directionality",
+                "optimize.prefilter.adverse_directionality_score",
                 "optimize.prefilter.checks",
-                "optimize.prefilter.exposure_ratios",
+                "optimize.prefilter.exposure_probe_fractions",
                 "optimize.prefilter.grid_max_entries",
+                "optimize.prefilter.log_range_ema_1h",
+                "optimize.prefilter.log_range_ema_1m",
                 "optimize.prefilter.penalty_weight",
-                "optimize.prefilter.volatility_ema_1h",
-                "optimize.prefilter.volatility_ema_1m",
                 "optimize.pymoo",
                 "optimize.pymoo.algorithms",
                 "optimize.pymoo.algorithms.nsga2",
@@ -30462,13 +30528,13 @@
                 "gpu",
                 "gpu.screening",
                 "prefilter",
-                "prefilter.adverse_directionality",
+                "prefilter.adverse_directionality_score",
                 "prefilter.checks",
-                "prefilter.exposure_ratios",
+                "prefilter.exposure_probe_fractions",
                 "prefilter.grid_max_entries",
+                "prefilter.log_range_ema_1h",
+                "prefilter.log_range_ema_1m",
                 "prefilter.penalty_weight",
-                "prefilter.volatility_ema_1h",
-                "prefilter.volatility_ema_1m",
                 "pymoo",
                 "pymoo.algorithms",
                 "pymoo.algorithms.nsga2",
@@ -30575,13 +30641,13 @@
           "propertyNames": {
             "not": {
               "enum": [
-                "adverse_directionality",
+                "adverse_directionality_score",
                 "checks",
-                "exposure_ratios",
+                "exposure_probe_fractions",
                 "grid_max_entries",
-                "penalty_weight",
-                "volatility_ema_1h",
-                "volatility_ema_1m"
+                "log_range_ema_1h",
+                "log_range_ema_1m",
+                "penalty_weight"
               ]
             }
           }

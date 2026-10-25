@@ -590,7 +590,7 @@ def test_account_critical_probe_health_summarizes_failures_without_raw_errors():
     assert summary["total"] == 3
     assert summary["succeeded"] == 1
     assert summary["failed"] == 2
-    assert summary["failure_pct"] == pytest.approx(66.667)
+    assert summary["failure_percent"] == pytest.approx(66.667)
     assert summary["surfaces"]["positions"]["error_types"] == {"RequestTimeout": 1}
     assert summary["surfaces"]["open_orders"]["latest"]["error_type"] == "RuntimeError"
     assert "secret=leak" not in str(summary)
@@ -643,7 +643,7 @@ def test_endpoint_latency_probe_health_summarizes_existing_outcomes_only():
     assert summary["total"] == 8
     assert summary["succeeded"] == 6
     assert summary["failed"] == 2
-    assert summary["failure_pct"] == pytest.approx(25.0)
+    assert summary["failure_percent"] == pytest.approx(25.0)
     assert summary["endpoints"]["fetch_ticker_concurrent"]["total"] == 2
     assert summary["endpoints"]["fetch_ticker_concurrent"]["failed"] == 1
     assert summary["endpoints"]["fetch_ticker_concurrent"]["error_types"] == {
@@ -879,7 +879,7 @@ def test_account_critical_probe_collection_aggregates_user_summaries():
     assert collection["users"][0]["total"] == 3
     assert collection["users"][0]["succeeded"] == 2
     assert collection["users"][0]["failed"] == 1
-    assert collection["users"][0]["failure_pct"] == pytest.approx(33.333)
+    assert collection["users"][0]["failure_percent"] == pytest.approx(33.333)
     assert collection["users"][1] == {
         "user": "binance_01",
         "exchange": "binance",
@@ -887,7 +887,7 @@ def test_account_critical_probe_collection_aggregates_user_summaries():
         "total": 0,
         "succeeded": 0,
         "failed": 0,
-        "failure_pct": None,
+        "failure_percent": None,
     }
 
 
@@ -930,7 +930,7 @@ def test_time_sync_probe_health_summarizes_success_failure_and_unsupported():
     assert summary["succeeded"] == 1
     assert summary["failed"] == 1
     assert summary["unsupported"] == 1
-    assert summary["failure_pct"] == pytest.approx(50.0)
+    assert summary["failure_percent"] == pytest.approx(50.0)
     assert summary["clock_skew_ms"]["max_abs"] == 125.0
     assert summary["error_types"] == {"RequestTimeout": 1}
     assert "raw exchange error" not in str(summary)
@@ -948,7 +948,7 @@ def test_time_sync_probe_collection_aggregates_user_summaries():
                     "succeeded": 1,
                     "failed": 0,
                     "unsupported": 0,
-                    "failure_pct": 0.0,
+                    "failure_percent": 0.0,
                     "clock_skew_ms": {"max_abs": 42.0},
                     "latest": {"ok": True, "clock_skew_ms": 42.0},
                 },
@@ -962,7 +962,7 @@ def test_time_sync_probe_collection_aggregates_user_summaries():
                     "succeeded": 0,
                     "failed": 0,
                     "unsupported": 1,
-                    "failure_pct": None,
+                    "failure_percent": None,
                     "clock_skew_ms": {"max_abs": None},
                     "latest": {"ok": False, "supported": False, "skipped": True},
                 },
@@ -1027,7 +1027,7 @@ def test_candle_freshness_probe_health_summarizes_symbol_tail_ages():
     assert summary["total_symbols"] == 3
     assert summary["succeeded_symbols"] == 2
     assert summary["failed_symbols"] == 1
-    assert summary["failure_pct"] == pytest.approx(33.333)
+    assert summary["failure_percent"] == pytest.approx(33.333)
     assert summary["current_incomplete_symbols"] == 1
     assert summary["missing_timestamp_symbols"] == 0
     assert summary["last_age_ms"]["max"] == 60_000.0
@@ -1184,7 +1184,7 @@ def test_fill_history_probe_health_summarizes_success_failure_without_raw_errors
     assert summary["total"] == 2
     assert summary["succeeded"] == 1
     assert summary["failed"] == 1
-    assert summary["failure_pct"] == pytest.approx(50.0)
+    assert summary["failure_percent"] == pytest.approx(50.0)
     assert summary["latency_ms"]["count"] == 2
     assert summary["trade_count"]["max"] == 2.0
     assert summary["error_types"] == {"RequestTimeout": 1}
@@ -1207,7 +1207,7 @@ def test_fill_history_probe_collection_aggregates_users():
                     "total": 1,
                     "succeeded": 1,
                     "failed": 0,
-                    "failure_pct": 0.0,
+                    "failure_percent": 0.0,
                     "latest": {
                         "symbol": "BTC/USDT:USDT",
                         "trade_count": 2,
@@ -1228,7 +1228,7 @@ def test_fill_history_probe_collection_aggregates_users():
                     "total": 1,
                     "succeeded": 0,
                     "failed": 1,
-                    "failure_pct": 100.0,
+                    "failure_percent": 100.0,
                     "latest": {
                         "symbol": "ETH/USDT:USDT",
                         "trade_count": 0,
@@ -1244,7 +1244,7 @@ def test_fill_history_probe_collection_aggregates_users():
                     "total": 0,
                     "succeeded": 0,
                     "failed": 0,
-                    "failure_pct": None,
+                    "failure_percent": None,
                     "latest": None,
                     "newest_trade": None,
                 },
@@ -1255,7 +1255,7 @@ def test_fill_history_probe_collection_aggregates_users():
     assert collection["total"] == 2
     assert collection["succeeded"] == 1
     assert collection["failed"] == 1
-    assert collection["failure_pct"] == pytest.approx(50.0)
+    assert collection["failure_percent"] == pytest.approx(50.0)
     assert collection["trade_count"]["count"] == 2
     assert collection["newest_trade"] == {
         "user": "binance_01",

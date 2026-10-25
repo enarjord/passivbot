@@ -9,10 +9,10 @@ use std::collections::HashSet;
 pub struct CoinFeature {
     pub index: usize,
     pub enabled: bool,
-    pub volume_score: f64,
-    pub volatility_score: f64,
+    pub volume_ema: f64,
+    pub log_range_ema: f64,
     pub unilateralness_score: f64,
-    pub ema_readiness_score: f64,
+    pub ema_entry_price_gap_fraction: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ pub struct SelectionConfig {
     pub slots_to_fill: usize,
     pub weights: ForagerScoreWeights,
     pub require_forager: bool,
-    pub score_hysteresis_pct: f64,
+    pub score_hysteresis_margin: f64,
     pub incumbent_indices: HashSet<usize>,
 }
 
@@ -46,8 +46,8 @@ impl ForagerPositionSide {
 pub struct ForagerCandidate {
     pub index: usize,
     pub enabled: bool,
-    pub volume_score: f64,
-    pub volatility_score: f64,
+    pub volume_ema: f64,
+    pub log_range_ema: f64,
     pub unilateralness_score: f64,
     pub bid: f64,
     pub ask: f64,
@@ -62,7 +62,7 @@ pub struct ForagerSelectionConfig {
     pub weights: ForagerScoreWeights,
     pub require_forager: bool,
     pub position_side: ForagerPositionSide,
-    pub score_hysteresis_pct: f64,
+    pub score_hysteresis_margin: f64,
     pub incumbent_indices: HashSet<usize>,
 }
 
@@ -72,7 +72,7 @@ pub struct ForagerScoredCandidate {
     pub score: f64,
     pub volume_component: f64,
     pub ema_readiness_component: f64,
-    pub volatility_component: f64,
+    pub log_range_component: f64,
     pub unilateralness_component: f64,
     pub selected: bool,
     pub incumbent: bool,
@@ -108,8 +108,8 @@ impl ForagerSelectionConfig {
         Ok(self.require_forager && self.weights.volume != 0.0)
     }
 
-    fn volatility_required(&self) -> bool {
-        self.require_forager && self.weights.volatility != 0.0
+    fn log_range_required(&self) -> bool {
+        self.require_forager && self.weights.log_range != 0.0
     }
 
     fn ema_readiness_required(&self) -> bool {
@@ -117,11 +117,11 @@ impl ForagerSelectionConfig {
     }
 
     fn score_hysteresis(&self) -> Result<f64, ForagerSelectionError> {
-        validate_non_negative_pct("forager_score_hysteresis_pct", self.score_hysteresis_pct)
+        validate_finite_nonnegative("forager_score_hysteresis_margin", self.score_hysteresis_margin)
     }
 }
 
-fn validate_unit_pct(field: &'static str, value: f64) -> Result<f64, ForagerSelectionError> {
+fn validate_unit_interval(field: &'static str, value: f64) -> Result<f64, ForagerSelectionError> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
         return Err(ForagerSelectionError::InvalidConfig {
             field,
@@ -131,7 +131,7 @@ fn validate_unit_pct(field: &'static str, value: f64) -> Result<f64, ForagerSele
     Ok(value)
 }
 
-fn validate_non_negative_pct(
+fn validate_finite_nonnegative(
     field: &'static str,
     value: f64,
 ) -> Result<f64, ForagerSelectionError> {
@@ -161,7 +161,7 @@ fn validate_forager_weights(
     let normalized = canonicalize_forager_weights(weights)?;
     if !(normalized.volume.is_finite()
         && normalized.ema_readiness.is_finite()
-        && normalized.volatility.is_finite())
+        && normalized.log_range.is_finite())
     {
         return Err(ForagerSelectionError::NonFiniteInput {
             field: "forager_score_weights",
@@ -171,7 +171,7 @@ fn validate_forager_weights(
     Ok(normalized)
 }
 
-fn validate_required_score(
+fn validate_required_finite_value(
     value: f64,
     field: &'static str,
     index: usize,
@@ -182,11 +182,11 @@ fn validate_required_score(
     Ok(value)
 }
 
-fn compute_ema_readiness_score(
+fn compute_ema_entry_price_gap_fraction(
     candidate: &ForagerCandidate,
     cfg: &ForagerSelectionConfig,
 ) -> Result<f64, ForagerSelectionError> {
-    let entry_initial_ema_distance_fraction = validate_required_score(
+    let entry_initial_ema_distance_fraction = validate_required_finite_value(
         candidate.entry_initial_ema_distance_fraction,
         "entry_initial_ema_distance_fraction",
         candidate.index,
@@ -194,9 +194,9 @@ fn compute_ema_readiness_score(
     match cfg.position_side {
         ForagerPositionSide::Long => {
             let market_price =
-                validate_required_score(candidate.bid, "forager_market_bid", candidate.index)?;
+                validate_required_finite_value(candidate.bid, "forager_market_bid", candidate.index)?;
             let ema_lower =
-                validate_required_score(candidate.ema_lower, "forager_ema_lower", candidate.index)?;
+                validate_required_finite_value(candidate.ema_lower, "forager_ema_lower", candidate.index)?;
             let entry_threshold = ema_lower * (1.0 - entry_initial_ema_distance_fraction);
             if !(market_price > 0.0 && entry_threshold.is_finite() && entry_threshold > 0.0) {
                 return Err(ForagerSelectionError::NonFiniteInput {
@@ -208,9 +208,9 @@ fn compute_ema_readiness_score(
         }
         ForagerPositionSide::Short => {
             let market_price =
-                validate_required_score(candidate.ask, "forager_market_ask", candidate.index)?;
+                validate_required_finite_value(candidate.ask, "forager_market_ask", candidate.index)?;
             let ema_upper =
-                validate_required_score(candidate.ema_upper, "forager_ema_upper", candidate.index)?;
+                validate_required_finite_value(candidate.ema_upper, "forager_ema_upper", candidate.index)?;
             let entry_threshold = ema_upper * (1.0 + entry_initial_ema_distance_fraction);
             if !(market_price > 0.0 && entry_threshold.is_finite() && entry_threshold > 0.0) {
                 return Err(ForagerSelectionError::NonFiniteInput {
@@ -228,7 +228,7 @@ fn build_coin_features(
     cfg: &ForagerSelectionConfig,
 ) -> Result<Vec<CoinFeature>, ForagerSelectionError> {
     let require_volume = cfg.volume_required()?;
-    let require_volatility = cfg.volatility_required();
+    let require_log_range = cfg.log_range_required();
     let require_ema_readiness = cfg.ema_readiness_required();
 
     candidates
@@ -238,47 +238,47 @@ fn build_coin_features(
                 return Ok(CoinFeature {
                     index: candidate.index,
                     enabled: false,
-                    volume_score: 0.0,
-                    volatility_score: 0.0,
+                    volume_ema: 0.0,
+                    log_range_ema: 0.0,
                     unilateralness_score: 0.0,
-                    ema_readiness_score: 0.0,
+                    ema_entry_price_gap_fraction: 0.0,
                 });
             }
-            let volume_score = if require_volume {
-                validate_required_score(
-                    candidate.volume_score,
-                    "forager_volume_score",
+            let volume_ema = if require_volume {
+                validate_required_finite_value(
+                    candidate.volume_ema,
+                    "forager_volume_ema",
                     candidate.index,
                 )?
             } else {
-                candidate.volume_score
+                candidate.volume_ema
             };
-            let volatility_score = if require_volatility {
-                validate_required_score(
-                    candidate.volatility_score,
-                    "forager_volatility_score",
+            let log_range_ema = if require_log_range {
+                validate_required_finite_value(
+                    candidate.log_range_ema,
+                    "forager_log_range_ema",
                     candidate.index,
                 )?
             } else {
-                candidate.volatility_score
+                candidate.log_range_ema
             };
             let unilateralness_score = if cfg.require_forager && cfg.weights.unilateralness > 0.0 {
-                validate_unit_pct("unilateralness_score", candidate.unilateralness_score)?
+                validate_unit_interval("unilateralness_score", candidate.unilateralness_score)?
             } else {
                 0.0
             };
-            let ema_readiness_score = if require_ema_readiness {
-                compute_ema_readiness_score(candidate, cfg)?
+            let ema_entry_price_gap_fraction = if require_ema_readiness {
+                compute_ema_entry_price_gap_fraction(candidate, cfg)?
             } else {
                 0.0
             };
             Ok(CoinFeature {
                 index: candidate.index,
                 enabled: candidate.enabled,
-                volume_score,
-                volatility_score,
+                volume_ema,
+                log_range_ema,
                 unilateralness_score,
-                ema_readiness_score,
+                ema_entry_price_gap_fraction,
             })
         })
         .collect()
@@ -296,13 +296,13 @@ pub fn select_forager_candidates_with_diagnostics(
     cfg: &ForagerSelectionConfig,
 ) -> Result<ForagerSelectionResult, ForagerSelectionError> {
     let normalized_weights = validate_forager_weights(&cfg.weights)?;
-    let score_hysteresis_pct = cfg.score_hysteresis()?;
+    let score_hysteresis_margin = cfg.score_hysteresis()?;
     let normalized_cfg = ForagerSelectionConfig {
         slots_to_fill: cfg.slots_to_fill,
         weights: normalized_weights,
         require_forager: cfg.require_forager,
         position_side: cfg.position_side,
-        score_hysteresis_pct,
+        score_hysteresis_margin,
         incumbent_indices: cfg.incumbent_indices.clone(),
     };
     let features = build_coin_features(candidates, &normalized_cfg)?;
@@ -310,7 +310,7 @@ pub fn select_forager_candidates_with_diagnostics(
         slots_to_fill: normalized_cfg.slots_to_fill,
         weights: normalized_cfg.weights,
         require_forager: normalized_cfg.require_forager,
-        score_hysteresis_pct: normalized_cfg.score_hysteresis_pct,
+        score_hysteresis_margin: normalized_cfg.score_hysteresis_margin,
         incumbent_indices: normalized_cfg.incumbent_indices,
     };
     Ok(select_coins_with_diagnostics(&features, &selection_cfg))
@@ -381,19 +381,19 @@ fn score_forager_candidates(
     let volume_scores = normalize_higher_is_better(
         &positions
             .iter()
-            .map(|&pos| features[pos].volume_score)
+            .map(|&pos| features[pos].volume_ema)
             .collect::<Vec<f64>>(),
     );
     let ema_readiness_scores = normalize_lower_is_better(
         &positions
             .iter()
-            .map(|&pos| features[pos].ema_readiness_score)
+            .map(|&pos| features[pos].ema_entry_price_gap_fraction)
             .collect::<Vec<f64>>(),
     );
-    let volatility_scores = normalize_higher_is_better(
+    let log_range_scores = normalize_higher_is_better(
         &positions
             .iter()
-            .map(|&pos| features[pos].volatility_score)
+            .map(|&pos| features[pos].log_range_ema)
             .collect::<Vec<f64>>(),
     );
 
@@ -413,14 +413,14 @@ fn score_forager_candidates(
         .map(|(i, &pos)| {
             let score = cfg.weights.volume * volume_scores[i]
                 + cfg.weights.ema_readiness * ema_readiness_scores[i]
-                + cfg.weights.volatility * volatility_scores[i]
+                + cfg.weights.log_range * log_range_scores[i]
                 + cfg.weights.unilateralness * unilateralness_scores[i];
             ScoredPosition {
                 pos,
                 score,
                 volume_component: volume_scores[i],
                 ema_readiness_component: ema_readiness_scores[i],
-                volatility_component: volatility_scores[i],
+                log_range_component: log_range_scores[i],
                 unilateralness_component: unilateralness_scores[i],
             }
         })
@@ -463,7 +463,7 @@ fn score_forager_candidates(
                 score: item.score,
                 volume_component: item.volume_component,
                 ema_readiness_component: item.ema_readiness_component,
-                volatility_component: item.volatility_component,
+                log_range_component: item.log_range_component,
                 unilateralness_component: item.unilateralness_component,
                 selected: selected_set.contains(&index),
                 incumbent: cfg.incumbent_indices.contains(&index),
@@ -484,7 +484,7 @@ struct ScoredPosition {
     score: f64,
     volume_component: f64,
     ema_readiness_component: f64,
-    volatility_component: f64,
+    log_range_component: f64,
     unilateralness_component: f64,
 }
 
@@ -495,10 +495,10 @@ fn apply_score_hysteresis(
     selected: &mut Vec<ScoredPosition>,
     events: &mut Vec<ForagerHysteresisEvent>,
 ) {
-    let hysteresis = cfg.score_hysteresis_pct;
+    let hysteresis = cfg.score_hysteresis_margin;
     assert!(
         hysteresis.is_finite() && hysteresis >= 0.0,
-        "invalid forager_score_hysteresis_pct"
+        "invalid forager_score_hysteresis_margin"
     );
     if hysteresis <= 0.0 || cfg.incumbent_indices.is_empty() || selected.is_empty() {
         return;
@@ -625,26 +625,26 @@ fn compare_desc(value_a: f64, value_b: f64, idx_a: usize, idx_b: usize) -> Order
 pub struct CoinFeatureInput {
     pub index: usize,
     pub enabled: bool,
-    pub volume_score: f64,
-    pub volatility_score: f64,
+    pub volume_ema: f64,
+    pub log_range_ema: f64,
     pub unilateralness_score: f64,
-    pub ema_readiness_score: f64,
+    pub ema_entry_price_gap_fraction: f64,
 }
 
 impl<'source> FromPyObject<'source> for CoinFeatureInput {
     fn extract(ob: &'source PyAny) -> PyResult<Self> {
         let index = ob.get_item("index")?.extract::<usize>()?;
         let enabled = ob.get_item("enabled")?.extract::<bool>()?;
-        let volume_score = ob.get_item("volume_score")?.extract::<f64>()?;
-        let volatility_score = ob.get_item("volatility_score")?.extract::<f64>()?;
-        let ema_readiness_score = ob.get_item("ema_readiness_score")?.extract::<f64>()?;
+        let volume_ema = ob.get_item("volume_ema")?.extract::<f64>()?;
+        let log_range_ema = ob.get_item("log_range_ema")?.extract::<f64>()?;
+        let ema_entry_price_gap_fraction = ob.get_item("ema_entry_price_gap_fraction")?.extract::<f64>()?;
         Ok(CoinFeatureInput {
             index,
             enabled,
-            volume_score,
-            volatility_score,
+            volume_ema,
+            log_range_ema,
             unilateralness_score: optional_feature(ob, "unilateralness_score")?,
-            ema_readiness_score,
+            ema_entry_price_gap_fraction,
         })
     }
 }
@@ -655,9 +655,9 @@ impl From<CoinFeatureInput> for CoinFeature {
             unilateralness_score: value.unilateralness_score,
             index: value.index,
             enabled: value.enabled,
-            volume_score: value.volume_score,
-            volatility_score: value.volatility_score,
-            ema_readiness_score: value.ema_readiness_score,
+            volume_ema: value.volume_ema,
+            log_range_ema: value.log_range_ema,
+            ema_entry_price_gap_fraction: value.ema_entry_price_gap_fraction,
         }
     }
 }
@@ -667,7 +667,7 @@ impl<'source> FromPyObject<'source> for ForagerScoreWeights {
         Ok(Self {
             volume: ob.get_item("volume")?.extract::<f64>()?,
             ema_readiness: ob.get_item("ema_readiness")?.extract::<f64>()?,
-            volatility: ob.get_item("volatility")?.extract::<f64>()?,
+            log_range: ob.get_item("log_range")?.extract::<f64>()?,
             unilateralness: optional_score(ob, "unilateralness")?,
         })
     }
@@ -678,8 +678,8 @@ impl<'source> FromPyObject<'source> for ForagerCandidate {
         Ok(Self {
             index: ob.get_item("index")?.extract::<usize>()?,
             enabled: ob.get_item("enabled")?.extract::<bool>()?,
-            volume_score: ob.get_item("volume_score")?.extract::<f64>()?,
-            volatility_score: ob.get_item("volatility_score")?.extract::<f64>()?,
+            volume_ema: ob.get_item("volume_ema")?.extract::<f64>()?,
+            log_range_ema: ob.get_item("log_range_ema")?.extract::<f64>()?,
             unilateralness_score: optional_feature(ob, "unilateralness_score")?,
             bid: ob.get_item("bid")?.extract::<f64>()?,
             ask: ob.get_item("ask")?.extract::<f64>()?,
@@ -707,12 +707,12 @@ pub fn select_coin_indices_py(
         slots_to_fill,
         weights,
         require_forager,
-        score_hysteresis_pct: 0.0,
+        score_hysteresis_margin: 0.0,
         incumbent_indices: HashSet::new(),
     };
     if require_forager && cfg.weights.unilateralness > 0.0 {
         for f in features.iter().filter(|f| f.enabled) {
-            validate_unit_pct("unilateralness_score", f.unilateralness_score)
+            validate_unit_interval("unilateralness_score", f.unilateralness_score)
                 .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("{err:?}")))?;
         }
     }
@@ -744,7 +744,7 @@ pub fn select_forager_candidates_py(
         })?,
         require_forager,
         position_side,
-        score_hysteresis_pct: 0.0,
+        score_hysteresis_margin: 0.0,
         incumbent_indices: HashSet::new(),
     };
     select_forager_candidates(&py_candidates, &cfg).map_err(|err| match err {
@@ -773,7 +773,7 @@ mod tests {
     fn make_candidate(
         index: usize,
         volume: f64,
-        volatility: f64,
+        log_range: f64,
         bid: f64,
         ask: f64,
     ) -> ForagerCandidate {
@@ -781,8 +781,8 @@ mod tests {
             unilateralness_score: 0.0,
             index,
             enabled: true,
-            volume_score: volume,
-            volatility_score: volatility,
+            volume_ema: volume,
+            log_range_ema: log_range,
             bid,
             ask,
             ema_lower: 100.0,
@@ -821,14 +821,14 @@ mod tests {
         }
     }
 
-    fn make_feature(index: usize, volume: f64, volatility: f64, ema_readiness: f64) -> CoinFeature {
+    fn make_feature(index: usize, volume: f64, log_range: f64, ema_readiness: f64) -> CoinFeature {
         CoinFeature {
             unilateralness_score: 0.0,
             index,
             enabled: true,
-            volume_score: volume,
-            volatility_score: volatility,
-            ema_readiness_score: ema_readiness,
+            volume_ema: volume,
+            log_range_ema: log_range,
+            ema_entry_price_gap_fraction: ema_readiness,
         }
     }
 
@@ -837,7 +837,7 @@ mod tests {
             slots_to_fill: 3,
             weights: ForagerScoreWeights::default(),
             require_forager: true,
-            score_hysteresis_pct: 0.0,
+            score_hysteresis_margin: 0.0,
             incumbent_indices: HashSet::new(),
         }
     }
@@ -848,7 +848,7 @@ mod tests {
             weights: ForagerScoreWeights::default(),
             require_forager: true,
             position_side: pside,
-            score_hysteresis_pct: 0.0,
+            score_hysteresis_margin: 0.0,
             incumbent_indices: HashSet::new(),
         }
     }
@@ -860,25 +860,25 @@ mod tests {
                 unilateralness_score: 0.0,
                 index: 0,
                 enabled: true,
-                volume_score: 0.1,
-                volatility_score: 0.1,
-                ema_readiness_score: 0.1,
+                volume_ema: 0.1,
+                log_range_ema: 0.1,
+                ema_entry_price_gap_fraction: 0.1,
             },
             CoinFeature {
                 unilateralness_score: 0.0,
                 index: 1,
                 enabled: false,
-                volume_score: 1.0,
-                volatility_score: 1.0,
-                ema_readiness_score: 1.0,
+                volume_ema: 1.0,
+                log_range_ema: 1.0,
+                ema_entry_price_gap_fraction: 1.0,
             },
             CoinFeature {
                 unilateralness_score: 0.0,
                 index: 2,
                 enabled: true,
-                volume_score: 0.2,
-                volatility_score: 0.2,
-                ema_readiness_score: 0.2,
+                volume_ema: 0.2,
+                log_range_ema: 0.2,
+                ema_entry_price_gap_fraction: 0.2,
             },
         ];
         let cfg = SelectionConfig {
@@ -938,7 +938,7 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
             ..default_config()
         };
@@ -968,7 +968,7 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 0.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
             ..default_config()
         };
@@ -988,7 +988,7 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
             ..default_config()
         };
@@ -1008,9 +1008,9 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
-            score_hysteresis_pct: 0.02,
+            score_hysteresis_margin: 0.02,
             incumbent_indices: HashSet::from([1]),
             ..default_config()
         };
@@ -1039,9 +1039,9 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 1.0,
                 ema_readiness: 0.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
-            score_hysteresis_pct: 0.02,
+            score_hysteresis_margin: 0.02,
             incumbent_indices: HashSet::from([1]),
             ..default_config()
         };
@@ -1066,7 +1066,7 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
             ..default_forager_config(ForagerPositionSide::Long)
         };
@@ -1088,7 +1088,7 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
             ..default_forager_config(ForagerPositionSide::Short)
         };
@@ -1110,7 +1110,7 @@ mod tests {
                 unilateralness: 0.0,
                 volume: 0.0,
                 ema_readiness: 1.0,
-                volatility: 0.0,
+                log_range: 0.0,
             },
             ..default_forager_config(ForagerPositionSide::Long)
         };

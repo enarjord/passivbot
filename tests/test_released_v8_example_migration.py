@@ -115,8 +115,8 @@ def test_cli_reports_ignored_cap_and_preserves_the_input_file(tmp_path):
     assert main([str(src), str(dst), "--lookback-ema-span-minutes", "123.5",
                  "--report", str(report)]) == 0
     exported = json.loads(dst.read_text())
-    assert type(exported["backtest"]["maker_fee_override"]) is float
-    assert exported["backtest"]["maker_fee_override"] == 0.000375
+    assert type(exported["backtest"]["maker_fee_override_fraction"]) is float
+    assert exported["backtest"]["maker_fee_override_fraction"] == 0.000375
     assert prepare_config(exported, verbose=False)["bot"]["portfolio"]["warmup"]["max_minutes"] == 17.5
     assert any(item["path"] == "backtest.max_warmup_minutes"
                and item["reason"].startswith("removed unused released-v8")
@@ -130,13 +130,13 @@ def test_visible_metric_null_and_empty_list_keep_distinct_existing_meanings(visi
 
     source = get_template_config()
     source["backtest"]["visible_metrics"] = visible
-    source["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    source["optimize"]["scoring"] = [{"goal": "max", "metric": "adg_fraction_strategy_equity"}]
     source["optimize"]["limits"] = []
     Draft202012Validator(generate_schema()).validate(source)
     prepared = prepare_config(source, verbose=False)
-    analysis = {"adg_strategy_eq": 0.1, "volume_pct_per_day_avg": 0.2}
+    analysis = {"adg_fraction_strategy_equity": 0.1, "volume_pct_per_day_avg": 0.2}
     result = filter_analysis_for_visibility(analysis, prepared)
-    assert result.analysis == (analysis if visible == [] else {"adg_strategy_eq": 0.1})
+    assert result.analysis == (analysis if visible == [] else {"adg_fraction_strategy_equity": 0.1})
     assert source["backtest"]["visible_metrics"] is visible
 
 
@@ -194,7 +194,8 @@ def test_released_fee_strings_keep_actual_fee_values_and_null_inheritance(fee_ki
         _apply_config_overrides(effective, effective["optimize"]["fixed_runtime_overrides"])
     elif layer == "scenario":
         apply_scenario_overrides(effective, effective["backtest"]["scenarios"][0]["overrides"])
-    final = effective["backtest"][name]
+    final_selector = f"backtest.{name}_fraction"
+    final = effective["backtest"][f"{name}_fraction"]
     if value is None:
         assert final is None
     else:
@@ -205,7 +206,7 @@ def test_released_fee_strings_keep_actual_fee_values_and_null_inheritance(fee_ki
     )
     if isinstance(value, str):
         change = next(item for item in result.changes if item["path"] == path and item["old"] == value)
-        numeric = change["new"].get(selector) if isinstance(change["new"], dict) else change["new"]
+        numeric = change["new"].get(final_selector) if isinstance(change["new"], dict) else change["new"]
         assert type(numeric) is float and numeric == float(value)
     assert source == original
 

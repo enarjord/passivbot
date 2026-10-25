@@ -13,13 +13,30 @@ from backtest_universe import (
     normalize_backtest_coin,
 )
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
-from config.metrics import CURRENCY_METRICS
+from config.metrics import CURRENCY_METRICS, metric_with_curve
 from config.scoring import default_objective_goal, from_engine_value
 from config.shared_bot import require_grouped_bot_value
 from config.strategy import build_runtime_strategy_side, merge_runtime_bot_side
 from metrics_schema import KNOWN_ANALYSIS_METRICS, merge_suite_payload
 from optimization.evaluation_payload import build_evaluation_payload
 from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
+
+
+# Authored quantities have one spelling; the native probe protocol stays unchanged.
+PREFILTER_PROBE_NATIVE_FIELDS = {
+    "exposure_probe_fractions": "exposure_ratios",
+    "log_range_ema_1m": "log_range_ema_1m",
+    "log_range_ema_1h": "log_range_ema_1h",
+    "adverse_directionality_score": "adverse_directionality",
+    "grid_max_entries": "grid_max_entries",
+}
+PREFILTER_METRIC_NATIVE_FIELDS = {
+    "entry_close_span_fraction": "entry_close_span",
+    "entry_retracement_fraction": "entry_retracement",
+    "close_retracement_fraction": "close_retracement",
+    "entry_cooldown_minutes": "entry_cooldown_minutes",
+    "grid_span_fraction": "grid_span",
+}
 
 
 def prefilter_config_for_exchange(config, markets, exchange):
@@ -98,7 +115,7 @@ def _probe_inputs(config, params, checks):
         )
         allocation_total = float(
             require_grouped_bot_value(
-                master, side, "total_wallet_exposure_limit", prefer_flat=True
+                master, side, "total_wallet_exposure_limit_ratio", prefer_flat=True
             )
         )
         dynamic = config["backtest"]["dynamic_wel_by_tradability"]
@@ -122,7 +139,7 @@ def _probe_inputs(config, params, checks):
             def required(key):
                 return require_grouped_bot_value(bot, side, key, prefer_flat=True)
 
-            total = float(required("total_wallet_exposure_limit"))
+            total = float(required("total_wallet_exposure_limit_ratio"))
             if slots <= 0 or allocation_total <= 0 or total <= 0:
                 continue
             # prep_backtest_args derives global WEL from total/slots; only an
@@ -142,23 +159,22 @@ def _probe_inputs(config, params, checks):
             yield coin, side, {
                 "side": side,
                 "strategy": strategy,
-                "wallet_exposure_limit": base_limit,
-                "total_wallet_exposure_limit": total,
-                "risk_we_excess_allowance_pct": float(
-                    required("risk_we_excess_allowance_pct")
+                "wallet_exposure_limit_ratio": base_limit,
+                "total_wallet_exposure_limit_ratio": total,
+                "risk_we_excess_allowance_fraction": float(
+                    required("risk_we_excess_allowance_fraction")
                 ),
                 "cooldown_base": float(required("risk_entry_cooldown_minutes")),
                 "cooldown_min": float(required("entry_cooldown_min_duration_minutes")),
                 "cooldown_max": required("entry_cooldown_max_duration_minutes"),
                 "cooldown_exposure_weight": weights["exposure_ratio"],
                 "cooldown_adverse_weight": weights["adverse_directionality"],
-                "exposure_ratios": params["exposure_ratios"],
-                "log_range_ema_1m": params["volatility_ema_1m"],
-                "log_range_ema_1h": params["volatility_ema_1h"],
-                "adverse_directionality": params["adverse_directionality"],
-                "grid_max_entries": params["grid_max_entries"],
+                **{
+                    native: params[public]
+                    for public, native in PREFILTER_PROBE_NATIVE_FIELDS.items()
+                },
                 "calculate_grid": any(
-                    check["metric"] == "grid_span" and side in check["sides"]
+                    check["metric"] == "grid_span_fraction" and side in check["sides"]
                     for check in checks
                 ),
             }
@@ -180,13 +196,14 @@ def inspect_config_prefilter(config, prefilter_params):
         for index, check in enumerate(checks):
             if side not in check["sides"]:
                 continue
+            native_metric = PREFILTER_METRIC_NATIVE_FIELDS[check["metric"]]
             rows = (
                 [{"grid_span": measurements["grid_span"]}]
-                if check["metric"] == "grid_span"
+                if check["metric"] == "grid_span_fraction"
                 else measurements["observations"]
             )
             for row in rows:
-                value = float(row[check["metric"]])
+                value = float(row[native_metric])
                 if not math.isfinite(value):
                     raise ValueError("non-finite config prefilter measurement")
                 violation = (
@@ -198,7 +215,7 @@ def inspect_config_prefilter(config, prefilter_params):
                     / check["scale"]
                 )
                 incomplete = (
-                    check["metric"] == "grid_span" and not measurements["grid_complete"]
+                    check["metric"] == "grid_span_fraction" and not measurements["grid_complete"]
                 )
                 if incomplete:
                     # A truncated or unreachable ladder cannot establish a valid
@@ -274,7 +291,7 @@ def build_prefilter_payload(
     names = (
         KNOWN_ANALYSIS_METRICS
         | {
-            f"{name}_{currency}"
+            metric_with_curve(name, currency)
             for name in CURRENCY_METRICS
             for currency in ("usd", "btc")
         }
@@ -286,7 +303,7 @@ def build_prefilter_payload(
             -constraint
             if (
                 default_objective_goal(name) == "max"
-                or name in {"win_rate", "win_rate_w"}
+                or name in {"trade_win_fraction"}
             )
             else constraint
         )

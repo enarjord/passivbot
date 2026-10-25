@@ -50,7 +50,7 @@ pip install -e ".[full]"
 ## Session identity and output names
 
 For exponential recency weighting, set `backtest.ew_half_life_days` (for example,
-`180`) and select a metric such as `adg_strategy_eq_ew`. The setting defaults to
+`180`) and select a metric such as `adg_fraction_strategy_equity_ew`. The setting defaults to
 `null`, and existing objectives retain their behavior. CPU and native GPU use the
 [same daily-return definition](metrics.md#exponential-recency-weighting).
 Legacy `_w` metrics and their capture workspaces are removed. Ordinary metrics and explicit
@@ -127,8 +127,8 @@ list of objective objects:
 
 ```json
 "scoring": [
-  {"metric": "adg_strategy_eq", "goal": "max"},
-  {"metric": "drawdown_worst_strategy_eq", "goal": "min"}
+  {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+  {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"}
 ]
 ```
 
@@ -139,7 +139,7 @@ list of objective objects:
 The older shorthand form is still accepted for built-in metrics with known default goals:
 
 ```json
-"scoring": ["adg_strategy_eq", "drawdown_worst_strategy_eq"]
+"scoring": ["adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity"]
 ```
 
 Passivbot normalizes that shorthand to the canonical object form during config formatting. For
@@ -336,11 +336,11 @@ Pymoo-specific settings live under `optimize.pymoo`:
     "pymoo": {
       "algorithm": "auto",
       "shared": {
-        "crossover_eta": 20.0,
-        "crossover_prob_var": 0.5,
-        "mutation_eta": 20.0,
-        "mutation_prob": "auto",
-        "mutation_prob_per_variable": "auto",
+        "crossover_distribution_index": 20.0,
+        "crossover_probability_per_variable": 0.5,
+        "mutation_distribution_index": 20.0,
+        "mutation_probability": "auto",
+        "mutation_probability_per_variable": "auto",
         "eliminate_duplicates": true
       },
       "algorithms": {
@@ -408,26 +408,27 @@ Current meaning of the main pymoo knobs:
   - Default is `auto`.
   - `auto` chooses `nsga2` when `len(optimize.scoring) <= 3`, otherwise `nsga3`.
   - Use explicit `nsga2` or `nsga3` only when you want to override that default selection.
-- `optimize.pymoo.shared.crossover_prob_var`
+- `optimize.pymoo.shared.crossover_probability_per_variable`
   - Per-variable SBX crossover probability.
   - Higher values mix more parameters between parents on each crossover.
   - Default `0.5` is a conservative middle ground for Passivbot's parameter space.
-- `optimize.pymoo.shared.crossover_eta`
+- `optimize.pymoo.shared.crossover_distribution_index`
   - SBX distribution index.
   - Higher values keep offspring closer to the parents; lower values explore more aggressively.
   - Default `20` is a standard conservative setting and is usually a good starting point.
-- `optimize.pymoo.shared.mutation_prob`
+- `optimize.pymoo.shared.mutation_probability`
   - Per-individual polynomial-mutation probability; `"auto"` means `1 / n_params`.
   - The offline v8 converter reports any replacement of the retired `mutation_prob_var` key.
     Normal v9 loading accepts only the canonical control.
-- `optimize.pymoo.shared.mutation_prob_per_variable`
+- `optimize.pymoo.shared.mutation_probability_per_variable`
   - Conditional per-variable mutation probability; `"auto"` means `min(0.5, 1 / n_params)`,
     matching pymoo's historical implicit default.
   - The probability of selecting a coordinate for mutation is the product of the two gates. To experiment
-    with approximately one mutated coordinate per offspring, set `mutation_prob: 1.0` and
+    with approximately one coordinate selected for mutation per offspring when `n_params >= 2`,
+    set `mutation_probability: 1.0` and
     leave this control on `"auto"`. This is a stronger mutation regime, not the default.
   - `n_params` is the CPU problem's vector length or the GPU problem's active vector length.
-- `optimize.pymoo.shared.mutation_eta`
+- `optimize.pymoo.shared.mutation_distribution_index`
   - Polynomial-mutation distribution index.
   - Higher values make smaller, more local mutations.
   - Default `20` keeps mutation fairly local, which is usually appropriate for expensive
@@ -443,10 +444,10 @@ Current meaning of the main pymoo knobs:
 Recommended defaults for typical Passivbot runs:
 
 - Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: auto`.
-- Keep `mutation_prob: "auto"`.
-- Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make
+- Keep `mutation_probability: "auto"`.
+- Keep `crossover_distribution_index: 20` and `mutation_distribution_index: 20` unless you have a specific reason to make
   variation much more local or much more aggressive.
-- Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
+- Keep `crossover_probability_per_variable: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
 - Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for default pymoo behavior:
   NSGA-II resolves null population size to `250`, while NSGA-III uses a default population budget
@@ -461,24 +462,24 @@ Practical interpretation for the default shared block:
 
 ```json
 "shared": {
-  "crossover_eta": 20,
-  "crossover_prob_var": 0.5,
+  "crossover_distribution_index": 20,
+  "crossover_probability_per_variable": 0.5,
   "eliminate_duplicates": true,
-  "mutation_eta": 20,
-  "mutation_prob": "auto",
-  "mutation_prob_per_variable": "auto"
+  "mutation_distribution_index": 20,
+  "mutation_probability": "auto",
+  "mutation_probability_per_variable": "auto"
 }
 ```
 
-- `crossover_eta: 20`
+- `crossover_distribution_index: 20`
   - conservative crossover; offspring stay fairly close to parents
-- `crossover_prob_var: 0.5`
-  - each parameter has a 50% chance of participating in crossover
-- `mutation_eta: 20`
+- `crossover_probability_per_variable: 0.5`
+  - within parent pairs selected for crossover, each parameter has a 50% chance of participating in crossover
+- `mutation_distribution_index: 20`
   - conservative mutation; most mutations are relatively local
-- `mutation_prob: "auto"`
+- `mutation_probability: "auto"`
   - select each offspring for mutation with probability `1 / n_params`
-- `mutation_prob_per_variable: "auto"`
+- `mutation_probability_per_variable: "auto"`
   - within selected offspring, mutate each coordinate with probability `min(0.5, 1 / n_params)`
 - `eliminate_duplicates: true`
   - do not spend backtests on duplicate candidates
@@ -570,11 +571,11 @@ fixed-parameter set before bounds are collapsed.
 
 ### Polishing Around A Selected Config
 
-Use `--polish-pct` to narrow every configured optimizer bound around the current config
+Use `--polish-bounds-fraction` to narrow every configured optimizer bound around the current config
 value before the run starts:
 
 ```bash
-passivbot optimize path/to/config.json --polish-pct 0.25
+passivbot optimize path/to/config.json --polish-bounds-fraction 0.25
 ```
 
 By default this keeps the polished bounds inside the original `optimize.bounds` domain and
@@ -584,7 +585,8 @@ leaves fixed bounds fixed. `--polish-bounds-mode` changes that policy:
 - `override-tunable`: allow tunable bounds to escape the original bounds; fixed bounds stay fixed.
 - `override-all`: allow tunable bounds to escape the original bounds and expand fixed bounds too.
 
-Polish still uses relative bounds: `[value * (1 - pct), value * (1 + pct)]`. A current
+Polish uses a scale-one relative half-width: `0.25` means ±25%, producing
+`[value * (1 - half_width_fraction), value * (1 + half_width_fraction)]`. A current
 value of `0.0` therefore remains fixed at `[0.0, 0.0]`.
 
 `optimize.fixed_params` is applied after polish. That makes it the right way to polish all
@@ -592,7 +594,7 @@ bounds while pinning selected parameters to the config value:
 
 ```bash
 passivbot optimize path/to/config.json \
-  --polish-pct 0.25 \
+  --polish-bounds-fraction 0.25 \
   --polish-bounds-mode override-all \
   --optimize.fixed_params long.risk.max_positions,long.risk.total_wallet_exposure_limit_ratio
 ```
@@ -620,9 +622,9 @@ operator-risk settings such as:
 These overrides set the finite cooldown after a qualifying flatten during optimizer
 evaluations. Portfolio mode uses `bot.portfolio.hsl.cooldown_after_red_minutes` instead of side
 paths. There is no permanent restart selector. Inspect strategy-equity drawdown and
-recovery with `drawdown_worst_strategy_eq`, `drawdown_worst_mean_1pct_strategy_eq`,
-and `strategy_eq_recovery_days_max`. The `drawdown_worst_ema_strategy_eq` and
-`drawdown_worst_mean_1pct_ema_strategy_eq` fields describe the enabled HSL signal
+recovery with `drawdown_max_fraction_strategy_equity`, `drawdown_daily_worst_1pct_mean_fraction_strategy_equity`,
+and `recovery_max_days_strategy_equity`. The `hsl_signal_ema_max_fraction` and
+`hsl_signal_ema_worst_1pct_mean_fraction` fields describe the enabled HSL signal
 scopes and are within-model diagnostics. Use independent ordinary-account equity
 and account-based metrics for cross-version economic comparisons.
 
@@ -668,14 +670,14 @@ Each object-form `optimize.scoring` entry may override the default:
   "optimize": {
     "objective_scenario": "base",
     "scoring": [
-      {"metric": "adg_strategy_eq", "goal": "max"},
+      {"metric": "adg_fraction_strategy_equity", "goal": "max"},
       {
-        "metric": "pain_index_strategy_eq",
+        "metric": "pain_index_fraction_strategy_equity",
         "goal": "min",
         "scenario": null
       },
       {
-        "metric": "strategy_eq_recovery_days_max",
+        "metric": "recovery_max_days_strategy_equity",
         "goal": "min",
         "scenario": null,
         "reducer": "max"
@@ -700,13 +702,13 @@ metric:
 ```json
 "limits": [
   {
-    "metric": "drawdown_worst_strategy_eq",
+    "metric": "drawdown_max_fraction_strategy_equity",
     "penalize_if": "greater_than",
     "scenario": "base",
     "value": 0.5
   },
   {
-    "metric": "drawdown_worst_strategy_eq",
+    "metric": "drawdown_max_fraction_strategy_equity",
     "penalize_if": "greater_than",
     "reducer": "max",
     "value": 0.7
@@ -746,12 +748,12 @@ Each evaluation written to disk now includes a compact `suite_metrics` payload:
 ```json
 "suite_metrics": {
   "aggregate": {
-    "aggregated": {"adg_btc": 0.0012, "...": "..."},
-    "stats": {"adg_btc": {"mean": 0.0011, "min": 0.0008, "max": 0.0014, "std": 1.5e-4}}
+    "aggregated": {"adg_fraction_btc": 0.0012, "...": "..."},
+    "stats": {"adg_fraction_btc": {"mean": 0.0011, "min": 0.0008, "max": 0.0014, "std": 1.5e-4}}
   },
   "scenarios": {
-    "scenario_a": {"stats": {"adg_btc": {"mean": 0.0012, "min": 0.0011, ...}}},
-    "scenario_b": {"stats": {"adg_btc": {"mean": 0.0009, ...}}}
+    "scenario_a": {"stats": {"adg_fraction_btc": {"mean": 0.0012, "min": 0.0011, ...}}},
+    "scenario_b": {"stats": {"adg_fraction_btc": {"mean": 0.0009, ...}}}
   }
 }
 ```
@@ -777,7 +779,7 @@ Per-coin warmup inside an optimizer run is sized from `optimize.bounds`, not fro
 
 Each optimization run creates a directory:
 ```
-optimize_results/YYYY-MM-DDTHH_MM_SS_{exchanges}_{n_days}days_{coin_label}_{hash}/
+optimize_results/YYYY-MM-DDTHH_MM_SS_{exchanges}_{analysis_duration_days}days_{coin_label}_{hash}/
 ```
 
 Contents:
@@ -831,14 +833,14 @@ formal MCDM implementations. For most real runs, `knee`, `reference`, and `utili
 useful methods.
 
 `-o` / `--objectives` can also reference stored metrics outside the original `optimize.scoring`
-list, for example `sharpe_ratio_strategy_eq`, as long as that metric is present in the
+list, for example `sharpe_ratio_strategy_equity`, as long as that metric is present in the
 saved Pareto JSON and Passivbot has a known default min/max direction for it.
 
 Example:
 
 ```bash
 passivbot tool pareto \
-  -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
+  -o sharpe_ratio_strategy_equity,adg_fraction_strategy_equity,recovery_max_days_strategy_equity \
   -m ideal
 ```
 
@@ -861,7 +863,7 @@ isn't needed.
 To enforce constraints during optimization, populate `optimize.limits` with a list of limit
 objects. Each object describes when to penalize a result:
 
-- `metric`: canonical metric name (e.g. `drawdown_worst_btc`, `loss_profit_ratio`, `adg`).
+- `metric`: canonical metric name (e.g. `drawdown_max_fraction_btc`, `loss_profit_ratio`, `adg_fraction`).
 - `penalize_if`: comparison operator. Use `<`, `<=`, `>`, `>=`, `==` (or aliases like `less_than`
   / `greater_than`), `outside_range`
   to keep a metric within `[low, high]`, or `inside_range` to forbid a band.
@@ -879,41 +881,41 @@ Example:
 ```json
 "limits": [
   {
-    "metric": "drawdown_worst_strategy_eq",
+    "metric": "drawdown_max_fraction_strategy_equity",
     "penalize_if": "greater_than",
     "scenario": "base",
     "value": 0.5
   },
   {
-    "metric": "drawdown_worst_strategy_eq",
+    "metric": "drawdown_max_fraction_strategy_equity",
     "penalize_if": "greater_than",
     "reducer": "max",
     "value": 0.7
   },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
-  {"metric": "adg", "penalize_if": "<", "value": 0.0008, "reducer": "mean"}
+  {"metric": "adg_fraction", "penalize_if": "<", "value": 0.0008, "reducer": "mean"}
 ]
 ```
 
 CLI overrides can replace the full limit set with the same JSON/HJSON payload:
 
 ```bash
-passivbot optimize --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+passivbot optimize --limits '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]'
 ```
 
 For quicker one-off edits, use repeatable `--limit` entries. The symbolic scalar operators
 in `--limit` are written as keep conditions, matching `pareto_store.py` filtering:
-- `--limit 'adg > 0.0008'` means keep only results with `adg > 0.0008`
-- `--limit 'drawdown_worst <= 0.35'` means keep only results with `drawdown_worst <= 0.35`
+- `--limit 'adg_fraction > 0.0008'` means keep only results with `adg_fraction > 0.0008`
+- `--limit 'drawdown_max_fraction <= 0.35'` means keep only results with `drawdown_max_fraction <= 0.35`
 
 ```bash
 passivbot optimize \
   --clear-limits \
-  --limit 'drawdown_worst <= 0.35' \
-  --limit 'drawdown_worst_strategy_eq <= 0.5 scenario=base' \
-  --limit 'backtest_completion_ratio>=1.0' \
+  --limit 'drawdown_max_fraction <= 0.35' \
+  --limit 'drawdown_max_fraction_strategy_equity <= 0.5 scenario=base' \
+  --limit 'backtest_completion_fraction>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
-  --limit 'adg > 0.0008 reducer=mean'
+  --limit 'adg_fraction > 0.0008 reducer=mean'
 ```
 
 You can also combine both forms. `--limits` loads a whole list first, and each `--limit`
@@ -921,8 +923,8 @@ appends one more canonical entry:
 
 ```bash
 passivbot optimize \
-  --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]' \
-  --limit 'strategy_eq_recovery_days_max <= 21'
+  --limits '[{"metric":"drawdown_max_fraction","penalize_if":">","value":0.35}]' \
+  --limit 'recovery_max_days_strategy_equity <= 21'
 ```
 
 Semantics:
@@ -958,43 +960,43 @@ over all exchanges before scoring.
 - Penalties from `optimize.limits` replace affected engine objective scores when a bound is
   violated, turning constraint breaches into very poor scores while preserving the raw metrics
   stored for inspection.
-- Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`).
+- Metrics are emitted with both USD and BTC suffixes (for example, `adg_fraction_usd` and `adg_fraction_btc`).
 - `_btc` metrics use BTC-denominated balance/equity as the numeraire even when
-  `backtest.btc_collateral_cap = 0`, so they can be used to compare strategy performance against
+  `backtest.btc_collateral_target_ratio = 0`, so they can be used to compare strategy performance against
   passive BTC exposure.
 - The tables below reference the base metric names for brevity; append `_usd` or `_btc` to select the denomination you want to use.
-- Exposure-normalized variants (e.g., `adg_per_exposure_long`) divide the base metric by
+- Exposure-normalized variants (e.g., `adg_fraction_per_twel_ratio_long`) divide the base metric by
   that side’s configured `total_wallet_exposure_limit_ratio`, letting you compare bots that use
   different leverage budgets.
 
 ### Returns & Growth
 | Metric | Description |
 |--------|-------------|
-| `adg` | Average Daily Gain (smoothed geometric)  |
-| `mdg` | Median Daily Gain  |
-| `gain` | Smoothed terminal equity / starting equity; terminal equity averages the last up to three daily values |
-| `adg_strategy_eq` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
-| `adg_rolling_hmean_strategy_eq` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
-| `adg_time_integrated_strategy_eq` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
-| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a growth objective such as `adg_strategy_eq`. |
-| `mdg_strategy_eq` | Median-day version of the same strategy-equity growth family |
+| `adg_fraction` | Average Daily Gain (smoothed geometric)  |
+| `mdg_fraction` | Median Daily Gain  |
+| `gain_multiplier` | Smoothed terminal equity / starting equity; terminal equity averages the last up to three daily values |
+| `adg_fraction_strategy_equity` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
+| `adg_rolling_hmean_fraction_strategy_equity` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
+| `adg_time_integrated_fraction_strategy_equity` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
+| `positive_log_return_participation_score_strategy_equity` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a growth objective such as `adg_fraction_strategy_equity`. |
+| `mdg_fraction_strategy_equity` | Median-day version of the same strategy-equity growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 
 ### Risk Metrics
 | Metric | Description |
 |--------|-------------|
-| `drawdown_worst` | Maximum peak-to-trough drawdown |
-| `pain_index_strategy_eq` | Mean full-resolution strategy-equity drawdown, including zeros; minimize |
-| `ulcer_index_strategy_eq` | Root mean square full-resolution strategy-equity drawdown, including zeros; minimize |
-| `drawdown_worst_mean_1pct` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
-| `drawdown_worst_strategy_eq` | Worst drawdown on collateral-agnostic strategy equity |
-| `drawdown_worst_ema_strategy_eq` | Worst portfolio EMA-smoothed strategy-equity drawdown, using each observation's maximum enabled HSL signal scope |
-| `drawdown_worst_mean_1pct_strategy_eq` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
+| `drawdown_max_fraction` | Maximum peak-to-trough drawdown |
+| `pain_index_fraction_strategy_equity` | Mean full-resolution strategy-equity drawdown, including zeros; minimize |
+| `ulcer_index_fraction_strategy_equity` | Root mean square full-resolution strategy-equity drawdown, including zeros; minimize |
+| `drawdown_daily_worst_1pct_mean_fraction` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
+| `drawdown_max_fraction_strategy_equity` | Worst drawdown on collateral-agnostic strategy equity |
+| `hsl_signal_ema_max_fraction` | Worst portfolio EMA-smoothed strategy-equity drawdown, using each observation's maximum enabled HSL signal scope |
+| `drawdown_daily_worst_1pct_mean_fraction_strategy_equity` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
 | `drawdown_worst_mean_1pct_strategy_eq_{long,short}` | Mean of worst 1% daily worst strategy-equity drawdowns for the long or short HSL controller |
-| `drawdown_worst_mean_1pct_ema_strategy_eq` | Mean of worst 1% portfolio EMA-smoothed drawdown observations; each observation takes the maximum enabled HSL signal scope before tail selection |
-| `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
-| `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
-| `equity_balance_diff_neg_mean` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |
+| `hsl_signal_ema_worst_1pct_mean_fraction` | Mean of worst 1% portfolio EMA-smoothed drawdown observations; each observation takes the maximum enabled HSL signal scope before tail selection |
+| `expected_shortfall_1pct_fraction` | Mean of worst 1% daily losses (CVaR) |
+| `equity_balance_gap_negative_max_fraction` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |
+| `equity_balance_gap_negative_mean_fraction` / `pos_mean` | Average divergence between equity and balance (split by sign as above) |
 
 ### Ratios & Efficiency
 | Metric | Description |
@@ -1009,16 +1011,16 @@ over all exchanges before scoring.
 ### Position & Execution Metrics
 | Metric | Description |
 |--------|-------------|
-| `positions_held_per_day` | Average number of unique positions opened per day |
+| `position_episodes_per_day` | Average number of unique positions opened per day |
 | `position_held_hours_{mean,median,max}`, `position_held_days_{mean,median,max}` | Holding-time statistics in hours and equivalent days |
 | `position_held_time_weighted_mean_hours` | Minimize `sum(held_hours^2) / sum(held_hours)` across coin/side holding episodes, including open tails. Adds and partial closes do not reset an episode. Returns zero when no positive holding time exists; supported by CPU and GPU scoring. |
-| `position_unchanged_hours_max`, `position_unchanged_days_max` | Longest span without modifying an existing position, in hours and equivalent days |
+| `position_unchanged_max_hours`, `position_unchanged_max_days` | Longest span without modifying an existing position, in hours and equivalent days |
 | `fills_gap_time_weighted_mean_hours` | Time-weighted mean portfolio no-fill gap: `sum(gap_hours^2) / sum(gap_hours)` over unique fill timestamps and the analysis boundaries. Lower values reward distributing fills through long droughts instead of clustering activity. |
-| `volume_pct_per_day_avg` | Average traded volume as % of account per day,  |
-| `peak_recovery_hours_equity_usd`, `_btc`; `peak_recovery_days_equity_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_days_equity_usd", "penalize_if": ">", "value": 7}`). |
-| `peak_recovery_hours_pnl`, `peak_recovery_days_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
-| `strategy_eq_recovery_days_mean`, `strategy_eq_recovery_days_median`, `strategy_eq_recovery_days_p95`, `strategy_eq_recovery_days_p99`, `strategy_eq_recovery_days_mean_worst_5pct`, `strategy_eq_recovery_days_mean_worst_1pct`, `strategy_eq_recovery_days_max` | Per-sample strategy-equity time-to-exceed distribution in days. Each sample measures how long until a later strategy-equity sample strictly exceeds it; unrecovered samples use the open tail to the backtest end. |
-| `peak_recovery_hours_strategy_eq`, `peak_recovery_days_strategy_eq` | Legacy max-recovery metrics. `peak_recovery_days_strategy_eq` is an alias for `strategy_eq_recovery_days_max`; the hours variant remains available for older configs. |
+| `active_day_turnover_proxy_mean_ratio` | Average traded volume as % of account per day,  |
+| `peak_recovery_max_hours_usd`, `_btc`; `peak_recovery_max_days_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_max_days_usd", "penalize_if": ">", "value": 7}`). |
+| `peak_recovery_max_hours_realized_pnl`, `peak_recovery_max_days_realized_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
+| `recovery_mean_days_strategy_equity`, `recovery_median_days_strategy_equity`, `recovery_p95_days_strategy_equity`, `recovery_p99_days_strategy_equity`, `recovery_worst_5pct_mean_days_strategy_equity`, `recovery_worst_1pct_mean_days_strategy_equity`, `recovery_max_days_strategy_equity` | Per-sample strategy-equity time-to-exceed distribution in days. Each sample measures how long until a later strategy-equity sample strictly exceeds it; unrecovered samples use the open tail to the backtest end. |
+| `recovery_max_hours_strategy_equity`, `recovery_max_days_strategy_equity` | Legacy max-recovery metrics. `recovery_max_days_strategy_equity` is an alias for `recovery_max_days_strategy_equity`; the hours variant remains available for older configs. |
 | `peak_recovery_hours_strategy_eq_{long,short}`, `peak_recovery_days_strategy_eq_{long,short}` | Longest strict time-to-exceed interval for the long or short HSL strategy-equity controller, including an unrecovered tail through the backtest end. |
 | `high_exposure_hours_{mean,max}_long`, `high_exposure_days_{mean,max}_long` | Mean / maximum duration of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE, in hours and equivalent days |
 | `high_exposure_hours_{mean,max}_short`, `high_exposure_days_{mean,max}_short` | Mean / maximum duration of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE, in hours and equivalent days |
@@ -1026,9 +1028,9 @@ over all exchanges before scoring.
 ### Equity Curve Quality
 | Metric | Description |
 |--------|-------------|
-| `equity_choppiness` | Normalized total variation (lower is smoother) |
-| `equity_jerkiness` | Normalized mean absolute second derivative |
-| `exponential_fit_error` | MSE from a log-linear equity fit |
+| `equity_choppiness_ratio` | Normalized total variation (lower is smoother) |
+| `equity_jerkiness_ratio` | Normalized mean absolute second derivative |
+| `exponential_fit_mse_log_ratio_squared` | MSE from a log-linear equity fit |
 
 Legacy `_w` variants are unavailable. To emphasize recent returns, explicitly opt into
 [exponential metrics](metrics.md#exponential-recency-weighting); they use a different definition.

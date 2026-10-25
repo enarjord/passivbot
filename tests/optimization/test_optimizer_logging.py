@@ -117,10 +117,10 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     from config.scoring import ObjectiveSpec
 
     caplog.set_level(logging.INFO)
-    specs = [ObjectiveSpec("adg_strategy_eq", "max"), ObjectiveSpec("sharpe_ratio_strategy_eq", "max")]
+    specs = [ObjectiveSpec("adg_fraction_strategy_equity", "max"), ObjectiveSpec("sharpe_ratio_strategy_equity", "max")]
     specs += [ObjectiveSpec(name, "min") for name in (
-        "pain_index_strategy_eq", "strategy_eq_recovery_days_max",
-        "drawdown_worst_strategy_eq", "drawdown_worst_mean_1pct_strategy_eq",
+        "pain_index_fraction_strategy_equity", "recovery_max_days_strategy_equity",
+        "drawdown_max_fraction_strategy_equity", "drawdown_daily_worst_1pct_mean_fraction_strategy_equity",
         "position_held_time_weighted_mean_hours",
     )]
     def candidate(index, values, violation=0):
@@ -133,7 +133,7 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     assert store.add_entry(candidate(0, [1, 4, 1, 1, 1, 1, 1]))
     caplog.clear()
     assert store.add_entry(candidate(1, [3, 2, 2, 2, 2, 2, 2]))
-    assert "adg_strategy_eq=[1,3*] sharpe_ratio_strategy_eq=[2,4]" in caplog.text
+    assert "adg_fraction_strategy_equity=[1,3*] sharpe_ratio_strategy_equity=[2,4]" in caplog.text
     for spec in specs[2:]:
         assert f"{spec.metric}=[1,2]" in caplog.text
     assert "+5 metrics" not in caplog.text
@@ -149,7 +149,7 @@ def test_pareto_all_objective_ranges_goals_tradeoffs_and_resume(tmp_path, caplog
     assert resumed.progress_snapshot()["pareto_added"] == 0
     assert resumed.progress_snapshot()["last_pareto_age"] == "unknown"
     assert resumed.add_entry(candidate(3, [4, 2, 2, 2, 2, 2, 2]))
-    assert "adg_strategy_eq=[1,4*] sharpe_ratio_strategy_eq=[2,4]" in caplog.text
+    assert "adg_fraction_strategy_equity=[1,4*] sharpe_ratio_strategy_equity=[2,4]" in caplog.text
     assert "changes=+1/-1" in caplog.text
 
 
@@ -171,37 +171,37 @@ def test_pareto_marks_best_endpoints_only_when_ranges_change(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     store = ParetoStore(str(tmp_path))
 
-    def candidate(index, gain, drawdown, underwater):
+    def candidate(index, gain_multiplier, drawdown, underwater):
         result = entry(index)
         result["optimize"] = {"scoring": [
-            {"metric": "adg_strategy_eq", "goal": "max"},
-            {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
-            {"metric": "pain_index_strategy_eq", "goal": "min"},
+            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
+            {"metric": "pain_index_fraction_strategy_equity", "goal": "min"},
         ]}
         result["metrics"]["objectives"] = {
-            "adg_strategy_eq": gain, "drawdown_worst_strategy_eq": drawdown,
-            "pain_index_strategy_eq": underwater,
+            "adg_fraction_strategy_equity": gain_multiplier, "drawdown_max_fraction_strategy_equity": drawdown,
+            "pain_index_fraction_strategy_equity": underwater,
         }
         return result
 
     assert store.add_entry(candidate(0, 1, 2, 1))
-    assert "adg_strategy_eq=[1,1*]" in caplog.text
-    assert "drawdown_worst_strategy_eq=[2*,2]" in caplog.text
+    assert "adg_fraction_strategy_equity=[1,1*]" in caplog.text
+    assert "drawdown_max_fraction_strategy_equity=[2*,2]" in caplog.text
     caplog.clear()
     assert store.add_entry(candidate(1, 2, 3, 3))
-    assert "adg_strategy_eq=[1,2*]" in caplog.text
-    assert "drawdown_worst_strategy_eq=[2,3]" in caplog.text
+    assert "adg_fraction_strategy_equity=[1,2*]" in caplog.text
+    assert "drawdown_max_fraction_strategy_equity=[2,3]" in caplog.text
     caplog.clear()
     assert store.add_entry(candidate(2, .5, 1, 4))
-    assert "adg_strategy_eq=[0.5,2]" in caplog.text
-    assert "drawdown_worst_strategy_eq=[1*,3]" in caplog.text
+    assert "adg_fraction_strategy_equity=[0.5,2]" in caplog.text
+    assert "drawdown_max_fraction_strategy_equity=[1*,3]" in caplog.text
     caplog.clear()
     # This point widens the worse drawdown endpoint but improves no best.
     assert store.add_entry(candidate(3, 1.5, 4, 2))
     assert "quality=unchanged_tradeoff" in caplog.text
-    assert "adg_strategy_eq=[0.5,2]" in caplog.text
-    assert "drawdown_worst_strategy_eq=[1,4]" in caplog.text
-    assert "pain_index_strategy_eq=[1,4]" in caplog.text
+    assert "adg_fraction_strategy_equity=[0.5,2]" in caplog.text
+    assert "drawdown_max_fraction_strategy_equity=[1,4]" in caplog.text
+    assert "pain_index_fraction_strategy_equity=[1,4]" in caplog.text
     assert not any("*" in record.getMessage() for record in caplog.records)
 
 
@@ -210,8 +210,8 @@ def test_pareto_range_scope_excludes_infeasible_outliers(tmp_path, caplog):
 
     caplog.set_level(logging.INFO)
     store = ParetoStore(str(tmp_path))
-    store.scoring_specs = [ObjectiveSpec("adg_strategy_eq", "max"),
-                           ObjectiveSpec("drawdown_worst_strategy_eq", "min")]
+    store.scoring_specs = [ObjectiveSpec("adg_fraction_strategy_equity", "max"),
+                           ObjectiveSpec("drawdown_max_fraction_strategy_equity", "min")]
     store.scoring_keys = [spec.metric for spec in store.scoring_specs]
     # Exercise scope selection directly with infeasible outliers at both ends.
     store._front = ["first", "second", "infeasible"]
@@ -219,8 +219,8 @@ def test_pareto_range_scope_excludes_infeasible_outliers(tmp_path, caplog):
     store._violations = {"first": 0, "second": 0, "infeasible": 1}
     store._log_front_state(added=1, removed=0)
     assert "best_scope=feasible_front" in caplog.text
-    assert "adg_strategy_eq=[2,3*]" in caplog.text
-    assert "drawdown_worst_strategy_eq=[2*,3]" in caplog.text
+    assert "adg_fraction_strategy_equity=[2,3*]" in caplog.text
+    assert "drawdown_max_fraction_strategy_equity=[2*,3]" in caplog.text
     assert "999" not in caplog.text
     assert "[-1" not in caplog.text
 

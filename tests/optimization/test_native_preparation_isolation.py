@@ -73,8 +73,8 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
                 for key in ("max_positions", "total_wallet_exposure_limit_ratio")
             }
         config["optimize"]["scoring"] = [
-            {"metric": "adg_strategy_eq", "goal": "max"},
-            {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+            {"metric": "adg_fraction_strategy_equity", "goal": "max"},
+            {"metric": "drawdown_max_fraction_strategy_equity", "goal": "min"},
         ]
         config["optimize"]["limits"] = []
         columns = config["backtest"].pop("coins")

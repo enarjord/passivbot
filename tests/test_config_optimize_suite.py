@@ -34,7 +34,7 @@ def test_only_canonical_reducer_is_accepted_across_suite_scoring_and_limits(alia
     base["backtest"][alias] = {"default": "max"}
     base["optimize"]["scoring"] = [
         {
-            "metric": "strategy_eq_recovery_days_max",
+            "metric": "recovery_max_days_strategy_equity",
             "goal": "min",
             "scenario": None,
             alias: "max",
@@ -42,7 +42,7 @@ def test_only_canonical_reducer_is_accepted_across_suite_scoring_and_limits(alia
     ]
     base["optimize"]["limits"] = [
         {
-            "metric": "strategy_eq_recovery_days_max",
+            "metric": "recovery_max_days_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": None,
             alias: "max",
@@ -71,7 +71,7 @@ def test_same_valued_retired_reducer_aliases_are_rejected(scope):
     base = get_template_config()
     base["optimize"]["scoring"] = [
         {
-            "metric": "adg_strategy_eq",
+            "metric": "adg_fraction_strategy_equity",
             "goal": "max",
             "scenario": None,
             "reducer": "mean",
@@ -79,7 +79,7 @@ def test_same_valued_retired_reducer_aliases_are_rejected(scope):
     ]
     base["optimize"]["limits"] = [
         {
-            "metric": "strategy_eq_recovery_days_max",
+            "metric": "recovery_max_days_strategy_equity",
             "penalize_if": "greater_than",
             "reducer": "max",
             "value": 100,
@@ -104,7 +104,7 @@ def test_conflicting_reducer_aliases_are_rejected_by_authored_boundary(scope):
     elif scope == "scoring":
         base["optimize"]["scoring"] = [
             {
-                "metric": "adg_strategy_eq",
+                "metric": "adg_fraction_strategy_equity",
                 "goal": "max",
                 "reducer": "mean",
                 "stat": "max",
@@ -113,7 +113,7 @@ def test_conflicting_reducer_aliases_are_rejected_by_authored_boundary(scope):
     else:
         base["optimize"]["limits"] = [
             {
-                "metric": "strategy_eq_recovery_days_max",
+                "metric": "recovery_max_days_strategy_equity",
                 "penalize_if": "greater_than",
                 "reducer": "mean",
                 "scenario_stat": "max",
@@ -140,19 +140,19 @@ def test_optimizer_scoring_basis_round_trip_preserves_omitted_named_and_null_sce
     base["_raw"] = deepcopy(base)
     base["optimize"]["objective_scenario"] = "base"
     base["optimize"]["scoring"] = [
-        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "adg_fraction_strategy_equity", "goal": "max"},
         {
-            "metric": "pain_index_strategy_eq",
+            "metric": "pain_index_fraction_strategy_equity",
             "goal": "min",
             "scenario": None,
         },
         {
-            "metric": "strategy_eq_recovery_days_max",
+            "metric": "recovery_max_days_strategy_equity",
             "goal": "min",
             "scenario": "stress",
         },
         {
-            "metric": "position_held_days_max",
+            "metric": "position_held_max_days",
             "goal": "min",
             "scenario": None,
             "reducer": "max",
@@ -176,13 +176,13 @@ def test_optimizer_limit_basis_round_trip_preserves_named_and_null_scenarios():
     base["_raw"] = deepcopy(base)
     base["optimize"]["limits"] = [
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": "base",
             "value": 0.5,
         },
         {
-            "metric": "drawdown_worst_strategy_eq",
+            "metric": "drawdown_max_fraction_strategy_equity",
             "penalize_if": "greater_than",
             "scenario": None,
             "reducer": "max",

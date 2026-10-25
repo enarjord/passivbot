@@ -16,7 +16,7 @@ from config.risk_memory import (
 from live.smoke_report import _user_safe_display_path
 
 DEFAULT_SAMPLE_SIZE = 8
-HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
+HIGH_BALANCE_HYSTERESIS_WARNING_FRACTION = 0.05
 DEFAULT_HSL_SIGNAL_MODE = "coin"
 HSL_RISKS_DOC = "docs/equity_hard_stop_loss.md"
 SIDES = ("long", "short")
@@ -90,7 +90,7 @@ DIFF_SETTING_PATHS = (
         "bot.portfolio.warmup.max_minutes",
         ("bot", "portfolio", "warmup", "max_minutes"),
     ),
-    ("cache", "bot.portfolio.warmup.span_multiplier", ("bot", "portfolio", "warmup", "span_multiplier")),
+    ("cache", "bot.portfolio.warmup.activation_span_fraction", ("bot", "portfolio", "warmup", "activation_span_fraction")),
 )
 
 
@@ -367,8 +367,8 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     forager_values = {
         key: get_grouped_bot_value(side_config, flat_key, default=None)
         for key, flat_key in (
-            ("log_range_ema_span_minutes", "forager_volatility_ema_span_1m"),
-            ("volume_ema_span_minutes", "forager_volume_ema_span_1m"),
+            ("log_range_ema_span_minutes", "forager_log_range_ema_span_minutes"),
+            ("volume_ema_span_minutes", "forager_volume_ema_span_minutes"),
         )
     }
     forager_values["score_hysteresis_margin"] = side_config.get("forager", {}).get("score_hysteresis_margin")
@@ -529,7 +529,7 @@ def _balance_hysteresis_report(
     report: dict[str, Any] = {
         "present": raw_value is not _MISSING,
         "default_value": 0.02,
-        "warning_threshold": HIGH_BALANCE_HYSTERESIS_WARNING_PCT,
+        "warning_threshold": HIGH_BALANCE_HYSTERESIS_WARNING_FRACTION,
         "basis": (
             "snapped balance is used for sizing/gating surfaces where hysteresis "
             "is intentional; raw balance remains the basis for exact exposure repair"
@@ -545,7 +545,7 @@ def _balance_hysteresis_report(
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_invalid_bool",
+                "balance_hysteresis_snap_fraction_invalid_bool",
                 "live.account.balance_hysteresis_snap_fraction should be a non-negative number, not a boolean",
                 path="live.account.balance_hysteresis_snap_fraction",
             )
@@ -559,7 +559,7 @@ def _balance_hysteresis_report(
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_invalid",
+                "balance_hysteresis_snap_fraction_invalid",
                 "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
                 path="live.account.balance_hysteresis_snap_fraction",
             )
@@ -571,18 +571,18 @@ def _balance_hysteresis_report(
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_invalid",
+                "balance_hysteresis_snap_fraction_invalid",
                 "live.account.balance_hysteresis_snap_fraction should be a non-negative finite number",
                 path="live.account.balance_hysteresis_snap_fraction",
             )
         )
         return report
-    if value > HIGH_BALANCE_HYSTERESIS_WARNING_PCT:
+    if value > HIGH_BALANCE_HYSTERESIS_WARNING_FRACTION:
         report["status"] = "high"
         issues.append(
             _issue(
                 "warning",
-                "balance_hysteresis_snap_pct_high",
+                "balance_hysteresis_snap_fraction_high",
                 (
                     "live.account.balance_hysteresis_snap_fraction is above 5%; snapped-balance entry sizing/gating may diverge noticeably from raw-balance exposure repair near risk boundaries"
                 ),
@@ -636,7 +636,7 @@ def _cache_readiness_report(
 ) -> dict[str, Any]:
     checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
     warmup = config.get("bot", {}).get("portfolio", {}).get("warmup", {})
-    checks.update({f"bot.portfolio.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
+    checks.update({f"bot.portfolio.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "activation_span_fraction")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -705,18 +705,18 @@ def _cache_readiness_report(
     if max_minutes_status != "present":
         _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
                           f"bot.portfolio.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
-    warmup_ratio_status = _numeric_status(_setting_value(warmup, "span_multiplier"), allow_zero=True)
-    if warmup_ratio_status == "missing":
+    activation_span_fraction_status = _numeric_status(_setting_value(warmup, "activation_span_fraction"), allow_zero=True)
+    if activation_span_fraction_status == "missing":
         _append_attention(
             candles,
-            "warmup_ratio_missing",
-            "bot.portfolio.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
+            "activation_span_fraction_missing",
+            "bot.portfolio.warmup.activation_span_fraction is missing; EMA warmup buffer intent is implicit",
         )
-    elif warmup_ratio_status != "present":
+    elif activation_span_fraction_status != "present":
         _append_attention(
             candles,
-            f"warmup_ratio_{warmup_ratio_status}",
-            f"bot.portfolio.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"activation_span_fraction_{activation_span_fraction_status}",
+            f"bot.portfolio.warmup.activation_span_fraction is {activation_span_fraction_status}; EMA warmup buffer is suspicious",
         )
 
     archive_status = _bool_status(
@@ -1290,7 +1290,7 @@ def build_live_config_preflight_report(
         "cache": {
             "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("portfolio", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
+                bot.get("portfolio", {}).get("warmup", {}), ("max_minutes", "activation_span_fraction")
             ),
             "readiness": _cache_readiness_report(
                 live,
