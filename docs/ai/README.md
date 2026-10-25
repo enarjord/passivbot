@@ -10,6 +10,7 @@ current task.
 | Trading-critical failure, fallback, readiness, or data availability | `error_contract.md` |
 | Component ownership, live/backtest/optimizer flow | `architecture.md` |
 | Configuration field types and defaults | `generated/config_fields.md` |
+| Numeric names, units, denominators, and metric spelling | `numeric_conventions.md` |
 | Validation selection or code review | `validation.md` |
 | Logging levels, redaction, sinks, console behavior | `logging_policy.md` |
 | Active architectural rationale | `decisions.md` |

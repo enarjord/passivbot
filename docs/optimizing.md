@@ -671,7 +671,7 @@ Each object-form `optimize.scoring` entry may override the default:
     "scoring": [
       {"metric": "adg_strategy_eq", "goal": "max"},
       {
-        "metric": "strategy_eq_underwater_pct_mean",
+        "metric": "pain_index_strategy_eq",
         "goal": "min",
         "scenario": null
       },
@@ -985,6 +985,8 @@ over all exchanges before scoring.
 | Metric | Description |
 |--------|-------------|
 | `drawdown_worst` | Maximum peak-to-trough drawdown |
+| `pain_index_strategy_eq` | Mean full-resolution strategy-equity drawdown, including zeros; minimize |
+| `ulcer_index_strategy_eq` | Root mean square full-resolution strategy-equity drawdown, including zeros; minimize |
 | `drawdown_worst_mean_1pct` | Mean of worst 1% daily worst drawdowns, computed from full-resolution drawdowns before daily reduction |
 | `drawdown_worst_strategy_eq` | Worst drawdown on collateral-agnostic strategy equity |
 | `drawdown_worst_ema_strategy_eq` | Worst portfolio EMA-smoothed strategy-equity drawdown, using each observation's maximum enabled HSL signal scope |

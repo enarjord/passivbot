@@ -4696,7 +4696,7 @@ class TestEvaluator:
         mock_config["optimize"]["scoring"] = [
             {"metric": "adg_strategy_eq", "goal": "max"},
             {
-                "metric": "strategy_eq_underwater_pct_mean",
+                "metric": "pain_index_strategy_eq",
                 "goal": "min",
                 "scenario": None,
             },
@@ -4763,7 +4763,7 @@ class TestEvaluator:
             {
                 "stats": {
                     "adg_strategy_eq": metric_stats(0.01),
-                    "strategy_eq_underwater_pct_mean": metric_stats(0.1),
+                    "pain_index_strategy_eq": metric_stats(0.1),
                     "strategy_eq_recovery_days_max": metric_stats(10.0),
                     "position_held_days_max": metric_stats(5.0),
                 }
@@ -4771,7 +4771,7 @@ class TestEvaluator:
             {
                 "stats": {
                     "adg_strategy_eq": metric_stats(0.002),
-                    "strategy_eq_underwater_pct_mean": metric_stats(0.5),
+                    "pain_index_strategy_eq": metric_stats(0.5),
                     "strategy_eq_recovery_days_max": metric_stats(50.0),
                     "position_held_days_max": metric_stats(20.0),
                 }
