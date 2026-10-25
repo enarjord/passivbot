@@ -89,7 +89,7 @@ def test_duplicate_rejection_keeps_its_non_replay_provenance(monkeypatch):
         base.config["optimize"]["prefilter"] = rejecting_policy()
         base.duplicate_counter = defaultdict(int)
         for name in (
-            "perturb_x_pct",
+            "perturb_relative_fraction",
             "perturb_step_digits",
             "perturb_gaussian",
             "perturb_random_subset",

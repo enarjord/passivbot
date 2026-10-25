@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Rename optimizer polish to `--polish-bounds-fraction`: `0.25` still narrows bounds by a
+  relative half-width of 25%, without rescaling values. Perturbation helpers now distinguish
+  relative fractions from probabilities of retaining an unchanged parameter.
+
 - Require complete config-override long-option spellings in the live, backtest and optimizer
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
   select a renamed field.
