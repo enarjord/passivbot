@@ -121,7 +121,7 @@ passivbot tool pareto-plot optimize_results/.../pareto --open
 passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
 # Optional positional metrics set the initial axes; the HTML still includes all metrics.
 passivbot tool pareto-plot optimize_results/... \
-  adg_strategy_eq strategy_eq_underwater_pct_mean sortino_ratio_strategy_eq \
+  adg_strategy_eq pain_index_strategy_eq sortino_ratio_strategy_eq \
   --output plots/tradeoffs.html --open
 ```
 

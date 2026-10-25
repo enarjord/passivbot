@@ -14,7 +14,7 @@ def test_native_portfolio_raw_risk_retains_liquidation_mark(strategy, sides, ter
     from optimization.gpu.parity import MetricTolerance
 
     metrics = ("drawdown_worst_strategy_eq", "drawdown_worst_mean_1pct_strategy_eq",
-               "strategy_eq_underwater_pct_mean", "drawdown_worst_usd")
+               "pain_index_strategy_eq", "ulcer_index_strategy_eq", "drawdown_worst_usd")
     report = run_comparison(
         _liquidation_inputs(strategy, sides, terminal_fill), "bybit", metrics,
         {name: MetricTolerance(1e-8, 1e-6) for name in metrics},
@@ -46,6 +46,9 @@ def test_raw_daily_risk_keeps_account_aliases_and_excludes_padding(days):
         'day_end_eq': torch.full(shape, 100.0, dtype=torch.float64),
         'day_min_eq': day_min, 'day_max_dd': account_dd,
         'raw_strategy_day_max_dd': raw_dd,
+        'raw_strategy_day_dd_sum': raw_dd,
+        'raw_strategy_day_dd_squared_sum': raw_dd.square(),
+        'raw_strategy_day_sample_count': torch.ones(shape, dtype=torch.float64),
         'day_volume': torch.zeros(shape),
         'day_has_fill': torch.zeros(shape, dtype=torch.bool),
         'max_dd': torch.tensor([.1]), 'fill_count': zero,
@@ -57,7 +60,7 @@ def test_raw_daily_risk_keeps_account_aliases_and_excludes_padding(days):
         'liq_step': torch.tensor([-1]),
     }
     names = {'drawdown_worst_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq',
-             'strategy_eq_underwater_pct_mean', 'drawdown_worst_usd',
+             'pain_index_strategy_eq', 'drawdown_worst_usd',
              'drawdown_worst_mean_1pct_usd'}
     values = compute_objectives(
         out, SimpleNamespace(interval_ms=86400000, requested_start_ts_ms=0),
@@ -67,7 +70,7 @@ def test_raw_daily_risk_keeps_account_aliases_and_excludes_padding(days):
     assert values['drawdown_worst_strategy_eq'].item() == pytest.approx(3.0)
     assert values['drawdown_worst_mean_1pct_strategy_eq'].item() == pytest.approx(
         3.0 if days == 2 else 2.5)
-    assert values['strategy_eq_underwater_pct_mean'].item() == pytest.approx(
+    assert values['pain_index_strategy_eq'].item() == pytest.approx(
         (5.0 + (days-2)*.2) / days)
     for name in ('drawdown_worst_usd', 'drawdown_worst_mean_1pct_usd'):
         assert values[name].item() == pytest.approx(.1)
@@ -78,8 +81,8 @@ def test_raw_daily_risk_keeps_account_aliases_and_excludes_padding(days):
 @pytest.mark.parametrize('btc_risk', [False, True])
 def test_raw_risk_ablation_preserves_other_outputs_and_budgets_days(strategy, side, btc_risk):
     torch = pytest.importorskip('torch')
-    if not torch.cuda.is_available():
-        pytest.skip('CUDA required')
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip('GPU required')
     import numpy as np
     from test_gpu_mps import _multicoin_exposure_fixture
     from optimization.gpu.mps_kernel import (
@@ -96,13 +99,14 @@ def test_raw_risk_ablation_preserves_other_outputs_and_budgets_days(strategy, si
                   btc_prices=np.full(count, 30000.0) if btc_risk else None)
     baseline = cls(run, data, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     enabled = cls(run, data, raw_strategy_risk_enabled=True, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
-    assert enabled.daily_cols == baseline.daily_cols + 1
+    assert enabled.daily_cols == baseline.daily_cols + 4
     assert (enabled._history_bytes_per_candidate() - baseline._history_bytes_per_candidate()
-            == 4 * data['n_days'])
+            == 16 * data['n_days'])
     params = np.asarray([row, row], dtype=np.float64)
     expected = baseline.run(params)
     actual = enabled.run(params)
-    assert actual.keys() == expected.keys() | {'raw_strategy_day_max_dd'}
+    assert actual.keys() == expected.keys() | {'raw_strategy_day_max_dd', 'raw_strategy_day_dd_sum',
+            'raw_strategy_day_dd_squared_sum', 'raw_strategy_day_sample_count'}
     for name, value in expected.items():
         if isinstance(value, torch.Tensor):
             torch.testing.assert_close(actual[name], value, rtol=0, atol=0, equal_nan=True)
@@ -114,17 +118,17 @@ def test_raw_risk_ablation_preserves_other_outputs_and_budgets_days(strategy, si
 
 @pytest.mark.parametrize('strategy', ['ema_anchor', 'trailing_martingale'])
 @pytest.mark.parametrize('sides', ['long', 'short', 'both'])
-@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'pside', 'portfolio'])
+@pytest.mark.parametrize('hsl', ['disabled', 'coin', 'position_side', 'portfolio'])
 def test_native_portfolio_raw_risk_on_active_shock_replay(strategy, sides, hsl):
     torch = pytest.importorskip('torch')
-    if not torch.cuda.is_available():
-        pytest.skip('CUDA required')
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip('GPU required')
     from test_gpu_side_equity_sampling import _side_equity_inputs
     from tools.gpu_parity import run_comparison
     from optimization.gpu.parity import MetricTolerance
 
     metrics = ('drawdown_worst_strategy_eq', 'drawdown_worst_mean_1pct_strategy_eq',
-               'strategy_eq_underwater_pct_mean', 'drawdown_worst_usd')
+               'pain_index_strategy_eq', 'ulcer_index_strategy_eq', 'drawdown_worst_usd')
     policies = {name: MetricTolerance(1e-6, 1e-4) for name in metrics}
     if strategy == 'trailing_martingale' and sides == 'both' and hsl == 'disabled':
         # This public seed-43 fixture retains the independently traced .017/.018
