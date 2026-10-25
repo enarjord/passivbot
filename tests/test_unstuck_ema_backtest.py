@@ -49,7 +49,7 @@ def _legacy_replay_config():
     for side in ("long", "short"):
         b = c["bot"][side]
         b["risk"].update(
-            n_positions=2, total_wallet_exposure_limit_ratio=1.0 if side == "long" else 0.0,
+            n_positions=2, total_wallet_exposure_limit=1.0 if side == "long" else 0.0,
             we_excess_allowance_pct=0, position_exposure_enforcer_enabled=False,
             total_exposure_enforcer_enabled=False,
         )
