@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Require complete config-override long-option spellings in the live, backtest and optimizer
+  command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
+  select a renamed field.
+
 - Automatically stream local integer tick inputs for large Metal trailing-martingale histories.
   Keep historical bars and exact bootstrap inputs available, compact one-minute hourly ranges
   without changing their values, and admit the bounded device footprint against the safety budget.
