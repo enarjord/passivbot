@@ -266,7 +266,7 @@ def test_prefilter_rejection_reuses_config_without_admission_or_retention(monkey
     with managed_arrays() as manager:
         base = inputs(manager)
         base.config["optimize"]["prefilter"] = {
-            "checks": [{"metric": "entry_close_span", "enabled": True, "max": 0.0, "sides": ["long"]}],
+            "checks": [{"metric": "entry_close_span_fraction", "enabled": True, "max": 0.0, "sides": ["long"]}],
         }
         records = []
         execute(base, SimpleNamespace(record=records.append), tmp_path / "checkpoint.pkl")
