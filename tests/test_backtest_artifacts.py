@@ -259,3 +259,30 @@ def test_load_backtest_artifact_fails_loudly_on_missing_cache_file(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="hlcvs_file"):
         load_backtest_artifact(artifact_dir)
+
+
+def test_notebook_fill_plot_keywords_match_the_current_plotting_api():
+    import ast
+    import inspect
+    import json
+    from pathlib import Path
+    from plotting import plot_fills_long
+
+    path = Path(__file__).resolve().parents[1] / "notebooks" / "notes_backtest.ipynb"
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    calls = []
+    for cell in notebook["cells"]:
+        if cell.get("cell_type") != "code":
+            continue
+        source = "".join(cell.get("source", []))
+        if "plot_fills_long(" not in source:
+            continue
+        calls.extend(node for node in ast.walk(ast.parse(source))
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                     and node.func.id == "plot_fills_long")
+    assert calls
+    for call in calls:
+        inspect.signature(plot_fills_long).bind(
+            *(object() for _ in call.args),
+            **{keyword.arg: object() for keyword in call.keywords},
+        )
