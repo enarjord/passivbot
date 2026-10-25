@@ -189,7 +189,8 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     "strategy_eq_recovery_days_mean_worst_5pct",
     "strategy_eq_recovery_days_mean_worst_1pct",
     "strategy_eq_recovery_days_max",
-    "strategy_eq_underwater_pct_mean",
+    "pain_index_strategy_eq",
+    "ulcer_index_strategy_eq",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
     "total_wallet_exposure_rms_long",
@@ -1691,6 +1692,35 @@ def _with_native_equity_timestamps(
     return result
 
 
+def _strategy_drawdown_indices(out: dict, active, requested) -> dict:
+    names = {"pain_index_strategy_eq", "ulcer_index_strategy_eq"} & set(requested)
+    if not names:
+        return {}
+    fields = ("raw_strategy_day_dd_sum", "raw_strategy_day_dd_squared_sum",
+              "raw_strategy_day_sample_count")
+    if not set(fields).issubset(out):
+        raise RuntimeError("GPU minute strategy-drawdown moments are missing")
+    totals = []
+    for field in fields:
+        values = out[field].to(torch.float64)
+        if values.shape != active.shape:
+            raise RuntimeError("GPU strategy-drawdown moment shape disagrees with daily samples")
+        values = torch.where(active, values, torch.zeros_like(values))
+        if bool((~torch.isfinite(values) | (values < 0)).any()):
+            raise RuntimeError("GPU strategy-drawdown moments must be finite and nonnegative")
+        if field == fields[-1] and bool((active & ((values < 1) | (values != values.floor()))).any()):
+            raise RuntimeError("GPU strategy-drawdown sample counts must be positive integers")
+        totals.append(values.sum(dim=1))
+    drawdown_sum, squared_sum, count = totals
+    denominator = count.clamp(min=1)
+    result = {}
+    if "pain_index_strategy_eq" in names:
+        result["pain_index_strategy_eq"] = drawdown_sum / denominator
+    if "ulcer_index_strategy_eq" in names:
+        result["ulcer_index_strategy_eq"] = (squared_sum / denominator).sqrt()
+    return result
+
+
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
@@ -1755,10 +1785,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
                 has_fills, value, torch.ones_like(value)
             )
 
-    underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
-        dim=1
-    ) / active.sum(dim=1).clamp(min=1)
-    underwater_median = _masked_median(day_max_dd, active)
     worst_one_pct = _mean_worst_one_pct_largest(day_max_dd, active)
     calmar = adg / out["max_dd"].to(torch.float64).clamp(min=1e-12)
     sterling = adg / worst_one_pct.clamp(min=1e-12)
@@ -1958,8 +1984,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "peak_recovery_days_equity_usd": account_recovery_max_ms / 86_400_000.0,
         "peak_recovery_hours_pnl": pnl_recovery_max_ms / 3_600_000.0,
         "peak_recovery_days_pnl": pnl_recovery_max_ms / 86_400_000.0,
-        "strategy_eq_underwater_pct_mean": underwater,
-        "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
     usd_equity_balance_metrics = {
@@ -2058,9 +2082,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         objectives["drawdown_worst_mean_1pct_strategy_eq"] = (
             _mean_worst_one_pct_largest(raw_daily_dd, active)
         )
-        objectives["strategy_eq_underwater_pct_mean"] = (
-            raw_daily_dd.sum(dim=1) / active.sum(dim=1).clamp(min=1)
-        )
+    objectives.update(_strategy_drawdown_indices(out, active, requested))
     # Account aliases/exposure normalization above keep their account curve.
     # Explicit strategy growth consumes independently captured raw daily equity.
     if requested & RAW_STRATEGY_EQUITY_METRICS and "raw_strategy_day_end_eq" in out:
