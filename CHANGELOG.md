@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Best-effort released-v8 migration has explicit ordinary fallbacks for four retired weighted
+  metric families without EW counterparts. Report the changed recency formula and any resulting
+  duplicate-objective consolidation; strict conversion and explicit formula choices retain priority.
+
 - Make analysis metric units explicit and put curve, position side and exponential weighting
   modifiers in a consistent order. Consolidate equivalent duration, long-PnL-share and maximum
   strategy-recovery outputs; update scoring, limits, result tools and GPU consumers without
