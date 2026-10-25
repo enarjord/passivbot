@@ -1,6 +1,7 @@
 """Bounded immutable tick transport keeps replay indices and bytes unchanged."""
 
 import ast
+import builtins
 from contextlib import contextmanager
 from copy import deepcopy
 import logging
@@ -382,10 +383,38 @@ def _tick_window_fixture(sides, hsl):
     return inputs
 
 
-def test_tick_window_fixture_admits_requested_metrics_without_device_execution():
+def test_tick_window_fixture_admits_requested_metrics_without_device_execution(monkeypatch):
+    original_import = builtins.__import__
+    def cpu_only(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            pytest.fail("host metric/config validation must not import Torch")
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", cpu_only)
     from config.ew import validate_ew_half_life_days
     from config.gpu import validate_gpu_backtest_config
-    from optimization.gpu.metrics import validate_gpu_metric_names
+
+    # Exercise the actual host validator and its complete metric declarations,
+    # without importing the unrelated tensor reductions or retaining a fake
+    # Torch module that could contaminate later device qualification tests.
+    source = ROOT / "src/optimization/gpu/metrics.py"
+    nodes = []
+    for node in ast.parse(source.read_text()).body:
+        if isinstance(node, ast.FunctionDef):
+            if node.name == "validate_gpu_metric_names":
+                nodes.append(node)
+                break
+            continue
+        if isinstance(node, ast.Import) and any(alias.name == "torch" for alias in node.names):
+            continue
+        if isinstance(node, ast.ImportFrom) and node.module in {
+            "optimization.gpu.entry_intervals", "optimization.gpu.exponential_equity",
+        }:
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.Assert)):
+            nodes.append(node)
+    namespace = {}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
+    validate_gpu_metric_names = namespace["validate_gpu_metric_names"]
 
     config, *_ = _tick_window_fixture("both", "coin")
     validate_gpu_backtest_config(config)

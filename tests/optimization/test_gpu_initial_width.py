@@ -3,6 +3,8 @@
 import builtins
 from contextlib import contextmanager
 from threading import Event, get_ident
+from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -62,6 +64,9 @@ def test_owner_selects_initial_width_before_prepared_admission_without_extra_rep
         ownership.append(("cuda", get_ident()))
         yield None
     monkeypatch.setattr(runtime, "gpu_device", owner_device)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
+    monkeypatch.setattr(residency, "capture_mps_input_memory_budget",
+                        lambda _torch: residency.MpsInputMemoryBudget(1, 1))
     monkeypatch.setattr(residency, "metal_residency_scope", metal_scope)
     monkeypatch.setattr(residency, "cuda_residency_scope", cuda_scope)
     service = service_class(batch_size=setting, tuning_mode=mode, max_pending=max_pending,
