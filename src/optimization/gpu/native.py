@@ -14,6 +14,23 @@ from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.gpu.executor import GpuBacktestService
 
 
+def _metal_system_headroom():
+    """Decline growth when unified-memory telemetry is unavailable or pressured."""
+    try:
+        import psutil
+        memory = psutil.virtual_memory()
+        total, available = memory.total, memory.available
+        if (isinstance(total, bool) or not isinstance(total, int) or total <= 0
+                or isinstance(available, bool) or not isinstance(available, int)
+                or not 0 <= available <= total):
+            return False
+        return available >= max(256 * 1024**2, total * 0.1)
+    except Exception:
+        # This optional host observation only permits a larger allocation. Its
+        # loss cannot fail accepted work or invent available memory.
+        return False
+
+
 class NativeBacktestService:
     """Register prepared scenarios and exchange requests/futures, without device handles.
 
@@ -77,6 +94,7 @@ class NativeBacktestService:
         if gpu_device(torch) == "mps":
             total = torch.mps.recommended_max_memory()
             free = total - torch.mps.driver_allocated_memory()
+            return free >= max(256 * 1024**2, total * 0.2) and _metal_system_headroom()
         else:
             free, total = torch.cuda.mem_get_info()
         return free >= max(256 * 1024**2, total * 0.2)
@@ -104,7 +122,8 @@ class NativeBacktestService:
         if self._batch_tuner is not None and device == "mps":
             # Device selection stays on the owner, before prepared replay limits
             # create a controller and clamp its initial width.
-            self._batch_tuner.initial = 256
+            from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+            self._batch_tuner.initial = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
         scope = metal_residency_scope if device == "mps" else cuda_residency_scope
         try:
             with scope() as residency:

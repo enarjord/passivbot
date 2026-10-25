@@ -10,6 +10,10 @@ since the latest release tag; these features may already be available when insta
   Keep historical bars and exact bootstrap inputs available, compact one-minute hourly ranges
   without changing their values, and admit the bounded device footprint against the safety budget.
 
+- Improve GPU width tuning for long replays using actual compilation evidence and
+  bounded shorter evidence windows. Metal starts within its prepared replay ceiling
+  and checks available system RAM before growing the batch.
+
 - Let GPU request batching learn from the first completed replay and wait for declared
   CPU preparation across cold starts, with finite accumulation deadlines and prompt sealing.
 
