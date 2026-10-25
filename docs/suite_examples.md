@@ -196,7 +196,7 @@ reduction, and optionally set an objective-only `reducer`. For example:
     "scoring": [
       {"metric": "adg_strategy_eq", "goal": "max"},
       {
-        "metric": "strategy_eq_underwater_pct_mean",
+        "metric": "pain_index_strategy_eq",
         "goal": "min",
         "scenario": null
       }
