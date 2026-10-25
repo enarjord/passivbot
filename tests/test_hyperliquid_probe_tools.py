@@ -90,6 +90,59 @@ class _DummySession:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("module,flag,attribute", [
+    ("probe_hyperliquid_order_margin", "--distance-fraction", "distance_fraction"),
+    ("probe_hyperliquid_position_balance", "--close-order-distance-fraction", "close_order_distance_fraction"),
+])
+@pytest.mark.parametrize("value", [None, 0.0, .025, -.4, 1.25])
+async def test_probe_price_distance_fraction_parser_is_scale_preserving(
+    monkeypatch, module, flag, attribute, value
+):
+    mod = importlib.import_module(f"tools.{module}")
+    captured = {}
+
+    class Parsed(Exception):
+        pass
+
+    def stop_before_wallet(parser, args, **kwargs):
+        captured.update(vars(args))
+        raise Parsed
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("parser-only verification must not load credentials or create a session")
+
+    argv = [module, "--user", "parser-only"]
+    if value is not None:
+        argv += [f"{flag}={value}"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(mod, "require_live_mutation_confirmation", stop_before_wallet)
+    monkeypatch.setattr(mod, "load_hyperliquid_wallet", forbidden)
+    monkeypatch.setattr(mod, "create_hyperliquid_probe_session", forbidden)
+    with pytest.raises(Parsed):
+        await mod._main()
+    assert captured[attribute] == (.25 if value is None else value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module,retired", [
+    ("probe_hyperliquid_order_margin", "--distance-pct"),
+    ("probe_hyperliquid_position_balance", "--close-order-distance-pct"),
+])
+async def test_probe_retired_distance_flag_fails_before_credentials(monkeypatch, module, retired):
+    mod = importlib.import_module(f"tools.{module}")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("retired flags must fail before confirmation or credential access")
+
+    monkeypatch.setattr(sys, "argv", [module, "--user", "parser-only", retired, ".025"])
+    for name in ("require_live_mutation_confirmation", "load_hyperliquid_wallet", "create_hyperliquid_probe_session"):
+        monkeypatch.setattr(mod, name, forbidden)
+    with pytest.raises(SystemExit) as exc:
+        await mod._main()
+    assert exc.value.code == 2
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_order_margin_probe_smoke(monkeypatch, capsys):
     mod = importlib.import_module("tools.probe_hyperliquid_order_margin")
     session = _DummySession()
