@@ -120,7 +120,7 @@ def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pi
     assert native["coins"]["BTC"][1]["drawdown_threshold_fraction"] == default_threshold
     assert native["portfolio"]["drawdown_threshold_fraction"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
-        assert "drawdown_threshold_fraction" not in policy
+        assert "red_threshold" not in policy
 
 
 @pytest.mark.parametrize("proxy_cls", [SharedAccountReplay])
