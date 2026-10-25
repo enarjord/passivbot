@@ -68,9 +68,9 @@ def test_cooldown_reporting_changes_only_red_samples_in_real_replay(monkeypatch,
     getter = getattr(passivbot_rust, getter_name)
     library = getattr(mps_kernel, f"_{strategy}_multicoin_shader_library")
     candidate = {
-        "long_hsl_red_threshold": 1e-6,
-        "short_hsl_red_threshold": 1e-6,
-        "hsl_red_threshold": 1e-6,
+        "long_hsl_drawdown_threshold_fraction": 1e-6,
+        "short_hsl_drawdown_threshold_fraction": 1e-6,
+        "hsl_drawdown_threshold_fraction": 1e-6,
     }
     # A control restores only the old reporting expression in the otherwise
     # identical exported replay. Trading, episode state and counters stay intact.

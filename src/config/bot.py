@@ -30,8 +30,8 @@ DEFAULT_FORAGER_SCORE_WEIGHTS = {
 }
 REQUIRED_BOT_KEYS = ()
 CLIFF_EDGE_THRESHOLD_KEYS = (
-    "risk_wel_enforcer_threshold",
-    "risk_twel_enforcer_threshold",
+    "risk_wel_enforcer_threshold_ratio",
+    "risk_twel_enforcer_threshold_ratio",
     "unstuck_threshold",
 )
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
@@ -125,7 +125,7 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
-                bot_side, "risk_wel_enforcer_threshold"
+                bot_side, "risk_wel_enforcer_threshold_ratio"
             ),
             enabled_path=f"bot.{pside}.risk.position_exposure_enforcer.enabled",
             threshold_path=f"bot.{pside}.risk.position_exposure_enforcer.threshold_ratio",
@@ -133,14 +133,14 @@ def validate_bot_config(result: dict) -> None:
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(
-                bot_side, "risk_twel_enforcer_threshold"
+                bot_side, "risk_twel_enforcer_threshold_ratio"
             ),
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer.enabled",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
         _validate_positive_ratio_when_enabled(
             enabled_value=True,
-            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+            threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold_ratio"),
             enabled_path=f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer.threshold_ratio",
         )
@@ -148,7 +148,7 @@ def validate_bot_config(result: dict) -> None:
             get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
             path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
         )
-        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
+        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit_ratio"))
         raw_n_positions = get_grouped_bot_value(bot_side, "n_positions")
         try:
             n_positions_value = float(raw_n_positions)
@@ -272,16 +272,16 @@ def _derive_close_grid_qty_fraction(bot_cfg: dict, *, path: str) -> Optional[flo
 
 
 def _bot_side_enabled(bot_cfg: dict, *, pside: str) -> bool:
-    path = _bot_path(pside, "total_wallet_exposure_limit")
+    path = _bot_path(pside, "total_wallet_exposure_limit_ratio")
     try:
-        total_wallet_exposure_limit = float(bot_cfg["total_wallet_exposure_limit"])
+        total_wallet_exposure_limit_ratio = float(bot_cfg["total_wallet_exposure_limit_ratio"])
     except KeyError:
         return False
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{path} must be numeric") from exc
-    if not math.isfinite(total_wallet_exposure_limit):
+    if not math.isfinite(total_wallet_exposure_limit_ratio):
         raise ValueError(f"{path} must be finite")
-    return total_wallet_exposure_limit > 0.0
+    return total_wallet_exposure_limit_ratio > 0.0
 
 
 def _hydrate_forager_score_weights(
@@ -455,7 +455,7 @@ def normalize_hsl_risk_unstuck_numerics(
             set_grouped_bot_value(bot_side, f"unstuck_{key}", value)
 
         _validate_ratio(
-            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_fraction"),
             path=f"{risk_path}.we_excess_allowance_fraction",
         )
         _validate_ratio(
@@ -896,7 +896,7 @@ def format_bot_config(
             if isinstance(seeded.get("risk"), dict):
                 seeded["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
             else:
-                seeded["total_wallet_exposure_limit"] = 0.0
+                seeded["total_wallet_exposure_limit_ratio"] = 0.0
             result["bot"][pside] = seeded
             if tracker is not None:
                 tracker.add(["bot", pside], seeded)

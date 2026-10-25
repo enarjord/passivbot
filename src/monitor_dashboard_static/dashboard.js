@@ -631,8 +631,8 @@
     const totalShort = rows
       .filter((row) => row.pside === "short")
       .reduce((acc, row) => acc + Number(row.side.wallet_exposure || 0), 0);
-    const twelLong = rows.find((row) => row.pside === "long")?.side.total_wallet_exposure_limit || 0;
-    const twelShort = rows.find((row) => row.pside === "short")?.side.total_wallet_exposure_limit || 0;
+    const twelLong = rows.find((row) => row.pside === "long")?.side.total_wallet_exposure_limit_ratio || 0;
+    const twelShort = rows.find((row) => row.pside === "short")?.side.total_wallet_exposure_limit_ratio || 0;
     els.positionsMeta.textContent = `TWE L ${fmtCompact(totalLong)}/${fmtCompact(twelLong)} | S ${fmtCompact(totalShort)}/${fmtCompact(twelShort)}`;
     els.positionsBody.innerHTML = "";
     if (!rows.length) {

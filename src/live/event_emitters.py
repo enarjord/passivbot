@@ -1384,7 +1384,7 @@ def emit_memory_snapshot_event(
     bot: Any,
     *,
     rss_bytes: Any,
-    rss_delta_pct: Any = None,
+    rss_delta_percent: Any = None,
     cache_bytes: Any = None,
     cache_candles: Any = None,
     cache_symbols: Any = None,
@@ -1408,9 +1408,9 @@ def emit_memory_snapshot_event(
         if bounded_rss is None:
             return None
         data["rss_bytes"] = bounded_rss
-        delta = _bounded_memory_snapshot_delta(rss_delta_pct)
+        delta = _bounded_memory_snapshot_delta(rss_delta_percent)
         if delta is not None:
-            data["rss_delta_pct"] = delta
+            data["rss_delta_percent"] = delta
         cache: dict[str, Any] = {}
         for key, raw_value, maximum in (
             ("bytes", cache_bytes, _MEMORY_SNAPSHOT_MAX_BYTES),
@@ -3973,13 +3973,13 @@ def emit_order_churn_admission_event(
             "reason_counts": dict(sorted(reasons.items())[:16]),
             "rolling_count": max(0, int(rolling_count)),
             "activation_count": max(0, int(activation_count)),
-            "market_distance_threshold_pct": _safe_float(
+            "market_distance_threshold_percent": _safe_float(
                 float(market_distance_threshold) * 100.0
             ),
             "symbols": symbols[:12],
             "symbols_count": len(symbols),
             "symbols_truncated": len(symbols) > 12,
-            "distance_pct_sample": [
+            "distance_percent_sample": [
                 float(distance) * 100.0 for distance in sorted(distances)[:8]
             ],
         }
@@ -4069,7 +4069,7 @@ def _order_event_data(
     if isinstance(delta, dict):
         compact_delta = {
             key: delta.get(key)
-            for key in ("price_pct_diff", "qty_pct_diff")
+            for key in ("price_difference_percent", "qty_difference_percent")
             if delta.get(key) is not None
         }
         if compact_delta:
@@ -4167,7 +4167,7 @@ def emit_execution_connector_call_started_event(
         if isinstance(delta, dict):
             safe_delta = {
                 key: safe_value
-                for key in ("price_pct_diff", "qty_pct_diff")
+                for key in ("price_difference_percent", "qty_difference_percent")
                 if (safe_value := _safe_finite_float(delta.get(key))) is not None
             }
             if safe_delta:
@@ -4813,7 +4813,7 @@ def _unstuck_status_side_summary(
 ) -> dict[str, Any]:
     status = str(info.get("status") or "unknown")
     out: dict[str, Any] = {"status": status}
-    for key in ("allowance", "peak", "pct_from_peak", "loss_allowance_pct"):
+    for key in ("allowance", "peak", "change_from_peak_percent", "loss_allowance_pct"):
         value = _safe_float(info.get(key))
         if value is not None:
             out[key] = value
@@ -5038,14 +5038,14 @@ def emit_unstuck_selection_event(
     try:
         entry = _safe_float(entry_price)
         current = _safe_float(current_price)
-        price_diff_pct = None
+        price_change_percent = None
         if entry is not None and current is not None and entry > 0.0 and current > 0.0:
-            price_diff_pct = (current / entry - 1.0) * 100.0
+            price_change_percent = (current / entry - 1.0) * 100.0
         data = {
             "changed": bool(changed),
             "entry_price": entry,
             "current_price": current,
-            "price_diff_pct": price_diff_pct,
+            "price_change_percent": price_change_percent,
             "allowance": _safe_float(allowance),
         }
         bot._emit_live_event(

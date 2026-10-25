@@ -523,7 +523,7 @@ def test_fused_dormant_scoring_respects_each_sides_eligible_count(strategy):
     cls = (mps_kernel.MpsEmaAnchorMulticoinFusedRunner if strategy == "ema_anchor"
            else mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner)
     short_overrides = np.full((2, getattr(model, prefix + "_COIN_OVERRIDE_COLS")), np.nan)
-    short_overrides[1, getattr(model, prefix + "_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN")] = 0
+    short_overrides[1, getattr(model, prefix + "_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN")] = 0
     runner = cls(run, data, short_coin_overrides=short_overrides, dynamic_wel_by_tradability=False, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     assert runner.rms_ranking_coin_counts == (2, 1)
     row[keys.index("n_positions")] = 2

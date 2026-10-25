@@ -45,10 +45,10 @@ def test_martingale_close_diagnostics_remain_available(
             "volatility_ema_1m": 0.0, "volatility_ema_1h": 0.0,
         },
         "bot_params": {
-            "wallet_exposure_limit": 1.0, "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit_ratio": 1.0, "total_wallet_exposure_limit_ratio": 1.0,
             "n_positions": 1,
         },
-        "runtime": {"effective_wallet_exposure_limit": 1.0},
+        "runtime": {"effective_wallet_exposure_limit_ratio": 1.0},
         "position": {"size": sign * 5.0, "price": 100.0},
         "trailing": {
             "min_since_open": 100.0, "max_since_min": 110.0,

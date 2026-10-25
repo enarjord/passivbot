@@ -86,12 +86,12 @@ def _raw_rust_input(
     long_pos_size=1.0,
     short_pos_size=0.0,
     tradable=True,
-    long_wallet_exposure_limit=1.0,
-    short_wallet_exposure_limit=1.0,
+    long_wallet_exposure_limit_ratio=1.0,
+    short_wallet_exposure_limit_ratio=1.0,
     long_n_positions=1,
     short_n_positions=1,
-    long_total_wallet_exposure_limit=1.0,
-    short_total_wallet_exposure_limit=1.0,
+    long_total_wallet_exposure_limit_ratio=1.0,
+    short_total_wallet_exposure_limit_ratio=1.0,
     bid=100.0,
     ask=100.0,
     qty_step=0.001,
@@ -127,17 +127,17 @@ def _raw_rust_input(
         "global_bot_params": {
             "long": {
                 "n_positions": long_n_positions,
-                "total_wallet_exposure_limit": long_total_wallet_exposure_limit,
+                "total_wallet_exposure_limit_ratio": long_total_wallet_exposure_limit_ratio,
                 "risk_twel_enforcer_enabled": True,
-                "risk_twel_enforcer_threshold": 1.0,
+                "risk_twel_enforcer_threshold_ratio": 1.0,
                 "hsl_enabled": False,
                 "hsl_panic_close_order_type": "market",
             },
             "short": {
                 "n_positions": short_n_positions,
-                "total_wallet_exposure_limit": short_total_wallet_exposure_limit,
+                "total_wallet_exposure_limit_ratio": short_total_wallet_exposure_limit_ratio,
                 "risk_twel_enforcer_enabled": True,
-                "risk_twel_enforcer_threshold": 1.0,
+                "risk_twel_enforcer_threshold_ratio": 1.0,
                 "hsl_enabled": False,
                 "hsl_panic_close_order_type": "market",
             },
@@ -182,10 +182,10 @@ def _raw_rust_input(
                     "bot_params": {
                         "hsl_enabled": long_hsl_enabled,
                         "hsl_panic_close_order_type": long_hsl_panic_close_order_type,
-                        "wallet_exposure_limit": long_wallet_exposure_limit,
+                        "wallet_exposure_limit_ratio": long_wallet_exposure_limit_ratio,
                         "risk_entry_cooldown_minutes": long_entry_cooldown_minutes,
                         "risk_wel_enforcer_enabled": True,
-                        "risk_wel_enforcer_threshold": 1.0,
+                        "risk_wel_enforcer_threshold_ratio": 1.0,
                         "unstuck_enabled": True,
                         "unstuck_close_pct": 0.1,
                         "unstuck_loss_allowance_pct": 0.1,
@@ -209,10 +209,10 @@ def _raw_rust_input(
                     "bot_params": {
                         "hsl_enabled": short_hsl_enabled,
                         "hsl_panic_close_order_type": short_hsl_panic_close_order_type,
-                        "wallet_exposure_limit": short_wallet_exposure_limit,
+                        "wallet_exposure_limit_ratio": short_wallet_exposure_limit_ratio,
                         "risk_entry_cooldown_minutes": short_entry_cooldown_minutes,
                         "risk_wel_enforcer_enabled": True,
-                        "risk_wel_enforcer_threshold": 1.0,
+                        "risk_wel_enforcer_threshold_ratio": 1.0,
                         "unstuck_enabled": True,
                         "unstuck_close_pct": 0.1,
                         "unstuck_loss_allowance_pct": 0.1,
@@ -283,7 +283,7 @@ def test_passivbot_rust_stub_emits_required_diagnostic_collections():
     with pytest.raises(ValueError, match="unknown order type"):
         pbr.order_type_snake_to_id("entry_bogus_long")
 
-    stub_input = _raw_rust_input(long_pos_size=0.0, long_wallet_exposure_limit=0.0)
+    stub_input = _raw_rust_input(long_pos_size=0.0, long_wallet_exposure_limit_ratio=0.0)
     stub_out = json.loads(pbr.compute_ideal_orders_json(json.dumps(stub_input)))
     assert stub_out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
 
@@ -987,7 +987,7 @@ def test_raw_rust_output_rejects_unstuck_when_submitted_gate_is_false():
         (
             "close_auto_reduce_wel_long",
             "symbol",
-            "risk_wel_enforcer_threshold",
+            "risk_wel_enforcer_threshold_ratio",
             0.0,
         ),
         (
@@ -999,7 +999,7 @@ def test_raw_rust_output_rejects_unstuck_when_submitted_gate_is_false():
         (
             "close_auto_reduce_twel_long",
             "global",
-            "risk_twel_enforcer_threshold",
+            "risk_twel_enforcer_threshold_ratio",
             0.0,
         ),
     ],
@@ -1279,7 +1279,7 @@ def test_raw_rust_output_rejects_missing_panic_close_for_held_side(
             1.0,
             {
                 "long_n_positions": 0,
-                "long_total_wallet_exposure_limit": 0.0,
+                "long_total_wallet_exposure_limit_ratio": 0.0,
             },
             True,
         ),
@@ -1534,7 +1534,7 @@ def test_raw_rust_output_rejects_unhashable_symbol_state_modes(field, value):
     "input_overrides",
     [
         {"tradable": False},
-        {"long_wallet_exposure_limit": 0.0},
+        {"long_wallet_exposure_limit_ratio": 0.0},
     ],
     ids=["non-tradable", "zero-wallet-exposure-limit"],
 )
@@ -1553,7 +1553,7 @@ def test_raw_rust_output_rejects_active_state_for_submitted_ineligible_side(
     "input_overrides",
     [
         {"long_n_positions": 0},
-        {"long_total_wallet_exposure_limit": 0.0},
+        {"long_total_wallet_exposure_limit_ratio": 0.0},
     ],
     ids=["zero-global-position-cap", "zero-global-wallet-exposure-limit"],
 )
@@ -1586,7 +1586,7 @@ def test_raw_rust_output_accepts_inactive_state_for_submitted_ineligible_side():
     "input_overrides",
     [
         {"tradable": False},
-        {"long_wallet_exposure_limit": 0.0},
+        {"long_wallet_exposure_limit_ratio": 0.0},
     ],
     ids=["non-tradable", "zero-wallet-exposure-limit"],
 )
@@ -1609,7 +1609,7 @@ def test_raw_rust_output_rejects_flat_entry_for_submitted_ineligible_side(
     "input_overrides",
     [
         {"long_n_positions": 0},
-        {"long_total_wallet_exposure_limit": 0.0},
+        {"long_total_wallet_exposure_limit_ratio": 0.0},
     ],
     ids=["zero-global-position-cap", "zero-global-wallet-exposure-limit"],
 )
@@ -1642,7 +1642,7 @@ def test_raw_rust_output_rejects_flat_entry_for_globally_disabled_side(
 def test_raw_rust_output_zero_capacity_held_side_blocks_entries_but_keeps_closes(order):
     out = _raw_rust_output([order])
     out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
-    submitted = _raw_rust_input(long_pos_size=1.0, long_total_wallet_exposure_limit=0.0)
+    submitted = _raw_rust_input(long_pos_size=1.0, long_total_wallet_exposure_limit_ratio=0.0)
     if order["order_type"].startswith("entry_"):
         with pytest.raises(FatalBotException, match="globally disabled long"):
             reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}, submitted)
@@ -2857,7 +2857,7 @@ def test_raw_rust_output_keeps_active_held_side_when_globally_disabled():
         _raw_rust_input(
             long_pos_size=1.0,
             long_n_positions=0,
-            long_total_wallet_exposure_limit=0.0,
+            long_total_wallet_exposure_limit_ratio=0.0,
         ),
     ) == []
 
@@ -3144,7 +3144,7 @@ def test_raw_rust_output_keeps_reducer_loss_gate_block_at_zero_entry_capacity():
     out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
 
     assert reconciler.validate_rust_orchestrator_output(
-        out, {0: SYMBOL}, _raw_rust_input(long_total_wallet_exposure_limit=0.0),
+        out, {0: SYMBOL}, _raw_rust_input(long_total_wallet_exposure_limit_ratio=0.0),
     ) == []
 
 
@@ -3647,7 +3647,7 @@ def test_departed_symbol_clears_history_instead_of_refreshing_empty_snapshots(
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 
@@ -3691,7 +3691,7 @@ def test_nonzero_position_keeps_churn_history_after_symbol_rotation(monkeypatch)
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 
@@ -3736,7 +3736,7 @@ def test_stable_switching_boundary_is_emitted_as_history_reset(monkeypatch):
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 
@@ -3774,7 +3774,7 @@ def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
+                "order_match_tolerance_fraction": 0.0002,
                 "execution_delay_seconds": 2.0,
             }[key]
 

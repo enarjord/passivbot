@@ -67,8 +67,8 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     for key, expected in {
         "start_date": "2023-01-01", "end_date": "2023-01-15",
         "exchanges": ["binance", "bybit"], "candle_interval_minutes": 5,
-        "starting_balance": 100000.0, "maker_fee_override": 0.0004,
-        "btc_collateral_cap": 0.0, "suite_enabled": False,
+        "starting_balance": 100000.0, "maker_fee_override_fraction": 0.0004,
+        "btc_collateral_target_ratio": 0.0, "suite_enabled": False,
     }.items():
         assert config["backtest"][key] == expected
     expected_native_strategy = {
@@ -258,7 +258,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
         (
             {
                 "bot.long.risk.total_wallet_exposure_limit_ratio": 1.0,
-                "bot.long.total_wallet_exposure_limit": 2.0,
+                "bot.long.total_wallet_exposure_limit_ratio": 2.0,
             },
             ValueError,
             "unknown configuration field",
@@ -432,10 +432,10 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     )
 
     assert "n_positions" not in prepared["bot"]["long"]
-    assert "total_wallet_exposure_limit" not in prepared["bot"]["long"]
-    assert "risk_wel_enforcer_threshold" not in prepared["bot"]["long"]
+    assert "total_wallet_exposure_limit_ratio" not in prepared["bot"]["long"]
+    assert "risk_wel_enforcer_threshold_ratio" not in prepared["bot"]["long"]
     assert "unstuck_threshold" not in prepared["bot"]["long"]
-    assert "hsl_red_threshold" not in prepared["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in prepared["bot"]["long"]
     assert "forager_volume_ema_span_1m" not in prepared["bot"]["long"]
     assert "filter_volume_ema_span_1m" not in prepared["bot"]["long"]
     assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
@@ -553,11 +553,11 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         == canonical["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
-        compiled["bot"]["long"]["total_wallet_exposure_limit"]
+        compiled["bot"]["long"]["total_wallet_exposure_limit_ratio"]
         == canonical["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
+        compiled["bot"]["long"]["risk_wel_enforcer_threshold_ratio"]
         == canonical['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
@@ -565,7 +565,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         == canonical["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["hsl_red_threshold"]
+        compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
         == canonical["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (

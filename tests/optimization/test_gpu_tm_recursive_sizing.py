@@ -71,8 +71,8 @@ def test_recursive_initial_quantity_reprices_with_simulated_touch(side, anchor, 
         entry_initial_ema_distance_fraction=0., entry_initial_qty_fraction=quantity_pct,
         entry_trailing_reentry_qty_multiplier=.2, entry_trailing_retracement_base_fraction=0.,
         entry_trailing_threshold_base_fraction=spacing, entry_weight_volatility_1h=0.,
-        entry_weight_volatility_1m=0., entry_exposure_ratio_coefficient=0., wallet_exposure_limit=.5,
-        risk_we_excess_allowance_pct=0., balance=1000., position_size=0., position_price=0.,
+        entry_weight_volatility_1m=0., entry_exposure_ratio_coefficient=0., wallet_exposure_limit_ratio=.5,
+        risk_we_excess_allowance_fraction=0., balance=1000., position_size=0., position_price=0.,
         min_since_open=0., max_since_min=0., max_since_open=0., min_since_max=0.,
         volatility_ema_1h=0., volatility_ema_1m=0.)
     kwargs['ema_bands_upper' if side=='short' else 'ema_bands_lower'] = anchor

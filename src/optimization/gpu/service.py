@@ -48,12 +48,12 @@ from optimization.gpu.model import (
     UNSTUCK_EMA_PARAM_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GLOBAL_RISK_PARAM_KEYS,
     HSL_COIN_OVERRIDE_PATHS,
@@ -65,16 +65,16 @@ from optimization.gpu.model import (
     CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     UNSTUCK_PARAM_KEYS,
     build_mps_multicoin_data,
@@ -1063,7 +1063,7 @@ def _multicoin_exposure_eligible_coins(
     return eligible
 
 
-def _candidate_wallet_exposure_limit_outputs(
+def _candidate_wallet_exposure_limit_ratio_outputs(
     candidates: list[dict],
     base_limits: dict[str, float],
     *,
@@ -1075,12 +1075,12 @@ def _candidate_wallet_exposure_limit_outputs(
     for side in ("long", "short"):
         if side not in base_limits:
             raise ValueError(f"GPU candidate TWEL context is missing {side}")
-        key = f"{side}_total_wallet_exposure_limit"
+        key = f"{side}_total_wallet_exposure_limit_ratio"
         values = np.asarray(
             [float(candidate.get(key, base_limits[side])) for candidate in candidates],
             dtype=np.float64,
         )
-        outputs[f"candidate_total_wallet_exposure_limit_{side}"] = torch.from_numpy(
+        outputs[f"candidate_total_wallet_exposure_limit_ratio_{side}"] = torch.from_numpy(
             values
         )
     return outputs
@@ -1100,7 +1100,7 @@ def _candidate_position_slot_outputs(
         if side not in base_n_positions or side not in base_limits:
             raise ValueError(f"GPU candidate position-slot context is missing {side}")
         n_positions_key = f"{side}_n_positions"
-        limit_key = f"{side}_total_wallet_exposure_limit"
+        limit_key = f"{side}_total_wallet_exposure_limit_ratio"
         values = []
         for candidate in candidates:
             n_positions = float(candidate.get(n_positions_key, base_n_positions[side]))
@@ -1689,7 +1689,7 @@ class SharedAccountReplay:
         )
 
         comparable_bot_keys = (
-            "total_wallet_exposure_limit",
+            "total_wallet_exposure_limit_ratio",
             "filter_volume_ema_span_1m",
             "filter_volatility_ema_span_1m",
             "forager_score_weights",
@@ -1697,7 +1697,7 @@ class SharedAccountReplay:
             "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold",
+            "risk_twel_enforcer_threshold_ratio",
         )
         signal_mode = self.hsl_signal_mode
         hsl_enabled_sides = [
@@ -1724,8 +1724,8 @@ class SharedAccountReplay:
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
             )
-        self.base_total_wallet_exposure_limits = {
-            side: float(payload.bot_params_list[0][side]["total_wallet_exposure_limit"])
+        self.base_total_wallet_exposure_limit_ratios = {
+            side: float(payload.bot_params_list[0][side]["total_wallet_exposure_limit_ratio"])
             for side in ("long", "short")
         }
         self.base_n_positions = {
@@ -1868,7 +1868,7 @@ class SharedAccountReplay:
                 date_to_ts(format_end_date(config["backtest"]["end_date"]))
             ))
         wallet_exposure_column = (
-            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
             if self.strategy_kind == "ema_anchor"
             else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
         )
@@ -2108,8 +2108,8 @@ class SharedAccountReplay:
             candidates = [dict(c) for c in candidates]
             for candidate in candidates:
                 for key in (
-                    "hsl_red_threshold",
-                    "hsl_drawdown_ratio_ema_span_minutes",
+                    "hsl_drawdown_threshold_fraction",
+                    "hsl_drawdown_fraction_ema_span_minutes",
                     "hsl_cooldown_ms_lo", "hsl_cooldown_ms_hi",
                 ):
                     if key in candidate:
@@ -2184,8 +2184,8 @@ class SharedAccountReplay:
             # Metric normalization also reads defaults for the disabled side.
             for pside in ("long", "short"):
                 expanded.setdefault(
-                    f"{pside}_total_wallet_exposure_limit",
-                    self.base_total_wallet_exposure_limits[pside],
+                    f"{pside}_total_wallet_exposure_limit_ratio",
+                    self.base_total_wallet_exposure_limit_ratios[pside],
                 )
                 expanded.setdefault(
                     f"{pside}_n_positions", self.base_n_positions[pside]
@@ -2383,9 +2383,9 @@ class SharedAccountReplay:
                 )
             if any("_per_exposure_" in name for name in self.needed_metrics):
                 output.update(
-                    _candidate_wallet_exposure_limit_outputs(
+                    _candidate_wallet_exposure_limit_ratio_outputs(
                         chunk,
-                        self.base_total_wallet_exposure_limits,
+                        self.base_total_wallet_exposure_limit_ratios,
                         torch=torch,
                     )
                 )
@@ -2394,7 +2394,7 @@ class SharedAccountReplay:
                     _candidate_position_slot_outputs(
                         chunk,
                         self.base_n_positions,
-                        self.base_total_wallet_exposure_limits,
+                        self.base_total_wallet_exposure_limit_ratios,
                         torch=torch,
                     )
                 )

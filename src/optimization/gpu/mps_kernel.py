@@ -49,7 +49,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
-    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
@@ -63,7 +63,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
@@ -413,7 +413,7 @@ def _scale_directional_minute_parameters(
         rms = adverse_demand | ranking
         if side_activation is not None:
             rms &= side_activation[side_index]
-        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit")] > 0.0
+        rms &= scaled[:, offset + keys.index("total_wallet_exposure_limit_ratio")] > 0.0
         if np.any(rms) and interval_minutes != 1.0:
             raise ValueError("GPU RMS directionality requires one-minute candles")
         spans = scaled[:, span_col]
@@ -432,7 +432,7 @@ def _scale_directional_minute_parameters(
         for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
             _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
-            hsl_span_column = offset + keys.index("hsl_drawdown_ratio_ema_span_minutes")
+            hsl_span_column = offset + keys.index("hsl_drawdown_fraction_ema_span_minutes")
             hsl_spans = scaled[:, hsl_span_column]
             if np.any(~np.isfinite(hsl_spans)) or np.any(hsl_spans < 1.0):
                 raise ValueError(
@@ -1414,8 +1414,8 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
             key: params[:, side * width + keys.index(key)]
             for key in (
                 "hsl_enabled",
-                "hsl_red_threshold",
-                "hsl_drawdown_ratio_ema_span_minutes",
+                "hsl_drawdown_threshold_fraction",
+                "hsl_drawdown_fraction_ema_span_minutes",
                 "hsl_cooldown_ms_lo",
                 "hsl_memory_ema_span_minutes",
                 "hsl_signal_mode",
@@ -1426,7 +1426,7 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
         if not np.isfinite(cols["hsl_enabled"]).all():
             raise ValueError("GPU HSL enablement must be finite")
         # HSL clocks belong to the selected scope, independently of realized memory.
-        for key in ("hsl_memory_ema_span_minutes", "hsl_drawdown_ratio_ema_span_minutes"):
+        for key in ("hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes"):
             spans = cols[key].astype(np.float32)
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                 alpha = np.float32(2) / (spans + np.float32(1))
@@ -1447,9 +1447,9 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
             return cols[key][enabled]
 
         if (
-            np.any(selected("hsl_red_threshold") <= 0)
-            or np.any(selected("hsl_red_threshold") > 1)
-            or np.any(selected("hsl_drawdown_ratio_ema_span_minutes") < 1)
+            np.any(selected("hsl_drawdown_threshold_fraction") <= 0)
+            or np.any(selected("hsl_drawdown_threshold_fraction") > 1)
+            or np.any(selected("hsl_drawdown_fraction_ema_span_minutes") < 1)
             or np.any(selected("hsl_memory_ema_span_minutes") < 1)
             or not np.isin(selected("hsl_signal_mode"), [0, 1, 2]).all()
             or any(np.any(selected(key) < 0) or np.any(selected(key) >= 2**24)
@@ -1465,8 +1465,8 @@ def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
     unified = params[:, mode] == 0
     for key in (
         "hsl_enabled",
-        "hsl_red_threshold",
-        "hsl_drawdown_ratio_ema_span_minutes",
+        "hsl_drawdown_threshold_fraction",
+        "hsl_drawdown_fraction_ema_span_minutes",
         "hsl_cooldown_ms_lo",
         "hsl_cooldown_ms_hi",
         "hsl_memory_ema_span_minutes",
@@ -2643,7 +2643,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
     parameter_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
     coin_override_label = "EMA"
-    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_wel_column = EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     coin_override_cooldown_column = EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
     coin_override_unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
@@ -2883,12 +2883,12 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         )
         self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
-            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+            short_coin_overrides[:, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN] != 0.0
         )),)
         self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
             EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
             self.coin_override_cols - 4, self.coin_override_cols - 3,
-            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            self.coin_override_cols - 1, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
         ]].copy(),)
         unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)
@@ -3034,7 +3034,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
     decimal_coin_overrides = True
-    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+    coin_override_wel_column = TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
     coin_override_cooldown_column = TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
     coin_override_hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
     coin_override_unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
@@ -3337,12 +3337,12 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5)))
         self._coin_hsl_enabled_overrides += (short_hsl_overrides.copy(),)
         self.rms_ranking_coin_counts += (int(np.count_nonzero(
-            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] != 0.0
+            short_coin_overrides[:, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN] != 0.0
         )),)
         self.rms_cooldown_coin_overrides += (short_coin_overrides[:, [
             TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
             self.coin_override_cols - 4, self.coin_override_cols - 3,
-            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            self.coin_override_cols - 1, TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
         ]].copy(),)
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         self._unstuck_ema_overrides += (short_coin_overrides[:, [unstuck_start, unstuck_start + 1]].copy(),)

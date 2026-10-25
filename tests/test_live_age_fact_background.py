@@ -51,7 +51,7 @@ def _bot(side="long", exchange="binance"):
     bot.WS_ohlcvs_1m_tasks = {}
     bot.update_effective_min_cost = AsyncMock()
     bot.refresh_approved_ignored_coins_lists = lambda: None
-    bot.set_wallet_exposure_limits = lambda: None
+    bot.set_wallet_exposure_limit_ratios = lambda: None
     bot._assert_supported_live_state = lambda: None
     bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.refresh_market_state_if_needed = AsyncMock(return_value=True)

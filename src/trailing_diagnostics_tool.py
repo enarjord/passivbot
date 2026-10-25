@@ -23,9 +23,9 @@ ENTRY_CONFIG_KEYS = [
     "entry_trailing_threshold_base_fraction",
     "entry_trailing_threshold_exposure_ratio_coefficient",
     "entry_trailing_threshold_volatility_weight",
-    "wallet_exposure_limit",
-    "total_wallet_exposure_limit",
-    "risk_we_excess_allowance_pct",
+    "wallet_exposure_limit_ratio",
+    "total_wallet_exposure_limit_ratio",
+    "risk_we_excess_allowance_fraction",
 ]
 
 CLOSE_CONFIG_KEYS = [
@@ -33,10 +33,10 @@ CLOSE_CONFIG_KEYS = [
     "close_trailing_qty_fraction",
     "close_trailing_retracement_base_fraction",
     "close_trailing_threshold_base_fraction",
-    "wallet_exposure_limit",
-    "total_wallet_exposure_limit",
-    "risk_we_excess_allowance_pct",
-    "risk_wel_enforcer_threshold",
+    "wallet_exposure_limit_ratio",
+    "total_wallet_exposure_limit_ratio",
+    "risk_we_excess_allowance_fraction",
+    "risk_wel_enforcer_threshold_ratio",
 ]
 
 TRAILING_EXTREMA_KEYS = [
@@ -91,9 +91,9 @@ WIZARD_CORE_KEYS = [
     "h1_log_range_ema",
     "m1_log_range_ema",
     *TRAILING_EXTREMA_KEYS,
-    "wallet_exposure_limit",
-    "total_wallet_exposure_limit",
-    "risk_we_excess_allowance_pct",
+    "wallet_exposure_limit_ratio",
+    "total_wallet_exposure_limit_ratio",
+    "risk_we_excess_allowance_fraction",
     "entry_trailing_threshold_base_fraction",
     "entry_trailing_retracement_base_fraction",
     "entry_weight_volatility_1h",
@@ -119,7 +119,7 @@ WIZARD_ADVANCED_KEYS = [
     "entry_initial_qty_fraction",
     "entry_trailing_reentry_qty_multiplier",
     "close_grid_qty_fraction",
-    "risk_wel_enforcer_threshold",
+    "risk_wel_enforcer_threshold_ratio",
 ]
 
 
@@ -293,7 +293,7 @@ def _manual_defaults() -> dict[str, Any]:
     }
     for key in set(ENTRY_CONFIG_KEYS + CLOSE_CONFIG_KEYS):
         defaults[key] = 0.0
-    defaults["wallet_exposure_limit"] = 1.7
+    defaults["wallet_exposure_limit_ratio"] = 1.7
     return defaults
 
 
@@ -544,7 +544,7 @@ def _render_summary_box(state: TrailingDiagnosticsState, diagnostic: dict[str, A
         ),
         (
             f"WE={_fmt_compact(diagnostic.get('wallet_exposure'))} "
-            f"limit={_fmt_compact(diagnostic.get('allowed_wallet_exposure_limit'))} "
+            f"limit={_fmt_compact(diagnostic.get('allowed_wallet_exposure_limit_ratio'))} "
             f"entry_cap={_fmt_compact(diagnostic.get('entry_limit_cap'))} "
             f"mode={diagnostic.get('entry_mode') or '-'}"
         ),
@@ -629,10 +629,10 @@ def _render_inputs_box(state: TrailingDiagnosticsState, width: int) -> list[str]
         "close_trailing_qty_fraction",
         "close_trailing_threshold_base_fraction",
         "close_trailing_retracement_base_fraction",
-        "wallet_exposure_limit",
-        "total_wallet_exposure_limit",
-        "risk_we_excess_allowance_pct",
-        "risk_wel_enforcer_threshold",
+        "wallet_exposure_limit_ratio",
+        "total_wallet_exposure_limit_ratio",
+        "risk_we_excess_allowance_fraction",
+        "risk_wel_enforcer_threshold_ratio",
     ]
     lines = [f"{key}={_fmt_compact(state.inputs.get(key))}" for key in important]
     return _wrap_box("Config Inputs", lines, width)

@@ -147,7 +147,7 @@ def test_disabled_unstuck_preserves_active_factual_hsl_panics(
 
     proxy = make_proxy('portfolio', strategy, sides, minutes=3000, factual_hsl=True)
     candidate = {f'{side}_unstuck_enabled': 0.0 for side in sides}
-    candidate['hsl_red_threshold'] = 1e-6
+    candidate['hsl_drawdown_threshold_fraction'] = 1e-6
     runner, specialized = raw(proxy, [candidate])
     assert not runner.dispatch_unstuck_enabled
     assert not runner.dispatch_hsl_disabled

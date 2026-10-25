@@ -173,7 +173,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     strategy = lower_runtime_strategy_side(STRATEGY_KIND, strategy)
     entry = _require_mapping(strategy.get("entry"), "strategy.entry")
     close = _require_mapping(strategy.get("close"), "strategy.close")
-    total_wallet_exposure_limit = _finite_float(
+    total_wallet_exposure_limit_ratio = _finite_float(
         risk.get("total_wallet_exposure_limit_ratio"),
         f"bot.{pside}.risk.total_wallet_exposure_limit_ratio",
     )
@@ -236,8 +236,8 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         ceiling is None or clamped_base < ceiling
     )
     return {
-        "active": total_wallet_exposure_limit > 0.0 and max_positions > 0,
-        "total_wallet_exposure_limit": total_wallet_exposure_limit,
+        "active": total_wallet_exposure_limit_ratio > 0.0 and max_positions > 0,
+        "total_wallet_exposure_limit_ratio": total_wallet_exposure_limit_ratio,
         "max_positions": max_positions,
         "forced_mode": forced_mode,
         "hsl_enabled": hsl_enabled_global or bool(hsl_enabled_override_symbols),
@@ -422,7 +422,7 @@ def inspect_trailing(
     position_price: float,
     position_size: float | None,
     wallet_exposure: float,
-    effective_wallet_exposure_limit: float,
+    effective_wallet_exposure_limit_ratio: float,
     volatility_ema_1m: float,
     volatility_ema_1h: float,
     params: Mapping[str, Any],
@@ -435,9 +435,9 @@ def inspect_trailing(
     if position_size is not None:
         position_size = _finite_float(position_size, "position_size")
     wallet_exposure = _finite_float(wallet_exposure, "wallet_exposure")
-    effective_wallet_exposure_limit = _finite_float(
-        effective_wallet_exposure_limit,
-        "effective_wallet_exposure_limit",
+    effective_wallet_exposure_limit_ratio = _finite_float(
+        effective_wallet_exposure_limit_ratio,
+        "effective_wallet_exposure_limit_ratio",
     )
     volatility_ema_1m = _finite_float(volatility_ema_1m, "volatility_ema_1m")
     volatility_ema_1h = _finite_float(volatility_ema_1h, "volatility_ema_1h")
@@ -445,14 +445,14 @@ def inspect_trailing(
         raise ValueError("position_price must be greater than zero")
     if wallet_exposure < 0.0:
         raise ValueError("wallet_exposure must not be negative")
-    if effective_wallet_exposure_limit <= 0.0:
-        raise ValueError("effective_wallet_exposure_limit must be greater than zero")
+    if effective_wallet_exposure_limit_ratio <= 0.0:
+        raise ValueError("effective_wallet_exposure_limit_ratio must be greater than zero")
     if volatility_ema_1m < 0.0 or volatility_ema_1h < 0.0:
         raise ValueError("volatility EMAs must not be negative")
 
     entry = _require_mapping(params.get("entry"), "params.entry")
     close = _require_mapping(params.get("close"), "params.close")
-    wallet_exposure_ratio = wallet_exposure / effective_wallet_exposure_limit
+    wallet_exposure_ratio = wallet_exposure / effective_wallet_exposure_limit_ratio
 
     entry_threshold_multiplier = _dynamic_multiplier(
         volatility_ema_1m=volatility_ema_1m,
@@ -556,7 +556,7 @@ def inspect_trailing(
         "pside": pside,
         "position": {"size": position_size, "price": position_price},
         "wallet_exposure": wallet_exposure,
-        "effective_wallet_exposure_limit": effective_wallet_exposure_limit,
+        "effective_wallet_exposure_limit_ratio": effective_wallet_exposure_limit_ratio,
         "wallet_exposure_ratio": wallet_exposure_ratio,
         "volatility_ema_1m": volatility_ema_1m,
         "volatility_ema_1h": volatility_ema_1h,
@@ -881,7 +881,7 @@ def _classify_side(
         elif forced_mode == "normal":
             overall.append(
                 f"{pside.capitalize()} is enabled: total exposure limit "
-                f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
+                f"{context['total_wallet_exposure_limit_ratio'] * 100.0:.2f}% across "
                 f"{context['max_positions']} configured position slot(s)."
             )
         elif context.get("hsl_enabled", False):
@@ -1158,7 +1158,7 @@ def build_overview(
                     position_price=price_anchor,
                     position_size=None,
                     wallet_exposure=exposure_ratio,
-                    effective_wallet_exposure_limit=1.0,
+                    effective_wallet_exposure_limit_ratio=1.0,
                     volatility_ema_1m=volatility_ema_1m,
                     volatility_ema_1h=volatility_ema_1h,
                     params=params,
@@ -1354,7 +1354,7 @@ def render_report(result: Mapping[str, Any]) -> str:
         f"Position: {size_text}{_fmt_number(position['price'])}",
         (
             f"Wallet exposure: {_fmt_pct(result['wallet_exposure'])} / effective limit "
-            f"{_fmt_pct(result['effective_wallet_exposure_limit'])} "
+            f"{_fmt_pct(result['effective_wallet_exposure_limit_ratio'])} "
             f"(ratio {_fmt_pct(result['wallet_exposure_ratio'])})"
         ),
         (
@@ -1718,6 +1718,7 @@ def _parse_volatility_scenarios(value: str) -> tuple[tuple[str, float, float], .
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool trailing-inspect",
+        allow_abbrev=False,
         description=(
             "Inspect trailing_martingale entry and close thresholds without starting a bot. "
             "Percent inputs use config ratios (0.01 = 1%)."
@@ -1730,7 +1731,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Detailed single-scenario mode (backward compatible):\n"
             "  passivbot tool trailing-inspect --symbol COIN --side long "
             "--position-size 150 --position-price 20 --wallet-exposure 0.6 "
-            "--effective-wallet-exposure-limit 0.9 --volatility-ema-1m 0.007 "
+            "--effective-wallet-exposure-limit-ratio 0.9 --volatility-ema-1m 0.007 "
             "--volatility-ema-1h 0.0033\n\n"
             "A positional config path is preferred; --config remains available for compatibility. "
             "Any parameter flag below overrides the config/default value."
@@ -1760,7 +1761,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     state.add_argument("--wallet-exposure", type=float, default=None, help="Current WE ratio")
     state.add_argument(
-        "--effective-wallet-exposure-limit",
+        "--effective-wallet-exposure-limit-ratio",
         type=float,
         default=None,
         help="Effective per-position WEL used by the strategy",
@@ -1820,7 +1821,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for value in (
                 args.position_size,
                 args.wallet_exposure,
-                args.effective_wallet_exposure_limit,
+                args.effective_wallet_exposure_limit_ratio,
                 args.volatility_ema_1m,
                 args.volatility_ema_1h,
             )
@@ -1830,11 +1831,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("detailed single-scenario mode requires --side long or --side short")
             if (
                 args.wallet_exposure is None
-                or args.effective_wallet_exposure_limit is None
+                or args.effective_wallet_exposure_limit_ratio is None
             ):
                 raise ValueError(
                     "detailed single-scenario mode requires both --wallet-exposure and "
-                    "--effective-wallet-exposure-limit"
+                    "--effective-wallet-exposure-limit-ratio"
                 )
             if args.price_anchor is None:
                 raise ValueError(
@@ -1849,7 +1850,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 position_price=args.price_anchor,
                 position_size=args.position_size,
                 wallet_exposure=args.wallet_exposure,
-                effective_wallet_exposure_limit=args.effective_wallet_exposure_limit,
+                effective_wallet_exposure_limit_ratio=args.effective_wallet_exposure_limit_ratio,
                 volatility_ema_1m=(
                     args.volatility_ema_1m if args.volatility_ema_1m is not None else 0.0
                 ),

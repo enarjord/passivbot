@@ -19,7 +19,7 @@ from trailing_diagnostics import (
     normalize_trailing_extrema,
 )
 from risk_limits import (
-    effective_we_excess_allowance_pct,
+    effective_we_excess_allowance_fraction,
 )
 from utils import utc_ms
 
@@ -556,12 +556,12 @@ def _build_health_summary_payload(
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)
-    mem_pct = _get_process_memory_percent()
-    if mem_pct is not None and math.isfinite(mem_pct):
-        payload["memory_percent"] = float(mem_pct)
-    cpu_pct = _get_process_cpu_percent()
-    if cpu_pct is not None and math.isfinite(cpu_pct):
-        payload["cpu_percent"] = max(0.0, float(cpu_pct))
+    memory_percent = _get_process_memory_percent()
+    if memory_percent is not None and math.isfinite(memory_percent):
+        payload["memory_percent"] = float(memory_percent)
+    cpu_percent = _get_process_cpu_percent()
+    if cpu_percent is not None and math.isfinite(cpu_percent):
+        payload["cpu_percent"] = max(0.0, float(cpu_percent))
     open_fds = _get_open_fd_count()
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)
@@ -1172,7 +1172,7 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
                 self.bot_value(pside, "unstuck_threshold") or 0.0
             ),
         }
-        for key in ("allowance", "peak", "pct_from_peak"):
+        for key in ("allowance", "peak", "change_from_peak_percent"):
             if key in info:
                 side_payload[key] = float(info[key])
         if "loss_allowance_pct" in info:
@@ -1407,18 +1407,18 @@ def _build_monitor_recent_section(self) -> dict[str, Any]:
     }
 
 
-def _monitor_wallet_exposure_limit_with_allowance(
+def _monitor_wallet_exposure_limit_ratio_with_allowance(
     self, pside: str, symbol: str
 ) -> float:
-    wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
-    allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-    effective_allowance_pct = effective_we_excess_allowance_pct(
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        total_wallet_exposure_limit=twel,
+    wel = float(self.bp(pside, "wallet_exposure_limit_ratio", symbol))
+    allowance_fraction = float(self.bp(pside, "risk_we_excess_allowance_fraction", symbol))
+    twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
+    effective_allowance_fraction = effective_we_excess_allowance_fraction(
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_fraction,
+        total_wallet_exposure_limit_ratio=twel,
     )
-    return wel * (1.0 + effective_allowance_pct)
+    return wel * (1.0 + effective_allowance_fraction)
 
 
 def _monitor_strategy_params(self, pside, symbol, strategy_cache=None):
@@ -1476,7 +1476,7 @@ def _monitor_entry_trailing_limit_cap(
     symbol: str,
     wallet_exposure: float,
 ) -> tuple[Optional[float], Optional[str]]:
-    allowed_limit = _monitor_wallet_exposure_limit_with_allowance(self, pside, symbol)
+    allowed_limit = _monitor_wallet_exposure_limit_ratio_with_allowance(self, pside, symbol)
     if allowed_limit <= 0.0:
         return None, None
     retracement = _monitor_strategy_value(
@@ -1639,12 +1639,12 @@ def _build_monitor_trailing_entry_payload(
             self, pside, key, symbol, strategy_cache=strategy_cache
         )
     for key in (
-        "wallet_exposure_limit",
-        "risk_we_excess_allowance_pct",
+        "wallet_exposure_limit_ratio",
+        "risk_we_excess_allowance_fraction",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
-    inputs["total_wallet_exposure_limit"] = float(
-        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    inputs["total_wallet_exposure_limit_ratio"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0
     )
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
@@ -1698,8 +1698,8 @@ def _build_monitor_trailing_close_payload(
             },
             "bot_params": self._bot_params_to_rust_dict(pside, symbol),
             "runtime": {
-                "effective_wallet_exposure_limit": float(
-                    self.bp(pside, "wallet_exposure_limit", symbol)
+                "effective_wallet_exposure_limit_ratio": float(
+                    self.bp(pside, "wallet_exposure_limit_ratio", symbol)
                 )
             },
             "close_params": dict(strategy_params["close"]),
@@ -1752,13 +1752,13 @@ def _build_monitor_trailing_close_payload(
             self, pside, key, symbol, strategy_cache=strategy_cache
         )
     for key in (
-        "wallet_exposure_limit",
-        "risk_we_excess_allowance_pct",
-        "risk_wel_enforcer_threshold",
+        "wallet_exposure_limit_ratio",
+        "risk_we_excess_allowance_fraction",
+        "risk_wel_enforcer_threshold_ratio",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
-    inputs["total_wallet_exposure_limit"] = float(
-        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    inputs["total_wallet_exposure_limit_ratio"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0
     )
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
@@ -1887,26 +1887,26 @@ def _build_monitor_position_side_payload(
         wallet_exposure = float(
             pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw
         )
-    wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
-    allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-    effective_allowance_pct = effective_we_excess_allowance_pct(
-        wallet_exposure_limit=wel,
-        risk_we_excess_allowance_pct=allowance_pct,
-        total_wallet_exposure_limit=twel,
+    wel = float(self.bp(pside, "wallet_exposure_limit_ratio", symbol))
+    allowance_fraction = float(self.bp(pside, "risk_we_excess_allowance_fraction", symbol))
+    twel = float(self.bot_value(pside, "total_wallet_exposure_limit_ratio") or 0.0)
+    effective_allowance_fraction = effective_we_excess_allowance_fraction(
+        wallet_exposure_limit_ratio=wel,
+        risk_we_excess_allowance_fraction=allowance_fraction,
+        total_wallet_exposure_limit_ratio=twel,
     )
-    effective_wel = wel * (1.0 + effective_allowance_pct)
+    effective_wel = wel * (1.0 + effective_allowance_fraction)
 
     payload: dict[str, Any] = {
         "size": size,
         "price": price,
         "wallet_exposure": wallet_exposure,
-        "wallet_exposure_limit": wel,
-        "effective_wallet_exposure_limit": effective_wel,
+        "wallet_exposure_limit_ratio": wel,
+        "effective_wallet_exposure_limit_ratio": effective_wel,
         "wel_ratio": wallet_exposure / wel if wel > 0.0 else 0.0,
         "wele_ratio": wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0,
         "total_wallet_exposure": float(total_we_by_pside.get(pside, 0.0) or 0.0),
-        "total_wallet_exposure_limit": twel,
+        "total_wallet_exposure_limit_ratio": twel,
         "twel_ratio": (
             float(total_we_by_pside.get(pside, 0.0) or 0.0) / twel
             if twel > 0.0

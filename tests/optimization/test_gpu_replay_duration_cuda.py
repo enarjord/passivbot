@@ -34,7 +34,7 @@ def test_adaptive_boundaries_preserve_every_output_and_cache_reset(
     runner = proxy.fused_runner or proxy.runners[sides[0]]
     assert runner.max_dispatch_candidate_bars is not None
     assert proxy.temporal_chunking
-    candidates = [{"hsl_red_threshold": 1e-6}, {"hsl_red_threshold": 1e-6}]
+    candidates = [{"hsl_drawdown_threshold_fraction": 1e-6}, {"hsl_drawdown_threshold_fraction": 1e-6}]
     runner.max_dispatch_candidate_bars = None
     _, expected = raw(proxy, candidates)
     # A deliberately tiny execution target forces actual, successful GPU work

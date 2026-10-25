@@ -11,8 +11,8 @@ def _bot():
     return {
         "hsl_enabled": True,
         "hsl_scale_budget_with_excess_allowance": False,
-        "hsl_red_threshold": .1,
-        "hsl_drawdown_ratio_ema_span_minutes": 3.5,
+        "hsl_drawdown_threshold_fraction": .1,
+        "hsl_drawdown_fraction_ema_span_minutes": 3.5,
         "hsl_cooldown_minutes_after_red": 5.25,
         "hsl_memory_ema_span_minutes": 43200.5,
         "hsl_slot_count": 2,
@@ -24,7 +24,7 @@ def test_policy_packs_independent_hsl_memory_and_ratio_spans(mode, code):
     packed = pack_params(_bot(), mode)
     assert packed["hsl_signal_mode"] == code
     assert packed["hsl_memory_ema_span_minutes"] == 43200.5
-    assert packed["hsl_drawdown_ratio_ema_span_minutes"] == 3.5
+    assert packed["hsl_drawdown_fraction_ema_span_minutes"] == 3.5
     assert not any("restart" in key for key in packed)
 
 
@@ -42,7 +42,7 @@ def test_old_portfolio_mode_name_is_not_a_runtime_alias():
 
 
 def test_projection_uses_explicit_portfolio_policy_memory():
-    policy = {"enabled": True, "red_threshold": .2, "drawdown_ratio_ema_span_minutes": 15.5, "memory_ema_span_minutes": 1234.5,
+    policy = {"enabled": True, "drawdown_threshold_fraction": .2, "drawdown_fraction_ema_span_minutes": 15.5, "memory_ema_span_minutes": 1234.5,
               "cooldown_minutes_after_red": 20.0, "panic_close_order_type": "market"}
     payload = SimpleNamespace(
         bot_params_list=[{"long": {"n_positions": 2}}],
@@ -52,13 +52,13 @@ def test_projection_uses_explicit_portfolio_policy_memory():
                                                    "portfolio": policy}},
     )
     projected = project_bot(payload, 0, "long", {})
-    assert projected["hsl_red_threshold"] == .2
+    assert projected["hsl_drawdown_threshold_fraction"] == .2
     assert projected["hsl_memory_ema_span_minutes"] == 1234.5
 
 
 def test_coin_projection_preserves_policy_memory_and_budget_scaling():
-    policy = {"enabled": True, "red_threshold": .2,
-              "drawdown_ratio_ema_span_minutes": 3.5, "memory_ema_span_minutes": 7.5,
+    policy = {"enabled": True, "drawdown_threshold_fraction": .2,
+              "drawdown_fraction_ema_span_minutes": 3.5, "memory_ema_span_minutes": 7.5,
               "scale_budget_with_excess_allowance": True,
               "cooldown_minutes_after_red": 2.0, "panic_close_order_type": "market"}
     payload = SimpleNamespace(
@@ -71,7 +71,7 @@ def test_coin_projection_preserves_policy_memory_and_budget_scaling():
     )
     packed = pack_params(project_bot(payload, 0, "long", {}), "coin")
     assert packed["hsl_memory_ema_span_minutes"] == 7.5
-    assert packed["hsl_drawdown_ratio_ema_span_minutes"] == 3.5
+    assert packed["hsl_drawdown_fraction_ema_span_minutes"] == 3.5
     assert packed["hsl_scale_budget_with_excess_allowance"] == 1.0
 
 
@@ -116,7 +116,7 @@ def test_retired_directional_runner_fails_before_device_or_input_access(name):
     assert not hasattr(mps_kernel, name)
 
 
-@pytest.mark.parametrize("option", ["--hsl-drawdown-ratio-ema-span-minutes", "--hsl-memory-ema-span-minutes"])
+@pytest.mark.parametrize("option", ["--hsl-drawdown-fraction-ema-span-minutes", "--hsl-memory-ema-span-minutes"])
 @pytest.mark.parametrize("span", ["1e9", "3.4028234663852886e38"])
 def test_fixture_preflight_rejects_memory_that_rounds_to_no_decay(option, span):
     from tools.gpu_parity import build_parser, resolve_fixture_args

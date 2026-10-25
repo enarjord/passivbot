@@ -1,5 +1,5 @@
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
-use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance};
+use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_ratio_with_allowance};
 use crate::strategies::{StrategySide, TrailingMartingaleCloseParams};
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
@@ -36,7 +36,7 @@ pub struct TrailingMartingaleCloseDiagnostic {
     pub retracement_fraction: f64,
     pub retracement_met: bool,
     pub wallet_exposure: f64,
-    pub effective_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit_ratio: f64,
     pub wallet_exposure_ratio: f64,
     pub volatility_ema_1m: f64,
     pub volatility_ema_1h: f64,
@@ -69,7 +69,7 @@ pub fn calc_close_qty(
     close_price: f64,
 ) -> f64 {
     let full_psize = cost_to_qty(
-        balance * wallet_exposure_limit_with_allowance(bot_params, runtime_context),
+        balance * wallet_exposure_limit_ratio_with_allowance(bot_params, runtime_context),
         position.price,
         exchange_params.c_mult,
     );
@@ -104,18 +104,18 @@ pub(crate) fn calc_wel_auto_reduce_long(
     position: &Position,
     wallet_exposure: f64,
 ) -> Option<Order> {
-    if !bot_params.risk_wel_enforcer_enabled || bot_params.risk_wel_enforcer_threshold <= 0.0 {
+    if !bot_params.risk_wel_enforcer_enabled || bot_params.risk_wel_enforcer_threshold_ratio <= 0.0 {
         return None;
     }
     if state_params.balance <= 0.0 || position.price <= 0.0 {
         return None;
     }
-    let allowed_limit = wallet_exposure_limit_with_allowance(bot_params, runtime_context);
+    let allowed_limit = wallet_exposure_limit_ratio_with_allowance(bot_params, runtime_context);
     if allowed_limit <= 0.0 {
         return None;
     }
     // Strict target: must enforce WE < target_exposure
-    let target_exposure = allowed_limit * bot_params.risk_wel_enforcer_threshold;
+    let target_exposure = allowed_limit * bot_params.risk_wel_enforcer_threshold_ratio;
     if wallet_exposure <= target_exposure {
         return None;
     }
@@ -190,18 +190,18 @@ pub(crate) fn calc_wel_auto_reduce_short(
     position: &Position,
     wallet_exposure: f64,
 ) -> Option<Order> {
-    if !bot_params.risk_wel_enforcer_enabled || bot_params.risk_wel_enforcer_threshold <= 0.0 {
+    if !bot_params.risk_wel_enforcer_enabled || bot_params.risk_wel_enforcer_threshold_ratio <= 0.0 {
         return None;
     }
     if state_params.balance <= 0.0 || position.price <= 0.0 {
         return None;
     }
-    let allowed_limit = wallet_exposure_limit_with_allowance(bot_params, runtime_context);
+    let allowed_limit = wallet_exposure_limit_ratio_with_allowance(bot_params, runtime_context);
     if allowed_limit <= 0.0 {
         return None;
     }
     // Strict target: must enforce WE < target_exposure
-    let target_exposure = allowed_limit * bot_params.risk_wel_enforcer_threshold;
+    let target_exposure = allowed_limit * bot_params.risk_wel_enforcer_threshold_ratio;
     if wallet_exposure <= target_exposure {
         return None;
     }
@@ -289,14 +289,14 @@ pub(crate) fn calc_close_threshold_fraction(
     close_params: &TrailingMartingaleCloseParams,
     position: &Position,
 ) -> f64 {
-    let wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params, runtime_context);
-    let wallet_exposure_ratio = if wallet_exposure_limit > 0.0 {
+    let wallet_exposure_limit_ratio = wallet_exposure_limit_ratio_with_allowance(bot_params, runtime_context);
+    let wallet_exposure_ratio = if wallet_exposure_limit_ratio > 0.0 {
         calc_wallet_exposure(
             exchange_params.c_mult,
             state_params.balance,
             position.size.abs(),
             position.price,
-        ) / wallet_exposure_limit
+        ) / wallet_exposure_limit_ratio
     } else {
         0.0
     };
@@ -762,16 +762,16 @@ pub fn calc_trailing_martingale_close_diagnostic(
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> TrailingMartingaleCloseDiagnostic {
-    let effective_wallet_exposure_limit =
-        wallet_exposure_limit_with_allowance(bot_params, runtime_context);
+    let effective_wallet_exposure_limit_ratio =
+        wallet_exposure_limit_ratio_with_allowance(bot_params, runtime_context);
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
         state_params.balance,
         position.size,
         position.price,
     );
-    let wallet_exposure_ratio = if effective_wallet_exposure_limit > 0.0 {
-        wallet_exposure / effective_wallet_exposure_limit
+    let wallet_exposure_ratio = if effective_wallet_exposure_limit_ratio > 0.0 {
+        wallet_exposure / effective_wallet_exposure_limit_ratio
     } else {
         0.0
     };
@@ -868,7 +868,7 @@ pub fn calc_trailing_martingale_close_diagnostic(
         retracement_fraction,
         retracement_met,
         wallet_exposure,
-        effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio,
         wallet_exposure_ratio,
         volatility_ema_1m: state_params.volatility_ema_1m,
         volatility_ema_1h: state_params.volatility_ema_1h,
@@ -882,7 +882,7 @@ mod tests {
 
     fn make_runtime_context() -> RuntimeOrderContext {
         RuntimeOrderContext {
-            effective_wallet_exposure_limit: 1.0,
+            effective_wallet_exposure_limit_ratio: 1.0,
         }
     }
 
@@ -924,9 +924,9 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0, // WEL_base
-            risk_we_excess_allowance_pct: 0.0,
-            risk_wel_enforcer_threshold: 1.0,
+            wallet_exposure_limit_ratio: 1.0, // WEL_base
+            risk_we_excess_allowance_fraction: 0.0,
+            risk_wel_enforcer_threshold_ratio: 1.0,
             ..Default::default()
         };
         let pos = Position {
@@ -965,11 +965,11 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
             n_positions: 1,
-            risk_we_excess_allowance_pct: 1.5,
-            risk_wel_enforcer_threshold: 1.0,
+            risk_we_excess_allowance_fraction: 1.5,
+            risk_wel_enforcer_threshold_ratio: 1.0,
             ..Default::default()
         };
         let pos = Position {
@@ -1005,9 +1005,9 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
             risk_wel_enforcer_enabled: false,
-            risk_wel_enforcer_threshold: 1.0,
+            risk_wel_enforcer_threshold_ratio: 1.0,
             ..Default::default()
         };
         let pos = Position {
@@ -1047,8 +1047,8 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            risk_wel_enforcer_threshold: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
+            risk_wel_enforcer_threshold_ratio: 1.0,
             ..Default::default()
         };
         let pos = Position {
@@ -1094,9 +1094,9 @@ mod tests {
         };
         // price 50, psize 10.1 -> WE = (10.1*50)/500 = 1.01; target=1.0
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
-            risk_wel_enforcer_threshold: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
+            risk_wel_enforcer_threshold_ratio: 1.0,
             ..Default::default()
         };
         let pos = Position {
@@ -1135,7 +1135,7 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
             ..Default::default()
         };
         let runtime = make_runtime_context();
@@ -1191,7 +1191,7 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
             ..Default::default()
         };
         let runtime = make_runtime_context();
@@ -1329,8 +1329,8 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             ..Default::default()
         };
         let close = TrailingMartingaleCloseParams {
@@ -1374,10 +1374,10 @@ mod tests {
 
     fn make_recursive_close_bot() -> BotParams {
         BotParams {
-            wallet_exposure_limit: 1.0,
-            risk_we_excess_allowance_pct: 0.0,
+            wallet_exposure_limit_ratio: 1.0,
+            risk_we_excess_allowance_fraction: 0.0,
             risk_wel_enforcer_enabled: false,
-            risk_wel_enforcer_threshold: 0.0,
+            risk_wel_enforcer_threshold_ratio: 0.0,
             ..Default::default()
         }
     }

@@ -110,7 +110,7 @@ def replay_inputs(kind, topology, margins):
     config["optimize"]["enable_overrides"] = []
     config["bot"]["portfolio"]["strategy_kind"] = kind
     config["bot"]["portfolio"]["hedge_mode"] = topology != "oneway"
-    config["bot"]["portfolio"]["warmup"].update(max_minutes=1.0, span_multiplier=1.0)
+    config["bot"]["portfolio"]["warmup"].update(max_minutes=1.0, activation_span_fraction=1.0)
     config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
     config["bot"]["portfolio"]["execution"]["market_orders_allowed"] = False
     coins = ["AAA", "BBB", "CCC"]
@@ -149,7 +149,7 @@ def replay_inputs(kind, topology, margins):
                              "threshold_log_range_1m_coefficient", "retracement_log_range_1m_coefficient"):
                     strategy[leg][name] = 0.0
     config["backtest"].update(exchanges=["binance"], starting_balance=1000.0,
-                               btc_collateral_cap=0.0, filter_by_min_effective_cost=False,
+                               btc_collateral_target_ratio=0.0, filter_by_min_effective_cost=False,
                                dynamic_wel_by_tradability=False)
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     config["backtest"]["coins"] = {"binance": coins}

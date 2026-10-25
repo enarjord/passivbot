@@ -36,8 +36,8 @@ def test_initial_entry_qty_long_uses_base_wel_without_runtime_excess():
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=0.0,
         entry_trailing_threshold_base_fraction=0.0,
-        wallet_exposure_limit=0.1,
-        risk_we_excess_allowance_pct=1.0,
+        wallet_exposure_limit_ratio=0.1,
+        risk_we_excess_allowance_fraction=1.0,
         balance=1000.0,
         position_size=0.0,
         position_price=0.0,
@@ -57,7 +57,7 @@ def test_initial_entry_qty_long_uses_base_wel_without_runtime_excess():
     # Excess allowance is applied upstream (orchestrator/backtest) through the
     # runtime effective wallet exposure limit; the standalone entry calculator
     # sizes off the base limit it receives.
-    allowed = params["wallet_exposure_limit"]
+    allowed = params["wallet_exposure_limit_ratio"]
     target_cost = params["balance"] * allowed * params["entry_initial_qty_fraction"]
     expected_qty = pbr.round_(
         pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
@@ -84,8 +84,8 @@ def test_initial_entry_qty_short_uses_base_wel_without_runtime_excess():
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=0.0,
         entry_trailing_threshold_base_fraction=0.0,
-        wallet_exposure_limit=0.1,
-        risk_we_excess_allowance_pct=1.0,
+        wallet_exposure_limit_ratio=0.1,
+        risk_we_excess_allowance_fraction=1.0,
         balance=1000.0,
         position_size=0.0,
         position_price=0.0,
@@ -105,7 +105,7 @@ def test_initial_entry_qty_short_uses_base_wel_without_runtime_excess():
     # Excess allowance is applied upstream (orchestrator/backtest) through the
     # runtime effective wallet exposure limit; the standalone entry calculator
     # sizes off the base limit it receives.
-    allowed = params["wallet_exposure_limit"]
+    allowed = params["wallet_exposure_limit_ratio"]
     target_cost = params["balance"] * allowed * params["entry_initial_qty_fraction"]
     expected_qty = pbr.round_(
         pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
@@ -132,8 +132,8 @@ def test_reentry_blocked_when_cap_reached():
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=0.0,
         entry_trailing_threshold_base_fraction=0.0,
-        wallet_exposure_limit=0.05,
-        risk_we_excess_allowance_pct=0.0,
+        wallet_exposure_limit_ratio=0.05,
+        risk_we_excess_allowance_fraction=0.0,
         balance=1000.0,
         position_size=10.0,
         position_price=100.0,
@@ -171,8 +171,8 @@ def test_reentry_long_is_cropped_to_cap():
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=0.0,
         entry_trailing_threshold_base_fraction=0.0,
-        wallet_exposure_limit=0.3,
-        risk_we_excess_allowance_pct=0.0,
+        wallet_exposure_limit_ratio=0.3,
+        risk_we_excess_allowance_fraction=0.0,
         balance=1000.0,
         position_size=2.0,
         position_price=100.0,
@@ -194,7 +194,7 @@ def test_reentry_long_is_cropped_to_cap():
         params["position_size"], params["position_price"], qty, price, params["qty_step"]
     )
     new_exposure = pbr.calc_wallet_exposure(params["c_mult"], params["balance"], new_size, new_price)
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
+    allowed = params["wallet_exposure_limit_ratio"] * (1.0 + params["risk_we_excess_allowance_fraction"])
     assert new_exposure <= allowed * 1.02 + 1e-9
 
 
@@ -216,8 +216,8 @@ def test_reentry_short_is_cropped_to_cap():
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=0.0,
         entry_trailing_threshold_base_fraction=0.0,
-        wallet_exposure_limit=0.3,
-        risk_we_excess_allowance_pct=0.0,
+        wallet_exposure_limit_ratio=0.3,
+        risk_we_excess_allowance_fraction=0.0,
         balance=1000.0,
         position_size=-2.0,
         position_price=100.0,
@@ -241,7 +241,7 @@ def test_reentry_short_is_cropped_to_cap():
     new_exposure = pbr.calc_wallet_exposure(
         params["c_mult"], params["balance"], abs(new_size), new_price
     )
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
+    allowed = params["wallet_exposure_limit_ratio"] * (1.0 + params["risk_we_excess_allowance_fraction"])
     assert new_exposure <= allowed * 1.02 + 1e-9
 
 
@@ -263,8 +263,8 @@ def test_reentry_long_near_cap_stays_normal():
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=0.0,
         entry_trailing_threshold_base_fraction=0.0,
-        wallet_exposure_limit=0.3,
-        risk_we_excess_allowance_pct=0.0,
+        wallet_exposure_limit_ratio=0.3,
+        risk_we_excess_allowance_fraction=0.0,
         balance=1000.0,
         position_size=2.0,
         position_price=100.0,

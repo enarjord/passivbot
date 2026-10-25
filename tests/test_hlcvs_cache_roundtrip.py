@@ -27,13 +27,13 @@ def _config(base_dir: str, compress: bool) -> dict:
             "long": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
             },
             "short": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
                 "universe": {"minimum_coin_age_days": 0, "approved_coins": ["BTC"]},
             },
             "global": {"universe": {}},

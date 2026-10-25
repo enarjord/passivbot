@@ -32,7 +32,7 @@ def test_compute_live_warmup_windows_forager_toggle():
         symbols_by_side,
         bp,
         forager_enabled={"long": True, "short": False},
-        warmup_ratio=0.5,
+        activation_span_fraction=0.5,
     )
 
     assert wins["BTC"] == 3000
@@ -90,7 +90,7 @@ def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
         forager_enabled={"long": True},
         strategy_lookup=strategy,
         forager_lookup=forager,
-        warmup_ratio=0.3,
+        activation_span_fraction=0.3,
     )
 
     assert wins["HYPE"] == 988
@@ -221,7 +221,7 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
         "unstuck_loss_allowance_pct",
         "unstuck_close_pct",
         "unstuck_threshold",
-        "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio",
     ],
 )
 def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
@@ -238,7 +238,7 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
         "unstuck_loss_allowance_pct": 0.1,
         "unstuck_close_pct": 0.1,
         "unstuck_threshold": 0.2,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
     }
     if inactive in values:
         values[inactive] = 0.0
@@ -254,7 +254,7 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
             bot, side, symbol, mode
         ),
         forager_enabled={pside: True},
-        warmup_ratio=0.0,
+        activation_span_fraction=0.0,
         span_buffer=1.0,
     )
     assert windows["FLAT"] == 20

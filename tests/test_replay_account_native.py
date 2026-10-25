@@ -54,9 +54,9 @@ def test_full_native_account_outputs_feed_version_neutral_confirmation(mode, thr
     assert metrics["observed_end_ms"] == int(prepared["candle_timestamps_ms"][-2]) + 60000
     assert metrics["sample_count"] == len(result[1]) + 1
     assert metrics["final_equity"] == result[1][-1, 1]
-    assert metrics["net_return"] == pytest.approx(result[1][-1, 1] / params["starting_balance"] - 1)
+    assert metrics["net_return_fraction"] == pytest.approx(result[1][-1, 1] / params["starting_balance"] - 1)
     assert metrics["net_realized_pnl"] == pytest.approx(math.fsum(float(fill[3]) + float(fill[4]) for fill in result[0]))
     assert metrics["fill_count"] == len(result[0]) > 0
-    assert metrics["gross_exposure_ratio_max"] > 0
+    assert metrics["gross_exposure_max_ratio"] > 0
     assert metrics["exposure_denominator_value"] == params["starting_balance"]
     assert "adg_strategy_eq" not in metrics

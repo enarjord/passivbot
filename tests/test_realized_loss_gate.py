@@ -205,7 +205,7 @@ class TestRealizedPnlConsumers:
         *,
         max_realized_loss_pct=1.0,
         hsl_enabled=False,
-        total_wallet_exposure_limit=1.0,
+        total_wallet_exposure_limit_ratio=1.0,
         values=None,
     ):
         bot = object.__new__(Passivbot)
@@ -213,7 +213,7 @@ class TestRealizedPnlConsumers:
         bot._live_max_realized_loss_pct = lambda: max_realized_loss_pct
         bot._equity_hard_stop_enabled = lambda: hsl_enabled
         bot.bot_value = lambda pside, key: (
-            total_wallet_exposure_limit if key == "total_wallet_exposure_limit" else 0.0
+            total_wallet_exposure_limit_ratio if key == "total_wallet_exposure_limit_ratio" else 0.0
         )
         values = values or {}
         bot.bp = lambda pside, key, symbol=None: values.get(
@@ -263,7 +263,7 @@ class TestRealizedPnlConsumers:
             (None, "long", "unstuck_threshold"): 0.9,
         }
         bot = self._make_bot(
-            total_wallet_exposure_limit=0.0,
+            total_wallet_exposure_limit_ratio=0.0,
             values=values,
         )
 
@@ -1038,12 +1038,12 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
     def _make_config(self, max_realized_loss_pct=None):
         config = get_expanded_config_prototype()
         config["backtest"].update(coins={"binance": ["BTC"]}, starting_balance=10000,
-                                  btc_collateral_cap=.5)
+                                  btc_collateral_target_ratio=.5)
         set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
         config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         config["bot"]["short"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=0.0)
-        config["bot"]["long"]["wallet_exposure_limit"] = .5
-        config["bot"]["short"]["wallet_exposure_limit"] = 0.0
+        config["bot"]["long"]["wallet_exposure_limit_ratio"] = .5
+        config["bot"]["short"]["wallet_exposure_limit_ratio"] = 0.0
         if max_realized_loss_pct is not None:
             config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_realized_loss_pct
         return config
@@ -1122,8 +1122,6 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         assert hs["portfolio"] is None
         expected = [deepcopy(config["bot"][s]["hsl"]) for s in ("long", "short")]
         for policy in expected:
-            policy["red_threshold"] = policy.pop("drawdown_threshold_fraction")
-            policy["drawdown_ratio_ema_span_minutes"] = policy.pop("drawdown_fraction_ema_span_minutes")
             policy["cooldown_minutes_after_red"] = policy.pop("cooldown_after_red_minutes")
         assert hs["sides"] == expected
         assert not any(s["enabled"] for s in hs["sides"])
@@ -1140,8 +1138,6 @@ class TestPrepBacktestArgsEquityHardStopLoss:
         config = self._make_config(policy)
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         expected = {**policy, "scale_budget_with_excess_allowance": False}
-        expected["red_threshold"] = expected.pop("drawdown_threshold_fraction")
-        expected["drawdown_ratio_ema_span_minutes"] = expected.pop("drawdown_fraction_ema_span_minutes")
         expected["cooldown_minutes_after_red"] = expected.pop("cooldown_after_red_minutes")
         assert bp["equity_hard_stop_loss"]["sides"][0] == expected
 

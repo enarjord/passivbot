@@ -12,8 +12,8 @@ pub(crate) mod hsl_runtime;
 use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
 use crate::entries::{
-    calc_min_entry_qty, effective_we_excess_allowance_pct,
-    wallet_exposure_limit_with_allowance_from_base,
+    calc_min_entry_qty, effective_we_excess_allowance_fraction,
+    wallet_exposure_limit_ratio_with_allowance_from_base,
 };
 use crate::orchestrator;
 use crate::orchestrator::{
@@ -91,9 +91,9 @@ struct UnstuckCalcDebug {
     ema_band_upper_bits: u64,
     ema_band_lower: f64,
     ema_band_lower_bits: u64,
-    wallet_exposure_limit: f64,
-    wallet_exposure_limit_bits: u64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    wallet_exposure_limit_ratio_bits: u64,
+    risk_we_excess_allowance_fraction: f64,
     unstuck_threshold: f64,
     unstuck_close_pct: f64,
     unstuck_ema_dist: f64,
@@ -796,16 +796,16 @@ fn calc_entry_balance_pct(
     if effective_n_positions == 0 {
         return 0.0;
     }
-    let base_limit = params.total_wallet_exposure_limit / effective_n_positions as f64;
-    let allowance_multiplier = 1.0 + effective_we_excess_allowance_pct(params, base_limit);
+    let base_limit = params.total_wallet_exposure_limit_ratio / effective_n_positions as f64;
+    let allowance_multiplier = 1.0 + effective_we_excess_allowance_fraction(params, base_limit);
     base_limit * entry_initial_qty_fraction * allowance_multiplier
 }
 
-fn configured_wallet_exposure_limit(params: &BotParams) -> f64 {
-    if params.wallet_exposure_limit > 0.0 {
-        params.wallet_exposure_limit
+fn configured_wallet_exposure_limit_ratio(params: &BotParams) -> f64 {
+    if params.wallet_exposure_limit_ratio > 0.0 {
+        params.wallet_exposure_limit_ratio
     } else if params.n_positions > 0 {
-        params.total_wallet_exposure_limit / params.n_positions as f64
+        params.total_wallet_exposure_limit_ratio / params.n_positions as f64
     } else {
         0.0
     }
@@ -815,10 +815,10 @@ fn make_runtime_budget_state(
     params: &BotParams,
     effective_n_positions: usize,
 ) -> RuntimeBudgetState {
-    let configured_wallet_exposure_limit = configured_wallet_exposure_limit(params);
+    let configured_wallet_exposure_limit_ratio = configured_wallet_exposure_limit_ratio(params);
     RuntimeBudgetState {
-        configured_wallet_exposure_limit,
-        effective_wallet_exposure_limit: configured_wallet_exposure_limit,
+        configured_wallet_exposure_limit_ratio,
+        effective_wallet_exposure_limit_ratio: configured_wallet_exposure_limit_ratio,
         configured_n_positions: params.n_positions,
         effective_n_positions,
     }
@@ -906,14 +906,14 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         let bp = self.bp(idx, side);
         if !bp.unstuck_enabled
             || bp.unstuck_loss_allowance_pct <= 0.0
-            || bp.total_wallet_exposure_limit <= 0.0
+            || bp.total_wallet_exposure_limit_ratio <= 0.0
         {
             return Ok(0.0);
         }
         crate::hsl_decay::allowance_for(
             self.balance.usd_total_balance,
             bp.unstuck_loss_allowance_pct,
-            bp.total_wallet_exposure_limit,
+            bp.total_wallet_exposure_limit_ratio,
             self.unstuck_memory.drawdown(),
         )
     }
@@ -962,9 +962,9 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         let ex = &self.exchange_params_list[idx];
 
         let size_abs = position.size.abs();
-        let effective_wel = wallet_exposure_limit_with_allowance_from_base(
+        let effective_wel = wallet_exposure_limit_ratio_with_allowance_from_base(
             bp,
-            runtime_budget.effective_wallet_exposure_limit,
+            runtime_budget.effective_wallet_exposure_limit_ratio,
         );
         let wallet_exposure = calc_wallet_exposure(ex.c_mult, balance, size_abs, position.price);
         let ema_price_target = match side {
@@ -1050,9 +1050,9 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             ema_band_upper_bits: ema_bands.upper.to_bits(),
             ema_band_lower: ema_bands.lower,
             ema_band_lower_bits: ema_bands.lower.to_bits(),
-            wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
-            wallet_exposure_limit_bits: runtime_budget.effective_wallet_exposure_limit.to_bits(),
-            risk_we_excess_allowance_pct: bp.risk_we_excess_allowance_pct,
+            wallet_exposure_limit_ratio: runtime_budget.effective_wallet_exposure_limit_ratio,
+            wallet_exposure_limit_ratio_bits: runtime_budget.effective_wallet_exposure_limit_ratio.to_bits(),
+            risk_we_excess_allowance_fraction: bp.risk_we_excess_allowance_fraction,
             unstuck_threshold: bp.unstuck_threshold,
             unstuck_close_pct: bp.unstuck_close_pct,
             unstuck_ema_dist: bp.unstuck_ema_dist,
@@ -1861,13 +1861,13 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         let mut bot_params = bot_params;
         let bot_params_original = bot_params.clone();
         for bp in bot_params.iter_mut() {
-            if bp.long.wallet_exposure_limit == 0.0 && bp.long.n_positions > 0 {
-                bp.long.wallet_exposure_limit =
-                    bp.long.total_wallet_exposure_limit / bp.long.n_positions as f64;
+            if bp.long.wallet_exposure_limit_ratio == 0.0 && bp.long.n_positions > 0 {
+                bp.long.wallet_exposure_limit_ratio =
+                    bp.long.total_wallet_exposure_limit_ratio / bp.long.n_positions as f64;
             }
-            if bp.short.wallet_exposure_limit == 0.0 && bp.short.n_positions > 0 {
-                bp.short.wallet_exposure_limit =
-                    bp.short.total_wallet_exposure_limit / bp.short.n_positions as f64;
+            if bp.short.wallet_exposure_limit_ratio == 0.0 && bp.short.n_positions > 0 {
+                bp.short.wallet_exposure_limit_ratio =
+                    bp.short.total_wallet_exposure_limit_ratio / bp.short.n_positions as f64;
             }
         }
         let strategy_params_parsed: Vec<StrategyParamsPair> = strategy_params
@@ -2032,11 +2032,11 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             trading_enabled: TradingEnabled {
                 long: bot_params
                     .iter()
-                    .any(|bp| bp.long.entry_eligible && bp.long.wallet_exposure_limit != 0.0)
+                    .any(|bp| bp.long.entry_eligible && bp.long.wallet_exposure_limit_ratio != 0.0)
                     && bot_params_master.long.n_positions > 0,
                 short: bot_params
                     .iter()
-                    .any(|bp| bp.short.entry_eligible && bp.short.wallet_exposure_limit != 0.0)
+                    .any(|bp| bp.short.entry_eligible && bp.short.wallet_exposure_limit_ratio != 0.0)
                     && bot_params_master.short.n_positions > 0,
             },
             trailing_enabled,
@@ -2084,7 +2084,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         && p.unstuck_loss_allowance_pct > 0.0
                         && p.unstuck_close_pct > 0.0
                         && p.unstuck_threshold > 0.0
-                        && p.total_wallet_exposure_limit > 0.0
+                        && p.total_wallet_exposure_limit_ratio > 0.0
                 })
             }),
             unstuck_memory: crate::hsl_decay::RealizedMemory::new(
@@ -2246,7 +2246,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 self.bootstrap_ordinary_emas(k);
-                if self.update_n_positions_and_wallet_exposure_limits(k) {
+                if self.update_n_positions_and_wallet_exposure_limit_ratios(k) {
                     self.equity_tracking_active = true;
                 }
                 self.initialize_btc_collateral_if_needed(k);
@@ -2342,7 +2342,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
     }
 
-    fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) -> bool {
+    fn update_n_positions_and_wallet_exposure_limit_ratios(&mut self, k: usize) -> bool {
         let eligible: Vec<usize> = (0..self.n_coins)
             .filter(|&idx| self.coin_is_tradeable_at(idx, k))
             .collect();
@@ -2356,7 +2356,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .copied()
             .filter(|&idx| {
                 self.bot_params_original[idx].long.entry_eligible
-                    && self.bot_params_original[idx].long.wallet_exposure_limit != 0.0
+                    && self.bot_params_original[idx].long.wallet_exposure_limit_ratio != 0.0
                     && (self.positions.long[idx].size != 0.0
                         || crate::age_admission::eligible(
                             self.first_timestamp_ms + k as u64 * self.interval_ms,
@@ -2374,7 +2374,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .copied()
             .filter(|&idx| {
                 self.bot_params_original[idx].short.entry_eligible
-                    && self.bot_params_original[idx].short.wallet_exposure_limit != 0.0
+                    && self.bot_params_original[idx].short.wallet_exposure_limit_ratio != 0.0
                     && (self.positions.short[idx].size != 0.0
                         || crate::age_admission::eligible(
                             self.first_timestamp_ms + k as u64 * self.interval_ms,
@@ -2450,13 +2450,13 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
 
         // ---------- 3. dynamic WELs ----------
         let dyn_wel_long_base = if self.effective_n_positions.long > 0 {
-            self.bot_params_master.long.total_wallet_exposure_limit
+            self.bot_params_master.long.total_wallet_exposure_limit_ratio
                 / self.effective_n_positions.long as f64
         } else {
             0.0
         };
         let dyn_wel_short_base = if self.effective_n_positions.short > 0 {
-            self.bot_params_master.short.total_wallet_exposure_limit
+            self.bot_params_master.short.total_wallet_exposure_limit_ratio
                 / self.effective_n_positions.short as f64
         } else {
             0.0
@@ -2468,17 +2468,17 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             runtime_budget.short.effective_n_positions = self.effective_n_positions.short;
         }
         for &idx in &eligible_long {
-            if self.bot_params_original[idx].long.wallet_exposure_limit < 0.0 {
+            if self.bot_params_original[idx].long.wallet_exposure_limit_ratio < 0.0 {
                 self.runtime_budget[idx]
                     .long
-                    .effective_wallet_exposure_limit = dyn_wel_long_base;
+                    .effective_wallet_exposure_limit_ratio = dyn_wel_long_base;
             }
         }
         for &idx in &eligible_short {
-            if self.bot_params_original[idx].short.wallet_exposure_limit < 0.0 {
+            if self.bot_params_original[idx].short.wallet_exposure_limit_ratio < 0.0 {
                 self.runtime_budget[idx]
                     .short
-                    .effective_wallet_exposure_limit = dyn_wel_short_base;
+                    .effective_wallet_exposure_limit_ratio = dyn_wel_short_base;
             }
         }
         true
@@ -2611,11 +2611,11 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
         let base_limit = self
             .runtime_budget(idx, pside)
-            .effective_wallet_exposure_limit;
+            .effective_wallet_exposure_limit_ratio;
         if base_limit <= 0.0 {
             return false;
         }
-        let effective_limit = wallet_exposure_limit_with_allowance_from_base(bot, base_limit);
+        let effective_limit = wallet_exposure_limit_ratio_with_allowance_from_base(bot, base_limit);
         let projected_cost =
             self.balance.usd_total_balance * effective_limit * entry_initial_qty_fraction;
         projected_cost >= min_cost
@@ -2778,8 +2778,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
     fn record_total_wallet_exposure(&mut self) {
         // For analysis time series we record the net TWE (long + short, where short is negative).
         let limits = [
-            self.bot_params_master.long.total_wallet_exposure_limit,
-            self.bot_params_master.short.total_wallet_exposure_limit,
+            self.bot_params_master.long.total_wallet_exposure_limit_ratio,
+            self.bot_params_master.short.total_wallet_exposure_limit_ratio,
         ];
         let mut exposure = [0.0; 2];
         let mut position_moments = [0.0; 2];
@@ -2796,7 +2796,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         / self.balance.usd_total_balance;
                 let wel = self
                     .runtime_budget(idx, side)
-                    .effective_wallet_exposure_limit;
+                    .effective_wallet_exposure_limit_ratio;
                 exposure[side] += e;
                 position_moments[side] +=
                     crate::exposure_rms::position_moment(e, wel, limits[side]);
@@ -2965,7 +2965,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         };
         if !p.unstuck_enabled
             || p.unstuck_loss_allowance_pct <= 0.0
-            || p.total_wallet_exposure_limit <= 0.0
+            || p.total_wallet_exposure_limit_ratio <= 0.0
         {
             return 0.0;
         }
@@ -2974,7 +2974,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         crate::hsl_decay::allowance_for(
             self.balance.usd_total_balance,
             p.unstuck_loss_allowance_pct,
-            p.total_wallet_exposure_limit,
+            p.total_wallet_exposure_limit_ratio,
             self.unstuck_memory.drawdown(),
         )
         .unwrap_or(f64::NAN)
@@ -4409,14 +4409,14 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         equities: &Equities,
     ) -> FillActivityMetrics {
         let long_slots = if self.bot_params_master.long.n_positions > 0
-            && self.bot_params_master.long.total_wallet_exposure_limit > 0.0
+            && self.bot_params_master.long.total_wallet_exposure_limit_ratio > 0.0
         {
             self.bot_params_master.long.n_positions
         } else {
             0
         };
         let short_slots = if self.bot_params_master.short.n_positions > 0
-            && self.bot_params_master.short.total_wallet_exposure_limit > 0.0
+            && self.bot_params_master.short.total_wallet_exposure_limit_ratio > 0.0
         {
             self.bot_params_master.short.n_positions
         } else {
@@ -5094,8 +5094,8 @@ mod tests {
     fn hour_basis_fixture_pair() -> BotParamsPair {
         let mut pair = BotParamsPair::default();
         pair.long.n_positions = 1;
-        pair.long.total_wallet_exposure_limit = 1.0;
-        pair.long.wallet_exposure_limit = 1.0;
+        pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        pair.long.wallet_exposure_limit_ratio = 1.0;
         pair.long.ema_span_0 = 1.0;
         pair.long.ema_span_1 = 1.0;
         pair.long.entry_initial_qty_fraction = 0.1;
@@ -5513,14 +5513,14 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.long.wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.long.is_forced_active = true;
         bp_pair.short.n_positions = 1;
-        bp_pair.short.total_wallet_exposure_limit = 1.0;
-        bp_pair.short.wallet_exposure_limit = 1.0;
+        bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.short.wallet_exposure_limit_ratio = 1.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
 
@@ -5589,8 +5589,8 @@ mod tests {
         let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.long.wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         let backtest_params = BacktestParams {
@@ -5693,7 +5693,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -5780,7 +5780,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -5864,13 +5864,13 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.long.wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.n_positions = 1;
-        bp_pair.short.total_wallet_exposure_limit = 1.0;
-        bp_pair.short.wallet_exposure_limit = 1.0;
+        bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.short.wallet_exposure_limit_ratio = 1.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
 
@@ -5967,7 +5967,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -6052,7 +6052,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -6147,7 +6147,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -6433,8 +6433,8 @@ mod tests {
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
         bp_pair.short.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.short.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.short.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.ema_span_0 = 10.0;
@@ -6731,8 +6731,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.5;
-        bp_pair.long.wallet_exposure_limit = 1.5;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.5;
+        bp_pair.long.wallet_exposure_limit_ratio = 1.5;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.long.hsl_enabled = true;
@@ -6811,8 +6811,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 5.0;
-        bp_pair.long.wallet_exposure_limit = 5.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 5.0;
+        bp_pair.long.wallet_exposure_limit_ratio = 5.0;
         bp_pair.long.ema_span_0 = 1.0;
         bp_pair.long.ema_span_1 = 1.0;
 
@@ -6965,14 +6965,14 @@ mod tests {
     }
 
     #[test]
-    fn cached_orchestrator_input_updates_dynamic_wallet_exposure_limit() {
+    fn cached_orchestrator_input_updates_dynamic_wallet_exposure_limit_ratio() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.wallet_exposure_limit = 0.1;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.long.wallet_exposure_limit_ratio = 0.1;
         bp_pair.long.entry_initial_qty_fraction = 0.1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
@@ -7030,12 +7030,12 @@ mod tests {
             .as_ref()
             .expect("expected long runtime budget");
         assert!(
-            (runtime_budget.effective_wallet_exposure_limit - 0.1).abs() < 1e-12,
+            (runtime_budget.effective_wallet_exposure_limit_ratio - 0.1).abs() < 1e-12,
             "expected cached input WEL to match initial runtime budget"
         );
         bt.orchestrator_input_cache = Some(input);
 
-        bt.runtime_budget[0].long.effective_wallet_exposure_limit = 0.2;
+        bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio = 0.2;
 
         let input = bt.get_orchestrator_input_cached(1, None, None);
         let runtime_budget = input.symbols[0]
@@ -7044,7 +7044,7 @@ mod tests {
             .as_ref()
             .expect("expected refreshed long runtime budget");
         assert!(
-            (runtime_budget.effective_wallet_exposure_limit - 0.2).abs() < 1e-12,
+            (runtime_budget.effective_wallet_exposure_limit_ratio - 0.2).abs() < 1e-12,
             "expected cached input WEL to update after runtime budget change"
         );
         bt.orchestrator_input_cache = Some(input);
@@ -7057,7 +7057,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 0.5;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 0.5;
         bp_pair.long.unstuck_loss_allowance_pct = 0.2;
         bp_pair.long.unstuck_enabled = true;
         bp_pair.long.ema_span_0 = 10.0;
@@ -7142,7 +7142,7 @@ mod tests {
         // Debug allowance must use effective coin settings and continuous D,
         // independently of side-master settings.
         bt.bot_params[0].long.unstuck_loss_allowance_pct = 0.125;
-        bt.bot_params[0].long.total_wallet_exposure_limit = 2.0;
+        bt.bot_params[0].long.total_wallet_exposure_limit_ratio = 2.0;
         assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 42.5);
         assert_ne!(bt.unstuck_allowance_diagnostic(LONG), 42.5);
         bt.bot_params[0].long.unstuck_loss_allowance_pct = f64::NAN;
@@ -7160,7 +7160,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 0.5;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 0.5;
         bp_pair.long.unstuck_loss_allowance_pct = 0.2;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
@@ -7265,22 +7265,22 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 4;
-        bp_pair.long.total_wallet_exposure_limit = 1.2;
-        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.2;
+        bp_pair.long.wallet_exposure_limit_ratio = -1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.n_positions = 4;
-        bp_pair.short.total_wallet_exposure_limit = 2.0;
-        bp_pair.short.wallet_exposure_limit = -1.0;
+        bp_pair.short.total_wallet_exposure_limit_ratio = 2.0;
+        bp_pair.short.wallet_exposure_limit_ratio = -1.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
 
-        bp_pair.long.wallet_exposure_limit = 0.2;
+        bp_pair.long.wallet_exposure_limit_ratio = 0.2;
         let mut short_only = bp_pair.clone();
         short_only.long.entry_eligible = false;
         short_only.long.n_positions = 0;
-        short_only.long.total_wallet_exposure_limit = 0.0;
-        short_only.long.wallet_exposure_limit = 0.0;
+        short_only.long.total_wallet_exposure_limit_ratio = 0.0;
+        short_only.long.wallet_exposure_limit_ratio = 0.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7350,15 +7350,15 @@ mod tests {
         let initial_zero = ndarray::Array2::<u8>::zeros((6, 4));
         bt.eligibility = Some(initial_zero.view());
         bt.eligibility_rows = Some(rows.view());
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(0));
         assert_eq!(bt.effective_n_positions.long, 0);
         assert_eq!(bt.effective_n_positions.short, 0);
         assert_eq!(
-            bt.runtime_budget[1].short.effective_wallet_exposure_limit,
+            bt.runtime_budget[1].short.effective_wallet_exposure_limit_ratio,
             0.0
         );
         assert_eq!(
-            bt.runtime_budget[0].long.effective_wallet_exposure_limit,
+            bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio,
             0.2
         );
         let configured = (
@@ -7367,27 +7367,27 @@ mod tests {
         );
         bt.configured_n_positions.long = 0;
         bt.configured_n_positions.short = 0;
-        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(!bt.update_n_positions_and_wallet_exposure_limit_ratios(0));
         (
             bt.configured_n_positions.long,
             bt.configured_n_positions.short,
         ) = configured;
         bt.coin_trade_start_idx.fill(2);
-        assert!(!bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(!bt.update_n_positions_and_wallet_exposure_limit_ratios(0));
         bt.coin_trade_start_idx.fill(0);
 
         bt.eligibility = Some(eligibility.view());
         for (k, long, short) in [(0, 1, 1), (1, 1, 1), (2, 3, 4), (3, 3, 4), (4, 3, 4)] {
-            bt.update_n_positions_and_wallet_exposure_limits(k);
+            bt.update_n_positions_and_wallet_exposure_limit_ratios(k);
             assert_eq!(bt.effective_n_positions.long, long);
             assert_eq!(bt.effective_n_positions.short, short);
             // An explicit per-coin WEL remains authoritative when retired.
             assert_eq!(
-                bt.runtime_budget[0].long.effective_wallet_exposure_limit,
+                bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio,
                 0.2
             );
             assert!(
-                (bt.runtime_budget[1].short.effective_wallet_exposure_limit - 2.0 / short as f64)
+                (bt.runtime_budget[1].short.effective_wallet_exposure_limit_ratio - 2.0 / short as f64)
                     .abs()
                     < 1e-12
             );
@@ -7436,7 +7436,7 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -7547,8 +7547,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 3;
-        bp_pair.long.total_wallet_exposure_limit = 1.5;
-        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.5;
+        bp_pair.long.wallet_exposure_limit_ratio = -1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -7602,39 +7602,39 @@ mod tests {
             &backtest_params,
         );
 
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(0));
         assert!(
-            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.75).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio - 0.75).abs() < 1e-12,
             "k=0 expected wel 1.5/2"
         );
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit + 1.0).abs() < 1e-12,
+            (bt.bot_params[0].long.wallet_exposure_limit_ratio + 1.0).abs() < 1e-12,
             "configured bot params must remain unchanged"
         );
         assert_eq!(bt.effective_n_positions.long, 2);
 
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(1));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(1));
         assert!(
-            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio - 0.5).abs() < 1e-12,
             "k=1 expected wel 1.5/3 after third coin becomes tradable"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
 
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(4));
         assert!(
-            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio - 0.5).abs() < 1e-12,
             "k=4 expected wel to remain 1.5/3 after B delists"
         );
         assert_eq!(bt.effective_n_positions.long, 3);
 
         // Exposure diagnostics read the retained runtime budget for a held,
         // nontradable coin, independently of cached order-generation inputs.
-        bt.runtime_budget[1].long.effective_wallet_exposure_limit = 0.75;
+        bt.runtime_budget[1].long.effective_wallet_exposure_limit_ratio = 0.75;
         bt.positions.long[1] = Position {
             size: 5.0,
             price: 100.0,
         };
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(4));
         bt.record_total_wallet_exposure();
         let mut analysis = crate::types::Analysis::default();
         bt.exposure_rms.apply(&mut analysis);
@@ -7653,21 +7653,21 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 4;
-        bp_pair.long.total_wallet_exposure_limit = 1.2;
-        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.2;
+        bp_pair.long.wallet_exposure_limit_ratio = -1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
         bp_pair.short.n_positions = 4;
-        bp_pair.short.total_wallet_exposure_limit = 2.0;
-        bp_pair.short.wallet_exposure_limit = -1.0;
+        bp_pair.short.total_wallet_exposure_limit_ratio = 2.0;
+        bp_pair.short.wallet_exposure_limit_ratio = -1.0;
         bp_pair.short.ema_span_0 = 10.0;
         bp_pair.short.ema_span_1 = 20.0;
 
         let mut short_only = bp_pair.clone();
         short_only.long.entry_eligible = false;
         short_only.long.n_positions = 0;
-        short_only.long.total_wallet_exposure_limit = 0.0;
-        short_only.long.wallet_exposure_limit = 0.0;
+        short_only.long.total_wallet_exposure_limit_ratio = 0.0;
+        short_only.long.wallet_exposure_limit_ratio = 0.0;
 
         let backtest_params = BacktestParams {
             side_activation: crate::types::SideActivation::uniform(true),
@@ -7725,13 +7725,13 @@ mod tests {
             &backtest_params,
         );
 
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(0));
         assert_eq!(bt.effective_n_positions.long, 3);
         assert_eq!(bt.effective_n_positions.short, 4);
-        assert!((bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.4).abs() < 1e-12);
-        assert!((bt.runtime_budget[0].short.effective_wallet_exposure_limit - 0.5).abs() < 1e-12);
+        assert!((bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio - 0.4).abs() < 1e-12);
+        assert!((bt.runtime_budget[0].short.effective_wallet_exposure_limit_ratio - 0.5).abs() < 1e-12);
         assert_eq!(
-            bt.runtime_budget[3].long.effective_wallet_exposure_limit,
+            bt.runtime_budget[3].long.effective_wallet_exposure_limit_ratio,
             0.0
         );
         let input = bt.build_orchestrator_input_iter(0, None, None, 0..4);
@@ -7749,8 +7749,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 4;
-        bp_pair.long.total_wallet_exposure_limit = 2.0;
-        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 2.0;
+        bp_pair.long.wallet_exposure_limit_ratio = -1.0;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
 
@@ -7800,20 +7800,20 @@ mod tests {
             &backtest_params,
         );
 
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(0));
         assert!(
-            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio - 0.5).abs() < 1e-12,
             "k=0 expected fixed wel 2.0/4"
         );
         assert!(
-            (bt.bot_params[0].long.wallet_exposure_limit + 1.0).abs() < 1e-12,
+            (bt.bot_params[0].long.wallet_exposure_limit_ratio + 1.0).abs() < 1e-12,
             "configured bot params must remain unchanged"
         );
         assert_eq!(bt.effective_n_positions.long, 4);
 
-        assert!(bt.update_n_positions_and_wallet_exposure_limits(4));
+        assert!(bt.update_n_positions_and_wallet_exposure_limit_ratios(4));
         assert!(
-            (bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.5).abs() < 1e-12,
+            (bt.runtime_budget[0].long.effective_wallet_exposure_limit_ratio - 0.5).abs() < 1e-12,
             "k=4 expected fixed wel to stay 2.0/4 despite fewer tradable coins"
         );
         assert_eq!(bt.effective_n_positions.long, 4);
@@ -7827,8 +7827,8 @@ mod tests {
 
         let mut bp_pair = BotParamsPair::default();
         bp_pair.long.n_positions = 1;
-        bp_pair.long.total_wallet_exposure_limit = 1.0;
-        bp_pair.long.wallet_exposure_limit = 0.1;
+        bp_pair.long.total_wallet_exposure_limit_ratio = 1.0;
+        bp_pair.long.wallet_exposure_limit_ratio = 0.1;
         bp_pair.long.entry_initial_qty_fraction = 0.1;
         bp_pair.long.ema_span_0 = 10.0;
         bp_pair.long.ema_span_1 = 20.0;
@@ -7914,7 +7914,7 @@ mod tests {
         bp.long.unstuck_loss_allowance_pct = 0.01;
         bp.long.unstuck_close_pct = 0.1;
         bp.long.unstuck_threshold = 0.9;
-        bp.long.total_wallet_exposure_limit = 1.0;
+        bp.long.total_wallet_exposure_limit_ratio = 1.0;
         bp.long.n_positions = 1;
         bp.long.unstuck_ema_span_0 = 400_000.25;
         bp.long.unstuck_ema_span_1 = 500_000.25;
@@ -7940,7 +7940,7 @@ mod tests {
                 0 => inactive.long.unstuck_loss_allowance_pct = 0.0,
                 1 => inactive.long.unstuck_close_pct = 0.0,
                 2 => inactive.long.unstuck_threshold = 0.0,
-                3 => inactive.long.total_wallet_exposure_limit = 0.0,
+                3 => inactive.long.total_wallet_exposure_limit_ratio = 0.0,
                 _ => inactive.long.n_positions = 0,
             }
             assert_eq!(
@@ -8151,7 +8151,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.long.unstuck_loss_allowance_pct > 0.0
                 && pair.long.unstuck_close_pct > 0.0
                 && pair.long.unstuck_threshold > 0.0
-                && pair.long.total_wallet_exposure_limit > 0.0
+                && pair.long.total_wallet_exposure_limit_ratio > 0.0
                 && pair.long.n_positions > 0
             {
                 pair.long.unstuck_ema_span_0
@@ -8163,7 +8163,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.long.unstuck_loss_allowance_pct > 0.0
                 && pair.long.unstuck_close_pct > 0.0
                 && pair.long.unstuck_threshold > 0.0
-                && pair.long.total_wallet_exposure_limit > 0.0
+                && pair.long.total_wallet_exposure_limit_ratio > 0.0
                 && pair.long.n_positions > 0
             {
                 pair.long.unstuck_ema_span_1
@@ -8182,7 +8182,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.short.unstuck_loss_allowance_pct > 0.0
                 && pair.short.unstuck_close_pct > 0.0
                 && pair.short.unstuck_threshold > 0.0
-                && pair.short.total_wallet_exposure_limit > 0.0
+                && pair.short.total_wallet_exposure_limit_ratio > 0.0
                 && pair.short.n_positions > 0
             {
                 pair.short.unstuck_ema_span_0
@@ -8194,7 +8194,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.short.unstuck_loss_allowance_pct > 0.0
                 && pair.short.unstuck_close_pct > 0.0
                 && pair.short.unstuck_threshold > 0.0
-                && pair.short.total_wallet_exposure_limit > 0.0
+                && pair.short.total_wallet_exposure_limit_ratio > 0.0
                 && pair.short.n_positions > 0
             {
                 pair.short.unstuck_ema_span_1

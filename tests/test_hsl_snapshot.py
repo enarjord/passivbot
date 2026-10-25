@@ -87,7 +87,7 @@ def payload(snapshot, mode="portfolio", *, quantity_step=None, **kwargs):
 
 
 def runtime_request(snapshot, *, slots=1, span=1.0, threshold=0.05):
-    return dict(snapshot=snapshot,slots=slots,drawdown_ratio_ema_span_minutes=span,threshold=threshold,
+    return dict(snapshot=snapshot,slots=slots,drawdown_fraction_ema_span_minutes=span,drawdown_threshold_fraction=threshold,
                 memory_ema_span_minutes=43200.0,cooldown_ms=120000,
                 scale_budget_with_excess_allowance=False,exposure_budget=None,
                 budget_observations=[])
@@ -516,7 +516,7 @@ def test_currency_sum_matches_exact_fraction_oracle_for_generated_scopes():
 
 
 @pytest.mark.parametrize(
-    "field,value", [("drawdown_ratio_ema_span_minutes", 0), ("drawdown_ratio_ema_span_minutes", 0.5), ("threshold", -1), ("threshold", 2)]
+    "field,value", [("drawdown_fraction_ema_span_minutes", 0), ("drawdown_fraction_ema_span_minutes", 0.5), ("drawdown_threshold_fraction", -1), ("drawdown_threshold_fraction", 2)]
 )
 def test_inactive_scope_rejects_invalid_signal_configuration(field, value):
     import passivbot_rust as pbr

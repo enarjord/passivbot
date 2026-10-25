@@ -1,6 +1,6 @@
 use super::{EmaAnchorParams, GeneratedOrders, StrategyParams, StrategyRequest, StrategySide};
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
-use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance_from_base};
+use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_ratio_with_allowance_from_base};
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
 use crate::utils::{
     close_remainder_meets_minimum, cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
@@ -13,10 +13,10 @@ fn calc_signed_wallet_exposure_ratio(
     mid: f64,
     psize: f64,
     c_mult: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
 ) -> f64 {
-    if balance > 0.0 && mid > 0.0 && c_mult > 0.0 && effective_wallet_exposure_limit > 0.0 {
-        psize.signum() * qty_to_cost(psize, mid, c_mult) / balance / effective_wallet_exposure_limit
+    if balance > 0.0 && mid > 0.0 && c_mult > 0.0 && effective_wallet_exposure_limit_ratio > 0.0 {
+        psize.signum() * qty_to_cost(psize, mid, c_mult) / balance / effective_wallet_exposure_limit_ratio
     } else {
         0.0
     }
@@ -41,7 +41,7 @@ pub fn calc_bid_price(
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
     psize: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
 ) -> f64 {
     let mid = (state.order_book.bid + state.order_book.ask) * 0.5;
     let inventory_shift = calc_signed_wallet_exposure_ratio(
@@ -49,7 +49,7 @@ pub fn calc_bid_price(
         mid,
         psize,
         exchange.c_mult,
-        effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio,
     ) * params.inventory_offset_exposure_coefficient;
     let effective_offset = params.offset_fraction * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
@@ -68,7 +68,7 @@ pub fn calc_ask_price(
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
     psize: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
 ) -> f64 {
     let mid = (state.order_book.bid + state.order_book.ask) * 0.5;
     let inventory_shift = calc_signed_wallet_exposure_ratio(
@@ -76,7 +76,7 @@ pub fn calc_ask_price(
         mid,
         psize,
         exchange.c_mult,
-        effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio,
     ) * params.inventory_offset_exposure_coefficient;
     let effective_offset = params.offset_fraction * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
@@ -90,7 +90,7 @@ pub fn calc_quote_prices(
     exchange: &ExchangeParams,
     params: &EmaAnchorParams,
     psize: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
 ) -> (f64, f64) {
     (
         calc_bid_price(
@@ -98,14 +98,14 @@ pub fn calc_quote_prices(
             exchange,
             params,
             psize,
-            effective_wallet_exposure_limit,
+            effective_wallet_exposure_limit_ratio,
         ),
         calc_ask_price(
             state,
             exchange,
             params,
             psize,
-            effective_wallet_exposure_limit,
+            effective_wallet_exposure_limit_ratio,
         ),
     )
 }
@@ -117,13 +117,13 @@ fn calc_base_clip_qty(
     params: &EmaAnchorParams,
     balance: f64,
     price: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
 ) -> f64 {
     if !(price.is_finite() && price > 0.0 && balance > 0.0) {
         return 0.0;
     }
     let effective_limit =
-        wallet_exposure_limit_with_allowance_from_base(bot_params, effective_wallet_exposure_limit);
+        wallet_exposure_limit_ratio_with_allowance_from_base(bot_params, effective_wallet_exposure_limit_ratio);
     if effective_limit <= 0.0 || params.base_qty_fraction <= 0.0 {
         return 0.0;
     }
@@ -148,7 +148,7 @@ fn calc_entry_qty(
     params: &EmaAnchorParams,
     balance: f64,
     price: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
     psize: f64,
     mid: f64,
 ) -> f64 {
@@ -158,7 +158,7 @@ fn calc_entry_qty(
         params,
         balance,
         price,
-        effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio,
     );
     if base_qty <= 0.0 {
         return 0.0;
@@ -168,7 +168,7 @@ fn calc_entry_qty(
         mid,
         psize,
         exchange.c_mult,
-        effective_wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio,
     );
     let same_side_bias = match side {
         StrategySide::Long => signed_we_ratio.max(0.0),
@@ -186,7 +186,7 @@ fn calc_close_qty(
     balance: f64,
     close_price: f64,
     position_size_abs: f64,
-    effective_wallet_exposure_limit: f64,
+    effective_wallet_exposure_limit_ratio: f64,
 ) -> f64 {
     if close_price <= 0.0 || position_size_abs <= 0.0 {
         return 0.0;
@@ -203,7 +203,7 @@ fn calc_close_qty(
             params,
             balance,
             close_price,
-            effective_wallet_exposure_limit,
+            effective_wallet_exposure_limit_ratio,
         ),
     );
     if clip_qty <= 0.0 {
@@ -225,7 +225,7 @@ fn typed_params<'a>(request: &'a StrategyRequest<'a>) -> &'a EmaAnchorParams {
 pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> GeneratedOrders {
     let params = typed_params(&request);
     let mut generated = GeneratedOrders::default();
-    let effective_wallet_exposure_limit = request.runtime_budget.effective_wallet_exposure_limit;
+    let effective_wallet_exposure_limit_ratio = request.runtime_budget.effective_wallet_exposure_limit_ratio;
 
     match side {
         StrategySide::Long => {
@@ -235,12 +235,12 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
-                    effective_wallet_exposure_limit,
+                    effective_wallet_exposure_limit_ratio,
                 );
                 if bid_price.is_finite()
                     && bid_price > 0.0
                     && bid_price <= request.state.order_book.bid
-                    && effective_wallet_exposure_limit > 0.0
+                    && effective_wallet_exposure_limit_ratio > 0.0
                 {
                     let mid = (request.state.order_book.bid + request.state.order_book.ask) * 0.5;
                     let qty = calc_entry_qty(
@@ -250,7 +250,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         params,
                         request.state.balance,
                         bid_price,
-                        effective_wallet_exposure_limit,
+                        effective_wallet_exposure_limit_ratio,
                         request.position.size,
                         mid,
                     );
@@ -270,7 +270,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
-                    effective_wallet_exposure_limit,
+                    effective_wallet_exposure_limit_ratio,
                 );
                 if ask_price.is_finite() && ask_price > 0.0 {
                     let close_qty = calc_close_qty(
@@ -280,7 +280,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         request.state.balance,
                         ask_price,
                         request.position.size.abs(),
-                        effective_wallet_exposure_limit,
+                        effective_wallet_exposure_limit_ratio,
                     );
                     if close_qty > 0.0 {
                         generated.closes.push(Order {
@@ -299,7 +299,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
-                    effective_wallet_exposure_limit,
+                    effective_wallet_exposure_limit_ratio,
                 );
                 if bid_price.is_finite() && bid_price > 0.0 {
                     let close_qty = calc_close_qty(
@@ -309,7 +309,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         request.state.balance,
                         bid_price,
                         request.position.size.abs(),
-                        effective_wallet_exposure_limit,
+                        effective_wallet_exposure_limit_ratio,
                     );
                     if close_qty > 0.0 {
                         generated.closes.push(Order {
@@ -327,9 +327,9 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.exchange,
                     params,
                     request.position.size,
-                    effective_wallet_exposure_limit,
+                    effective_wallet_exposure_limit_ratio,
                 );
-                if ask_price.is_finite() && ask_price > 0.0 && effective_wallet_exposure_limit > 0.0
+                if ask_price.is_finite() && ask_price > 0.0 && effective_wallet_exposure_limit_ratio > 0.0
                 {
                     let mid = (request.state.order_book.bid + request.state.order_book.ask) * 0.5;
                     let qty = calc_entry_qty(
@@ -339,7 +339,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         params,
                         request.state.balance,
                         ask_price,
-                        effective_wallet_exposure_limit,
+                        effective_wallet_exposure_limit_ratio,
                         request.position.size,
                         mid,
                     );
@@ -388,10 +388,10 @@ mod tests {
         }
     }
 
-    fn base_runtime_budget(effective_wallet_exposure_limit: f64) -> RuntimeBudgetState {
+    fn base_runtime_budget(effective_wallet_exposure_limit_ratio: f64) -> RuntimeBudgetState {
         RuntimeBudgetState {
-            configured_wallet_exposure_limit: effective_wallet_exposure_limit,
-            effective_wallet_exposure_limit,
+            configured_wallet_exposure_limit_ratio: effective_wallet_exposure_limit_ratio,
+            effective_wallet_exposure_limit_ratio,
             configured_n_positions: 1,
             effective_n_positions: 1,
         }
@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn no_entries_when_effective_wallet_exposure_limit_is_zero() {
+    fn no_entries_when_effective_wallet_exposure_limit_ratio_is_zero() {
         let state = base_state();
         let exchange = base_exchange();
         let bot_params = BotParams::default();

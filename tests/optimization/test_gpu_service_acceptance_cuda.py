@@ -182,7 +182,7 @@ def test_sigint_stops_large_clipped_hsl_request_without_losing_completed_results
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "long", "--coins", "25",
         "--bars", "11520", "--seed", "7", "--hsl", "portfolio",
-        "--hsl-red-threshold", ".99", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        "--hsl-drawdown-threshold-fraction", ".99", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-memory-ema-span-minutes", "1440",
     ]))
     config, candles, _markets, _btc, _timestamps = inputs

@@ -74,7 +74,7 @@ def apply_features(config, case, coins, markets, bars):
     if "slippage" in flags:
         config["backtest"]["market_order_slippage_fraction"] = 0.003
     if "btc_collateral" in flags:
-        config["backtest"]["btc_collateral_cap"] = 0.25
+        config["backtest"]["btc_collateral_target_ratio"] = 0.25
     if "eligibility" in flags and len(coins) > 1:
         markets[coins[-1]]["first_valid_index"] = bars // 2
         markets[coins[0]]["last_valid_index"] = bars - bars // 4 - 1
@@ -234,7 +234,7 @@ def freeze(directory, *, profile="smoke", patterns=(), candidates=8, seeds=(7,),
             options = ["--fixture", case.strategy,
                        "--sides", case.sides, "--coins", str(1 if case.topology == "single" else coins),
                        "--bars", str(bars), "--seed", str(seed), "--hsl", hsl,
-                       "--hsl-red-threshold", "0.005", "--hsl-drawdown-ratio-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
+                       "--hsl-drawdown-threshold-fraction", "0.005", "--hsl-drawdown-fraction-ema-span-minutes", "5", "--hsl-cooldown-minutes", "10"]
             config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
             source_coins = config["backtest"]["coins"]
             # A frozen benchmark candidate is a concrete execution snapshot,

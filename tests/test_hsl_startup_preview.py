@@ -198,9 +198,9 @@ def test_hsl_startup_preview_rejects_flat_hsl_aliases(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
         "hsl_enabled": True,
-        "hsl_red_threshold": 0.10,
+        "hsl_drawdown_threshold_fraction": 0.10,
         "hsl_cooldown_minutes_after_red": 45,
-        "hsl_ema_span_minutes": 120,
+        "hsl_drawdown_fraction_ema_span_minutes": 120,
         "hsl_panic_close_order_type": "limit",
     }
     config_path = tmp_path / "live.json"

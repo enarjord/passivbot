@@ -90,7 +90,7 @@ def test_backtest_with_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     config['bot']["portfolio"]['hedge_mode'] = False
 
@@ -189,7 +189,7 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     config['bot']["portfolio"]['hedge_mode'] = False
     config["bot"]["long"]["hsl"]["enabled"] = True
@@ -232,10 +232,10 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
         timestamps,
     )
     assert payload.backtest_params["equity_hard_stop_loss"]["sides"][0][
-        "drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes"
     ] == pytest.approx(1.0)
     assert payload.backtest_params["equity_hard_stop_loss"]["sides"][1][
-        "drawdown_ratio_ema_span_minutes"
+        "drawdown_fraction_ema_span_minutes"
     ] == pytest.approx(1.0)
 
 
@@ -250,7 +250,7 @@ def test_build_backtest_payload_normalizes_integral_float_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     config['bot']["portfolio"]['hedge_mode'] = False
 
@@ -303,7 +303,7 @@ def test_build_backtest_payload_rejects_fractional_candle_interval():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     config['bot']["portfolio"]['hedge_mode'] = False
 
@@ -344,7 +344,7 @@ def test_build_backtest_payload_rejects_fractional_candle_interval():
         )
 
 
-def test_backtest_rejects_invalid_equity_floor_ratio():
+def test_backtest_rejects_invalid_equity_floor_fraction():
     from backtest import build_backtest_payload
     from config_utils import load_config
 
@@ -358,8 +358,8 @@ def test_backtest_rejects_invalid_equity_floor_ratio():
     config["backtest"]["filter_by_min_effective_cost"] = False
     config["backtest"]["start_date"] = "2021-01-01"
     config["backtest"]["end_date"] = "2021-01-02"
-    config["backtest"]["equity_floor_ratio"] = 1.0
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    config["backtest"]["equity_floor_fraction"] = 1.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = None
     config['bot']["portfolio"]['hedge_mode'] = False
 
@@ -391,7 +391,7 @@ def test_backtest_rejects_invalid_equity_floor_ratio():
 
     with pytest.raises(
         ValueError,
-        match=r"backtest\.equity_floor_ratio must satisfy 0\.0 <= x < 1\.0",
+        match=r"backtest\.equity_floor_fraction must satisfy 0\.0 <= x < 1\.0",
     ):
         build_backtest_payload(
             hlcvs,

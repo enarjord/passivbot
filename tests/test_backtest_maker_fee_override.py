@@ -23,8 +23,8 @@ def _base_config():
     set_side_universe_sources(cfg, 'approved_coins', {
         "long": ["BTC", "ETH"], "short": ["BTC", "ETH"],
     })
-    cfg["backtest"]["maker_fee_override"] = None
-    cfg["backtest"]["taker_fee_override"] = None
+    cfg["backtest"]["maker_fee_override_fraction"] = None
+    cfg["backtest"]["taker_fee_override_fraction"] = None
     return cfg
 
 
@@ -72,17 +72,17 @@ def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
     assert exchange_params[0]["taker_fee"] == 0.0005
 
 
-def test_prep_backtest_args_uses_maker_fee_override_when_set():
+def test_prep_backtest_args_uses_maker_fee_override_fraction_when_set():
     config = _base_config()
-    config["backtest"]["maker_fee_override"] = 0.0002
+    config["backtest"]["maker_fee_override_fraction"] = 0.0002
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0002
 
 
-def test_prep_backtest_args_uses_taker_fee_override_when_set():
+def test_prep_backtest_args_uses_taker_fee_override_fraction_when_set():
     config = _base_config()
-    config["backtest"]["taker_fee_override"] = 0.0008
+    config["backtest"]["taker_fee_override_fraction"] = 0.0008
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["taker_fee"] == 0.0008
@@ -119,8 +119,8 @@ def test_prep_backtest_args_rejects_missing_taker_fee_without_override():
 
 def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
     config = _multi_coin_config()
-    config["backtest"]["maker_fee_override"] = 0.0003
-    config["backtest"]["taker_fee_override"] = 0.0009
+    config["backtest"]["maker_fee_override_fraction"] = 0.0003
+    config["backtest"]["taker_fee_override_fraction"] = 0.0009
     mss = _multi_coin_mss(eth_maker=0.0002, eth_taker=0.0007)
 
     _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
@@ -179,9 +179,9 @@ def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_transports_equity_floor_ratio():
+def test_prep_backtest_args_transports_equity_floor_fraction():
     config = _base_config()
-    config["backtest"]["equity_floor_ratio"] = 0.07
+    config["backtest"]["equity_floor_fraction"] = 0.07
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["liquidation_threshold"] == 0.07
@@ -207,8 +207,8 @@ def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coi
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
 
     assert len(bot_params_list) == 1
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == -1.0
-    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == -1.0
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == -1.0
+    assert bot_params_list[0]["short"]["wallet_exposure_limit_ratio"] == -1.0
 
 
 def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
@@ -236,10 +236,10 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
     bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
 
     params_by_coin = dict(zip(sorted(market_settings), bot_params_list))
-    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit"] == -1.0
-    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit"] == 0.0
-    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit"] == 0.0
-    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit_ratio"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit_ratio"] == 0.0
+    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit_ratio"] == -1.0
 
 
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
@@ -258,8 +258,8 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
 
     assert len(bot_params_list) == 1
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
-    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.25
+    assert bot_params_list[0]["short"]["wallet_exposure_limit_ratio"] == 0.5
 
 
 def test_zero_coin_wallet_override_preserves_side_total_exposure():
@@ -271,8 +271,8 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
 
     bot_params_list, _, _, _ = prep_backtest_args(config, _base_mss(), "binance")
 
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.0
-    assert bot_params_list[0]["long"]["total_wallet_exposure_limit"] == 1.5
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert bot_params_list[0]["long"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert bot_params_list[0]["long"]["n_positions"] > 0
 
 
@@ -301,9 +301,9 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     policies = backtest_params["equity_hard_stop_loss"]
     btc_long = policies["coins"]["BTC/USDT:USDT"][0]
     assert btc_long["enabled"] is True
-    assert btc_long["red_threshold"] == pytest.approx(0.01)
+    assert btc_long["drawdown_threshold_fraction"] == pytest.approx(0.01)
     assert policies["sides"][0]["enabled"] is False
-    assert policies["sides"][0]["red_threshold"] == pytest.approx(0.2)
+    assert policies["sides"][0]["drawdown_threshold_fraction"] == pytest.approx(0.2)
     assert all(
         not any(k.startswith("hsl_") for k in pair["long"]) for pair in bot_params_list
     )
@@ -339,7 +339,7 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(
 
     bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
 
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.25
 
 
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():

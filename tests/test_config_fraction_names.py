@@ -48,7 +48,7 @@ def test_old_development_spellings_are_not_normal_loader_aliases(old, new):
 def test_nondefault_fraction_bounds_keep_stable_native_optimizer_ids(kind):
     config = get_template_config()
     config["bot"]["portfolio"]["strategy_kind"] = kind
-    keys = ["long_unstuck_close_pct", "long_unstuck_loss_allowance_pct", "long_risk_we_excess_allowance_pct"]
+    keys = ["long_unstuck_close_pct", "long_unstuck_loss_allowance_pct", "long_risk_we_excess_allowance_fraction"]
     keys += (["long_entry_initial_qty_fraction", "long_entry_initial_ema_distance_fraction", "long_close_qty_fraction"]
              if kind == "trailing_martingale" else ["long_base_qty_fraction", "long_offset_fraction"])
     bounds = {}
@@ -88,11 +88,11 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
     source["bot"]["global"]["forager"]["score_hysteresis_margin"] = 0.037
     original = deepcopy(source)
     policy = fee_policy_kwargs_from_config(source)
-    assert policy["fee_pct_fallback"] == 0.00037
-    assert policy["fee_pct_sanity_abs_max"] == 0.0013
+    assert policy["fallback_fee_fraction"] == 0.00037
+    assert policy["max_abs_fee_fraction"] == 0.0013
     fee, _ = _normalize_fee_paid_from_payload(
-        {"qty": 2.0, "price": 123.0}, fee_pct_fallback=policy["fee_pct_fallback"],
-        fee_pct_sanity_abs_max=policy["fee_pct_sanity_abs_max"],
+        {"qty": 2.0, "price": 123.0}, fallback_fee_fraction=policy["fallback_fee_fraction"],
+        max_abs_fee_fraction=policy["max_abs_fee_fraction"],
     )
     assert fee == pytest.approx(-246.0 * 0.00037)
     config = prepare_config(source, verbose=False)

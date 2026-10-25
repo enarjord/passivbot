@@ -879,7 +879,7 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
 pub fn gate_entries_by_twel_py(
     side: &str,
     balance: f64,
-    total_wallet_exposure_limit: f64,
+    total_wallet_exposure_limit_ratio: f64,
     positions: &Bound<'_, PyList>,
     entries: &Bound<'_, PyList>,
 ) -> PyResult<Vec<(usize, f64, f64, u16)>> {
@@ -894,7 +894,7 @@ pub fn gate_entries_by_twel_py(
             ))
         }
     };
-    if balance <= 0.0 || total_wallet_exposure_limit <= 0.0 {
+    if balance <= 0.0 || total_wallet_exposure_limit_ratio <= 0.0 {
         return Ok(vec![]);
     }
 
@@ -987,7 +987,7 @@ pub fn gate_entries_by_twel_py(
     let gated = gate_entries_by_twel(
         side_code,
         balance,
-        total_wallet_exposure_limit,
+        total_wallet_exposure_limit_ratio,
         &positions_vec,
         &entries_vec,
     );
@@ -1044,17 +1044,17 @@ pub fn calc_unstucking_close_py(
             .get_item("position_price")?
             .ok_or_else(|| PyValueError::new_err("position missing 'position_price'"))?
             .extract::<f64>()?;
-        let wallet_exposure_limit = dict
-            .get_item("wallet_exposure_limit")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit'"))?
+        let wallet_exposure_limit_ratio = dict
+            .get_item("wallet_exposure_limit_ratio")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit_ratio'"))?
             .extract::<f64>()?;
-        let effective_we_excess_allowance_pct =
-            if let Some(value) = dict.get_item("effective_we_excess_allowance_pct")? {
+        let effective_we_excess_allowance_fraction =
+            if let Some(value) = dict.get_item("effective_we_excess_allowance_fraction")? {
                 value.extract::<f64>()?
             } else {
-                dict.get_item("risk_we_excess_allowance_pct")?
+                dict.get_item("risk_we_excess_allowance_fraction")?
                     .ok_or_else(|| {
-                        PyValueError::new_err("position missing 'risk_we_excess_allowance_pct'")
+                        PyValueError::new_err("position missing 'risk_we_excess_allowance_fraction'")
                     })?
                     .extract::<f64>()?
             };
@@ -1114,14 +1114,14 @@ pub fn calc_unstucking_close_py(
             side,
             position_size,
             position_price,
-            wallet_exposure_limit,
-            effective_we_excess_allowance_pct,
+            wallet_exposure_limit_ratio,
+            effective_we_excess_allowance_fraction,
             unstuck_threshold,
             unstuck_close_pct,
             unstuck_ema_gating_enabled,
             unstuck_ema_dist,
             unstuck_loss_allowance_pct: 0.0,
-            total_wallet_exposure_limit: 0.0,
+            total_wallet_exposure_limit_ratio: 0.0,
             ema_band_upper,
             ema_band_lower,
             current_price,
@@ -1346,8 +1346,8 @@ mod tests {
             ..Default::default()
         };
         let bot = BotParams {
-            wallet_exposure_limit: 1.0,
-            total_wallet_exposure_limit: 1.0,
+            wallet_exposure_limit_ratio: 1.0,
+            total_wallet_exposure_limit_ratio: 1.0,
             n_positions: 1,
             ..Default::default()
         };
@@ -1358,7 +1358,7 @@ mod tests {
         };
         let trailing = TrailingPriceBundle::default();
         let runtime = RuntimeOrderContext {
-            effective_wallet_exposure_limit: 1.0,
+            effective_wallet_exposure_limit_ratio: 1.0,
         };
         for (side, name, size) in [
             (StrategySide::Long, "long", 5.0),
@@ -1368,8 +1368,8 @@ mod tests {
             let input = serde_json::json!({
                 "pside": name, "exchange": exchange, "state": state,
                 "position": position, "trailing": trailing, "close_params": close,
-                "bot_params": {"wallet_exposure_limit":1.0,"total_wallet_exposure_limit":1.0,"n_positions":1},
-                "runtime": {"effective_wallet_exposure_limit":1.0},
+                "bot_params": {"wallet_exposure_limit_ratio":1.0,"total_wallet_exposure_limit_ratio":1.0,"n_positions":1},
+                "runtime": {"effective_wallet_exposure_limit_ratio":1.0},
             });
             let actual: Value = serde_json::from_str(
                 &calc_trailing_martingale_close_diagnostic_py(&input.to_string()).unwrap(),
@@ -2177,9 +2177,9 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
             &[
                 "enabled",
                 "scale_budget_with_excess_allowance",
-                "red_threshold",
+                "drawdown_threshold_fraction",
                 "memory_ema_span_minutes",
-                "drawdown_ratio_ema_span_minutes",
+                "drawdown_fraction_ema_span_minutes",
                 "cooldown_minutes_after_red",
                 "panic_close_order_type",
             ],
@@ -2192,11 +2192,11 @@ fn hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::hsl_runtime::Config
                 Some(value) => value.extract::<bool>()?,
                 None => false,
             },
-            red_threshold: extract_value(dict, "red_threshold")?,
+            drawdown_threshold_fraction: extract_value(dict, "drawdown_threshold_fraction")?,
             memory_ema_span_minutes: extract_value(dict, "memory_ema_span_minutes")?,
-            drawdown_ratio_ema_span_minutes: extract_value(
+            drawdown_fraction_ema_span_minutes: extract_value(
                 dict,
-                "drawdown_ratio_ema_span_minutes",
+                "drawdown_fraction_ema_span_minutes",
             )?,
             cooldown_minutes_after_red: extract_value(dict, "cooldown_minutes_after_red")?,
             panic_close_order_type: extract_value(dict, "panic_close_order_type")?,
@@ -2750,11 +2750,11 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             )));
         }
     }
-    let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
-    let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
-    let risk_we_excess_allowance_pct: f64 = extract_value(dict, "risk_we_excess_allowance_pct")?;
-    let total_wallet_exposure_limit: f64 = extract_value(dict, "total_wallet_exposure_limit")?;
-    let wallet_exposure_limit_raw: f64 = extract_value(dict, "wallet_exposure_limit")?;
+    let risk_wel_enforcer_threshold_ratio: f64 = extract_value(dict, "risk_wel_enforcer_threshold_ratio")?;
+    let risk_twel_enforcer_threshold_ratio: f64 = extract_value(dict, "risk_twel_enforcer_threshold_ratio")?;
+    let risk_we_excess_allowance_fraction: f64 = extract_value(dict, "risk_we_excess_allowance_fraction")?;
+    let total_wallet_exposure_limit_ratio: f64 = extract_value(dict, "total_wallet_exposure_limit_ratio")?;
+    let wallet_exposure_limit_ratio_raw: f64 = extract_value(dict, "wallet_exposure_limit_ratio")?;
     let n_positions_float: f64 = extract_value(dict, "n_positions")?;
     let n_positions = n_positions_float.round() as usize;
     let hsl = if hsl {
@@ -2773,7 +2773,7 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
     };
     // Callers resolve live fixed denominators before building orchestrator input.
     // Preserve zero here: per-symbol zero is the explicit side-disable sentinel.
-    let wallet_exposure_limit = wallet_exposure_limit_raw;
+    let wallet_exposure_limit_ratio = wallet_exposure_limit_ratio_raw;
 
     let params = BotParams {
         close_grid_qty_fraction: extract_optional_f64(dict, "close_grid_qty_fraction")?,
@@ -2866,18 +2866,18 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         },
         risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
         n_positions,
-        total_wallet_exposure_limit,
-        wallet_exposure_limit,
+        total_wallet_exposure_limit_ratio,
+        wallet_exposure_limit_ratio,
         risk_wel_enforcer_enabled: extract_optional_bool(dict, "risk_wel_enforcer_enabled", true)?,
-        risk_wel_enforcer_threshold,
+        risk_wel_enforcer_threshold_ratio,
         risk_twel_enforcer_enabled: extract_optional_bool(
             dict,
             "risk_twel_enforcer_enabled",
             true,
         )?,
         risk_twel_enforcer_policy: extract_optional_twel_enforcer_policy(dict)?,
-        risk_twel_enforcer_threshold,
-        risk_we_excess_allowance_pct,
+        risk_twel_enforcer_threshold_ratio,
+        risk_we_excess_allowance_fraction,
         unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
         unstuck_ema_gating_enabled: extract_optional_bool(
             dict,
@@ -2995,36 +2995,36 @@ fn validate_hsl_risk_unstuck_bot_params(
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.total_wallet_exposure_limit"),
-        params.total_wallet_exposure_limit,
+        &format!("{path_prefix}.total_wallet_exposure_limit_ratio"),
+        params.total_wallet_exposure_limit_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.wallet_exposure_limit"),
-        params.wallet_exposure_limit,
+        &format!("{path_prefix}.wallet_exposure_limit_ratio"),
+        params.wallet_exposure_limit_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.risk_wel_enforcer_threshold"),
-        params.risk_wel_enforcer_threshold,
+        &format!("{path_prefix}.risk_wel_enforcer_threshold_ratio"),
+        params.risk_wel_enforcer_threshold_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.risk_twel_enforcer_threshold"),
-        params.risk_twel_enforcer_threshold,
+        &format!("{path_prefix}.risk_twel_enforcer_threshold_ratio"),
+        params.risk_twel_enforcer_threshold_ratio,
         0.0,
         None,
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.risk_we_excess_allowance_pct"),
-        params.risk_we_excess_allowance_pct,
+        &format!("{path_prefix}.risk_we_excess_allowance_fraction"),
+        params.risk_we_excess_allowance_fraction,
         0.0,
         None,
         true,
@@ -3220,9 +3220,9 @@ fn make_trailing_martingale_close_params(
     }
 }
 
-fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext {
+fn make_runtime_order_context(wallet_exposure_limit_ratio: f64) -> RuntimeOrderContext {
     RuntimeOrderContext {
-        effective_wallet_exposure_limit: wallet_exposure_limit,
+        effective_wallet_exposure_limit_ratio: wallet_exposure_limit_ratio,
     }
 }
 
@@ -3244,12 +3244,12 @@ fn json_bool(value: &Value, key: &str, default: bool) -> bool {
 
 fn bot_params_for_close_diagnostic_json(value: &Value) -> PyResult<BotParams> {
     let mut bot = BotParams::default();
-    bot.wallet_exposure_limit = json_f64(value, "wallet_exposure_limit", 0.0);
-    bot.total_wallet_exposure_limit = json_f64(value, "total_wallet_exposure_limit", 0.0);
+    bot.wallet_exposure_limit_ratio = json_f64(value, "wallet_exposure_limit_ratio", 0.0);
+    bot.total_wallet_exposure_limit_ratio = json_f64(value, "total_wallet_exposure_limit_ratio", 0.0);
     bot.n_positions = json_usize(value, "n_positions", 1);
-    bot.risk_we_excess_allowance_pct = json_f64(value, "risk_we_excess_allowance_pct", 0.0);
+    bot.risk_we_excess_allowance_fraction = json_f64(value, "risk_we_excess_allowance_fraction", 0.0);
     bot.risk_wel_enforcer_enabled = json_bool(value, "risk_wel_enforcer_enabled", true);
-    bot.risk_wel_enforcer_threshold = json_f64(value, "risk_wel_enforcer_threshold", 0.0);
+    bot.risk_wel_enforcer_threshold_ratio = json_f64(value, "risk_wel_enforcer_threshold_ratio", 0.0);
     Ok(bot)
 }
 
@@ -3310,11 +3310,11 @@ pub fn calc_trailing_martingale_close_diagnostic_py(input_json: &str) -> PyResul
             .ok_or_else(|| PyValueError::new_err("missing bot_params"))?,
     )?;
     let runtime = RuntimeOrderContext {
-        effective_wallet_exposure_limit: input
+        effective_wallet_exposure_limit_ratio: input
             .get("runtime")
-            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit"))
+            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit_ratio"))
             .and_then(Value::as_f64)
-            .unwrap_or(bot.wallet_exposure_limit),
+            .unwrap_or(bot.wallet_exposure_limit_ratio),
     };
     let out = calc_trailing_martingale_close_diagnostic(
         side,
@@ -3347,8 +3347,8 @@ pub fn calc_next_entry_long_py(
     entry_weight_volatility_1h: f64,
     entry_weight_volatility_1m: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3394,8 +3394,8 @@ pub fn calc_next_entry_long_py(
         entry_weight_volatility_1h,
         entry_weight_volatility_1m,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3414,7 +3414,7 @@ pub fn calc_next_entry_long_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3448,9 +3448,9 @@ pub fn calc_next_entry_long_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -3475,9 +3475,9 @@ pub fn calc_next_close_long_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3521,9 +3521,9 @@ pub fn calc_next_close_long_py(
         close_trailing_threshold_base_fraction,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -3533,7 +3533,7 @@ pub fn calc_next_close_long_py(
         close_weight_volatility_1h,
         close_weight_volatility_1m,
     );
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -3577,8 +3577,8 @@ pub fn calc_next_entry_short_py(
     entry_weight_volatility_1h: f64,
     entry_weight_volatility_1m: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3624,8 +3624,8 @@ pub fn calc_next_entry_short_py(
         entry_weight_volatility_1h,
         entry_weight_volatility_1m,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3644,7 +3644,7 @@ pub fn calc_next_entry_short_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3678,9 +3678,9 @@ pub fn calc_next_entry_short_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -3705,9 +3705,9 @@ pub fn calc_next_close_short_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3751,9 +3751,9 @@ pub fn calc_next_close_short_py(
         close_trailing_threshold_base_fraction,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -3767,7 +3767,7 @@ pub fn calc_next_close_short_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3807,8 +3807,8 @@ pub fn calc_entries_long_py(
     entry_weight_volatility_1h: f64,
     entry_weight_volatility_1m: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3856,8 +3856,8 @@ pub fn calc_entries_long_py(
         entry_weight_volatility_1h,
         entry_weight_volatility_1m,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3877,7 +3877,7 @@ pub fn calc_entries_long_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -3918,8 +3918,8 @@ pub fn calc_entries_short_py(
     entry_weight_volatility_1h: f64,
     entry_weight_volatility_1m: f64,
     entry_exposure_ratio_coefficient: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -3967,8 +3967,8 @@ pub fn calc_entries_short_py(
         entry_weight_volatility_1h,
         entry_weight_volatility_1m,
         entry_exposure_ratio_coefficient,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
         ..Default::default()
     };
     let entry_params = make_trailing_martingale_entry_params(
@@ -3988,7 +3988,7 @@ pub fn calc_entries_short_py(
         size: position_size,
         price: position_price,
     };
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -4041,9 +4041,9 @@ pub fn calc_min_entry_qty_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -4068,9 +4068,9 @@ pub fn calc_closes_long_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -4116,9 +4116,9 @@ pub fn calc_closes_long_py(
         close_trailing_threshold_base_fraction,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -4128,7 +4128,7 @@ pub fn calc_closes_long_py(
         close_weight_volatility_1h,
         close_weight_volatility_1m,
     );
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
 
     let position = Position {
         size: position_size,
@@ -4167,9 +4167,9 @@ pub fn calc_closes_long_py(
     close_trailing_qty_fraction,
     close_trailing_retracement_base_fraction,
     close_trailing_threshold_base_fraction,
-    wallet_exposure_limit,
-    risk_we_excess_allowance_pct,
-    risk_wel_enforcer_threshold,
+    wallet_exposure_limit_ratio,
+    risk_we_excess_allowance_fraction,
+    risk_wel_enforcer_threshold_ratio,
     balance,
     position_size,
     position_price,
@@ -4194,9 +4194,9 @@ pub fn calc_closes_short_py(
     close_trailing_qty_fraction: f64,
     close_trailing_retracement_base_fraction: f64,
     close_trailing_threshold_base_fraction: f64,
-    wallet_exposure_limit: f64,
-    risk_we_excess_allowance_pct: f64,
-    risk_wel_enforcer_threshold: f64,
+    wallet_exposure_limit_ratio: f64,
+    risk_we_excess_allowance_fraction: f64,
+    risk_wel_enforcer_threshold_ratio: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -4242,9 +4242,9 @@ pub fn calc_closes_short_py(
         close_trailing_threshold_base_fraction,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        wallet_exposure_limit,
-        risk_we_excess_allowance_pct,
-        risk_wel_enforcer_threshold,
+        wallet_exposure_limit_ratio,
+        risk_we_excess_allowance_fraction,
+        risk_wel_enforcer_threshold_ratio,
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
@@ -4254,7 +4254,7 @@ pub fn calc_closes_short_py(
         close_weight_volatility_1h,
         close_weight_volatility_1m,
     );
-    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit_ratio);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -4285,8 +4285,8 @@ pub fn calc_closes_short_py(
 #[pyfunction]
 #[pyo3(signature = (
     side,
-    red_threshold,
-    total_wallet_exposure_limit,
+    exposure_threshold_ratio,
+    total_wallet_exposure_limit_ratio,
     effective_n_positions,
     balance,
     positions,
@@ -4295,8 +4295,8 @@ pub fn calc_closes_short_py(
 ))]
 pub fn calc_twel_enforcer_orders_py(
     side: &str,
-    red_threshold: f64,
-    total_wallet_exposure_limit: f64,
+    exposure_threshold_ratio: f64,
+    total_wallet_exposure_limit_ratio: f64,
     effective_n_positions: usize,
     balance: f64,
     positions: &Bound<'_, PyList>,
@@ -4382,8 +4382,8 @@ pub fn calc_twel_enforcer_orders_py(
 
     let actions = calc_twel_enforcer_actions(
         side_code,
-        red_threshold,
-        total_wallet_exposure_limit,
+        exposure_threshold_ratio,
+        total_wallet_exposure_limit_ratio,
         effective_n_positions,
         balance,
         &parsed_positions,
