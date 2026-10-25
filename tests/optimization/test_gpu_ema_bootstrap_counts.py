@@ -109,4 +109,5 @@ def test_bootstrap_count_device_bytes_are_included_in_admission(sides, coins):
         raw_strategy_growth_enabled=False, recovery_distribution_enabled=False,
         _hsl_ema_tail_samples_enabled=lambda: False, _exact_entry_intervals_enabled=lambda: False,
         replay_sides=sides, n_coins=coins)
-    assert _MulticoinReplayRunner._history_bytes_per_candidate(runner) == 40 * sides * coins
+    # Every candidate also uploads one int32 end-step word.
+    assert _MulticoinReplayRunner._history_bytes_per_candidate(runner) == 4 + 40 * sides * coins
