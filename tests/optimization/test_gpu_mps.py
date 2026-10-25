@@ -3280,12 +3280,12 @@ def _multicoin_exposure_fixture(
     loss_gate_max_drawdown_fraction=1.0,
     first_valid_indices=(0, 0),
     last_valid_indices=None,
-    liquidation_threshold=0.05,
+    equity_floor_fraction=0.05,
     collect_coin_fill_counts=False,
     filter_by_min_effective_cost=False,
-    market_order_slippage_pct=0.0,
+    market_order_slippage_fraction=0.0,
     market_orders_allowed=False,
-    market_order_near_touch_threshold=0.001,
+    market_order_near_touch_fraction=0.001,
     hsl_panic_market=False,
     recovery_distribution_enabled=False,
     entry_interval_enabled=False,
@@ -3326,7 +3326,7 @@ def _multicoin_exposure_fixture(
             int(timestamps[requested_start_index]),
             int(timestamps[0]),
             interval_ms,
-            liquidation_threshold,
+            equity_floor_fraction,
             first_valid_indices[coin],
             last_valid_indices[coin],
         )
@@ -3338,7 +3338,7 @@ def _multicoin_exposure_fixture(
         runs,
         markets,
         include_hourly_ranges=True,
-        market_order_slippage_pct=market_order_slippage_pct,
+        market_order_slippage_fraction=market_order_slippage_fraction,
     )
     if strategy_kind == "ema_anchor":
         values = {
@@ -3385,9 +3385,9 @@ def _multicoin_exposure_fixture(
             collect_coin_fill_counts=collect_coin_fill_counts,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": filter_by_min_effective_cost, "short": filter_by_min_effective_cost},
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market,
             recovery_distribution_enabled=recovery_distribution_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
@@ -3455,9 +3455,9 @@ def _multicoin_exposure_fixture(
             collect_coin_fill_counts=collect_coin_fill_counts,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": filter_by_min_effective_cost, "short": filter_by_min_effective_cost},
-            market_order_slippage_pct=market_order_slippage_pct,
+            market_order_slippage_fraction=market_order_slippage_fraction,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=market_order_near_touch_threshold,
+            market_order_near_touch_fraction=market_order_near_touch_fraction,
             hsl_panic_market=hsl_panic_market,
             recovery_distribution_enabled=recovery_distribution_enabled,
             entry_interval_enabled=entry_interval_enabled,
@@ -5398,7 +5398,7 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
         closes=closes,
         markets=markets,
         collect_coin_fill_counts=True,
-        market_order_slippage_pct=0.02 if shock_coin == "both" else 0.0,
+        market_order_slippage_fraction=0.02 if shock_coin == "both" else 0.0,
         hsl_panic_market=shock_coin == "both",
     )
     keys = (
@@ -5654,7 +5654,7 @@ def test_mps_multicoin_coin_hsl_override_selects_market_panic(strategy_kind, sid
             count=count,
             closes=closes,
             markets=markets,
-            market_order_slippage_pct=0.02,
+            market_order_slippage_fraction=0.02,
             hsl_panic_market=False,
         )
         keys = (
@@ -5746,7 +5746,7 @@ def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
         count=count,
         closes=closes,
         markets=markets,
-        market_order_slippage_pct=0.02,
+        market_order_slippage_fraction=0.02,
         hsl_panic_market=True,
     )
     keys = (
@@ -5975,7 +5975,7 @@ def test_mps_multicoin_initial_entry_pct_freezes_denominator_at_liquidation(
         side,
         count=20,
         first_valid_indices=(0, 12),
-        liquidation_threshold=1.0,
+        equity_floor_fraction=1.0,
     )
 
     output = runner.run(np.asarray([row], dtype=np.float64))
@@ -6106,7 +6106,7 @@ def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
         guard_ts_ms=int(timestamps[0]),
         first_ts_ms=int(timestamps[0]),
         interval_ms=60_000,
-        liquidation_threshold=0.05,
+        equity_floor_fraction=0.05,
         first_valid_idx=0,
         last_valid_idx=len(timestamps) - 1,
     )
@@ -6136,7 +6136,7 @@ def test_nondivisor_interval_hour_bucket_matches_rust_boundary_overlap():
         guard_ts_ms=0,
         first_ts_ms=0,
         interval_ms=interval_ms,
-        liquidation_threshold=0.05,
+        equity_floor_fraction=0.05,
         first_valid_idx=0,
         last_valid_idx=len(timestamps) - 1,
     )
@@ -6245,7 +6245,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
         loss_gate_max_drawdown_fraction=0.1,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.003,
+        market_order_near_touch_fraction=0.003,
         hsl_raw_drawdown_enabled=True,
         recovery_distribution_enabled=True,
         side_activation={"long": True, "short": True},
@@ -6305,13 +6305,13 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
         )
-    with pytest.raises(ValueError, match="market_order_near_touch_threshold"):
+    with pytest.raises(ValueError, match="market_order_near_touch_fraction"):
         MpsEmaAnchorMulticoinRunner(
             runs[0],
             data,
             pnl_lookback_bars=1440,
             side=side,
-            market_order_near_touch_threshold=float("nan"),
+            market_order_near_touch_fraction=float("nan"),
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -6404,8 +6404,8 @@ def test_mps_ema_multicoin_market_entry_uses_stored_next_close_intent(side):
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
     )
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
@@ -6463,8 +6463,8 @@ def test_mps_tm_multicoin_trailing_market_entry_uses_stored_next_close_intent(si
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
     )
     row[
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("entry_retracement_base_pct")
@@ -6507,7 +6507,7 @@ def test_mps_tm_multicoin_recursive_market_entry_does_not_expose_suffix(side):
         lows=closes,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_initial_qty_pct": 0.1,
@@ -6549,7 +6549,7 @@ def test_mps_tm_multicoin_batch_selects_market_mode_per_candidate(side):
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_double_down_factor": 1.0,
@@ -6746,7 +6746,7 @@ def test_mps_tm_multicoin_recursive_market_entry_passive_suffix(
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_double_down_factor": 1.0,
@@ -6795,7 +6795,7 @@ def test_mps_tm_multicoin_recursive_market_entry_stops_duplicate_tick_suffix(
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_double_down_factor": 1.0,
@@ -6848,7 +6848,7 @@ def test_mps_tm_multicoin_recursive_entry_gate_orders_cross_coin_ladders(
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_double_down_factor": 1.0,
@@ -6893,7 +6893,7 @@ def test_mps_tm_multicoin_recursive_entry_gate_keeps_partial_boundary(side, mark
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_double_down_factor": 1.0,
@@ -6944,7 +6944,7 @@ def test_mps_tm_multicoin_coin_override_selects_recursive_market_entry(side):
         first_valid_indices=(2, 2),
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_double_down_factor": 1.0,
@@ -7010,8 +7010,8 @@ def test_mps_tm_multicoin_trailing_market_close_uses_stored_next_close_intent(si
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7073,7 +7073,7 @@ def test_mps_tm_multicoin_recursive_next_close_promotes_without_suffix(side):
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7137,7 +7137,7 @@ def test_mps_tm_multicoin_expanded_recursive_close_promotes_each_group(side, mar
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.1,
+        market_order_near_touch_fraction=0.1,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7194,7 +7194,7 @@ def test_mps_tm_multicoin_coin_override_selects_recursive_market_close(side):
         lows=closes,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7242,7 +7242,7 @@ def test_mps_tm_multicoin_recursive_market_close_uses_executable_minimum(side):
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.02,
+        market_order_near_touch_fraction=0.02,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7298,7 +7298,7 @@ def test_mps_tm_multicoin_recursive_market_close_preserves_below_min_position():
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.02,
+        market_order_near_touch_fraction=0.02,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7348,7 +7348,7 @@ def test_mps_ema_multicoin_short_market_entry_uses_executable_minimum():
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_pct")] = 0.0001
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
@@ -7386,7 +7386,7 @@ def test_mps_tm_multicoin_short_market_entry_uses_executable_minimum():
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
     )
     for key, value in {
         "entry_initial_qty_pct": 0.0001,
@@ -7426,7 +7426,7 @@ def test_mps_ema_multicoin_market_entry_cap_uses_market_touch(side):
         lows=lows,
         markets=markets,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.003,
+        market_order_near_touch_fraction=0.003,
     )
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_pct")] = 1.0
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.002
@@ -7470,7 +7470,7 @@ def test_mps_tm_multicoin_market_entry_cap_uses_market_touch(side):
         lows=lows,
         markets=markets,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.003,
+        market_order_near_touch_fraction=0.003,
     )
     for key, value in {
         "entry_initial_qty_pct": 1.0,
@@ -7536,8 +7536,8 @@ def test_mps_ema_multicoin_market_close_uses_stored_next_close_intent(side):
         markets=markets,
         collect_coin_fill_counts=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
     )
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
@@ -7587,7 +7587,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         lows=closes,
         markets=markets,
         return_context=True,
-        market_order_slippage_pct=0.01,
+        market_order_slippage_fraction=0.01,
     )
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
@@ -7601,7 +7601,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         short_coin_overrides=overrides,
         collect_coin_fill_counts=True,
         hedge_mode=True,
-        market_order_slippage_pct=0.01,
+        market_order_slippage_fraction=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -7615,8 +7615,8 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         collect_coin_fill_counts=True,
         hedge_mode=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -7669,7 +7669,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         lows=closes,
         markets=markets,
         return_context=True,
-        market_order_slippage_pct=0.01,
+        market_order_slippage_fraction=0.01,
     )
     for key, value in {
         "entry_initial_ema_dist": 0.0005,
@@ -7703,8 +7703,8 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -7781,7 +7781,7 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_fraction=0.001,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -7865,7 +7865,7 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
         collect_coin_fill_counts=True,
         hedge_mode=hedge_mode,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.1,
+        market_order_near_touch_fraction=0.1,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -9531,8 +9531,8 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
         lows=lows,
         loss_gate_max_drawdown_fraction=0.05,
         market_orders_allowed=strategy_kind == "ema_anchor",
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
     )
     keys = (
         EMA_ANCHOR_MULTICOIN_PARAM_KEYS
@@ -9607,8 +9607,8 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
         lows=lows,
         loss_gate_max_drawdown_fraction=0.0005,
         market_orders_allowed=strategy_kind == "ema_anchor",
-        market_order_near_touch_threshold=0.001,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.001,
+        market_order_slippage_fraction=0.01,
     )
     strict_output = strict_runner.run(np.asarray([enabled], dtype=np.float64))
     synchronize()
@@ -9686,8 +9686,8 @@ def _tm_multicoin_off_tick_reducer_case(
     next_high=101.5,
     next_low=99.5,
     market_orders_allowed=False,
-    market_order_near_touch_threshold=0.02,
-    market_order_slippage_pct=0.0,
+    market_order_near_touch_fraction=0.02,
+    market_order_slippage_fraction=0.0,
     generation_touch=None,
     next_close=100.0,
     min_cost=0.0,
@@ -9727,7 +9727,7 @@ def _tm_multicoin_off_tick_reducer_case(
         count - 1,
     )
     data = build_mps_multicoin_data(hlcvs, timestamps, [run, run], [market, market],
-                                    market_order_slippage_pct=market_order_slippage_pct)
+                                    market_order_slippage_fraction=market_order_slippage_fraction)
     _, row = _multicoin_exposure_fixture("trailing_martingale", side, count=count)
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
     values.update(
@@ -9759,8 +9759,8 @@ def _tm_multicoin_off_tick_reducer_case(
         side=side,
         coin_overrides=overrides,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=market_order_near_touch_threshold,
-        market_order_slippage_pct=market_order_slippage_pct,
+        market_order_near_touch_fraction=market_order_near_touch_fraction,
+        market_order_slippage_fraction=market_order_slippage_fraction,
         collect_coin_fill_counts=collect_coin_fill_counts,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
@@ -10064,8 +10064,8 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
             highs=highs,
             lows=lows,
             market_orders_allowed=True,
-            market_order_near_touch_threshold=0.001,
-            market_order_slippage_pct=slippage,
+            market_order_near_touch_fraction=0.001,
+            market_order_slippage_fraction=slippage,
             loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
         )
         values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
@@ -10341,8 +10341,8 @@ def test_mps_tm_multicoin_market_grid_precedes_farther_reducer_for_volume(
         maker_fee=0.001,
         taker_fee=0.002,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.006,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.006,
+        market_order_slippage_fraction=0.01,
     )
     output = runner.run(np.asarray([candidate], dtype=np.float64))
     synchronize()
@@ -10388,7 +10388,7 @@ def test_mps_tm_multicoin_same_tick_wel_resizes_merged_market_group_once(side):
         next_high=99.0 if side == "long" else 101.0,
         next_low=99.0 if side == "long" else 101.0,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.005,
+        market_order_near_touch_fraction=0.005,
         generation_touch=99.0 if side == "long" else 101.0,
         next_close=99.0 if side == "long" else 101.0,
         min_cost=50.0,
@@ -10421,7 +10421,7 @@ def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee(side):
         "next_high": 102.5,
         "next_low": 97.5,
         "market_orders_allowed": True,
-        "market_order_near_touch_threshold": 0.005,
+        "market_order_near_touch_fraction": 0.005,
     }
     free_runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
         taker_fee=0.0, **common
@@ -10505,8 +10505,8 @@ def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
         count=10,
         markets=market_no_fee,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.002,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.002,
+        market_order_slippage_fraction=0.01,
     )
     fee_runner, _ = _multicoin_exposure_fixture(
         "trailing_martingale",
@@ -10514,8 +10514,8 @@ def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
         count=10,
         markets=market_with_taker_fee,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.002,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.002,
+        market_order_slippage_fraction=0.01,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
     values.update(
@@ -10557,7 +10557,7 @@ def test_mps_tm_multicoin_trailing_market_exposure_repair_stays_partial(side):
         side,
         count=10,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.002,
+        market_order_near_touch_fraction=0.002,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
     values.update(
@@ -10619,7 +10619,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
         strategy_kind,
         "long",
         return_context=True,
-        market_order_slippage_pct=0.01,
+        market_order_slippage_fraction=0.01,
         **fixture_kwargs,
     )
     if strategy_kind == "ema_anchor":
@@ -10628,8 +10628,8 @@ def test_mps_fused_dual_multicoin_exposure_repair(
             data,
             pnl_lookback_bars=1440,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=0.002,
-            market_order_slippage_pct=0.01,
+            market_order_near_touch_fraction=0.002,
+            market_order_slippage_fraction=0.01,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10641,8 +10641,8 @@ def test_mps_fused_dual_multicoin_exposure_repair(
             data,
             pnl_lookback_bars=1440,
             market_orders_allowed=market_orders_allowed,
-            market_order_near_touch_threshold=0.002,
-            market_order_slippage_pct=0.01,
+            market_order_near_touch_fraction=0.002,
+            market_order_slippage_fraction=0.01,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10686,7 +10686,7 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
         "long",
         count=10,
         return_context=True,
-        market_order_slippage_pct=0.01,
+        market_order_slippage_fraction=0.01,
     )
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
@@ -10694,8 +10694,8 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
         pnl_lookback_bars=1440,
         hedge_mode=False,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.002,
-        market_order_slippage_pct=0.01,
+        market_order_near_touch_fraction=0.002,
+        market_order_slippage_fraction=0.01,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10798,8 +10798,8 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
         "count": 10,
         "closes": (100.0, 100.0),
         "market_orders_allowed": market_orders_allowed,
-        "market_order_near_touch_threshold": 1.1,
-        "market_order_slippage_pct": 0.01,
+        "market_order_near_touch_fraction": 1.1,
+        "market_order_slippage_fraction": 0.01,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
         loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
@@ -10855,8 +10855,8 @@ def test_mps_tm_multicoin_fee_only_close_uses_loss_allowance(
         "closes": (100.0, 100.0),
         "markets": markets,
         "market_orders_allowed": market_orders_allowed,
-        "market_order_near_touch_threshold": 1.1,
-        "market_order_slippage_pct": 0.001,
+        "market_order_near_touch_fraction": 1.1,
+        "market_order_slippage_fraction": 0.001,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
         loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
@@ -11118,8 +11118,8 @@ def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
         "highs": highs,
         "lows": lows,
         "market_orders_allowed": True,
-        "market_order_near_touch_threshold": 0.001,
-        "market_order_slippage_pct": 0.01,
+        "market_order_near_touch_fraction": 0.001,
+        "market_order_slippage_fraction": 0.01,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
         loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
@@ -11748,7 +11748,7 @@ def test_mps_tm_multicoin_static_override_repairs_only_selected_symbol(
         side,
         count=10,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.002,
+        market_order_near_touch_fraction=0.002,
     )
     override_runner, overridden = _multicoin_exposure_fixture(
         "trailing_martingale",
@@ -11756,7 +11756,7 @@ def test_mps_tm_multicoin_static_override_repairs_only_selected_symbol(
         overrides,
         count=10,
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=0.002,
+        market_order_near_touch_fraction=0.002,
     )
     baseline_output = baseline_runner.run(np.asarray([baseline], dtype=np.float64))
     override_output = override_runner.run(np.asarray([overridden], dtype=np.float64))
@@ -12379,7 +12379,7 @@ def test_market_entries_use_original_precision_execution_tick(strategy_kind, sid
     runner, row = _multicoin_exposure_fixture(
         strategy_kind, side, count=6, closes=closes, highs=closes, lows=closes,
         markets=markets, market_orders_allowed=True,
-        market_order_near_touch_threshold=.001, market_order_slippage_pct=slip,
+        market_order_near_touch_fraction=.001, market_order_slippage_fraction=slip,
     )
     keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS if strategy_kind == "ema_anchor" else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     row[keys.index("entry_cooldown_minutes")] = 100.0

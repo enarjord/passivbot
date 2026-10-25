@@ -90,7 +90,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             next.high,
                             next_entry.qty,
                             next_entry.price,
-                            next.limit_order_fill_buffer_pct,
+                            next.limit_order_fill_buffer_fraction,
                         );
                     if expand_entries {
                         extend_nonzero(
@@ -174,7 +174,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             request.trailing,
                         );
                         if any_order_would_fill_next_candle(
-                            next.low, next.high, &closes, next.limit_order_fill_buffer_pct,
+                            next.low, next.high, &closes, next.limit_order_fill_buffer_fraction,
                         ) {
                             extend_nonzero(&mut generated.closes, closes);
                         } else {
@@ -245,7 +245,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             next.high,
                             next_entry.qty,
                             next_entry.price,
-                            next.limit_order_fill_buffer_pct,
+                            next.limit_order_fill_buffer_fraction,
                         );
                     if expand_entries {
                         extend_nonzero(
@@ -329,7 +329,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             request.trailing,
                         );
                         if any_order_would_fill_next_candle(
-                            next.low, next.high, &closes, next.limit_order_fill_buffer_pct,
+                            next.low, next.high, &closes, next.limit_order_fill_buffer_fraction,
                         ) {
                             extend_nonzero(&mut generated.closes, closes);
                         } else {
@@ -395,7 +395,7 @@ mod tests {
             position,
             trailing,
             next_candle: Some(NextStepHint {
-                limit_order_fill_buffer_pct: 0.0,
+                limit_order_fill_buffer_fraction: 0.0,
                 low: next_low,
                 high: next_high,
                 tradable: true,
@@ -458,7 +458,7 @@ mod tests {
         let mut buffered_request = recursive_close_request(
             &exchange, &state, &bot, &params, &position, &trailing, 0.0, 101.55,
         );
-        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = 0.01;
+        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_fraction = 0.01;
         let buffered = generate_orders(StrategySide::Long, buffered_request);
         assert_eq!(buffered.closes.len(), 1);
     }
@@ -517,7 +517,7 @@ mod tests {
         let mut buffered_request = recursive_close_request(
             &exchange, &state, &bot, &params, &position, &trailing, 98.05, 200.0,
         );
-        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = 0.01;
+        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_fraction = 0.01;
         let buffered = generate_orders(StrategySide::Short, buffered_request);
         assert_eq!(buffered.closes.len(), 1);
     }

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Align native execution inputs with explicit equity-floor, near-touch, slippage and fill-buffer
+  fractions. Preserve execution math, native buffer layouts and omitted optional defaults;
+  reject retired raw backtest packet keys instead of silently using different defaults.
+
 - Align native unstuck fields and optimizer IDs with explicit fractions, exposure ratios and
   minute spans; name the native account loss gate `loss_gate_max_drawdown_fraction`.
   Unstuck status fields use matching fraction names. Numeric behavior, signed fees and GPU

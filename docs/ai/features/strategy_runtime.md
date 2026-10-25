@@ -375,6 +375,13 @@ on Rust's `0.0` serde default for live loss projections. Live market-order execu
 current bid/ask snapshot plus exchange-side behavior, controlled by `bot.portfolio.execution.market_orders_allowed`
 and `bot.portfolio.execution.market_order_near_touch_fraction`.
 
+Native execution inputs use `equity_floor_fraction`, `market_order_near_touch_fraction`,
+`market_order_slippage_fraction` and `limit_order_fill_buffer_fraction`. Values and buffer
+positions are unchanged. The raw backtest boundary rejects retired execution keys and
+`max_realized_loss_pct`, even when the corresponding current key is also supplied; an old
+policy must not silently disappear into an optional default. Omitted current optional fields
+retain their existing defaults. Released-v8 config conversion remains a separate explicit step.
+
 ## Close Recursion Contract
 
 Close orders are computed recursively when the close threshold depends on wallet exposure:

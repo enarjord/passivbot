@@ -17957,7 +17957,7 @@ class Passivbot:
                     side: minimum_cost_filter(self.config, side) for side in ("long", "short")
                 },
                 "market_orders_allowed": bool(require_config_value(self.config, 'bot.portfolio.execution.market_orders_allowed')),
-                "market_order_near_touch_threshold": float(
+                "market_order_near_touch_fraction": float(
                     require_config_value(self.config, 'bot.portfolio.execution.market_order_near_touch_fraction')
                 ),
                 "panic_close_market": False,

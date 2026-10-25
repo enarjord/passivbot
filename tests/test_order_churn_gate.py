@@ -121,7 +121,7 @@ def _raw_rust_input(
         "strategy_kind": "trailing_martingale",
         "auto_unstuck_allowed": True,
         "market_orders_allowed": False,
-        "market_order_near_touch_threshold": 0.001,
+        "market_order_near_touch_fraction": 0.001,
         "panic_close_market": False,
         "loss_gate_max_drawdown_fraction": 0.1,
         "global_bot_params": {
@@ -2163,14 +2163,14 @@ def test_raw_rust_output_accepts_step_aligned_entry_at_effective_minimum():
 
 
 @pytest.mark.parametrize(
-    ("pside", "qty", "price", "near_touch_threshold"),
+    ("pside", "qty", "price", "near_touch_fraction"),
     [
         ("long", 0.001, 10_000.0, 0.001),
         ("short", -0.001, 10_000.0, 100.0),
     ],
 )
 def test_raw_rust_output_rejects_market_entry_below_minimum_at_submitted_touch(
-    pside, qty, price, near_touch_threshold
+    pside, qty, price, near_touch_fraction
 ):
     order = _raw_rust_order(
         pside=pside,
@@ -2192,7 +2192,7 @@ def test_raw_rust_output_rejects_market_entry_below_minimum_at_submitted_touch(
                 ask=100.0,
                 min_cost=10.0,
                 market_orders_allowed=True,
-                market_order_near_touch_threshold=near_touch_threshold,
+                market_order_near_touch_fraction=near_touch_fraction,
             ),
         )
 

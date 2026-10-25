@@ -1252,7 +1252,7 @@ def test_prepare_config_preserves_live_custom_endpoints_path():
     "field,value",
     [
         ("market_orders_allowed", False),
-        ("market_order_near_touch_threshold", 0.0),
+        ("market_order_near_touch_fraction", 0.0),
         ("lookback_ema_span_minutes", 0.0),
         ("realized_loss_gate_lookback_minutes", 0.0),
     ],
@@ -1273,8 +1273,8 @@ def test_prepare_config_rejects_backtest_inherited_live_fields(field, value):
 
 def test_prepare_config_rejects_legacy_backtest_market_slippage_key():
     source = get_template_config()
-    source["backtest"]["panic_market_slippage_pct"] = 0.0015
-    with pytest.raises(ValueError, match="panic_market_slippage_pct.*unknown configuration field"):
+    source["backtest"]["panic_market_slippage_fraction"] = 0.0015
+    with pytest.raises(ValueError, match="panic_market_slippage_fraction.*unknown configuration field"):
         prepare_config(source, verbose=False)
 
 

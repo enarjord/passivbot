@@ -447,7 +447,7 @@ def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
     args[0][70:] *= np.array([0.5, 0.5, 0.5, 1.0])
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
         policy["enabled"] = False
-    args[-1]["liquidation_threshold"] = 0.99
+    args[-1]["equity_floor_fraction"] = 0.99
     result = run(args)
     assert result[2]["liquidated"]
     assert 0 < len(result[1]) < len(args[0]) - 3

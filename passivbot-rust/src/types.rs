@@ -388,12 +388,12 @@ pub struct BacktestParams {
     pub loss_gate_max_drawdown_fraction: f64,
     pub unstuck_memory_ema_span_minutes: f64,
     pub loss_gate_memory_ema_span_minutes: f64,
-    pub liquidation_threshold: f64,
+    pub equity_floor_fraction: f64,
     pub equity_hard_stop_loss: EquityHardStopLossConfig,
     pub market_orders_allowed: bool,
-    pub market_order_near_touch_threshold: f64,
-    pub market_order_slippage_pct: f64,
-    pub limit_order_fill_buffer_pct: f64,
+    pub market_order_near_touch_fraction: f64,
+    pub market_order_slippage_fraction: f64,
+    pub limit_order_fill_buffer_fraction: f64,
     pub forager_score_hysteresis: ForagerScoreHysteresis,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }

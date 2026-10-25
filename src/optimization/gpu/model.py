@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from config.validate import validate_limit_order_fill_buffer_pct
+from config.validate import validate_limit_order_fill_buffer_fraction
 
 GAP_BINS = 512
 GAP_MAX_MINUTES = 4_000_000.0
@@ -490,7 +490,7 @@ class ProxyRun:
     guard_ts_ms: int
     first_ts_ms: int
     interval_ms: int
-    liquidation_threshold: float
+    equity_floor_fraction: float
     first_valid_idx: int
     last_valid_idx: int
     requested_end_ts_ms: int | None = None
@@ -572,7 +572,7 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
 
 
 def _strict_fill_tick_boundaries(
-    high, low, price_step: float, limit_order_fill_buffer_pct: float = 0.0
+    high, low, price_step: float, limit_order_fill_buffer_fraction: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Encode Rust's strict candle/order comparisons as integer tick boundaries."""
 
@@ -585,7 +585,7 @@ def _strict_fill_tick_boundaries(
     finite = np.isfinite(high) & np.isfinite(low)
     safe_high = np.where(finite, high, 0.0)
     safe_low = np.where(finite, low, 0.0)
-    buffer = validate_limit_order_fill_buffer_pct(limit_order_fill_buffer_pct)
+    buffer = validate_limit_order_fill_buffer_fraction(limit_order_fill_buffer_fraction)
     sell_factor, buy_factor = 1.0 + buffer, 1.0 - buffer
     # Solve the strict Rust price comparisons once, before uploading immutable
     # ticks. Kernels, raw candles, and market-order touch prices stay unchanged.
@@ -818,22 +818,22 @@ def _require_contiguous_mps_hlc(high, low, close, run: ProxyRun, *, coin: int = 
 
 
 
-def validate_market_order_slippage_pct(value):
+def validate_market_order_slippage_fraction(value):
     value = float(value)
     if not np.isfinite(value) or value < 0.0:
-        raise ValueError("market_order_slippage_pct must be finite and non-negative")
+        raise ValueError("market_order_slippage_fraction must be finite and non-negative")
     return value
 
 
 def _pack_multicoin_price_arrays(values, markets, relation_dtype, fill_buffer,
-                                 runs, market_order_slippage_pct, row_offset=0):
+                                 runs, market_order_slippage_fraction, row_offset=0):
     from passivbot_rust import prepare_gpu_market_execution_ticks
 
     candle_count, coin_count = values.shape[:2]
     market_execution_ticks = prepare_gpu_market_execution_ticks(
         np.asarray(values[:, :, 2], dtype=np.float64),
         [float(market.price_step) for market in markets],
-        market_order_slippage_pct,
+        market_order_slippage_fraction,
         [int(run.first_valid_idx) for run in runs],
         [int(run.last_valid_idx) for run in runs],
         row_offset,
@@ -875,7 +875,7 @@ def _pack_multicoin_price_arrays(values, markets, relation_dtype, fill_buffer,
 
 
 def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
-                          fill_buffer, market_order_slippage_pct,
+                          fill_buffer, market_order_slippage_fraction,
                           include_hourly_ranges, directory, *, compact_hourly_ranges=False):
     from contextlib import ExitStack
     from tempfile import TemporaryDirectory
@@ -930,7 +930,7 @@ def _spill_multicoin_arrays(values, timestamps, runs, markets, relation_dtype,
             end = min(start + chunk_rows, n)
             arrays, costs = _pack_multicoin_price_arrays(
                 values[start:end], markets, relation_dtype, fill_buffer,
-                runs, market_order_slippage_pct, row_offset=start,
+                runs, market_order_slippage_fraction, row_offset=start,
             )
             max_costs = np.maximum(max_costs, costs)
             if include_hourly_ranges and not compact_hourly_ranges:
@@ -975,8 +975,8 @@ def build_mps_multicoin_data(
     markets: list[ProxyMarket],
     *,
     include_hourly_ranges: bool = True,
-    limit_order_fill_buffer_pct: float = 0.0,
-    market_order_slippage_pct: float = 0.0,
+    limit_order_fill_buffer_fraction: float = 0.0,
+    market_order_slippage_fraction: float = 0.0,
     spill_dir=None,
     stream_tick_inputs=False,
     compact_hourly_ranges=False,
@@ -1000,7 +1000,7 @@ def build_mps_multicoin_data(
         ) from exc
 
     values = np.asarray(hlcvs)
-    market_order_slippage_pct = validate_market_order_slippage_pct(market_order_slippage_pct)
+    market_order_slippage_fraction = validate_market_order_slippage_fraction(market_order_slippage_fraction)
     if values.ndim != 3 or values.shape[2] < 4:
         raise ValueError(
             "MPS multicoin proxy expects HLCVs shaped (candles, coins, >=4); "
@@ -1076,13 +1076,13 @@ def build_mps_multicoin_data(
     if spill_dir is not None:
         arrays, max_costs, first_hour_observed = _spill_multicoin_arrays(
             values, timestamps, runs, markets, relation_dtype,
-            limit_order_fill_buffer_pct, market_order_slippage_pct,
+            limit_order_fill_buffer_fraction, market_order_slippage_fraction,
             include_hourly_ranges, spill_dir, compact_hourly_ranges=compact_hourly_ranges,
         )
     else:
         arrays, max_costs = _pack_multicoin_price_arrays(
-            values, markets, relation_dtype, limit_order_fill_buffer_pct,
-            runs, market_order_slippage_pct,
+            values, markets, relation_dtype, limit_order_fill_buffer_fraction,
+            runs, market_order_slippage_fraction,
         )
         if include_hourly_ranges:
             hourly = np.full((candle_count, coin_count), -1.0, dtype=np.float32)
@@ -1157,7 +1157,7 @@ def build_mps_multicoin_data(
         "hourly_range_rows": (compact_hourly_rows(candle_count, start_minute_of_hour=start_minute_of_hour)
                               if compact_hourly_ranges else candle_count),
         "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
-        "market_order_slippage_pct": market_order_slippage_pct,
+        "market_order_slippage_fraction": market_order_slippage_fraction,
         # Compact factual admission metadata, retained on the host even when
         # invariant tensors are spilled or moved between GPU datasets.
         "hourly_first_observed": tuple(map(int, first_hour_observed)),

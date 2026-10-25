@@ -189,7 +189,7 @@ inline bool should_use_ordinary_market_execution(
     float market_price,
     float price_step,
     bool market_orders_allowed,
-    float near_touch_threshold
+    float near_touch_fraction
 ) {
     if (!market_orders_allowed || order_ticks <= 0
         || !(market_price > 0.0f) || !isfinite(market_price)) {
@@ -200,7 +200,7 @@ inline bool should_use_ordinary_market_execution(
         return true;
     }
     return fabs(order_price / market_price - 1.0f)
-        <= fmax(near_touch_threshold, 0.0f);
+        <= fmax(near_touch_fraction, 0.0f);
 }
 
 inline int market_execution_tick_at(

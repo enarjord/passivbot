@@ -57,7 +57,7 @@ def _inputs(*, target=2.0, debt_cap=0.975):
         bot["enabled"] = side == "long"
         bot["universe"].update(minimum_coin_age_days=0.0, filter_by_min_effective_cost=False)
         bot["hsl"]["enabled"] = False
-        bot["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+        bot["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
         bot["strategy"]["ema_anchor"].update(
             base_qty_fraction=0.1, ema_span_0_minutes=1.0, ema_span_1_minutes=1.0,
             entry_double_down_factor=0.0, offset_fraction=0.1,
@@ -81,10 +81,9 @@ def test_native_transport_keeps_leverage_signed_fees_and_debt_sentinels(debt_cap
     assert native["btc_collateral_ltv_cap"] == debt_cap
     assert native["maker_fee"] == exchange_params[0]["maker_fee"] == -0.000125
     assert native["taker_fee"] == exchange_params[0]["taker_fee"] == 0.000375
-    assert native["liquidation_threshold"] == 0.07125
+    assert native["equity_floor_fraction"] == 0.07125
     assert not {"btc_collateral_target_ratio", "max_usd_debt_to_equity_ratio",
-                "maker_fee_override_fraction", "taker_fee_override_fraction",
-                "equity_floor_fraction"}.intersection(native)
+                "maker_fee_override_fraction", "taker_fee_override_fraction"}.intersection(native)
     assert config == before
 
 

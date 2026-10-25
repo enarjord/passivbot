@@ -3457,7 +3457,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
     await bot.calc_ideal_orders_orchestrator()
 
     assert "backtest" not in bot.config
-    assert "market_order_slippage_pct" not in captured["input"]["global"]
+    assert "market_order_slippage_fraction" not in captured["input"]["global"]
     assert call_order == ["ema_bundle", "market_snapshot"]
     assert snapshot_calls == [([symbol], 5_000)]
     assert cm_calls == []

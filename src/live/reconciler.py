@@ -1445,8 +1445,8 @@ def _expected_rust_execution_type(
     if (qty > 0.0 and price >= market_price) or (qty < 0.0 and price <= market_price):
         return "market"
     threshold = _validated_rust_finite_number(
-        global_input.get("market_order_near_touch_threshold", 0.001),
-        "global input has invalid market_order_near_touch_threshold",
+        global_input.get("market_order_near_touch_fraction", 0.001),
+        "global input has invalid market_order_near_touch_fraction",
     )
     price_diff = abs(price / market_price - 1.0)
     return "market" if price_diff <= max(threshold, 0.0) else "limit"

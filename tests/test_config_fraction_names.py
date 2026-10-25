@@ -100,8 +100,8 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
     market = dict(maker=0.0002, taker=0.0005, qty_step=0.001, price_step=0.01,
                   min_qty=0.001, min_cost=1.0, c_mult=1.0)
     *_, payload = prep_backtest_args(config, {"BTC": market}, "binance")
-    assert payload["market_order_slippage_pct"] == 0.00073
-    assert payload["limit_order_fill_buffer_pct"] == 0.00051
+    assert payload["market_order_slippage_fraction"] == 0.00073
+    assert payload["limit_order_fill_buffer_fraction"] == 0.00051
     assert payload["forager_score_hysteresis"] == {"long": 0.037, "short": 0.037}
     assert source == original
 

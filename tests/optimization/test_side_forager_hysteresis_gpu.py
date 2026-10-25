@@ -128,7 +128,7 @@ def test_replay_checkpoint_policy_changes_for_either_fixed_margin(side):
     assert initial["backtest"]["forager_score_hysteresis"][side] != policy[side]
 
 
-@pytest.mark.parametrize("field", ["loss_gate_max_drawdown_fraction", "market_order_near_touch_threshold"])
+@pytest.mark.parametrize("field", ["loss_gate_max_drawdown_fraction", "market_order_near_touch_fraction"])
 def test_explicit_neutral_pair_preserves_other_runner_validation(monkeypatch, field):
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(ValueError, match=field):

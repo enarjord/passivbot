@@ -298,8 +298,8 @@ def test_disk_packing_and_activation_preserve_every_eager_array(runtime, hourly,
         return build_mps_multicoin_data(
             values, timestamps, runs=[run, replace(run, first_valid_idx=3, last_valid_idx=count - 3)], markets=[market] * 2,
             include_hourly_ranges=hourly, spill_dir=directory,
-            limit_order_fill_buffer_pct=fill_buffer,
-            market_order_slippage_pct=0.0005,
+            limit_order_fill_buffer_fraction=fill_buffer,
+            market_order_slippage_fraction=0.0005,
         )
     manager = CudaSuiteResidency()
     try:

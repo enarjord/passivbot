@@ -87,7 +87,7 @@ def _validate_startup_phase_budgets(live_config: dict) -> None:
                 raise ValueError(f"{value_path} must be >= 0")
 
 
-def validate_limit_order_fill_buffer_pct(value) -> float:
+def validate_limit_order_fill_buffer_fraction(value) -> float:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -128,7 +128,7 @@ def validate_config(
         raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
-    validate_limit_order_fill_buffer_pct(
+    validate_limit_order_fill_buffer_fraction(
         config["backtest"]["limit_order_fill_buffer_fraction"]
     )
     from .ew import validate_ew_config

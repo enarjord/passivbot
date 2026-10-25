@@ -166,7 +166,7 @@ def test_exports_retain_explicit_portfolio_policy_values_and_side_independence(m
 def test_released_v8_selectors_land_directly_at_portfolio_paths_and_are_reported(owner):
     source = released_v8_policy()
     old = {"live.hedge_mode": True, "live.warmup_ratio": 0.625,
-           "live.market_order_near_touch_threshold": 0.0125}
+           "live.market_order_near_touch_fraction": 0.0125}
     if owner == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = old
     else:
