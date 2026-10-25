@@ -82,13 +82,13 @@ alpha(span)         = 2 / (span + 1)
 entry_threshold_vol_term =
     volatility_ema_1h * entry.threshold_volatility_1h_weight
   + volatility_ema_1m * entry.threshold_volatility_1m_weight
-entry_threshold_we_term = (wel / wel_base) * entry.threshold_we_weight
+entry_threshold_we_term = (wel / wel_allowed) * entry.threshold_exposure_ratio_coefficient
 entry_threshold_multiplier = max(1, 1 + entry_threshold_vol_term + entry_threshold_we_term)
 
 entry_retracement_vol_term =
     volatility_ema_1h * entry.retracement_volatility_1h_weight
   + volatility_ema_1m * entry.retracement_volatility_1m_weight
-entry_retracement_we_term = (wel / wel_base) * entry.retracement_we_weight
+entry_retracement_we_term = (wel / wel_allowed) * entry.retracement_exposure_ratio_coefficient
 entry_retracement_multiplier = max(1, 1 + entry_retracement_vol_term + entry_retracement_we_term)
 
 initial_price(pside) =
@@ -117,15 +117,17 @@ if entry.ema_gate_mode gates re-entries:
     next_entry_price(long)  = min(next_entry_price(long), EMA_low * (1 - entry_initial_ema_dist))
     next_entry_price(short) = max(next_entry_price(short), EMA_high * (1 + entry_initial_ema_dist))
 
-next_entry_qty(last_fill_qty) =
-    last_fill_qty * entry.double_down_factor
+next_entry_qty(pos.size) =
+    max(min_entry_qty,
+        initial_entry_qty_at_reentry_price,
+        abs(pos.size) * entry.reentry_qty_multiplier)
 ```
 
 * Re-entry orders are generated until the wallet exposure implied by the next order would exceed
   `wel_allowed` (base WEL plus the TWEL-capped excess allowance, plus safeguards).
-* `entry.double_down_factor > 0` multiplies each successive re-entry quantity; values
-  `< 1` still increase size if the preceding fill was larger than the remaining gap to the
-  exposure cap.
+* `entry.reentry_qty_multiplier` scales the additional re-entry quantity from the absolute
+  current position quantity. One adds a quantity equal to the current position, before the
+  minimum/initial sizing floors, exchange rounding, and exposure cap.
 * When `entry.retracement_base_fraction <= 0`, re-entries are passive recursive limit orders.
 * When `entry.retracement_base_fraction > 0`, the threshold condition must be reached first and the
   order is emitted after retracement confirmation.
@@ -145,7 +147,7 @@ state from 1m OHLCVs and does not use exchange-native trailing order types.
 ```text
 close_threshold =
     close.threshold_base_fraction
-  + (wel / wel_base) * close.threshold_we_weight
+  + (wel / wel_allowed) * close.threshold_exposure_ratio_coefficient
   + volatility_ema_1h * close.threshold_volatility_1h_weight
   + volatility_ema_1m * close.threshold_volatility_1m_weight
 
@@ -170,10 +172,10 @@ else:
         low_since_high <= high_since_open * (1 - close_retracement)
 ```
 
-Close orders are recursive when `close.threshold_we_weight != 0`: compute a slice up to
+Close orders are recursive when `close.threshold_exposure_ratio_coefficient != 0`: compute a slice up to
 `close.qty_fraction`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
 exhausted or the close ladder is complete. If `close.retracement_base_fraction <= 0` and
-`close.threshold_we_weight == 0`, all recursive closes would have the same price, so Rust emits one
+`close.threshold_exposure_ratio_coefficient == 0`, all recursive closes would have the same price, so Rust emits one
 full-position close instead of redundant same-price slices. The removed v7
 `close_grid_markup_start` / `close_grid_markup_end` linear TP grid is intentionally not part of the
 V8 strategy contract.

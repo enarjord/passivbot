@@ -123,10 +123,10 @@
                         "threshold_base_fraction": 0.006,
                         "threshold_volatility_1h_weight": 1.0,
                         "threshold_volatility_1m_weight": 0.0,
-                        "threshold_we_weight": -0.004
+                        "threshold_exposure_ratio_coefficient": -0.004
                     },
                     "entry": {
-                        "double_down_factor": 0.73,
+                        "reentry_qty_multiplier": 0.73,
                         "ema_gate_mode": "all",
                         "ema_span_0_minutes": 770,
                         "ema_span_1_minutes": 210,
@@ -135,11 +135,11 @@
                         "retracement_base_fraction": 0.0,
                         "retracement_volatility_1h_weight": 0.0,
                         "retracement_volatility_1m_weight": 0.0,
-                        "retracement_we_weight": 0.0,
+                        "retracement_exposure_ratio_coefficient": 0.0,
                         "threshold_base_fraction": 0.033,
                         "threshold_volatility_1h_weight": 2.4,
                         "threshold_volatility_1m_weight": 0.0,
-                        "threshold_we_weight": 0.135
+                        "threshold_exposure_ratio_coefficient": 0.135
                     },
                     "volatility_ema_span_1h_candles": 1690,
                     "volatility_ema_span_minutes": 60.0
@@ -222,10 +222,10 @@
                         "threshold_base_fraction": 0.006,
                         "threshold_volatility_1h_weight": 1.0,
                         "threshold_volatility_1m_weight": 0.0,
-                        "threshold_we_weight": -0.004
+                        "threshold_exposure_ratio_coefficient": -0.004
                     },
                     "entry": {
-                        "double_down_factor": 0.5,
+                        "reentry_qty_multiplier": 0.5,
                         "ema_gate_mode": "all",
                         "ema_span_0_minutes": 100,
                         "ema_span_1_minutes": 100,
@@ -234,11 +234,11 @@
                         "retracement_base_fraction": 0.0,
                         "retracement_volatility_1h_weight": 0.0,
                         "retracement_volatility_1m_weight": 0.0,
-                        "retracement_we_weight": 0.0,
+                        "retracement_exposure_ratio_coefficient": 0.0,
                         "threshold_base_fraction": 0.025,
                         "threshold_volatility_1h_weight": 1.0,
                         "threshold_volatility_1m_weight": 0.0,
-                        "threshold_we_weight": 0.0
+                        "threshold_exposure_ratio_coefficient": 0.0
                     },
                     "volatility_ema_span_1h_candles": 672,
                     "volatility_ema_span_minutes": 60.0
@@ -402,10 +402,10 @@
                             "threshold_base_fraction": [-0.02, 0.02, 1e-05],
                             "threshold_volatility_1h_weight": [0, 40, 0.1],
                             "threshold_volatility_1m_weight": [0, 40, 0.1],
-                            "threshold_we_weight": [-0.05, 0.05, 0.0001]
+                            "threshold_exposure_ratio_coefficient": [-0.05, 0.05, 0.0001]
                         },
                         "entry": {
-                            "double_down_factor": [0.5, 1, 0.01],
+                            "reentry_qty_multiplier": [0.5, 1, 0.01],
                             "ema_span_0_minutes": [200, 1440, 10],
                             "ema_span_1_minutes": [200, 1440, 10],
                             "initial_ema_distance_fraction": [-0.01, 0.01, 0.0001],
@@ -413,11 +413,11 @@
                             "retracement_base_fraction": [0, 0.015, 1e-05],
                             "retracement_volatility_1h_weight": [0, 40, 0.1],
                             "retracement_volatility_1m_weight": [0, 40, 0.1],
-                            "retracement_we_weight": [0, 5, 0.001],
+                            "retracement_exposure_ratio_coefficient": [0, 5, 0.001],
                             "threshold_base_fraction": [0, 0.04, 1e-05],
                             "threshold_volatility_1h_weight": [0, 40, 0.1],
                             "threshold_volatility_1m_weight": [0, 40, 0.1],
-                            "threshold_we_weight": [0, 5, 0.001]
+                            "threshold_exposure_ratio_coefficient": [0, 5, 0.001]
                         },
                         "volatility_ema_span_1h_candles": [672, 2016, 1],
                         "volatility_ema_span_minutes": [5, 720, 1]
@@ -466,10 +466,10 @@
                             "threshold_base_fraction": [-0.02, 0.02, 1e-05],
                             "threshold_volatility_1h_weight": [0, 40, 0.1],
                             "threshold_volatility_1m_weight": [0, 40, 0.1],
-                            "threshold_we_weight": [-0.05, 0.05, 0.0001]
+                            "threshold_exposure_ratio_coefficient": [-0.05, 0.05, 0.0001]
                         },
                         "entry": {
-                            "double_down_factor": [0.5, 1, 0.01],
+                            "reentry_qty_multiplier": [0.5, 1, 0.01],
                             "ema_span_0_minutes": [200, 1440, 10],
                             "ema_span_1_minutes": [200, 1440, 10],
                             "initial_ema_distance_fraction": [-0.01, 0.01, 0.0001],
@@ -477,11 +477,11 @@
                             "retracement_base_fraction": [0, 0.015, 1e-05],
                             "retracement_volatility_1h_weight": [0, 40, 0.1],
                             "retracement_volatility_1m_weight": [0, 40, 0.1],
-                            "retracement_we_weight": [0, 5, 0.001],
+                            "retracement_exposure_ratio_coefficient": [0, 5, 0.001],
                             "threshold_base_fraction": [0, 0.04, 1e-05],
                             "threshold_volatility_1h_weight": [0, 40, 0.1],
                             "threshold_volatility_1m_weight": [0, 40, 0.1],
-                            "threshold_we_weight": [0, 5, 0.001]
+                            "threshold_exposure_ratio_coefficient": [0, 5, 0.001]
                         },
                         "volatility_ema_span_1h_candles": [672, 2016, 1],
                         "volatility_ema_span_minutes": [5, 720, 1]

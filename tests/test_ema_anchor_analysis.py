@@ -39,7 +39,7 @@ def _ema_anchor_config() -> dict:
                         "offset_volatility_1m_weight": 0.5,
                         "offset_volatility_ema_span_1h_candles": 2.0,
                         "offset_volatility_1h_weight": 0.25,
-                        "offset_psize_weight": 0.2,
+                        "inventory_offset_exposure_coefficient": 0.2,
                     }
                 }
             },
@@ -54,7 +54,7 @@ def _ema_anchor_config() -> dict:
                         "offset_volatility_1m_weight": 0.5,
                         "offset_volatility_ema_span_1h_candles": 2.0,
                         "offset_volatility_1h_weight": 0.25,
-                        "offset_psize_weight": 0.1,
+                        "inventory_offset_exposure_coefficient": 0.1,
                     }
                 }
             },

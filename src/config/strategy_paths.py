@@ -15,10 +15,14 @@ STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]
         ("volatility_ema_span_1h",): ("volatility_ema_span_1h_candles",),
         ("entry", "initial_qty_pct"): ("entry", "initial_qty_fraction"),
         ("entry", "initial_ema_dist"): ("entry", "initial_ema_distance_fraction"),
+        ("entry", "double_down_factor"): ("entry", "reentry_qty_multiplier"),
+        ("entry", "threshold_we_weight"): ("entry", "threshold_exposure_ratio_coefficient"),
+        ("entry", "retracement_we_weight"): ("entry", "retracement_exposure_ratio_coefficient"),
         ("entry", "threshold_base_pct"): ("entry", "threshold_base_fraction"),
         ("entry", "retracement_base_pct"): ("entry", "retracement_base_fraction"),
         ("close", "qty_pct"): ("close", "qty_fraction"),
         ("close", "threshold_base_pct"): ("close", "threshold_base_fraction"),
+        ("close", "threshold_we_weight"): ("close", "threshold_exposure_ratio_coefficient"),
         ("close", "retracement_base_pct"): ("close", "retracement_base_fraction"),
     },
     "ema_anchor": {
@@ -28,6 +32,8 @@ STRATEGY_NATIVE_TO_PUBLIC_PATHS: dict[str, dict[tuple[str, ...], tuple[str, ...]
         ("offset_volatility_ema_span_1h",): ("offset_volatility_ema_span_1h_candles",),
         ("base_qty_pct",): ("base_qty_fraction",),
         ("offset",): ("offset_fraction",),
+        ("entry_double_down_factor",): ("entry_qty_exposure_coefficient",),
+        ("offset_psize_weight",): ("inventory_offset_exposure_coefficient",),
     },
 }
 

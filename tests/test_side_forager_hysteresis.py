@@ -138,11 +138,11 @@ def replay_inputs(kind, topology, margins):
         band.update(ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
         if kind == "ema_anchor":
             strategy.update(base_qty_fraction=0.01, offset_fraction=0.01,
-                            offset_psize_weight=0.0, offset_volatility_1m_weight=0.0,
-                            offset_volatility_1h_weight=0.0, entry_double_down_factor=0.0)
+                            inventory_offset_exposure_coefficient=0.0, offset_volatility_1m_weight=0.0,
+                            offset_volatility_1h_weight=0.0, entry_qty_exposure_coefficient=0.0)
         else:
             strategy["entry"].update(initial_qty_fraction=0.01, initial_ema_distance_fraction=0.01,
-                                      double_down_factor=0.0, threshold_base_fraction=0.01,
+                                      reentry_qty_multiplier=0.0, threshold_base_fraction=0.01,
                                       retracement_base_fraction=0.0)
             for leg in ("entry", "close"):
                 for name in ("threshold_volatility_1h_weight", "retracement_volatility_1h_weight",

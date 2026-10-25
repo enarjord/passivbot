@@ -41,11 +41,11 @@ def config():
     strategy = side["strategy"]["trailing_martingale"]
     strategy["entry"].update(
         initial_qty_fraction=0.1,
-        double_down_factor=1.0,
+        reentry_qty_multiplier=1.0,
         threshold_base_fraction=0.03,
-        threshold_we_weight=5.0,
+        threshold_exposure_ratio_coefficient=5.0,
         retracement_base_fraction=0.001,
-        retracement_we_weight=0.1,
+        retracement_exposure_ratio_coefficient=0.1,
         threshold_volatility_1m_weight=0,
         threshold_volatility_1h_weight=0,
         retracement_volatility_1m_weight=0,
@@ -53,7 +53,7 @@ def config():
     )
     strategy["close"].update(
         threshold_base_fraction=0.01,
-        threshold_we_weight=-0.005,
+        threshold_exposure_ratio_coefficient=-0.005,
         threshold_volatility_1m_weight=0,
         threshold_volatility_1h_weight=0,
         retracement_base_fraction=0.002,
@@ -139,7 +139,7 @@ def test_grid_span_checks_both_bounds_and_incomplete_ladders(
 ):
     candidate = config()
     entry = candidate["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]
-    entry.update(threshold_we_weight=0, retracement_base_fraction=0, initial_ema_distance_fraction=0)
+    entry.update(threshold_exposure_ratio_coefficient=0, retracement_base_fraction=0, initial_ema_distance_fraction=0)
     entry["threshold_base_fraction"] = 0.0001
     assert config_prefilter(candidate, policy("grid_span", min=0.1, max=0.35)) > 0
     entry["threshold_base_fraction"] = 0.05
@@ -187,7 +187,7 @@ def test_trailing_grid_completes_on_both_sides(
     set_side_universe_sources(candidate, 'approved_coins', {"long": [], "short": []})
     candidate['bot'][side]['universe']['approved_coins'] = ["TEST"]
     entry = candidate["bot"][side]["strategy"]["trailing_martingale"]["entry"]
-    entry.update(threshold_base_fraction=0.03, threshold_we_weight=0, initial_ema_distance_fraction=0)
+    entry.update(threshold_base_fraction=0.03, threshold_exposure_ratio_coefficient=0, initial_ema_distance_fraction=0)
     params = policy("grid_span", min=100)
     params["checks"][0]["sides"] = [side]
     constraint, findings = inspect_config_prefilter(candidate, params)

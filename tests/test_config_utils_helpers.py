@@ -1548,14 +1548,14 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
 
     args = SimpleNamespace()
     vars(args)[
-        "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
+        "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient"
     ] = -0.012
 
     update_config_with_args(source_config, args, verbose=False)
 
     assert (
         source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_we_weight"
+            "threshold_exposure_ratio_coefficient"
         ]
         == -0.012
     )
@@ -1564,7 +1564,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     diff = entry["details"]["diffs"][0]
     assert (
         diff["path"]
-        == "bot.long.strategy.trailing_martingale.close.threshold_we_weight"
+        == "bot.long.strategy.trailing_martingale.close.threshold_exposure_ratio_coefficient"
     )
     assert diff["old"] is None
     assert diff["new"] == -0.012
@@ -1577,7 +1577,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
     )
     assert (
         prepared["bot"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "threshold_we_weight"
+            "threshold_exposure_ratio_coefficient"
         ]
         == -0.012
     )

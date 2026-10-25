@@ -20,6 +20,9 @@ before backtesting a proposed replacement.
 | HSL `ema_span_minutes` | `drawdown_fraction_ema_span_minutes` in the same policy |
 | HSL `cooldown_minutes_after_red` | `cooldown_after_red_minutes` in the same policy |
 | Strategy and unstuck `ema_span_0`, `ema_span_1` | `ema_span_0_minutes`, `ema_span_1_minutes`; trailing-martingale spans live under `entry` |
+| TM `entry.double_down_factor` | `entry.reentry_qty_multiplier`, scaling the absolute current position quantity for an additional entry |
+| TM `entry.threshold_we_weight`, `entry.retracement_we_weight`, `close.threshold_we_weight` | Same role names ending in `_exposure_ratio_coefficient`; values and formulas are unchanged |
+| EMA-anchor `entry_double_down_factor`, `offset_psize_weight` | `entry_qty_exposure_coefficient`, `inventory_offset_exposure_coefficient`; same-side sizing and signed inventory shifts retain their original formulas |
 | Forager/strategy `*_ema_span_1m` | `*_ema_span_minutes`, with the same floating minute horizon |
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
