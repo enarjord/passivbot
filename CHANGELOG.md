@@ -8,6 +8,7 @@ since the latest release tag; these features may already be available when insta
 
 - Align native strategy sizing, price fractions and exposure coefficients with the authored
   configuration names, including optimizer IDs, calculator keywords and trailing diagnostics.
+  Trailing-inspector exposure sensitivities use `--*-exposure-ratio-coefficient` flags.
   Numeric values, calculator argument positions and GPU parameter columns are unchanged.
   Released-v8 conversion retains its frozen source vocabulary; earlier dev-v9 native names
   are unsupported.
