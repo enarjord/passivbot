@@ -19,7 +19,7 @@
    multiplicative, close threshold terms are additive, and close retracement has no wallet-exposure
    term.
 7. A positional config path defaults to a both-sides scenario overview. The overview uses explicit
-   example volatility and exposure-ratio inputs, a configurable price anchor, and descriptive
+   example logarithmic high/low ranges and exposure-ratio inputs, a configurable price anchor, and descriptive
    behavior categories. It must distinguish dormant sides, threshold-gated versus immediately
    armed trailing, passive ladders, entry cooldown staging, and recursive closes without claiming
    that a category predicts profitability.

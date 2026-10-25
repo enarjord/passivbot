@@ -43,8 +43,9 @@ For portfolio HSL risk stress and a three-objective materiality measurement:
 ```sh
 passivbot tool gpu-cohort-benchmark --seeds 7 43 --coins 2 --bars 3000 \
   --candidates 16 --warm-runs 1 --widths 16 auto --hsl portfolio \
-  --hsl-red-threshold 0.002 --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
-  --lookback-ema-span-minutes 1440.0 \
+  --hsl-drawdown-threshold-fraction 0.002 --hsl-drawdown-fraction-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
+  --hsl-memory-ema-span-minutes 1440.0 \
+  --unstuck-memory-ema-span-minutes 1440.0 --loss-gate-memory-ema-span-minutes 1440.0 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
   --objective adg_fraction_strategy_equity max --objective drawdown_max_fraction_strategy_equity min \
   --objective hsl_red_time_fraction min \

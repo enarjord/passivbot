@@ -215,9 +215,13 @@ Trailing-martingale price spans belong to `entry.ema_span_0_minutes` and `entry.
 Final v9 loading rejects the old
 strategy-root leaves. The explicit released-v8 converter moves them before independently
 authored file/inline patches merge and rejects conflicting values within one authored layer.
-Public optimizer bounds share the nested paths; internal optimizer keys and Metal columns retain
-`ema_span_0/1`. Entry subtree selectors include the horizons. EMA-anchor price spans retain their
-strategy-root paths. Volatility horizons remain shared by entries and closes.
+Public optimizer bounds share the nested paths. Native optimizer IDs use `entry_ema_span_0_minutes` / `entry_ema_span_1_minutes` for Trailing Martingale and
+`ema_span_0_minutes` / `ema_span_1_minutes` for EMA Anchor. Entry subtree selectors include
+the Trailing Martingale horizons. EMA Anchor price spans retain their strategy-root paths.
+Log-range horizons remain shared by entries and closes. GPU preparation scales minute-valued
+horizons to candle counts for kernels that consume them; decoded Metal fields use
+`entry_ema_span_0_candles` / `entry_ema_span_1_candles` or `ema_span_0_candles` /
+`ema_span_1_candles` accordingly, preserving the parameter-column positions.
 
 Entries and closes use threshold/retracement fields.
 

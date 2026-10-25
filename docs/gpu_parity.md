@@ -48,12 +48,13 @@ and minimum-effective-cost filtering are explicit options. These toggles exercis
 configuration paths; enabling a controller does not prove that a particular fixture
 triggers its transitions. Add targeted stress fixtures for behavioral coverage.
 
-Fixture-only `--hsl-red-threshold`, `--hsl-ema-span-minutes`,
-`--hsl-cooldown-minutes` and `--lookback-ema-span-minutes` set the explicit policy
-before canonical preparation. Defaults are 0.05, 30 minutes, 30 minutes and 1440
-minutes. These settings do not enable HSL; select its mode with `--hsl`. Fractional
-spans remain floats. The slow span controls continuous HSL and unstuck memory;
-the ordinary rolling loss-admission gate is configured independently.
+Fixture-only `--hsl-drawdown-threshold-fraction`, `--hsl-drawdown-fraction-ema-span-minutes`,
+`--hsl-cooldown-minutes` set the explicit policy before canonical preparation.
+Defaults are 0.05, 30 minutes and 30 minutes. Independent slow-memory controls are
+`--hsl-memory-ema-span-minutes`, `--unstuck-memory-ema-span-minutes` and
+`--loss-gate-memory-ema-span-minutes`, each defaulting to 1440 minutes.
+These settings do not enable HSL; select its mode with `--hsl`. Fractional spans
+remain floats. Each memory belongs to its named risk consumer.
 Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close from
 that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
 shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
@@ -70,8 +71,8 @@ For a decaying-memory stress diagnostic:
 
 ```sh
 passivbot tool gpu-parity --fixture ema_anchor --sides both --coins 2 --bars 3000 \
-  --seed 43 --hsl portfolio --gpu-engine native --hsl-red-threshold 0.002 \
-  --hsl-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
+  --seed 43 --hsl portfolio --gpu-engine native --hsl-drawdown-threshold-fraction 0.002 \
+  --hsl-drawdown-fraction-ema-span-minutes 2.5 --hsl-cooldown-minutes 10000 \
   --price-shock 0 1500 0.7 --price-shock 1 1800 1.3 \
   --metrics adg_fraction_strategy_equity drawdown_max_fraction_strategy_equity hsl_red_time_fraction \
   hsl_red_duration_max_minutes --report stress.json

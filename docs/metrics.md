@@ -206,7 +206,8 @@ samples must not omit required account/objective metrics. See [V9 risk model](v9
 
 - `hsl_trigger_count`: Absolute count of RED trigger events during the run.
 - `hsl_restart_count`: Absolute count of cooldown restarts after RED halts.
-- `hard_stop_total_loss_pct`: Total panic-close loss as a fraction of starting balance.
+- `hsl_panic_loss_starting_balance_fraction`: Loss-only net panic-fill PnL, summed as a
+  nonnegative loss magnitude and divided by starting balance.
 - `hsl_triggers_per_year`: `hsl_trigger_count / analysis_duration_days * 365.25`.
 - `hsl_restarts_per_year`: `hsl_restart_count / analysis_duration_days * 365.25`.
 
