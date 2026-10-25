@@ -4087,10 +4087,10 @@ async def main():
             and not data_config["backtest"].get("hlcvs_data_dir")
             and int(data_config["backtest"].get("candle_interval_minutes", 1) or 1) == 1
         )
-        array_manager = SharedArrayManager(
-            file_backed=is_gpu,
-            file_preflight=_gpu_cached_input_preflight if is_gpu and exact_cache_shape else None,
-        )
+        array_manager = (SharedArrayManager(
+            file_backed=True,
+            file_preflight=_gpu_cached_input_preflight if exact_cache_shape else None,
+        ) if is_gpu else SharedArrayManager())
         if is_gpu:
             from hlcvs_manifest import numpy_artifact_loader
             artifact_loaders.enter_context(numpy_artifact_loader(array_manager.load_numpy_artifact))
