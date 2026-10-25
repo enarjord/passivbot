@@ -240,7 +240,7 @@ def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
-    c['bot']["portfolio"]['warmup']['span_multiplier'] = 2.0
+    c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 2.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["optimize"]["bounds"] = {}
     for side in ("long", "short"):
@@ -420,7 +420,7 @@ def test_disabled_unstuck_warmup_ignores_values_and_bounds_but_honors_coin_activ
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
-    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     for side in ("long", "short"):
         c["bot"][side]["unstuck"][toggle] = False
@@ -459,7 +459,7 @@ def test_live_warmup_ignores_disabled_unstuck(toggle):
     kwargs = dict(
         symbols_by_side={"long": {"BTC"}, "short": set()},
         bp_lookup=lookup,
-        warmup_ratio=1.0,
+        activation_span_fraction=1.0,
         max_warmup_minutes=1_000_000,
         forager_enabled={"long": False, "short": False},
         span_buffer=1.0,
@@ -504,7 +504,7 @@ def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(c
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
-    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"]["short"]["unstuck"]["enabled"] = False
     c["bot"]["long"]["unstuck"][control] = 0.0
@@ -541,7 +541,7 @@ def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bo
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
-    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     opposite = "short" if side == "long" else "long"
     c["bot"][opposite]["unstuck"]["enabled"] = False
@@ -644,7 +644,7 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
-    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"][side]["risk"].update(total_wallet_exposure_limit_ratio=1.0, max_positions=1)
     c["optimize"]["bounds"] = {}
@@ -671,7 +671,7 @@ def test_zero_slot_unstuck_warmup_preserves_optimizer_reactivation(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
-    c['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     c["bot"][side]["risk"].update(total_wallet_exposure_limit_ratio=1.0, max_positions=0)
     c["optimize"]["bounds"][side]["risk"]["max_positions"] = [0, 0]

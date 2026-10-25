@@ -870,7 +870,7 @@ def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
     config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "pymoo"
     config['bot']["portfolio"]['strategy_kind'] = "trailing_grid_v7"
-    config["backtest"]["btc_collateral_cap"] = 1.0
+    config["backtest"]["btc_collateral_target_ratio"] = 1.0
 
     original_import = builtins.__import__
 
@@ -930,12 +930,12 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
     config = get_expanded_config_prototype()
     config["optimize"]["backend"] = "gpu"
     config["optimize"]["fixed_runtime_overrides"] = {
-        "backtest.btc_collateral_cap": 0.5,
+        "backtest.btc_collateral_target_ratio": 0.5,
     }
 
     with pytest.raises(
         ValueError,
-        match=r"btc_collateral_cap=0.*CPU",
+        match=r"btc_collateral_target_ratio=0.*CPU",
     ):
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
@@ -1298,11 +1298,21 @@ def test_optimize_parser_accepts_polish_bounds_mode():
     optimize.add_extra_options(advanced_group, help_all=True)
 
     args = parser.parse_args(
-        ["--polish-pct", "0.2", "--polish-bounds-mode", "override-all"]
+        ["--polish-bounds-fraction", "0.2", "--polish-bounds-mode", "override-all"]
     )
 
-    assert args.polish_bounds_pct == 0.2
+    assert args.polish_bounds_fraction == 0.2
     assert args.polish_bounds_mode == "override-all"
+    assert "0.1 means plus/minus 10 percent" in " ".join(parser.format_help().split())
+
+
+@pytest.mark.parametrize("retired_flag", ["--polish-pct", "--polish-bounds-pct"])
+def test_optimize_parser_rejects_retired_percentage_polish_flags(retired_flag):
+    parser = argparse.ArgumentParser()
+    optimize.add_extra_options(parser, help_all=True)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([retired_flag, "0.2"])
 
 
 def test_starting_configs_option_is_visible_in_default_help():
@@ -1489,7 +1499,7 @@ class TestIndividualToConfig:
                         "short_entry_initial_qty_fraction": [0.0, 10.0],
                         "short_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
                         "long_hsl_memory_ema_span_minutes": [30.0, 180.0, 5.0],
-                        "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                        "short_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
             },
@@ -1528,7 +1538,7 @@ class TestIndividualToConfig:
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
                         "short_entry_initial_qty_fraction": [0.0, 10.0],
                         "short_entry_threshold_exposure_ratio_coefficient": [0.0, 10.0],
-                        "long_hsl_red_threshold": [0.15, 0.35, 0.01],
+                        "long_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
                 "fixed_runtime_overrides": {"bot.long.hsl.cooldown_after_red_minutes": 1.0},
@@ -1989,9 +1999,9 @@ class TestIndividualToConfig:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -2118,9 +2128,9 @@ class TestIndividualToConfig:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
             },
@@ -2286,7 +2296,7 @@ class TestConfigToIndividual:
                         "short_entry_initial_qty_fraction": [0.0, 1000.0],
                         "short_entry_threshold_exposure_ratio_coefficient": [0.0, 1000.0],
                         "long_hsl_memory_ema_span_minutes": [30.0, 180.0, 5.0],
-                        "short_hsl_red_threshold": [0.15, 0.35, 0.01],
+                        "short_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
             },
@@ -2362,9 +2372,9 @@ class TestConfigToIndividual:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
             },
@@ -2894,7 +2904,7 @@ class TestApplyPolishBounds:
             "long_entry_threshold_base_fraction"
         ] == pytest.approx([0.04, 0.06])
 
-    def test_invalid_percentage_raises(self):
+    def test_invalid_fraction_raises(self):
         with pytest.raises(ValueError, match="finite non-negative"):
             apply_polish_bounds({"optimize": {"bounds": {}}}, -0.1)
 
@@ -3043,7 +3053,7 @@ class TestApplyFineTuneBounds:
         ) in caplog.text
         assert "  long.risk.we_excess_allowance_fraction" in caplog.text
         assert "  long.risk.total_wallet_exposure_limit_ratio" in caplog.text
-        assert "long_risk_we_excess_allowance_pct" not in caplog.text
+        assert "long_risk_we_excess_allowance_fraction" not in caplog.text
 
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
@@ -3424,9 +3434,9 @@ class TestApplyFineTuneBounds:
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_close_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     },
                 ),
                 "fixed_params": ["bot.long.strategy.trailing_martingale.close.qty_fraction"],
@@ -3459,9 +3469,9 @@ class TestApplyFineTuneBounds:
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
                         "long_close_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 ),
                 "fixed_params": ["long.strategy.trailing_martingale.close.qty_fraction"],
@@ -3538,9 +3548,9 @@ class TestApplyFineTuneBounds:
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
                         "long_entry_threshold_exposure_ratio_coefficient": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3587,9 +3597,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 ),
                 "round_to_n_significant_digits": 6,
@@ -3658,9 +3668,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3723,9 +3733,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -3783,9 +3793,9 @@ class TestApplyFineTuneBounds:
                     {
                         "long_n_positions": [1.0, 1.0],
                         "long_entry_initial_qty_fraction": [0.0, 1.0],
-                        "long_total_wallet_exposure_limit": [1.0, 1.0],
+                        "long_total_wallet_exposure_limit_ratio": [1.0, 1.0],
                         "short_n_positions": [0.0, 0.0],
-                        "short_total_wallet_exposure_limit": [0.0, 0.0],
+                        "short_total_wallet_exposure_limit_ratio": [0.0, 0.0],
                     }
                 )
             },
@@ -4361,7 +4371,7 @@ class TestEvaluator:
     """Test Evaluator class initialization and basic methods."""
 
     def test_perturb_step_digits(self):
-        """Test perturbation with different change probabilities."""
+        """Test perturbation with probabilities of keeping values unchanged."""
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4379,13 +4389,13 @@ class TestEvaluator:
 
         # Use a simple individual matching bounds length
         individual = [1.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_step_digits(individual, change_chance=0.5)
+        perturbed = evaluator.perturb_step_digits(individual, keep_value_probability=0.5)
 
         # Should have same length
         assert len(perturbed) == len(individual)
 
-    def test_perturb_x_pct(self):
-        """Test percentage-based perturbation."""
+    def test_perturb_relative_fraction(self):
+        """Test relative-fraction perturbation."""
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4401,9 +4411,41 @@ class TestEvaluator:
         )
 
         individual = [5.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_x_pct(individual, magnitude=0.01)
+        perturbed = evaluator.perturb_relative_fraction(individual, magnitude_fraction=0.01)
 
         assert len(perturbed) == len(individual)
+
+    @pytest.mark.parametrize("keep_value_probability,expected", [(1.0, 5.0), (0.0, 6.0)])
+    def test_step_perturbation_probability_describes_unchanged_values(
+        self, monkeypatch, keep_value_probability, expected
+    ):
+        from types import SimpleNamespace
+
+        evaluator = SimpleNamespace(
+            bounds=[SimpleNamespace(low=0.0, high=10.0, is_stepped=True, step=1.0)]
+        )
+        monkeypatch.setattr(np.random, "random", lambda: 0.5)
+        monkeypatch.setattr(np.random, "choice", lambda values: 1.0)
+
+        assert optimize.Evaluator.perturb_step_digits(
+            evaluator, [5.0], keep_value_probability=keep_value_probability
+        ) == [expected]
+
+    def test_relative_perturbation_fraction_preserves_scale_one_magnitude(self, monkeypatch):
+        from types import SimpleNamespace
+
+        evaluator = SimpleNamespace(
+            bounds=[SimpleNamespace(low=0.0, high=10.0, is_stepped=True)]
+        )
+
+        def positive_edge(low, high):
+            assert (low, high) == (-0.01, 0.01)
+            return high
+
+        monkeypatch.setattr(np.random, "uniform", positive_edge)
+        assert optimize.Evaluator.perturb_relative_fraction(
+            evaluator, [5.0], magnitude_fraction=0.01
+        ) == pytest.approx([5.05])
 
     def test_perturb_random_subset(self):
         """Test random subset perturbation."""
@@ -4456,7 +4498,7 @@ class TestEvaluator:
         from config.schema import get_expanded_config_prototype
 
         mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
         mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "fills_gap_p95_hours"]
         mock_config["optimize"]["limits"] = [
             {
@@ -4484,7 +4526,7 @@ class TestEvaluator:
         from config.schema import get_expanded_config_prototype
 
         mock_config = get_expanded_config_prototype()
-        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 0.0
         mock_config["optimize"]["scoring"] = ["adg_btc"]
         mock_config["optimize"]["limits"] = []
         evaluator = Evaluator(
@@ -4513,7 +4555,7 @@ class TestEvaluator:
             evaluator.limit_checks,
         )
 
-        mock_config["backtest"]["btc_collateral_cap"] = 1.0
+        mock_config["backtest"]["btc_collateral_target_ratio"] = 1.0
         mock_config["optimize"]["limits"] = []
         evaluator = Evaluator(
             hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config

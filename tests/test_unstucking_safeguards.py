@@ -35,13 +35,13 @@ def _empty_orchestrator_output(input_json: str) -> str:
             side_params = global_bot_params[pside]
             global_side_enabled = (
                 payload["global"]["side_activation"][pside]
-                and float(side_params["total_wallet_exposure_limit"]) > 0.0
+                and float(side_params["total_wallet_exposure_limit_ratio"]) > 0.0
                 and int(side_params["n_positions"]) > 0
             )
             effective_mode = selection_effective_mode
             symbol_side_eligible = (
                 bool(symbol.get("tradable", False))
-                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"]) != 0.0
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit_ratio"]) != 0.0
             )
             active = symbol_side_eligible and (
                 (has_position and selection_effective_mode != "manual")
@@ -459,8 +459,8 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "entry_trailing_reentry_qty_multiplier": 0.0,
                 "entry_trailing_retracement_base_fraction": 0.0,
                 "entry_trailing_threshold_base_fraction": 0.0,
-                "wallet_exposure_limit": 1.0,
-                "risk_we_excess_allowance_pct": 0.0,
+                "wallet_exposure_limit_ratio": 1.0,
+                "risk_we_excess_allowance_fraction": 0.0,
                 "close_grid_qty_fraction": 0.0,
                 "close_trailing_qty_fraction": 0.0,
                 "close_trailing_retracement_base_fraction": 0.0,
@@ -471,16 +471,16 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "ema_readiness": 0.0,
                     "volatility": 1.0,
                 },
-                "risk_wel_enforcer_threshold": 0.0,
+                "risk_wel_enforcer_threshold_ratio": 0.0,
                 "unstuck_threshold": 0.0,
                 "unstuck_close_pct": 0.0,
                 "unstuck_ema_dist": 0.0,
             }
             self._bot_value_defaults = {
                 "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
+                "total_wallet_exposure_limit_ratio": 0.0,
                 "risk_twel_enforcer_policy": "reduce_overweight",
-                "risk_twel_enforcer_threshold": 0.0,
+                "risk_twel_enforcer_threshold_ratio": 0.0,
                 "hsl_panic_close_order_type": "limit",
                 "filter_volume_ema_span_1m": 0.0,
                 "filter_volatility_ema_span_1m": 0.0,
@@ -497,7 +497,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "side_activation": {"long": True, "short": True},
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": False,
-                "order_match_tolerance_pct": 0.0,
+                "order_match_tolerance_fraction": 0.0,
             }
 
             async def _get_last_prices(symbols, max_age_ms=None):
@@ -3035,7 +3035,7 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     cfg["live"]["modes"]["disapproved_position"] = "manual"
     bot = _make_dummy_bot(cfg)
     bot._bot_value_defaults["n_positions"] = 1
-    bot._bot_value_defaults["total_wallet_exposure_limit"] = 1.0
+    bot._bot_value_defaults["total_wallet_exposure_limit_ratio"] = 1.0
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
@@ -3248,7 +3248,7 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
             "unstuck_threshold": 0.5,
         }
     )
-    bot._bot_value_defaults["total_wallet_exposure_limit"] = 0.5
+    bot._bot_value_defaults["total_wallet_exposure_limit_ratio"] = 0.5
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 

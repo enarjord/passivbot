@@ -54,7 +54,7 @@ def base_config():
                     }
                 },
             },
-            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 3.0, "max_minutes": None}},
+            "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 3.0, "max_minutes": None}},
         },
         "live": {},
         "optimize": {"bounds": {}},
@@ -137,7 +137,7 @@ class TestWarmupCalculation:
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
         # Max span is forager_volume_ema_span_1m = 2000.0
-        # Warmup = 2000.0 * 3.0 (warmup_ratio) = 6000 minutes
+        # Warmup = 2000.0 * 3.0 (activation_span_fraction) = 6000 minutes
         expected = int(math.ceil(2000.0 * 3.0))
 
         assert warmup_minutes == expected
@@ -192,9 +192,9 @@ class TestWarmupCalculation:
         assert warmup_minutes > 0
         assert warmup_minutes == 6000
 
-    def test_zero_warmup_ratio_edge_case(self, base_config):
-        """Test with warmup_ratio = 0."""
-        base_config['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    def test_zero_activation_span_fraction_edge_case(self, base_config):
+        """Test with activation_span_fraction = 0."""
+        base_config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -213,9 +213,9 @@ class TestWarmupCalculation:
         # Warmup = 1_000_000 * 3.0 = 3_000_000 minutes
         assert warmup_minutes == 3_000_000
 
-    def test_negative_warmup_ratio_clamped_to_zero(self, base_config):
-        """Test that negative warmup_ratio is treated as 0."""
-        base_config['bot']["portfolio"]['warmup']['span_multiplier'] = -5.0
+    def test_negative_activation_span_fraction_clamped_to_zero(self, base_config):
+        """Test that negative activation_span_fraction is treated as 0."""
+        base_config['bot']["portfolio"]['warmup']['activation_span_fraction'] = -5.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -440,8 +440,8 @@ class TestEMASpanExtraction:
 class TestWarmupEdgeCases:
     """Test edge cases and error conditions."""
 
-    def test_missing_warmup_ratio_defaults_to_zero(self):
-        """Test handling of missing warmup_ratio."""
+    def test_missing_activation_span_fraction_defaults_to_zero(self):
+        """Test handling of missing activation_span_fraction."""
         config = {
             "bot": {
                 "long": {
@@ -466,7 +466,7 @@ class TestWarmupEdgeCases:
                     "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 1000.0}}}
                 },
                 "short": {},
-                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {'span_multiplier': 3.0}},
+                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {'activation_span_fraction': 3.0}},
             },
             "live": {},
             "optimize": {"bounds": {}},
@@ -482,7 +482,7 @@ class TestWarmupEdgeCases:
             "bot": {
                 "long": {"enabled": False},
                 "short": {"enabled": False},
-                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 3.0, "max_minutes": None}},
+                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 3.0, "max_minutes": None}},
             },
             "live": {},
             "optimize": {"bounds": {}},
@@ -501,7 +501,7 @@ class TestWarmupEdgeCases:
                     "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": math.inf}}}
                 },
                 "short": {},
-                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 3.0, "max_minutes": None}},
+                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 3.0, "max_minutes": None}},
             },
             "live": {},
             "optimize": {"bounds": {}},
@@ -518,7 +518,7 @@ class TestWarmupEdgeCases:
                     "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": math.nan}}}
                 },
                 "short": {},
-                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"span_multiplier": 3.0, "max_minutes": None}},
+                "portfolio": {"strategy_kind": "trailing_martingale", "warmup": {"activation_span_fraction": 3.0, "max_minutes": None}},
             },
             "live": {},
             "optimize": {"bounds": {}},
@@ -579,7 +579,7 @@ Test Coverage Summary:
    - Bounds all fields extracted
 
 ✅ Edge Cases (5 tests):
-   - Missing warmup_ratio
+   - Missing activation_span_fraction
    - Missing max_warmup_minutes
    - Empty bot params
    - Infinite span

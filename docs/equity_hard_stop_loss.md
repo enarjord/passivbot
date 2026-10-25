@@ -33,9 +33,9 @@ WEL/excess values apply. It uses configured headroom rather than current utiliza
 The option is rejected in position_side/portfolio modes.
 
 The configured `drawdown_threshold_fraction` is a fraction: `0.05` means 5%.
-The native replay payload, reports and optimizer parameter IDs retain their
-existing `red_threshold`, `pside` and `hsl_red_threshold` names. Configuration
-adapters translate the public names without rescaling their values.
+Native replay policies and reports use `drawdown_threshold_fraction` and
+`drawdown_fraction_ema_span_minutes` too. Flat optimizer IDs retain the `hsl_` prefix;
+the native position-side scope token remains `pside`. No adapter rescales these values.
 
 ## Drawdown and ratio smoothing
 

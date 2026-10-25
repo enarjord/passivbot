@@ -75,7 +75,7 @@ struct HslState {
     bool hsl_owner;
     bool hsl_valid;
     bool enabled;
-    float red_threshold;
+    float drawdown_threshold_fraction;
     float alpha;
     float cooldown_minutes;
     int signal_mode;
@@ -786,7 +786,7 @@ inline HslState load_hsl(
     HslState h;
     int ho = po + hsl_param_offset;
     h.enabled = params[ho + 0] > 0.5f;
-    h.red_threshold = params[ho + 1];
+    h.drawdown_threshold_fraction = params[ho + 1];
     h.cooldown_minutes = 0.0f;
     h.signal_mode = int(round(params[ho + 5]));
     h.slot_count = 1.0f;
@@ -794,7 +794,7 @@ inline HslState load_hsl(
     long duration_ms = 0;
     h.hsl_valid = hsl_decay_duration(params[ho + 3], params[ho + 6], duration_ms)
         && hsl_decay_policy(params[ho + 4], params[ho + 2],
-            h.red_threshold, duration_ms, h.decay_policy);
+            h.drawdown_threshold_fraction, duration_ms, h.decay_policy);
     h.alpha = h.decay_policy.fast_alpha;
     h.decay = hsl_decay_scope_init();
     h.replay = nullptr; h.replay_side = 0; h.replay_coin = -1;
@@ -850,7 +850,7 @@ inline void apply_coin_hsl_overrides(
     float value = coin_overrides[offset + 0];
     if (isfinite(value)) h.enabled = value > 0.5f;
     value = coin_overrides[offset + 1];
-    if (isfinite(value)) h.red_threshold = h.decay_policy.threshold = value;
+    if (isfinite(value)) h.drawdown_threshold_fraction = h.decay_policy.drawdown_threshold_fraction = value;
     value = coin_overrides[offset + 2];
     if (isfinite(value)) {
         h.decay_policy.fast_alpha = 2.0f / (value + 1.0f);

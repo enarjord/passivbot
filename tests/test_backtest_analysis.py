@@ -115,8 +115,8 @@ def test_expand_analysis_includes_entry_balance_pct():
     analysis_btc = _make_analysis_entry(0.456)
     config = {
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         }
     }
     result = expand_analysis(
@@ -137,8 +137,8 @@ def test_expand_analysis_includes_high_exposure_hours():
     analysis_btc = _make_analysis_entry(0.5)
     config = {
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         }
     }
     result = expand_analysis(
@@ -162,8 +162,8 @@ def test_expand_analysis_includes_day_duration_metrics():
     analysis_btc["peak_recovery_days_equity"] = 2.5
     config = {
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         }
     }
     result = expand_analysis(
@@ -188,8 +188,8 @@ def test_expand_analysis_includes_trade_level_metrics():
     analysis_btc = _make_analysis_entry(0.75)
     config = {
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         }
     }
 
@@ -214,8 +214,8 @@ def test_expand_analysis_currency_suffixes_new_ratio_metrics():
     analysis_btc = _make_analysis_entry(0.75)
     config = {
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         }
     }
 
@@ -286,8 +286,8 @@ def test_expand_analysis_includes_backtest_completion_ratio_when_available():
             "candle_interval_minutes": 1,
         },
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         },
     }
     equities = np.array(
@@ -338,8 +338,8 @@ def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
             "candle_interval_minutes": 1,
         },
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         },
     }
 
@@ -386,8 +386,8 @@ def test_execute_backtest_captures_metrics_only_rust_profile(monkeypatch):
             "candle_interval_minutes": 1,
         },
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         },
     }
 
@@ -407,8 +407,8 @@ def test_expand_analysis_allows_skipped_btc_analysis():
         equities_array=None,
         config={
             "bot": {
-                "long": {"total_wallet_exposure_limit": 1.0},
-                "short": {"total_wallet_exposure_limit": 1.0},
+                "long": {"total_wallet_exposure_limit_ratio": 1.0},
+                "short": {"total_wallet_exposure_limit_ratio": 1.0},
             }
         },
     )
@@ -467,8 +467,8 @@ def test_expand_analysis_deduplicates_hard_stop_metrics():
     )
     config = {
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 1.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 1.0},
         }
     }
 
@@ -578,8 +578,8 @@ def test_expand_analysis_keeps_rust_fill_activity_metrics_shared():
         equities_array=np.empty((0, 3)),
         config={
             "bot": {
-                "long": {"total_wallet_exposure_limit": 1.0},
-                "short": {"total_wallet_exposure_limit": 0.0},
+                "long": {"total_wallet_exposure_limit_ratio": 1.0},
+                "short": {"total_wallet_exposure_limit_ratio": 0.0},
             }
         },
     )
@@ -1079,8 +1079,8 @@ def test_post_process_persists_artifacts_with_infinite_diagnostic(
         "disable_plotting": ["twe", "pnl", "hard_stop", "coin_fills"],
         "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
         "bot": {
-            "long": {"total_wallet_exposure_limit": 1.0},
-            "short": {"total_wallet_exposure_limit": 0.0},
+            "long": {"total_wallet_exposure_limit_ratio": 1.0},
+            "short": {"total_wallet_exposure_limit_ratio": 0.0},
         },
         "live": {},
     }
@@ -1135,7 +1135,7 @@ def test_expand_analysis_keeps_position_held_time_weighted_metric_shared():
         equities_array=np.empty((0, 3)),
         config={
             "bot": {
-                side: {"total_wallet_exposure_limit": 1.0} for side in ("long", "short")
+                side: {"total_wallet_exposure_limit_ratio": 1.0} for side in ("long", "short")
             }
         },
     )

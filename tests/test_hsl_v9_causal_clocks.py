@@ -29,7 +29,7 @@ def facts(now, *, size=1.0, mark=100.0, position_at=None, balance=1000.0):
             )],
         ),
         slots=1, scale_budget_with_excess_allowance=False, exposure_budget=None,
-        memory_ema_span_minutes=43200.0, drawdown_ratio_ema_span_minutes=1.0, threshold=0.005, cooldown_ms=60_000,
+        memory_ema_span_minutes=43200.0, drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.005, cooldown_ms=60_000,
         budget_observations=[dict(timestamp=0, order=-1, balance=1000.0, slots=1,
             scale_budget_with_excess_allowance=False, exposure_budget=None, estimated=True)],
     )
@@ -417,7 +417,7 @@ def test_partial_fill_stale_quantity_is_unavailable_then_recovers_without_double
 
     def account(now, size, mark):
         value = facts(now, size=direction * size, mark=mark)
-        value["threshold"] = 0.012
+        value["drawdown_threshold_fraction"] = 0.012
         value["snapshot"]["pside"] = side
         value["snapshot"]["pairs"][0]["position"]["pside"] = side
         if mode == "portfolio":
@@ -524,11 +524,11 @@ def test_malformed_native_unavailability_remains_a_fatal_producer_error(change):
 def test_same_receipt_actual_source_endpoints_preserve_reconciliation_and_pre_red(sources):
     replay = pbr.HslV9Replay()
     initial = facts(1)
-    initial["threshold"] = 0.012
+    initial["drawdown_threshold_fraction"] = 0.012
     evaluate(replay, initial)
     partial = fill("partial", 60_000, -0.5, -5.0, 90.0)
     account = facts(60_001, mark=90.0)
-    account["threshold"] = 0.012
+    account["drawdown_threshold_fraction"] = 0.012
     account["snapshot"]["pairs"][0]["fills"] = [partial]
     for index, source in enumerate(sources):
         account["snapshot"]["pairs"][0]["position_at"] = source
@@ -546,7 +546,7 @@ def test_same_receipt_actual_source_endpoints_preserve_reconciliation_and_pre_re
     replay.clear_derived_cache()
     assert evaluate(replay, account) == stable
     flat = facts(60_002, size=0.0, mark=90.0)
-    flat["threshold"] = 0.012
+    flat["drawdown_threshold_fraction"] = 0.012
     flat["snapshot"]["pairs"][0]["fills"] = [
         partial, fill("rebated_exit", 60_002, -1.0, 0.0, 90.0)
     ]
@@ -673,14 +673,14 @@ def test_corrected_native_position_sources_are_ordered_before_no_op_detection():
                      [(50_000, 2.0), (40_000, 1.0), (60_000, 1.0)]):
         replay = pbr.HslV9Replay()
         initial = facts(1)
-        initial["threshold"] = 0.012
+        initial["drawdown_threshold_fraction"] = 0.012
         evaluate(replay, initial)
         for index, (source, size) in enumerate(readings):
             account = facts(60_001 + index * 10_000, position_at=source, size=size, mark=90.0)
-            account["threshold"] = 0.012
+            account["drawdown_threshold_fraction"] = 0.012
             evaluate(replay, account)
         flat = facts(90_001, size=0.0, mark=90.0)
-        flat["threshold"] = 0.012
+        flat["drawdown_threshold_fraction"] = 0.012
         flat["snapshot"]["pairs"][0]["fills"] = [fill("exit", 90_000, -1.0, -10.0, 90.0)]
         terminal = evaluate(replay, flat)
         assert terminal["risk"]["cooldown_until"] is None

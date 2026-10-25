@@ -62,9 +62,9 @@ def reference_moments(inputs, payload, fills, equities):
     config, candles, markets, _, timestamps = inputs
     coins = payload.backtest_params["coins"]
     params = payload.bot_params_list
-    limits = [params[0][side]["total_wallet_exposure_limit"] for side in ("long", "short")]
+    limits = [params[0][side]["total_wallet_exposure_limit_ratio"] for side in ("long", "short")]
     slots = [params[0][side]["n_positions"] for side in ("long", "short")]
-    budgets = np.array([[p[side]["wallet_exposure_limit"] if p[side]["wallet_exposure_limit"] >= 0
+    budgets = np.array([[p[side]["wallet_exposure_limit_ratio"] if p[side]["wallet_exposure_limit_ratio"] >= 0
                          else limits[s] / slots[s] if slots[s] else 0.0
                          for p in params] for s, side in enumerate(("long", "short"))])
     max_seen = [0, 0]
@@ -86,12 +86,12 @@ def reference_moments(inputs, payload, fills, equities):
         for s, side in enumerate(("long", "short")):
             eligible = [c for c, p in enumerate(params)
                         if start[c] <= k <= last[c] and p[side]["entry_eligible"]
-                        and p[side]["wallet_exposure_limit"] != 0.0
+                        and p[side]["wallet_exposure_limit_ratio"] != 0.0
                         and not np.isnan(candles[k, c, :3]).all()]
             max_seen[s] = max(max_seen[s], len(eligible))
             effective = min(slots[s], max_seen[s]) if config["backtest"]["dynamic_wel_by_tradability"] else slots[s]
             for c in eligible:
-                if params[c][side]["wallet_exposure_limit"] < 0:
+                if params[c][side]["wallet_exposure_limit_ratio"] < 0:
                     budgets[s, c] = limits[s] / effective if effective else 0.0
         multipliers = np.array([markets[coin]["c_mult"] for coin in coins])
         e = sizes * prices * multipliers / balance

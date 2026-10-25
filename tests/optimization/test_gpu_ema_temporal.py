@@ -33,7 +33,7 @@ def _replay(hsl, hedge_mode, monkeypatch, sides="both"):
                "--hsl", hsl, "--unstuck", "--price-shock", "0", "1500", ".7",
                "--price-shock", "1", "1800", "1.3"]
     if hsl != "disabled":
-        options += ["--hsl-red-threshold", ".002", "--hsl-drawdown-ratio-ema-span-minutes", "2.5",
+        options += ["--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
                     "--hsl-cooldown-minutes", "10000", "--hsl-memory-ema-span-minutes", "1440"]
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args(options))
     config['bot']["portfolio"]['hedge_mode'] = hedge_mode

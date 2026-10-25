@@ -26,7 +26,7 @@ sys.meta_path.insert(0, NoDeviceOrSearch())
 from optimization.gpu.coin_parameters import build_coin_override_parameters
 from optimization.gpu.model import EMA_ANCHOR_COIN_OVERRIDE_COLS
 
-policy = dict(enabled=False, red_threshold=0.1, ema_span_minutes=30,
+policy = dict(enabled=False, drawdown_threshold_fraction=0.1, ema_span_minutes=30,
               cooldown_minutes_after_red=0)
 payload = SimpleNamespace(
     strategy_params_list=[{"long": {"offset_fraction": 0.125}}],

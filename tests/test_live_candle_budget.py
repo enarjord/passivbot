@@ -2260,7 +2260,7 @@ def test_required_candle_health_windows_include_indicator_and_diagnostic_timefra
     class FakeBot:
         config = {
             "live": {},
-            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}},
         }
         cm = FakeCM()
         approved_coins_minus_ignored_coins = {
@@ -2634,7 +2634,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
 
     class FakeBot:
         config = {
-            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}},
             "live": {"startup": {"force_cold_startup": False}},
         }
         exchange = "bybit"
@@ -2695,7 +2695,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     assert all(record.levelno == logging.DEBUG for record in warmup_records)
     assert any("trading-ready warmup" in record.message for record in warmup_records)
     target = next(record.message for record in warmup_records if "target" in record.message)
-    assert "span_multiplier=" in target and "max_minutes=" in target
+    assert "activation_span_fraction=" in target and "max_minutes=" in target
     assert "warmup_ratio=" not in target and "max_warmup_minutes=" not in target
     assert any("slot view" in record.message for record in warmup_records)
     assert any("windows" in record.message for record in warmup_records)
@@ -2837,7 +2837,7 @@ async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(
 
     class FakeBot:
         config = {
-            "bot": {"portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}},
+            "bot": {"portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}},
             "live": {
                 "startup": {"force_cold_startup": True, "warmup_jitter_seconds": 30.0}
             }

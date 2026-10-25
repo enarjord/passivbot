@@ -472,7 +472,7 @@ def test_v8_implicit_ranges_are_materialized_before_new_omission_semantics(missi
     migrated = migrate(source, memory_span_minutes=123.5)
     bounds = flattened(prepare_config(migrated.config, verbose=False))
     assert bounds["long_ema_span_0_minutes"] == [100.0, 2880.0, 10.0]
-    assert bounds["long_hsl_red_threshold"] == [0.15, 0.15, 0.001]
+    assert bounds["long_hsl_drawdown_threshold_fraction"] == [0.15, 0.15, 0.001]
     assert bounds["long_unstuck_ema_dist"] == [-0.2, 0.01, 0.0001]
     assert bounds["long_unilateralness_ema_span_1m"] == [42.5, 42.5]
     assert any("materialized released-v8 inherited search" in item["reason"] for item in migrated.changes)

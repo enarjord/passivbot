@@ -77,7 +77,7 @@ fn side_activation_backtest_refreshes_cached_native_permission_without_replacing
     let params = ordinary_ema_fixture_params(3, 1);
     let mut pair = BotParamsPair::default();
     pair.long.n_positions = 1;
-    pair.long.total_wallet_exposure_limit = 1.5;
+    pair.long.total_wallet_exposure_limit_ratio = 1.5;
     let mut bt = Backtest::new(
         data.view(),
         btc.view(),
@@ -96,7 +96,7 @@ fn side_activation_backtest_refreshes_cached_native_permission_without_replacing
             .global
             .global_bot_params
             .long
-            .total_wallet_exposure_limit,
+            .total_wallet_exposure_limit_ratio,
         1.5
     );
     assert_eq!(after.global.global_bot_params.long.n_positions, 1);

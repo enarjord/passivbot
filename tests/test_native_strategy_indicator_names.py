@@ -147,7 +147,7 @@ def test_every_hourly_sensitivity_retains_its_required_input_admission(kind, coe
     hour = ("offset_log_range_ema_span_1h_candles" if kind == "ema_anchor"
             else "log_range_ema_span_1h_candles")
     params = np.zeros((1, len(keys)), dtype=np.float64)
-    for key, value in (("total_wallet_exposure_limit", 1.0), ("n_positions", 1.0),
+    for key, value in (("total_wallet_exposure_limit_ratio", 1.0), ("n_positions", 1.0),
                        (hour, 2.875), (coefficient, .375)):
         params[0, keys.index(key)] = value
     pins = np.full((1, columns), np.nan, dtype=np.float64)
@@ -180,7 +180,7 @@ def test_price_span_bounds_keep_their_fractional_warmup_horizon(kind, side):
 
     config = get_expanded_config_prototype()
     config["bot"]["portfolio"]["strategy_kind"] = kind
-    config["bot"]["portfolio"]["warmup"].update(span_multiplier=1.0, max_minutes=None)
+    config["bot"]["portfolio"]["warmup"].update(activation_span_fraction=1.0, max_minutes=None)
     path = ("entry", "ema_span_0_minutes") if kind == "trailing_martingale" else ("ema_span_0_minutes",)
     bound = {}
     target = bound

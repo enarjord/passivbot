@@ -563,7 +563,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     set_side_universe_sources(config, 'approved_coins', "btc,eth")
     set_side_universe_sources(config, 'ignored_coins', {"long": ["eth"], "short": []})
     config["backtest"]["end_date"] = "2023-01-01"
-    config["backtest"]["btc_collateral_cap"] = 0.0
+    config["backtest"]["btc_collateral_target_ratio"] = 0.0
     config["optimize"]["scoring"] = ["btc_adg", "adg"]
     config["optimize"][
         "limits"
@@ -1195,9 +1195,9 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     config = format_config(get_template_config(), verbose=False)
 
     assert "n_positions" not in config["bot"]["long"]
-    assert "risk_wel_enforcer_threshold" not in config["bot"]["long"]
+    assert "risk_wel_enforcer_threshold_ratio" not in config["bot"]["long"]
     assert "unstuck_threshold" not in config["bot"]["long"]
-    assert "hsl_red_threshold" not in config["bot"]["long"]
+    assert "hsl_drawdown_threshold_fraction" not in config["bot"]["long"]
     assert "forager_volume_ema_span_1m" not in config["bot"]["long"]
     assert "filter_volume_ema_span_1m" not in config["bot"]["long"]
     assert "long_filter_volume_ema_span_1m" not in config["optimize"]["bounds"]
@@ -1209,7 +1209,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["risk"]["max_positions"]
     )
     assert (
-        compiled["bot"]["long"]["risk_wel_enforcer_threshold"]
+        compiled["bot"]["long"]["risk_wel_enforcer_threshold_ratio"]
         == config['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio']
     )
     assert (
@@ -1217,7 +1217,7 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
         == config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
-        compiled["bot"]["long"]["hsl_red_threshold"]
+        compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
         == config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
@@ -2280,8 +2280,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-fraction", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fallback-fee-fraction", "0"])
     parsed_fee_sanity = parser.parse_args(["--max-abs-fee-fraction", "0.002"])
-    parsed_maker_fee = parser.parse_args(["--maker-fee-override", "0.0002"])
-    parsed_taker_fee = parser.parse_args(["--taker-fee-override", "0.00055"])
+    parsed_maker_fee = parser.parse_args(["--maker-fee-override-fraction", "0.0002"])
+    parsed_taker_fee = parser.parse_args(["--taker-fee-override-fraction", "0.00055"])
 
     assert getattr(parsed_market, 'bot.portfolio.execution.market_orders_allowed') is True
     assert getattr(parsed_hedge, 'bot.portfolio.hedge_mode') is False
@@ -2298,10 +2298,10 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(
         parsed_fee_sanity, "live.fills.max_abs_fee_fraction"
     ) == pytest.approx(0.002)
-    assert getattr(parsed_maker_fee, "backtest.maker_fee_override") == pytest.approx(
+    assert getattr(parsed_maker_fee, "backtest.maker_fee_override_fraction") == pytest.approx(
         0.0002
     )
-    assert getattr(parsed_taker_fee, "backtest.taker_fee_override") == pytest.approx(
+    assert getattr(parsed_taker_fee, "backtest.taker_fee_override_fraction") == pytest.approx(
         0.00055
     )
 
@@ -2313,8 +2313,8 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--maker-fee-override FLOAT" in help_text
-    assert "--taker-fee-override FLOAT" in help_text
+    assert "--maker-fee-override-fraction FLOAT" in help_text
+    assert "--taker-fee-override-fraction FLOAT" in help_text
 
 
 def test_runtime_registry_reserved_help_metadata_stays_in_sync():

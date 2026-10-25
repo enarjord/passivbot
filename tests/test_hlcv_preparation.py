@@ -212,8 +212,8 @@ def sample_config():
             "long": {
                 "enabled": True,
                 "n_positions": 2,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 0.5,
+                "total_wallet_exposure_limit_ratio": 1.0,
+                "wallet_exposure_limit_ratio": 0.5,
                 "ema_span_0_minutes": 1000.0,
                 "ema_span_1_minutes": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -227,8 +227,8 @@ def sample_config():
             "short": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 0.5,
-                "wallet_exposure_limit": 0.5,
+                "total_wallet_exposure_limit_ratio": 0.5,
+                "wallet_exposure_limit_ratio": 0.5,
                 "ema_span_0_minutes": 1000.0,
                 "ema_span_1_minutes": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -236,7 +236,7 @@ def sample_config():
                 "entry_log_range_ema_span_1h_candles": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["BTC/USDT:USDT"], "ignored_coins": []},
             },
-            "portfolio": {"warmup": {"max_minutes": None, "span_multiplier": 3.0}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"max_minutes": None, "activation_span_fraction": 3.0}}, "global": {"universe": {}},
         },
         "live": {},
         "backtest": {
@@ -3285,17 +3285,17 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
         "bot": {
             "long": {
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
+                "wallet_exposure_limit_ratio": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": ["ETH"]},
             },
             "short": {
                 "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "total_wallet_exposure_limit_ratio": 0.0,
+                "wallet_exposure_limit_ratio": 0.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.0, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.0, "max_minutes": None}}, "global": {"universe": {}},
         },
     }
     config["bot"]["long"]["enabled"] = True

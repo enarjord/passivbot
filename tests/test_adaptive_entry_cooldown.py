@@ -296,7 +296,7 @@ def test_duration_floor_ceiling_and_uncapped_exposure():
     inp = adaptive_input(exposure=10.0, base=5.0)
     side = inp["symbols"][0]["long"]
     side["position"] = {"size": 20.0, "price": 100.0}
-    side["bot_params"]["wallet_exposure_limit"] = 1.0
+    side["bot_params"]["wallet_exposure_limit_ratio"] = 1.0
     side["bot_params"]["entry_cooldown_max_duration_minutes"] = 100.0
     # WE=2, ratio=2, base 5 + adverse .75*20 + exposure 2*10 = 40.
     assert json.loads(pbr.entry_cooldown_durations_json(json.dumps(inp)))["0:long"] == 40.0
@@ -314,11 +314,11 @@ def test_zero_exposure_allowance_saturates_ceiling():
     inp = adaptive_input(exposure=10.0)
     side = inp["symbols"][0]["long"]
     side["position"] = {"size": 20.0, "price": 100.0}
-    side["bot_params"]["wallet_exposure_limit"] = 0.0
+    side["bot_params"]["wallet_exposure_limit_ratio"] = 0.0
     side["runtime_budget"] = {
-        "effective_wallet_exposure_limit": 0.0,
+        "effective_wallet_exposure_limit_ratio": 0.0,
         "effective_n_positions": 1,
-        "configured_wallet_exposure_limit": 0.0,
+        "configured_wallet_exposure_limit_ratio": 0.0,
         "configured_n_positions": 1,
     }
     assert json.loads(pbr.entry_cooldown_durations_json(json.dumps(inp)))["0:long"] == 30.0
@@ -807,7 +807,7 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     # This legacy span would impose a shared delay beyond the entire test.
     cfg["bot"][side]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg["bot"][side]["forager"]["unilateralness_ema_span_minutes"] = 1.0
@@ -836,7 +836,7 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True, include_dataset=False)
-    cfg['bot']["portfolio"]['warmup']['span_multiplier'] = 0.0
+    cfg['bot']["portfolio"]['warmup']['activation_span_fraction'] = 0.0
     cfg["bot"]["long"]["forager"]["volume_ema_span_minutes"] = 5000.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
@@ -887,7 +887,7 @@ def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interv
 def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
     import passivbot_rust as pbr
 
-    bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0, "forager_score_weights": {
+    bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0, "forager_score_weights": {
         "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
     }}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(2)]
@@ -1102,7 +1102,7 @@ def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected
 def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, missing_idx):
     import passivbot_rust as pbr
 
-    bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0,
+    bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
           "filter_volume_ema_span_1m": 10.0,
           "unilateralness_ema_span_1m": 60.0,
           "forager_score_weights": {
@@ -1613,7 +1613,7 @@ async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(sid
     rows["c"] = 100.0
     async def candles(*args, **kwargs):
         return rows.copy()
-    bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0,
+    bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
           "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
           "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
           "entry_cooldown_max_duration_minutes": 30.0, "unilateralness_ema_span_1m": 1.0}

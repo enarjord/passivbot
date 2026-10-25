@@ -12,9 +12,9 @@ pub struct Policy {
     pub enabled: bool,
     #[serde(default)]
     pub scale_budget_with_excess_allowance: bool,
-    pub red_threshold: f64,
+    pub drawdown_threshold_fraction: f64,
     pub memory_ema_span_minutes: f64,
-    pub drawdown_ratio_ema_span_minutes: f64,
+    pub drawdown_fraction_ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
     pub panic_close_order_type: String,
 }
@@ -33,9 +33,9 @@ impl Default for Policy {
         Self {
             enabled: false,
             scale_budget_with_excess_allowance: false,
-            red_threshold: 0.25,
+            drawdown_threshold_fraction: 0.25,
             memory_ema_span_minutes: 43_200.0,
-            drawdown_ratio_ema_span_minutes: 60.0,
+            drawdown_fraction_ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
             panic_close_order_type: "limit".into(),
         }
@@ -89,8 +89,8 @@ impl Config {
             }
             hsl_decay::Policy::new(
                 policy.memory_ema_span_minutes,
-                policy.drawdown_ratio_ema_span_minutes,
-                policy.red_threshold,
+                policy.drawdown_fraction_ema_span_minutes,
+                policy.drawdown_threshold_fraction,
                 cooldown.round() as i64,
             )?;
         }
@@ -195,8 +195,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 coin,
                 policy: hsl_decay::Policy::new(
                     p.memory_ema_span_minutes,
-                    p.drawdown_ratio_ema_span_minutes,
-                    p.red_threshold,
+                    p.drawdown_fraction_ema_span_minutes,
+                    p.drawdown_threshold_fraction,
                     (p.cooldown_minutes_after_red * 60_000.0).round() as i64,
                 )?,
                 state: ScopeState::default(),
@@ -280,12 +280,12 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                 } else {
                     &self.bot_params_original[c].short
                 };
-                let base = if authored.wallet_exposure_limit < 0.0 {
-                    authored.total_wallet_exposure_limit / slots as f64
+                let base = if authored.wallet_exposure_limit_ratio < 0.0 {
+                    authored.total_wallet_exposure_limit_ratio / slots as f64
                 } else {
-                    authored.wallet_exposure_limit
+                    authored.wallet_exposure_limit_ratio
                 };
-                budget *= 1.0 + effective_we_excess_allowance_pct(authored, base);
+                budget *= 1.0 + effective_we_excess_allowance_fraction(authored, base);
             }
         }
         Ok((budget, upnl, exposed))
@@ -585,9 +585,9 @@ mod tests {
     fn params(mode: &str, coins: usize) -> BacktestParams {
         let policy = Policy {
             enabled: true,
-            red_threshold: 0.005,
+            drawdown_threshold_fraction: 0.005,
             memory_ema_span_minutes: 3.0,
-            drawdown_ratio_ema_span_minutes: 1.0,
+            drawdown_fraction_ema_span_minutes: 1.0,
             cooldown_minutes_after_red: 2.0,
             ..Policy::default()
         };
@@ -642,7 +642,7 @@ mod tests {
                 let mut pair = BotParamsPair::default();
                 for side in [&mut pair.long, &mut pair.short] {
                     side.n_positions = coins;
-                    side.total_wallet_exposure_limit = 1.0;
+                    side.total_wallet_exposure_limit_ratio = 1.0;
                     side.unstuck_loss_allowance_pct = 0.01;
                     side.unstuck_close_pct = 0.1;
                     side.unstuck_threshold = 0.95;
@@ -1083,7 +1083,7 @@ mod tests {
         long.unstuck_loss_allowance_pct = 0.02;
         long.unstuck_close_pct = 0.5;
         long.unstuck_threshold = 0.5;
-        long.wallet_exposure_limit = 0.5;
+        long.wallet_exposure_limit_ratio = 0.5;
         long.risk_wel_enforcer_enabled = false;
         long.risk_twel_enforcer_enabled = false;
         let mut bt = Backtest::new(
@@ -1272,7 +1272,7 @@ mod tests {
         let config = p.equity_hard_stop_loss.hsl.as_mut().unwrap();
         let mut local = config.sides.clone();
         local[LONG].memory_ema_span_minutes = 7.0;
-        local[LONG].drawdown_ratio_ema_span_minutes = 3.0;
+        local[LONG].drawdown_fraction_ema_span_minutes = 3.0;
         local[LONG].scale_budget_with_excess_allowance = true;
         config.coins.insert("COIN1".into(), local);
         let mut bt = Backtest::new(

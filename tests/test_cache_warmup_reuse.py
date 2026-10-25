@@ -69,8 +69,8 @@ def _base_config(**overrides):
             "long": {
                 "enabled": True,
                 "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0,
+                "total_wallet_exposure_limit_ratio": 1.0,
+                "wallet_exposure_limit_ratio": 1.0,
                 "ema_span_0_minutes": 1000.0,
                 "ema_span_1_minutes": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -81,8 +81,8 @@ def _base_config(**overrides):
             "short": {
                 "enabled": False,
                 "n_positions": 0,
-                "total_wallet_exposure_limit": 0.0,
-                "wallet_exposure_limit": 0.0,
+                "total_wallet_exposure_limit_ratio": 0.0,
+                "wallet_exposure_limit_ratio": 0.0,
                 "ema_span_0_minutes": 100.0,
                 "ema_span_1_minutes": 100.0,
                 "forager_volume_ema_span_1m": 360.0,
@@ -90,7 +90,7 @@ def _base_config(**overrides):
                 "entry_log_range_ema_span_1h_candles": 1.0,
                 "universe": {"minimum_coin_age_days": 0.0, "approved_coins": [], "ignored_coins": []},
             },
-            "portfolio": {"warmup": {"span_multiplier": 0.3, "max_minutes": None}}, "global": {"universe": {}},
+            "portfolio": {"warmup": {"activation_span_fraction": 0.3, "max_minutes": None}}, "global": {"universe": {}},
         },
         "live": {},
         "optimize": {"bounds": {}},
@@ -181,11 +181,11 @@ class TestCacheHashIndependence:
 
         assert hash_a == hash_b
 
-    def test_different_warmup_ratio_same_hash(self):
-        """Changing warmup_ratio does not change the hash."""
+    def test_different_activation_span_fraction_same_hash(self):
+        """Changing activation_span_fraction does not change the hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b['bot']["portfolio"]['warmup']['span_multiplier'] = 10.0
+        cfg_b['bot']["portfolio"]['warmup']['activation_span_fraction'] = 10.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")
@@ -207,8 +207,8 @@ class TestCacheHashIndependence:
         cfg_long = _base_config()
         cfg_short = copy.deepcopy(cfg_long)
         cfg_short["bot"]["short"]["enabled"] = True
-        cfg_short["bot"]["long"]["total_wallet_exposure_limit"] = 0.0
-        cfg_short["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+        cfg_short["bot"]["long"]["total_wallet_exposure_limit_ratio"] = 0.0
+        cfg_short["bot"]["short"]["total_wallet_exposure_limit_ratio"] = 1.0
         cfg_short["bot"]["short"]["n_positions"] = 1
         set_side_universe_sources(cfg_short, 'approved_coins', {
             "long": [],

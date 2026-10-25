@@ -624,12 +624,12 @@ def _optimizer_can_skip_btc_analysis(
     limit_checks: Sequence[Dict[str, Any]],
 ) -> bool:
     try:
-        btc_collateral_cap = float(
-            get_optional_config_value(config, "backtest.btc_collateral_cap", 0.0) or 0.0
+        btc_collateral_target_ratio = float(
+            get_optional_config_value(config, "backtest.btc_collateral_target_ratio", 0.0) or 0.0
         )
     except (TypeError, ValueError):
         return False
-    if btc_collateral_cap > 0.0:
+    if btc_collateral_target_ratio > 0.0:
         return False
     if any(
         _metric_uses_btc_denominated_analysis(spec.metric) for spec in scoring_specs
@@ -837,8 +837,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     backtest_keys = {
         "reducer",
         "balance_sample_divider",
-        "btc_collateral_cap",
-        "btc_collateral_ltv_cap",
+        "btc_collateral_target_ratio",
+        "max_usd_debt_to_equity_ratio",
         "candle_interval_minutes",
         "coins",
         "coin_sources",
@@ -849,8 +849,8 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "filter_by_min_effective_cost",
         "gap_tolerance_ohlcvs_minutes",
         "hlcvs_data_override_mode",
-        "equity_floor_ratio",
-        "maker_fee_override",
+        "equity_floor_fraction",
+        "maker_fee_override_fraction",
         "market_order_slippage_fraction",
         "limit_order_fill_buffer_fraction",
         "market_settings",
@@ -861,7 +861,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "start_date",
         "starting_balance",
         "suite_enabled",
-        "taker_fee_override",
+        "taker_fee_override_fraction",
         "volume_normalization",
     }
     old_bt_compare = _resume_subset(old_bt, backtest_keys)
@@ -1563,10 +1563,11 @@ class Evaluator:
                 self._attachments["btc"][exchange] = attachment
                 self.shared_btc_np[exchange] = attachment.array
 
-    def perturb_step_digits(self, individual, change_chance=0.5):
+    def perturb_step_digits(self, individual, keep_value_probability=0.5):
         perturbed = []
         for i, val in enumerate(individual):
-            if np.random.random() < change_chance:  # x% chance of leaving unchanged
+            # Preserve the existing probability of retaining this parameter unchanged.
+            if np.random.random() < keep_value_probability:
                 perturbed.append(val)
                 continue
             bound = self.bounds[i]
@@ -1593,14 +1594,16 @@ class Evaluator:
 
         return perturbed
 
-    def perturb_x_pct(self, individual, magnitude=0.01):
+    def perturb_relative_fraction(self, individual, magnitude_fraction=0.01):
         perturbed = []
         for i, val in enumerate(individual):
             bound = self.bounds[i]
             if bound.high == bound.low:
                 perturbed.append(val)
                 continue
-            new_val = val * (1 + np.random.uniform(-magnitude, magnitude))
+            new_val = val * (
+                1 + np.random.uniform(-magnitude_fraction, magnitude_fraction)
+            )
             # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
             if bound.is_stepped:
                 perturbed.append(new_val)
@@ -1691,7 +1694,7 @@ class Evaluator:
                     existing_score, existing_penalty = existing_entry
                 self.duplicate_counter["total"] += 1
                 perturbation_funcs = [
-                    self.perturb_x_pct,
+                    self.perturb_relative_fraction,
                     self.perturb_step_digits,
                     self.perturb_gaussian,
                     self.perturb_random_subset,
@@ -2337,7 +2340,7 @@ class SuiteEvaluator:
                     existing_score, existing_penalty = existing_entry
                 duplicate_counter["total"] += 1
                 perturbation_funcs = [
-                    self.base.perturb_x_pct,
+                    self.base.perturb_relative_fraction,
                     self.base.perturb_step_digits,
                     self.base.perturb_gaussian,
                     self.base.perturb_random_subset,
@@ -2702,13 +2705,13 @@ def add_extra_options(parser, *, help_all: bool):
         ),
     )
     parser.add_argument(
-        "--polish-pct",
-        "--polish-bounds-pct",
+        "--polish-bounds-fraction",
         type=float,
         default=None,
-        dest="polish_bounds_pct",
+        dest="polish_bounds_fraction",
         help=(
-            "Narrow each optimize bound around the current bot value by this percentage, "
+            "Narrow each optimize bound around the current bot value by this relative half-width "
+            "(0.1 means plus/minus 10 percent), "
             "constrained to the existing bounds; fixed bounds stay fixed"
             if help_all
             else argparse.SUPPRESS
@@ -2720,7 +2723,7 @@ def add_extra_options(parser, *, help_all: bool):
         default="clamp",
         dest="polish_bounds_mode",
         help=(
-            "How --polish-pct treats existing optimize bounds: clamp keeps current behavior, "
+            "How --polish-bounds-fraction treats existing optimize bounds: clamp keeps current behavior, "
             "override-tunable lets tunable bounds escape the existing bounds, and override-all "
             "also expands fixed bounds"
             if help_all
@@ -2863,21 +2866,21 @@ def _step_supported_by_range(step: Any, low: float, high: float) -> bool:
 
 
 def apply_polish_bounds(
-    config: dict, pct: float, *, bounds_mode: str = "clamp"
+    config: dict, half_width_fraction: float, *, bounds_mode: str = "clamp"
 ) -> None:
     if (
-        not isinstance(pct, (int, float))
-        or not math.isfinite(float(pct))
-        or float(pct) < 0.0
+        not isinstance(half_width_fraction, (int, float))
+        or not math.isfinite(float(half_width_fraction))
+        or float(half_width_fraction) < 0.0
     ):
         raise ValueError(
-            "polish bounds percentage must be a finite non-negative number"
+            "polish bounds fraction must be a finite non-negative number"
         )
     if bounds_mode not in ("clamp", "override-tunable", "override-all"):
         raise ValueError(
             "polish bounds mode must be one of: clamp, override-tunable, override-all"
         )
-    pct = float(pct)
+    half_width_fraction = float(half_width_fraction)
     override_bounds = bounds_mode in ("override-tunable", "override-all")
     expand_fixed_bounds = bounds_mode == "override-all"
     flat_bounds, _ = _flat_optimize_bounds_for_config(config)
@@ -2909,7 +2912,7 @@ def apply_polish_bounds(
             center = float(value)
         else:
             center = max(existing_bound.low, min(existing_bound.high, float(value)))
-        low, high = sorted([center * (1.0 - pct), center * (1.0 + pct)])
+        low, high = sorted([center * (1.0 - half_width_fraction), center * (1.0 + half_width_fraction)])
         if not override_bounds:
             low = max(existing_bound.low, low)
             high = min(existing_bound.high, high)
@@ -2920,9 +2923,9 @@ def apply_polish_bounds(
         _set_optimize_bound(config, bound_key, polished_bound)
         narrowed += 1
     logging.info(
-        "polish bounds narrowed %d optimize bounds with pct=%s mode=%s",
+        "polish bounds narrowed %d optimize bounds with half_width_fraction=%s mode=%s",
         narrowed,
-        pct,
+        half_width_fraction,
         bounds_mode,
     )
 
@@ -3872,14 +3875,14 @@ async def main():
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
     _validate_starting_config_selection_args(parser, args)
-    polish_bounds_pct = getattr(args, "polish_bounds_pct", None)
+    polish_bounds_fraction = getattr(args, "polish_bounds_fraction", None)
     polish_bounds_mode = getattr(args, "polish_bounds_mode", "clamp")
-    if polish_bounds_pct is not None and (
-        not math.isfinite(float(polish_bounds_pct)) or float(polish_bounds_pct) < 0.0
+    if polish_bounds_fraction is not None and (
+        not math.isfinite(float(polish_bounds_fraction)) or float(polish_bounds_fraction) < 0.0
     ):
-        parser.error("--polish-pct must be a finite non-negative number")
-    if polish_bounds_pct is None and polish_bounds_mode != "clamp":
-        parser.error("--polish-bounds-mode requires --polish-pct")
+        parser.error("--polish-bounds-fraction must be a finite non-negative number")
+    if polish_bounds_fraction is None and polish_bounds_mode != "clamp":
+        parser.error("--polish-bounds-mode requires --polish-bounds-fraction")
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
@@ -4032,8 +4035,8 @@ async def main():
         for key, value in vars(args).items()
         if key.startswith("optimize.bounds.") and value is not None
     }
-    if polish_bounds_pct is not None:
-        apply_polish_bounds(config, polish_bounds_pct, bounds_mode=polish_bounds_mode)
+    if polish_bounds_fraction is not None:
+        apply_polish_bounds(config, polish_bounds_fraction, bounds_mode=polish_bounds_mode)
     installing_anchor_plan = bool(fine_tune_params and args.starting_configs)
     if installing_anchor_plan:
         install_anchored_fine_tune_plan(

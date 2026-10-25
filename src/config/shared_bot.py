@@ -13,13 +13,13 @@ BOT_GROUP_FIELD_MAP = {
     },
     "risk": {
         "max_positions": "n_positions",
-        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit",
+        "total_wallet_exposure_limit_ratio": "total_wallet_exposure_limit_ratio",
         "total_exposure_enforcer.enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer.policy": "risk_twel_enforcer_policy",
-        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold",
-        "we_excess_allowance_fraction": "risk_we_excess_allowance_pct",
+        "total_exposure_enforcer.threshold_ratio": "risk_twel_enforcer_threshold_ratio",
+        "we_excess_allowance_fraction": "risk_we_excess_allowance_fraction",
         "position_exposure_enforcer.enabled": "risk_wel_enforcer_enabled",
-        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold",
+        "position_exposure_enforcer.threshold_ratio": "risk_wel_enforcer_threshold_ratio",
     },
     "forager": {
         "score_weights": "forager_score_weights",
@@ -29,12 +29,12 @@ BOT_GROUP_FIELD_MAP = {
     },
     "hsl": {
         "cooldown_after_red_minutes": "hsl_cooldown_minutes_after_red",
-        "drawdown_fraction_ema_span_minutes": "hsl_ema_span_minutes",
+        "drawdown_fraction_ema_span_minutes": "hsl_drawdown_fraction_ema_span_minutes",
         "memory_ema_span_minutes": "hsl_memory_ema_span_minutes",
         "enabled": "hsl_enabled",
         "scale_budget_with_excess_allowance": "hsl_scale_budget_with_excess_allowance",
         "panic_close_order_type": "hsl_panic_close_order_type",
-        "drawdown_threshold_fraction": "hsl_red_threshold",
+        "drawdown_threshold_fraction": "hsl_drawdown_threshold_fraction",
     },
     "unstuck": {
         "close_fraction": "unstuck_close_pct",
@@ -53,7 +53,7 @@ FLAT_BOT_KEY_TO_GROUP_PATH = {
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
-STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit": "wallet_exposure_limit_ratio"}
+STANDALONE_PUBLIC_BOT_PATHS = {"wallet_exposure_limit_ratio": "wallet_exposure_limit_ratio"}
 FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES = {"volatility": "log_range"}
 FORAGER_WEIGHT_PUBLIC_TO_NATIVE_NAMES = {
     public: native for native, public in FORAGER_WEIGHT_NATIVE_TO_PUBLIC_NAMES.items()

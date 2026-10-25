@@ -104,19 +104,19 @@ EMA_ANCHOR_PARAM_KEYS = (
     "offset_log_range_ema_span_1h_candles",
     "offset_log_range_ema_span_minutes",
     "entry_cooldown_minutes",
-    "total_wallet_exposure_limit",
+    "total_wallet_exposure_limit_ratio",
 )
 
 EXPOSURE_PARAM_KEYS = (
-    "we_excess_allowance_pct",
+    "we_excess_allowance_fraction",
     "hsl_scale_budget_with_excess_allowance",
     "twel_entry_gate_enabled",
-    "twel_enforcer_threshold",
+    "twel_enforcer_threshold_ratio",
 )
 
 POSITION_EXPOSURE_ENFORCER_PARAM_KEYS = (
     "wel_enforcer_enabled",
-    "wel_enforcer_threshold",
+    "wel_enforcer_threshold_ratio",
 )
 
 TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = ("twel_enforcer_enabled",)
@@ -149,8 +149,8 @@ GLOBAL_RISK_PARAM_KEYS = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_e
 
 HSL_PARAM_KEYS = (
     "hsl_enabled",
-    "hsl_red_threshold",
-    "hsl_drawdown_ratio_ema_span_minutes",
+    "hsl_drawdown_threshold_fraction",
+    "hsl_drawdown_fraction_ema_span_minutes",
     "hsl_cooldown_ms_lo",
     "hsl_memory_ema_span_minutes",
     "hsl_signal_mode",
@@ -159,8 +159,8 @@ HSL_PARAM_KEYS = (
 
 HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_enabled", ("enabled",)),
-    ("hsl_red_threshold", ("drawdown_threshold_fraction",)),
-    ("hsl_drawdown_ratio_ema_span_minutes", ("drawdown_fraction_ema_span_minutes",)),
+    ("hsl_drawdown_threshold_fraction", ("drawdown_threshold_fraction",)),
+    ("hsl_drawdown_fraction_ema_span_minutes", ("drawdown_fraction_ema_span_minutes",)),
     ("hsl_cooldown_ms_lo", ("cooldown_after_red_minutes",)),
     ("hsl_cooldown_ms_hi", ("cooldown_after_red_minutes",)),
     ("hsl_panic_market", ("panic_close_order_type",)),
@@ -170,10 +170,10 @@ HSL_COIN_OVERRIDE_PATHS = (
 
 EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
 EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN = len(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS)
-EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
 )
-EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
+EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN = (
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 2
 )
 EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
@@ -255,7 +255,7 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
     "close_retracement_log_range_1h_coefficient",
     "close_retracement_log_range_1m_coefficient",
     "entry_cooldown_minutes",
-    "total_wallet_exposure_limit",
+    "total_wallet_exposure_limit_ratio",
     "gate_initial",
     "gate_reentry",
 )
@@ -333,20 +333,20 @@ TRAILING_MARTINGALE_GATE_MODE_OVERRIDE_PATH = ("entry", "ema_gate_mode")
 TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN = len(
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN + 1
+TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN = (
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN + 1
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN + 1
 )
-TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN = (
+TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN + 1
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_RATIO_COLUMN + 1
 )
 TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN = (
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN + 6
@@ -415,7 +415,7 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             )
             or 0.0
         ),
-        "total_wallet_exposure_limit": float(risk["total_wallet_exposure_limit"]),
+        "total_wallet_exposure_limit_ratio": float(risk["total_wallet_exposure_limit_ratio"]),
         "gate_initial": float(mode in {"all", "initial"}),
         "gate_reentry": float(mode in {"all", "reentry"}),
     }

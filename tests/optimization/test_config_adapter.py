@@ -79,10 +79,10 @@ class TestConfigAdapter:
 
         key_paths = get_optimization_key_paths(config)
 
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
+        assert ("long_hsl_drawdown_threshold_fraction", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
         assert ("long_hsl_memory_ema_span_minutes",
                 ("bot", "long", "hsl", "memory_ema_span_minutes")) in key_paths
-        assert ("short_hsl_drawdown_ratio_ema_span_minutes",
+        assert ("short_hsl_drawdown_fraction_ema_span_minutes",
                 ("bot", "short", "hsl", "drawdown_fraction_ema_span_minutes")) in key_paths
 
     def test_get_optimization_key_paths_rejects_empty_bounds(self):
@@ -209,7 +209,7 @@ class TestConfigAdapter:
                 "threshold_base_fraction",
             ),
         ) in key_paths
-        assert ("long_hsl_red_threshold", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
+        assert ("long_hsl_drawdown_threshold_fraction", ("bot", "long", "hsl", "drawdown_threshold_fraction")) in key_paths
 
     def test_get_optimization_key_paths_routes_ema_anchor_fields_to_strategy_section(self):
         config = _canonical_config_with_bounds({

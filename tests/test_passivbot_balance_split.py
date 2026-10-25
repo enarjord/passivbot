@@ -197,7 +197,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
             )
             side_params = global_bot_params[pside]
             global_side_enabled = (
-                float(side_params["total_wallet_exposure_limit"]) > 0.0
+                float(side_params["total_wallet_exposure_limit_ratio"]) > 0.0
                 and int(side_params["n_positions"]) > 0
             )
             effective_mode = (
@@ -205,7 +205,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
             )
             symbol_side_eligible = (
                 bool(symbol.get("tradable", False))
-                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"]) != 0.0
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit_ratio"]) != 0.0
             )
             active = symbol_side_eligible and (
                 (has_position and selection_effective_mode != "manual")
@@ -925,7 +925,7 @@ def _counted_staged_account_refresh_bot(
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = balance
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = balance
     bot.balance = balance
     bot._exchange_reported_balance_raw = balance
@@ -1355,7 +1355,7 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
     }
     bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
-    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
 
     calls = []
@@ -1432,7 +1432,7 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
     bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
-    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
     sink = ListEventSink()
     bot.exchange = "binance"
@@ -1513,7 +1513,7 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
     bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
-    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
     bot.live_event_console_enabled = True
     sink = ListEventSink()
@@ -4450,7 +4450,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         },
         "short": {"status": "disabled"},
     }
@@ -4466,7 +4466,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.03,
             "peak": 16550.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         bot._monitor_runtime_unstuck_hints["long"] = {
             "next_symbol": "ETH/USDT:USDT",
@@ -4480,7 +4480,7 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "status": "ok",
             "allowance": -41.20,
             "peak": 16580.0,
-            "pct_from_peak": -0.2,
+            "change_from_peak_percent": -0.2,
         }
         now[0] += 5 * 60 * 1000
         bot._maybe_log_unstuck_status()
@@ -4530,7 +4530,7 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
             "status": "ok",
             "allowance": -41.01,
             "peak": 16400.0,
-            "pct_from_peak": -0.3,
+            "change_from_peak_percent": -0.3,
         }
         if pside == "long"
         else {"status": "disabled"}
@@ -4580,7 +4580,7 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     bot._get_realized_memories = lambda: {"unstuck": {"drawdown": 0.0}, "loss_gate": None}
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.5 if pside == "long" else 0.0
         if key == "unstuck_loss_allowance_pct":
             return 0.02 if pside == "long" else 0.0
@@ -6627,7 +6627,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6827,7 +6827,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -6974,7 +6974,7 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -7336,7 +7336,7 @@ async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raise
     bot.balance_raw = 50.0
     bot.balance_override = None
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._exchange_reported_balance_raw = 50.0
     bot._apply_open_orders_snapshot = AsyncMock()
     bot._apply_positions_snapshot = MagicMock()
@@ -7378,7 +7378,7 @@ async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_i
     bot.balance = 50.0
     bot.balance_raw = 50.0
     bot.previous_hysteresis_balance = 50.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_override = "invalid"
     bot._balance_override_logged = False
     bot._exchange_reported_balance_raw = 50.0
@@ -7636,7 +7636,7 @@ async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     ok = await bot.update_balance()
     assert ok is True
@@ -7655,7 +7655,7 @@ def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog)
     bot.balance_override = 250.0
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 133.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
 
     with caplog.at_level(logging.INFO):
         ok = bot._apply_balance_snapshot(123.45)
@@ -7720,12 +7720,12 @@ def test_accessor_returns_raw_when_present():
     assert bot.get_hysteresis_snapped_balance() == pytest.approx(1000.0)
 
 
-def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
+def test_get_wallet_exposure_limit_ratio_uses_configured_n_positions_only():
     bot = _unit_bot()
     bot.coin_overrides = {}
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.4
         if key == "n_positions":
             return 7
@@ -7735,7 +7735,7 @@ def test_get_wallet_exposure_limit_uses_configured_n_positions_only():
     bot.get_max_n_positions = lambda pside: 1
     bot.get_current_n_positions = lambda pside: 99
 
-    wel = bot.get_wallet_exposure_limit("long")
+    wel = bot.get_wallet_exposure_limit_ratio("long")
     assert wel == pytest.approx(0.2)
 
 
@@ -7764,9 +7764,9 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     bot.balance_raw = 10.0
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
-    bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.get_wallet_exposure_limit_ratio = lambda pside, symbol=None: 1.0
     bot.bot_value = lambda pside, key: (
-        1.0 if key == "total_wallet_exposure_limit" else 0.0
+        1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
     bot.bp = lambda pside, key, symbol=None: (
         0.5 if key == "entry_initial_qty_fraction" else 0.0
@@ -7785,10 +7785,10 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
         {"live": {}, "bot": {"long": {}, "portfolio": {"strategy_kind": "ema_anchor"}}}
     )
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
-    bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.get_wallet_exposure_limit_ratio = lambda pside, symbol=None: 1.0
     bot.bp = lambda pside, key, symbol=None: (
         0.0
-        if key == "risk_we_excess_allowance_pct"
+        if key == "risk_we_excess_allowance_fraction"
         else (
             "bounded"
             if key == "risk_we_excess_allowance_mode"
@@ -7796,7 +7796,7 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
         )
     )
     bot.bot_value = lambda pside, key: (
-        1.0 if key == "total_wallet_exposure_limit" else 0.0
+        1.0 if key == "total_wallet_exposure_limit_ratio" else 0.0
     )
     bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_fraction": 0.5}
     monkeypatch.setattr(
@@ -8049,7 +8049,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown(
     bot.balance = 100.0  # stale snapped value to simulate hysteresis lag
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.0
         if key == "unstuck_loss_allowance_pct":
             return 0.1
@@ -8084,7 +8084,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
     bot.balance_raw = 1000.0
 
     def bot_value(pside, key):
-        if key == "total_wallet_exposure_limit":
+        if key == "total_wallet_exposure_limit_ratio":
             return 1.0
         if key == "unstuck_loss_allowance_pct":
             return 0.01
@@ -8098,7 +8098,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
 
     assert info["status"] == "ok"
     assert info["peak"] == 1005.0
-    assert info["pct_from_peak"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
+    assert info["change_from_peak_percent"] == pytest.approx((1000.0 / 1005.0 - 1.0) * 100.0)
     assert info["allowance"] == allowance(1000.0, mul(f32(0.01), f32(1.0)), 5.0)
 
 
@@ -10234,7 +10234,7 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
         return {symbol: 100.0 for symbol in symbols}
 
     bot._get_live_last_prices = fake_get_live_last_prices
-    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
+    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_fraction" else 0.0
 
     secret = "open-order-secret https://example.invalid/open-order"
     unsafe_order_id = "token=order-id-secret https://example.invalid/order-id"
@@ -11593,7 +11593,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot.balance_raw = 0.0
     bot.balance = 0.0
     bot._exchange_reported_balance_raw = 0.0
@@ -11869,7 +11869,7 @@ def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = 100.0
-    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_hysteresis_snap_fraction = 0.02
     bot._balance_composition = composition
 
     assert bot._apply_balance_snapshot(100.0) is True

@@ -50,8 +50,8 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
-    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     _build_hourly_log_range,
     _directional_touch_ticks,
@@ -2588,8 +2588,8 @@ _UNSTUCK_DISABLED_VALUES = {
 
 _HSL_DISABLED_VALUES = {
     "hsl_enabled": 0.0,
-    "hsl_red_threshold": 0.2,
-    "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+    "hsl_drawdown_threshold_fraction": 0.2,
+    "hsl_drawdown_fraction_ema_span_minutes": 60.0,
     'hsl_cooldown_ms_lo': 0.0,
     'hsl_memory_ema_span_minutes': 43200.0,
     "hsl_signal_mode": 0.0,
@@ -2625,7 +2625,7 @@ def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
             minute_span_key: 120.0,
             hour_span_key: 24.0,
             "entry_cooldown_minutes": 2.0,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 450000.0,
         }
     )
@@ -2656,7 +2656,7 @@ def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
             == 450000.0
         )
         assert scaled[0, offset + keys.index(hour_span_key)] == 24.0
-        hsl_span = scaled[0, offset + keys.index("hsl_drawdown_ratio_ema_span_minutes")]
+        hsl_span = scaled[0, offset + keys.index("hsl_drawdown_fraction_ema_span_minutes")]
         alpha_1m = 2.0 / 61.0
         alpha_5m = 2.0 / (hsl_span + 1.0)
         assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
@@ -2669,7 +2669,7 @@ def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
         for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
     }
     side.update(_ADAPTIVE_DISABLED_VALUES)
-    side["hsl_drawdown_ratio_ema_span_minutes"] = span
+    side["hsl_drawdown_fraction_ema_span_minutes"] = span
     original = np.asarray(
         [[side[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS] * 2],
         dtype=np.float64,
@@ -2687,7 +2687,7 @@ def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
         offset = side_index * len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         effective_span = scaled[
             0,
-            offset + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_ratio_ema_span_minutes"),
+            offset + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_fraction_ema_span_minutes"),
         ]
         alpha_5m = 2.0 / (effective_span + 1.0)
         assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
@@ -2709,7 +2709,7 @@ def test_single_coin_interval_packing_preserves_one_minute_hsl_span_exactly():
         values[
             0,
             side_index * len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
-            + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_ratio_ema_span_minutes"),
+            + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_fraction_ema_span_minutes"),
         ] = 5.5
 
     scaled = _scale_directional_minute_parameters(
@@ -2748,7 +2748,7 @@ def test_multicoin_ema_interval_packing_scales_forager_and_directional_spans():
             "forager_volume_ema_span_1m": 180.0,
             "forager_volatility_ema_span_1m": 240.0,
             "entry_cooldown_minutes": 15.0,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 2100000.0,
         }
     )
@@ -2834,7 +2834,7 @@ def test_multicoin_tm_interval_packing_scales_forager_and_directional_spans():
             "forager_volume_ema_span_1m": 180.0,
             "forager_volatility_ema_span_1m": 240.0,
             "entry_cooldown_minutes": 15.0,
-            "hsl_drawdown_ratio_ema_span_minutes": 60.0,
+            "hsl_drawdown_fraction_ema_span_minutes": 60.0,
             'hsl_cooldown_ms_lo': 2100000.0,
         }
     )
@@ -2980,7 +2980,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
         risk["total_wallet_exposure_limit_ratio"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
-        risk["we_excess_allowance_pct"] = 0.0
+        risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
         config["bot"][side]["hsl"]["enabled"] = False
@@ -3169,7 +3169,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         risk["total_wallet_exposure_limit_ratio"] = 0.1 if enabled else 0.0
         risk["n_positions"] = 2 if enabled else 0
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
-        risk["we_excess_allowance_pct"] = 0.0
+        risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
         config["bot"][side]["hsl"]["enabled"] = enabled
@@ -3353,17 +3353,17 @@ def _multicoin_exposure_fixture(
             "offset_log_range_ema_span_1h_candles": 2.0,
             "offset_log_range_ema_span_minutes": 2.0,
             "entry_cooldown_minutes": 0.0,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "forager_volume_ema_span_1m": 2.0,
             "forager_volatility_ema_span_1m": 2.0,
             "forager_score_weights_volume": 1.0,
             "forager_score_weights_ema_readiness": 0.0,
             "forager_score_weights_volatility": 0.0,
             "n_positions": 2.0,
-            "we_excess_allowance_pct": 0.0,
+            "we_excess_allowance_fraction": 0.0,
             "hsl_scale_budget_with_excess_allowance": 0.0,
             "twel_entry_gate_enabled": 1.0,
-            "twel_enforcer_threshold": 1.0,
+            "twel_enforcer_threshold_ratio": 1.0,
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
@@ -3419,7 +3419,7 @@ def _multicoin_exposure_fixture(
             "close_retracement_log_range_1h_coefficient": 0.0,
             "close_retracement_log_range_1m_coefficient": 0.0,
             "entry_cooldown_minutes": 0.0,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "gate_initial": 0.0,
             "gate_reentry": 0.0,
             "forager_volume_ema_span_1m": 2.0,
@@ -3428,12 +3428,12 @@ def _multicoin_exposure_fixture(
             "forager_score_weights_ema_readiness": 0.0,
             "forager_score_weights_volatility": 0.0,
             "n_positions": 2.0,
-            "we_excess_allowance_pct": 0.0,
+            "we_excess_allowance_fraction": 0.0,
             "hsl_scale_budget_with_excess_allowance": 0.0,
             "twel_entry_gate_enabled": 1.0,
-            "twel_enforcer_threshold": 1.0,
+            "twel_enforcer_threshold_ratio": 1.0,
             "wel_enforcer_enabled": 0.0,
-            "wel_enforcer_threshold": 1.0,
+            "wel_enforcer_threshold_ratio": 1.0,
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
@@ -3595,8 +3595,8 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
             ("unstuck_ema_span_1", 133.5),
             ("hsl_enabled", 1.0),
             ("hsl_signal_mode", 2.0),
-            ("hsl_red_threshold", 0.02),
-            ("hsl_drawdown_ratio_ema_span_minutes", 1.0),
+            ("hsl_drawdown_threshold_fraction", 0.02),
+            ("hsl_drawdown_fraction_ema_span_minutes", 1.0),
             ("hsl_cooldown_ms_lo", 3.0),
         ):
             row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
@@ -4072,7 +4072,7 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         risk["total_wallet_exposure_limit_ratio"] = 0.2 if enabled else 0.0
         risk["n_positions"] = 1 if enabled else 0
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 100.0
-        risk["we_excess_allowance_pct"] = 0.0
+        risk["we_excess_allowance_fraction"] = 0.0
         risk["total_exposure_entry_gate_enabled"] = False
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
@@ -4257,8 +4257,8 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.9,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.9,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 0.0,
@@ -4375,8 +4375,8 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
         fused_runner_cls = MpsTrailingMartingaleMulticoinFusedRunner
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.9,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.9,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 0.0,
@@ -4450,8 +4450,8 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.01,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.01,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 120000.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 1.0,
@@ -4463,7 +4463,7 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
     # retain an unrelated profitable trailing position past its valid range.
     long_row, short_row = list(row), list(row)
     inactive_row = short_row if adverse_side == "long" else long_row
-    inactive_row[keys.index("total_wallet_exposure_limit")] = 0.0
+    inactive_row[keys.index("total_wallet_exposure_limit_ratio")] = 0.0
     output = fused_runner_cls(
         run,
         data,
@@ -4708,10 +4708,10 @@ def test_mps_tm_recursive_entry_twel_gate_does_not_expand_invalid_coin(
             "entry_reentry_qty_multiplier": 1.0,
             "entry_initial_qty_fraction": 0.1,
             "entry_threshold_base_fraction": 0.01,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "n_positions": 1.0,
             "twel_entry_gate_enabled": 1.0,
-            "twel_enforcer_threshold": 1.0,
+            "twel_enforcer_threshold_ratio": 1.0,
         }
     )
     params = _tm_probe_tensor(
@@ -4945,9 +4945,9 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     values.update(
         {
             "n_positions": 2.0,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
             "unstuck_enabled": 1.0,
@@ -5181,12 +5181,12 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
         wel_column = (
             11
             if strategy_kind == "ema_anchor"
-            else TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+            else TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN
         )
         allowance_column = (
             12
             if strategy_kind == "ema_anchor"
-            else TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN
+            else TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_FRACTION_COLUMN
         )
         overrides[:, wel_column] = 0.1
         overrides[1, allowance_column] = 1.0
@@ -5337,8 +5337,8 @@ def test_mps_one_sided_multicoin_hsl_panics_the_portfolio(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 0.0 if signal_mode == "portfolio" else 1.0,
@@ -5408,8 +5408,8 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5506,8 +5506,8 @@ def test_mps_multicoin_coin_hsl_override_controls_enablement(
     )
     for key, value in {
         "hsl_enabled": float(global_enabled),
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5543,7 +5543,7 @@ def test_mps_multicoin_coin_hsl_recovery_uses_total_exposure_contract(
     hsl_start = 19 if strategy_kind == "ema_anchor" else 34
     overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
     # A fixed per-coin WEL of zero disables entries, but does not change that
-    # coin's positive side total_wallet_exposure_limit. Exact Rust's HSL
+    # coin's positive side total_wallet_exposure_limit_ratio. Exact Rust's HSL
     # reporting contract checks the latter, so the enabled controller still
     # samples aggregate side equity while coin one trades.
     overrides[0, wel_index] = 0.0
@@ -5563,8 +5563,8 @@ def test_mps_multicoin_coin_hsl_recovery_uses_total_exposure_contract(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5699,8 +5699,8 @@ def test_mps_multicoin_coin_hsl_reselects_around_blocked_forager_coin(
     for key, value in {
         "n_positions": 1.0,
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
@@ -5756,8 +5756,8 @@ def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.05,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.05,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 1.0,
@@ -6164,7 +6164,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
     assert f"constant int PARAM_COLS = {len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)}" in source
     assert f"constant int OVERRIDE_COLS = {EMA_ANCHOR_COIN_OVERRIDE_COLS}" in source
-    assert "allowed_wallet_exposure_limit" in source
+    assert "allowed_wallet_exposure_limit_ratio" in source
     assert "twel_entry_gate_enabled" in source
     assert "twel_enforcer_enabled" in source
     assert "twel_enforcer_reduce_portfolio" in source
@@ -6857,10 +6857,10 @@ def test_mps_tm_multicoin_recursive_entry_gate_orders_cross_coin_ladders(
         "entry_threshold_base_fraction": 0.01,
         "entry_retracement_base_fraction": 0.0,
         "close_retracement_base_fraction": 0.01,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 2.0,
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": threshold,
+        "twel_enforcer_threshold_ratio": threshold,
     }.items():
         row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
 
@@ -6902,10 +6902,10 @@ def test_mps_tm_multicoin_recursive_entry_gate_keeps_partial_boundary(side, mark
         "entry_threshold_base_fraction": 0.01,
         "entry_retracement_base_fraction": 0.0,
         "close_retracement_base_fraction": 0.01,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 2.0,
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": 0.18,
+        "twel_enforcer_threshold_ratio": 0.18,
     }.items():
         row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
 
@@ -6954,7 +6954,7 @@ def test_mps_tm_multicoin_coin_override_selects_recursive_market_entry(side):
         "entry_retracement_base_fraction": 0.01,
         "close_retracement_base_fraction": 0.01,
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": 1.0,
+        "twel_enforcer_threshold_ratio": 1.0,
     }.items():
         row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
 
@@ -7430,7 +7430,7 @@ def test_mps_ema_multicoin_market_entry_cap_uses_market_touch(side):
     )
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_fraction")] = 1.0
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset_fraction")] = 0.002
-    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("total_wallet_exposure_limit")] = 0.2
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("total_wallet_exposure_limit_ratio")] = 0.2
     row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("n_positions")] = 2.0
     params = np.asarray([row], dtype=np.float64)
 
@@ -7477,7 +7477,7 @@ def test_mps_tm_multicoin_market_entry_cap_uses_market_touch(side):
         "entry_initial_ema_distance_fraction": 0.002,
         "entry_retracement_base_fraction": 0.01,
         "close_retracement_base_fraction": 0.01,
-        "total_wallet_exposure_limit": 0.2,
+        "total_wallet_exposure_limit_ratio": 0.2,
         "n_positions": 2.0,
     }.items():
         row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
@@ -7765,7 +7765,7 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
         "entry_retracement_base_fraction": 0.0,
         "close_retracement_base_fraction": 0.01,
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": 1.0,
+        "twel_enforcer_threshold_ratio": 1.0,
     }.items():
         row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
     params = np.asarray([row + row], dtype=np.float64)
@@ -7961,7 +7961,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     def side_row(signal_mode):
         hsl = dict(_HSL_DISABLED_VALUES)
         hsl["hsl_enabled"] = 1.0
-        hsl["hsl_red_threshold"] = 0.9
+        hsl["hsl_drawdown_threshold_fraction"] = 0.9
         hsl["hsl_signal_mode"] = float(signal_mode)
         row = base + list(hsl.values()) + [2.0, 3.0] + list(_ADAPTIVE_DISABLED_VALUES.values()) + [43200.0, 43200.0]
         assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
@@ -8222,7 +8222,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
     metric_rows = []
-    red_threshold_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_red_threshold")
+    red_threshold_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_drawdown_threshold_fraction")
     slow_span_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_memory_ema_span_minutes")
     for signal_mode in range(3):
         row = side_row(signal_mode) + side_row(signal_mode)
@@ -8454,7 +8454,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
     values.update(
         {
             "n_positions": 2.0,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "forager_score_weights_ema_readiness": 1.0,
         }
     )
@@ -8593,7 +8593,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "close_retracement_log_range_1h_coefficient": 0.0,
         "close_retracement_log_range_1m_coefficient": 0.0,
         "entry_cooldown_minutes": 0.0,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
         "gate_initial": 1.0,
         "gate_reentry": 1.0,
         "forager_volume_ema_span_1m": 60.0,
@@ -8602,12 +8602,12 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "forager_score_weights_ema_readiness": 0.0,
         "forager_score_weights_volatility": 0.0,
         "n_positions": 2.0,
-        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_fraction": 0.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": 1.0,
+        "twel_enforcer_threshold_ratio": 1.0,
         "wel_enforcer_enabled": 0.0,
-        "wel_enforcer_threshold": 1.0,
+        "wel_enforcer_threshold_ratio": 1.0,
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
@@ -8622,7 +8622,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     def side_row(signal_mode):
         side_values = dict(values)
         side_values["hsl_enabled"] = 1.0
-        side_values["hsl_red_threshold"] = 0.9
+        side_values["hsl_drawdown_threshold_fraction"] = 0.9
         side_values["hsl_signal_mode"] = float(signal_mode)
         return [side_values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -8877,7 +8877,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     metric_rows = []
     red_threshold_index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
-        "hsl_red_threshold"
+        "hsl_drawdown_threshold_fraction"
     )
     slow_span_index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
         "hsl_memory_ema_span_minutes"
@@ -9089,7 +9089,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         f"constant int OVERRIDE_COLS = {TRAILING_MARTINGALE_COIN_OVERRIDE_COLS + _TM_DECIMAL_WORDS}"
         in source
     )
-    assert "allowed_wallet_exposure_limit" in source
+    assert "allowed_wallet_exposure_limit_ratio" in source
     assert "twel_entry_gate_enabled" in source
     assert "coin_override_or" in source
     assert "merge_reducer" not in source
@@ -9161,7 +9161,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "close_retracement_log_range_1h_coefficient": 0.0,
         "close_retracement_log_range_1m_coefficient": 0.0,
         "entry_cooldown_minutes": 0.0,
-        "total_wallet_exposure_limit": 1.0,
+        "total_wallet_exposure_limit_ratio": 1.0,
         "gate_initial": 1.0,
         "gate_reentry": 1.0,
         "forager_volume_ema_span_1m": 60.0,
@@ -9170,12 +9170,12 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "forager_score_weights_ema_readiness": 0.0,
         "forager_score_weights_volatility": 0.0,
         "n_positions": 2.0,
-        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_fraction": 0.0,
         "hsl_scale_budget_with_excess_allowance": 0.0,
         "twel_entry_gate_enabled": 1.0,
-        "twel_enforcer_threshold": 1.0,
+        "twel_enforcer_threshold_ratio": 1.0,
         "wel_enforcer_enabled": 0.0,
-        "wel_enforcer_threshold": 1.0,
+        "wel_enforcer_threshold_ratio": 1.0,
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
@@ -9299,7 +9299,7 @@ def test_mps_multicoin_bounded_allowance_with_gate_disabled_expands_volume(
         if strategy_kind == "ema_anchor"
         else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     )
-    expanded[keys.index("we_excess_allowance_pct")] = 0.5
+    expanded[keys.index("we_excess_allowance_fraction")] = 0.5
     expanded[keys.index("hsl_scale_budget_with_excess_allowance")] = 1.0
     expanded[keys.index("twel_entry_gate_enabled")] = 0.0
 
@@ -9354,7 +9354,7 @@ def test_mps_multicoin_twel_threshold_reduces_entry_volume(strategy_kind):
         if strategy_kind == "ema_anchor"
         else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     )
-    reduced_cap[keys.index("twel_enforcer_threshold")] = 0.5
+    reduced_cap[keys.index("twel_enforcer_threshold_ratio")] = 0.5
 
     output = runner.run(np.asarray([full_cap, reduced_cap], dtype=np.float64))
     synchronize()
@@ -9392,7 +9392,7 @@ def test_mps_multicoin_equal_distance_twel_tie_keeps_higher_coin_index(
         if strategy_kind == "ema_anchor"
         else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     )
-    candidate[keys.index("twel_enforcer_threshold")] = 0.5
+    candidate[keys.index("twel_enforcer_threshold_ratio")] = 0.5
 
     output = runner.run(np.asarray([candidate], dtype=np.float64))
     synchronize()
@@ -9433,7 +9433,7 @@ def _tm_row(*, initial_ema_distance_fraction=0.01, gate_initial=1.0, gate_reentr
         0.0,  # close_retracement_log_range_1h_coefficient
         0.0,  # close_retracement_log_range_1m_coefficient
         0.0,  # entry_cooldown_minutes
-        1.0,  # total_wallet_exposure_limit
+        1.0,  # total_wallet_exposure_limit_ratio
         gate_initial,
         gate_reentry,
     ]
@@ -9561,13 +9561,13 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
     gated[keys.index("unstuck_ema_gating_enabled")] = 1.0
     gated[keys.index("unstuck_ema_dist")] = 0.1
     allowance_disabled = list(disabled)
-    allowance_disabled[keys.index("we_excess_allowance_pct")] = 1.0
+    allowance_disabled[keys.index("we_excess_allowance_fraction")] = 1.0
     allowance_disabled[keys.index("twel_entry_gate_enabled")] = 1.0
-    allowance_disabled[keys.index("twel_enforcer_threshold")] = 0.5
+    allowance_disabled[keys.index("twel_enforcer_threshold_ratio")] = 0.5
     allowance_enabled = list(enabled)
-    allowance_enabled[keys.index("we_excess_allowance_pct")] = 1.0
+    allowance_enabled[keys.index("we_excess_allowance_fraction")] = 1.0
     allowance_enabled[keys.index("twel_entry_gate_enabled")] = 1.0
-    allowance_enabled[keys.index("twel_enforcer_threshold")] = 0.5
+    allowance_enabled[keys.index("twel_enforcer_threshold_ratio")] = 0.5
 
     output = runner.run(
         np.asarray(
@@ -9656,7 +9656,7 @@ def test_mps_tm_multicoin_unstuck_finalization_keeps_ordinary_close_remainder():
             "gate_initial": 1.0,
             "n_positions": 1.0,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.2,
+            "wel_enforcer_threshold_ratio": 0.2,
             "unstuck_enabled": 1.0,
             "unstuck_ema_gating_enabled": 0.0,
             "unstuck_close_pct": 0.7,
@@ -9744,7 +9744,7 @@ def _tm_multicoin_off_tick_reducer_case(
             "close_threshold_exposure_ratio_coefficient": close_threshold_we,
             "close_retracement_base_fraction": 0.0,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.5,
+            "wel_enforcer_threshold_ratio": 0.5,
         }
     )
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -9827,9 +9827,9 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
             "close_threshold_exposure_ratio_coefficient": 0.0,
             "close_retracement_base_fraction": 0.0,
             "n_positions": 1.0,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.99,
+            "wel_enforcer_threshold_ratio": 0.99,
         }
     )
     params = _tm_probe_tensor(
@@ -9955,7 +9955,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
             "close_threshold_exposure_ratio_coefficient": 0.0,
             "close_retracement_base_fraction": 0.0,
             "n_positions": 1.0,
-            "total_wallet_exposure_limit": 1.0,
+            "total_wallet_exposure_limit_ratio": 1.0,
             "wel_enforcer_enabled": 0.0,
             "twel_enforcer_enabled": 0.0,
             "unstuck_enabled": 1.0,
@@ -10395,7 +10395,7 @@ def test_mps_tm_multicoin_same_tick_wel_resizes_merged_market_group_once(side):
         collect_coin_fill_counts=True,
     )
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values["wel_enforcer_threshold"] = 0.99
+    values["wel_enforcer_threshold_ratio"] = 0.99
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
     output = runner.run(np.asarray([candidate], dtype=np.float64))
@@ -10470,7 +10470,7 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
         1.0
     )
     repaired[
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold")
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold_ratio")
     ] = 0.5
     output = runner.run(np.asarray([baseline, repaired], dtype=np.float64))
     synchronize()
@@ -10522,8 +10522,8 @@ def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
         {
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "wel_enforcer_threshold": 0.5,
-            "twel_enforcer_threshold": 0.5,
+            "wel_enforcer_threshold_ratio": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "wel_enforcer_enabled": float(repair_kind == "position"),
             "twel_enforcer_enabled": float(repair_kind == "total"),
             "twel_enforcer_reduce_portfolio": float(repair_kind == "total"),
@@ -10566,7 +10566,7 @@ def test_mps_tm_multicoin_trailing_market_exposure_repair_stays_partial(side):
             "close_threshold_base_fraction": 10.0,
             "close_retracement_base_fraction": 0.01,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.5,
+            "wel_enforcer_threshold_ratio": 0.5,
         }
     )
     candidate = np.asarray(
@@ -10658,12 +10658,12 @@ def test_mps_fused_dual_multicoin_exposure_repair(
     repaired = list(baseline)
     if repair_kind == "total":
         repaired[param_keys.index("twel_entry_gate_enabled")] = 0.0
-        repaired[param_keys.index("twel_enforcer_threshold")] = 0.5
+        repaired[param_keys.index("twel_enforcer_threshold_ratio")] = 0.5
         repaired[param_keys.index("twel_enforcer_enabled")] = 1.0
         repaired[param_keys.index("twel_enforcer_reduce_portfolio")] = 1.0
     else:
         repaired[param_keys.index("wel_enforcer_enabled")] = 1.0
-        repaired[param_keys.index("wel_enforcer_threshold")] = 0.5
+        repaired[param_keys.index("wel_enforcer_threshold_ratio")] = 0.5
 
     output = runner.run(
         np.asarray([baseline + baseline, repaired + repaired], dtype=np.float64)
@@ -10713,14 +10713,14 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_enabled")
         ] = 1.0
         repaired[
-            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold")
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold_ratio")
         ] = 0.5
     else:
         repaired[
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_entry_gate_enabled")
         ] = 0.0
         repaired[
-            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio")
         ] = 0.5
         repaired[
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")
@@ -10762,7 +10762,7 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_entry_gate_enabled")
     ] = 0.0
     overweight[
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio")
     ] = 0.5
     overweight[
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")
@@ -10812,7 +10812,7 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
         {
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
         }
@@ -10927,7 +10927,7 @@ def test_mps_tm_multicoin_loss_gate_preserves_profitable_close_after_repair(side
             "close_threshold_exposure_ratio_coefficient": 0.0,
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
         }
@@ -11025,7 +11025,7 @@ def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
         {
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "twel_enforcer_reduce_portfolio": 1.0,
         }
     )
@@ -11073,7 +11073,7 @@ def test_mps_ema_multicoin_total_exposure_repair_policy(side):
     overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset_fraction")] = 0.01
     overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
     overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_entry_gate_enabled")] = 0.0
-    overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")] = 0.5
+    overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio")] = 0.5
     overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")] = 1.0
     portfolio = list(overweight)
     portfolio[
@@ -11133,7 +11133,7 @@ def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
             "offset_fraction": 0.01,
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
         }
@@ -11220,7 +11220,7 @@ def test_mps_tm_multicoin_rejects_held_tails_before_twel_repair(side):
         {
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.75,
+            "twel_enforcer_threshold_ratio": 0.75,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
         }
@@ -11279,7 +11279,7 @@ def test_mps_ema_multicoin_rejects_held_tails_before_twel_repair(side):
             "offset_fraction": 0.2,
             "entry_cooldown_minutes": 100.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.75,
+            "twel_enforcer_threshold_ratio": 0.75,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
         }
@@ -11334,7 +11334,7 @@ def test_mps_tm_multicoin_twel_repair_preserves_trailing_closes(side):
         100.0
     )
     row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_entry_gate_enabled")] = 0.0
-    row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")] = 0.8
+    row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold_ratio")] = 0.8
     row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")] = 1.0
     row[
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("twel_enforcer_reduce_portfolio")
@@ -11360,7 +11360,7 @@ def test_mps_tm_multicoin_reducer_retains_reachable_post_repair_grid(side):
         1.0
     )
     enabled[
-        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold")
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold_ratio")
     ] = 0.5
     enabled[
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
@@ -11427,7 +11427,7 @@ def test_mps_tm_multicoin_grid_can_fill_without_off_tick_reducer(side):
             "close_threshold_base_fraction": 0.0,
             "close_threshold_exposure_ratio_coefficient": 0.0,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.5,
+            "wel_enforcer_threshold_ratio": 0.5,
         }
     )
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -11485,7 +11485,7 @@ def test_mps_tm_multicoin_small_excess_reducer_crosses_strict_target(side):
             "n_positions": 1.0,
             "close_retracement_base_fraction": 0.001,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": target,
+            "wel_enforcer_threshold_ratio": target,
         }
     )
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -11543,7 +11543,7 @@ def test_mps_tm_multicoin_short_post_repair_grid_uses_negative_target_tick():
             "close_threshold_base_fraction": -0.01,
             "close_threshold_exposure_ratio_coefficient": 0.0,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.5,
+            "wel_enforcer_threshold_ratio": 0.5,
         }
     )
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -11585,7 +11585,7 @@ def test_mps_tm_multicoin_post_repair_grid_volume_uses_per_fill_balance(side):
             "close_threshold_base_fraction": 0.009,
             "close_threshold_exposure_ratio_coefficient": 0.0,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.5,
+            "wel_enforcer_threshold_ratio": 0.5,
         }
     )
     candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -11624,7 +11624,7 @@ def test_mps_tm_multicoin_same_tick_twel_and_grid_use_separate_denominators(side
         {
             "wel_enforcer_enabled": 0.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold_ratio": 0.5,
             "twel_enforcer_enabled": 1.0,
         }
     )
@@ -11702,9 +11702,9 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
             "close_retracement_base_fraction": 0.0,
             "n_positions": 1.0,
             "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold": 0.05,
+            "twel_enforcer_threshold_ratio": 0.05,
             "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.1,
+            "wel_enforcer_threshold_ratio": 0.1,
             "twel_enforcer_enabled": 1.0,
         }
     )
@@ -11905,7 +11905,7 @@ def test_streamed_gap_moment_matches_distinct_fill_timestamps(
     values = dict(zip(keys, row))
     if strategy_kind == "trailing_martingale":
         values.update(close_threshold_base_fraction=0.0, close_retracement_base_fraction=0.0)
-    values["total_wallet_exposure_limit"] = 0.5
+    values["total_wallet_exposure_limit_ratio"] = 0.5
     row = [values[key] for key in keys]
     if topology == "multicoin":
         runner, matrix = multi, np.asarray([row])
@@ -12208,12 +12208,12 @@ def test_multicoin_excess_allowance_changes_coin_hsl_signal(strategy_kind, side)
     )
     for key, value in {
         "hsl_enabled": 1.0,
-        "hsl_red_threshold": 0.2,
-        "hsl_drawdown_ratio_ema_span_minutes": 1.0,
+        "hsl_drawdown_threshold_fraction": 0.2,
+        "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
         'hsl_memory_ema_span_minutes': 43200.0,
         "hsl_signal_mode": 2.0,
-        "we_excess_allowance_pct": 1.0,
+        "we_excess_allowance_fraction": 1.0,
     }.items():
         row[keys.index(key)] = value
     scaled = list(row)

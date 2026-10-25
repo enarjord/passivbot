@@ -974,12 +974,12 @@ struct TrailingMartingaleMulticoinSideConfig {
     float w_ready;
     float w_volatility;
     int n_positions;
-    float allowance_pct;
+    float allowance_fraction;
     bool scale_hsl_budget;
     bool twel_entry_gate_enabled;
     float twel_threshold;
     bool wel_enforcer_enabled;
-    float wel_enforcer_threshold;
+    float wel_enforcer_threshold_ratio;
     bool twel_enforcer_enabled;
     bool twel_enforcer_reduce_portfolio;
     bool unstuck_enabled;
@@ -2866,12 +2866,12 @@ load_trailing_martingale_multicoin_side_config(
         config.w_volatility = 0.0f;
     }
     config.n_positions = max(0, int(rint(params[po + 32])));
-    config.allowance_pct = params[po + 33];
+    config.allowance_fraction = params[po + 33];
     config.scale_hsl_budget = params[po + 34] > 0.5f;
     config.twel_entry_gate_enabled = params[po + 35] > 0.5f;
     config.twel_threshold = params[po + 36];
     config.wel_enforcer_enabled = params[po + 37] > 0.5f;
-    config.wel_enforcer_threshold = params[po + 38];
+    config.wel_enforcer_threshold_ratio = params[po + 38];
     config.twel_enforcer_enabled = params[po + 39] > 0.5f;
     config.twel_enforcer_reduce_portfolio = params[po + 40] > 0.5f;
     config.unstuck_enabled = params[po + 41] > 0.5f;
@@ -3409,7 +3409,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 long_side.coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
                     long_config.scale_hsl_budget, long_config.twel,
                     long_effective_n_positions, long_coin_overrides, c,
-                    24, 25, long_config.allowance_pct
+                    24, 25, long_config.allowance_fraction
                 );
                 update_coin_hsl(
                     long_side.coin_hsl[c], account.balance,
@@ -3425,7 +3425,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 short_side.coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
                     short_config.scale_hsl_budget, short_config.twel,
                     short_effective_n_positions, short_coin_overrides, c,
-                    24, 25, short_config.allowance_pct
+                    24, 25, short_config.allowance_fraction
                 );
                 update_coin_hsl(
                     short_side.coin_hsl[c], account.balance,
@@ -3525,11 +3525,11 @@ inline void update_tm_multicoin_side_selection(
         float coin_wel = coin_override_or(coin_overrides, c, 24, -1.0f);
         float base_limit = coin_wel >= 0.0f
             ? coin_wel : config.twel / fmax(float(effective_n_positions), 1.0f);
-        float allowance_pct = coin_override_or(
-            coin_overrides, c, 25, config.allowance_pct
+        float allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, config.allowance_fraction
         );
-        float allowed_wel = allowed_wallet_exposure_limit(
-            base_limit, config.twel, allowance_pct);
+        float allowed_wel = allowed_wallet_exposure_limit_ratio(
+            base_limit, config.twel, allowance_fraction);
         float initial_qty_fraction = coin_override_or(
             coin_overrides, c, 6, config.initial_qty_fraction
         );
@@ -3772,11 +3772,11 @@ inline int select_tm_multicoin_unstuck_coin(
         );
         const float coin_wel = fixed_coin_wel >= 0.0f
             ? fixed_coin_wel : effective_wel;
-        const float coin_allowance_pct = coin_override_or(
-            coin_overrides, c, 25, config.allowance_pct
+        const float coin_allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, config.allowance_fraction
         );
-        const float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, config.twel, coin_allowance_pct);
+        const float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
+            coin_wel, config.twel, coin_allowance_fraction);
         if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
             && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
             && side.psize[c] > 0.0f && side.pprice[c] > 0.0f
@@ -3901,15 +3901,15 @@ inline void compute_tm_multicoin_one_way_initial_blocks(
         const float short_base_limit = short_wel >= 0.0f
             ? short_wel : short_config.twel
                 / fmax(float(short_effective_n_positions), 1.0f);
-        const float long_allowed_wel = allowed_wallet_exposure_limit(
+        const float long_allowed_wel = allowed_wallet_exposure_limit_ratio(
             long_base_limit, long_config.twel,
             coin_override_or(
-                long_coin_overrides, c, 25, long_config.allowance_pct
+                long_coin_overrides, c, 25, long_config.allowance_fraction
             ));
-        const float short_allowed_wel = allowed_wallet_exposure_limit(
+        const float short_allowed_wel = allowed_wallet_exposure_limit_ratio(
             short_base_limit, short_config.twel,
             coin_override_or(
-                short_coin_overrides, c, 25, short_config.allowance_pct
+                short_coin_overrides, c, 25, short_config.allowance_fraction
             ));
         const bool long_min_cost_eligible =
             passes_multicoin_min_effective_cost(
@@ -4038,11 +4038,11 @@ inline void generate_tm_multicoin_side_orders(
     const bool gate_initial = config.gate_initial;
     const bool gate_reentry = config.gate_reentry;
     const int n_positions = config.n_positions;
-    const float allowance_pct = config.allowance_pct;
+    const float allowance_fraction = config.allowance_fraction;
     const bool twel_entry_gate_enabled = config.twel_entry_gate_enabled;
     const float twel_threshold = config.twel_threshold;
     const bool wel_enforcer_enabled = config.wel_enforcer_enabled;
-    const float wel_enforcer_threshold = config.wel_enforcer_threshold;
+    const float wel_enforcer_threshold_ratio = config.wel_enforcer_threshold_ratio;
     const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
     const bool twel_enforcer_reduce_portfolio =
         config.twel_enforcer_reduce_portfolio;
@@ -4310,11 +4310,11 @@ inline void generate_tm_multicoin_side_orders(
         );
         float coin_wel = fixed_coin_wel >= 0.0f
             ? fixed_coin_wel : effective_wel;
-        float coin_allowance_pct = coin_override_or(
-            coin_overrides, c, 25, allowance_pct
+        float coin_allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, allowance_fraction
         );
-        float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, twel, coin_allowance_pct);
+        float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
+            coin_wel, twel, coin_allowance_fraction);
         if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
             && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
             && balance > 0.0f && balance_peak > 0.0f
@@ -4446,18 +4446,18 @@ inline void generate_tm_multicoin_side_orders(
         );
         float coin_wel = fixed_coin_wel >= 0.0f
             ? fixed_coin_wel : effective_wel;
-        float coin_allowance_pct = coin_override_or(
-            coin_overrides, c, 25, allowance_pct
+        float coin_allowance_fraction = coin_override_or(
+            coin_overrides, c, 25, allowance_fraction
         );
         bool coin_wel_enforcer_enabled = coin_override_or(
             coin_overrides, c, 26,
             wel_enforcer_enabled ? 1.0f : 0.0f
         ) > 0.5f;
-        float coin_wel_enforcer_threshold = coin_override_or(
-            coin_overrides, c, 27, wel_enforcer_threshold
+        float coin_wel_enforcer_threshold_ratio = coin_override_or(
+            coin_overrides, c, 27, wel_enforcer_threshold_ratio
         );
-        float allowed_coin_wel = allowed_wallet_exposure_limit(
-            coin_wel, twel, coin_allowance_pct);
+        float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
+            coin_wel, twel, coin_allowance_fraction);
         bool tradable = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(price_now) && (psize[c] > 0.0f || allowed_coin_wel > 0.0f);
@@ -4778,9 +4778,9 @@ inline void generate_tm_multicoin_side_orders(
         float wel_reducer_qty = 0.0f;
         int wel_reducer_tick = 0;
         float wel_target = allowed_coin_wel
-            * coin_wel_enforcer_threshold;
+            * coin_wel_enforcer_threshold_ratio;
         if (coin_wel_enforcer_enabled
-            && coin_wel_enforcer_threshold > 0.0f
+            && coin_wel_enforcer_threshold_ratio > 0.0f
             && balance > 0.0f && psize[c] > 0.0f && pprice[c] > 0.0f
             && wel_target > 0.0f && we > wel_target) {
             wel_reducer_tick = short_side ? touch_down : touch_up;
@@ -5317,11 +5317,11 @@ inline float tm_multicoin_entry_initial_balance_pct(
     float initial_qty_fraction = coin_override_or(
         coin_overrides, 0, 6, config.initial_qty_fraction
     );
-    float allowance_pct = coin_override_or(
-        coin_overrides, 0, 25, config.allowance_pct
+    float allowance_fraction = coin_override_or(
+        coin_overrides, 0, 25, config.allowance_fraction
     );
-    return allowed_wallet_exposure_limit(
-        base_limit, config.twel, allowance_pct) * initial_qty_fraction;
+    return allowed_wallet_exposure_limit_ratio(
+        base_limit, config.twel, allowance_fraction) * initial_qty_fraction;
 }
 
 // A temporal dispatch boundary preserves the entire candidate replay. Output
@@ -5770,14 +5770,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             long_config.scale_hsl_budget, long_config.twel,
             wallet_exposure_denominator_n_positions(
                 long_config.n_positions, long_side.max_tradable_seen),
-            long_coin_overrides, C, 24, 25, long_config.allowance_pct
+            long_coin_overrides, C, 24, 25, long_config.allowance_fraction
         );
         prepare_coin_hsl_budgets(
             short_side.coin_hsl, short_config.coin_hsl_mode,
             short_config.scale_hsl_budget, short_config.twel,
             wallet_exposure_denominator_n_positions(
                 short_config.n_positions, short_side.max_tradable_seen),
-            short_coin_overrides, C, 24, 25, short_config.allowance_pct
+            short_coin_overrides, C, 24, 25, short_config.allowance_fraction
         );
         float long_hsl_equity_before_fills = account.balance;
         long_hsl_equity_before_fills =
@@ -6849,7 +6849,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float initial_qty_fraction = config.initial_qty_fraction;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
-    const float allowance_pct = config.allowance_pct;
+    const float allowance_fraction = config.allowance_fraction;
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
@@ -7092,7 +7092,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             side.coin_hsl, config.coin_hsl_mode, config.scale_hsl_budget,
             config.twel, wallet_exposure_denominator_n_positions(
                 config.n_positions, side.max_tradable_seen),
-            coin_overrides, C, 24, 25, config.allowance_pct
+            coin_overrides, C, 24, 25, config.allowance_fraction
         );
         bool any_fill = process_tm_multicoin_side_fills(
             market_execution_ticks,
@@ -7204,7 +7204,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     coin_hsl[c].slot_count = float(effective_n_positions);
                     coin_hsl[c].budget_multiplier = coin_hsl_budget_multiplier(
                         config.scale_hsl_budget, config.twel, effective_n_positions,
-                        coin_overrides, c, 24, 25, config.allowance_pct
+                        coin_overrides, c, 24, 25, config.allowance_fraction
                     );
                     update_coin_hsl(
                         coin_hsl[c], balance,
@@ -7654,11 +7654,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float entry_initial_qty_fraction = coin_override_or(
         coin_overrides, 0, 6, initial_qty_fraction
     );
-    float entry_allowance_pct = coin_override_or(
-        coin_overrides, 0, 25, allowance_pct
+    float entry_allowance_fraction = coin_override_or(
+        coin_overrides, 0, 25, allowance_fraction
     );
-    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
-        entry_base_limit, twel, entry_allowance_pct) * entry_initial_qty_fraction;
+    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit_ratio(
+        entry_base_limit, twel, entry_allowance_fraction) * entry_initial_qty_fraction;
     scalars[scalar_offset + 22] = total_wallet_exposure_max;
     scalars[scalar_offset + 23] = total_wallet_exposure_mean;
     scalars[scalar_offset + 24] = fill_count;
