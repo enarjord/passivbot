@@ -95,9 +95,7 @@ def _get_ema_anchor_side_params(config: dict, side: str) -> dict:
     )
     if not side_cfg:
         raise KeyError(f"config.bot.{side}.strategy.{EMA_ANCHOR_STRATEGY_KIND} is required")
-    from config.strategy_paths import lower_runtime_strategy_side
-
-    return lower_runtime_strategy_side(EMA_ANCHOR_STRATEGY_KIND, side_cfg)
+    return deepcopy(side_cfg)
 
 
 def _calc_quote_series(
@@ -119,13 +117,13 @@ def _calc_quote_series(
         np.ascontiguousarray(np.asarray(balances, dtype=float)),
         np.ascontiguousarray(np.asarray(position_sizes, dtype=float)),
         price_step=price_step,
-        ema_span_0=float(params["ema_span_0"]),
-        ema_span_1=float(params["ema_span_1"]),
+        ema_span_0_minutes=float(params["ema_span_0_minutes"]),
+        ema_span_1_minutes=float(params["ema_span_1_minutes"]),
         offset_fraction=float(params["offset_fraction"]),
-        offset_volatility_ema_span_1m=float(params["offset_volatility_ema_span_1m"]),
-        offset_volatility_1m_weight=float(params["offset_volatility_1m_weight"]),
-        offset_volatility_ema_span_1h=float(params["offset_volatility_ema_span_1h"]),
-        offset_volatility_1h_weight=float(params["offset_volatility_1h_weight"]),
+        offset_log_range_ema_span_minutes=float(params["offset_log_range_ema_span_minutes"]),
+        offset_log_range_1m_coefficient=float(params["offset_log_range_1m_coefficient"]),
+        offset_log_range_ema_span_1h_candles=float(params["offset_log_range_ema_span_1h_candles"]),
+        offset_log_range_1h_coefficient=float(params["offset_log_range_1h_coefficient"]),
         inventory_offset_exposure_coefficient=float(params["inventory_offset_exposure_coefficient"]),
     )
     return np.asarray(bids, dtype=float), np.asarray(asks, dtype=float)

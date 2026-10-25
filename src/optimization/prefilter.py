@@ -152,16 +152,11 @@ def _probe_inputs(config, params, checks):
                 "cooldown_max": required("entry_cooldown_max_duration_minutes"),
                 "cooldown_exposure_weight": weights["exposure_ratio"],
                 "cooldown_adverse_weight": weights["adverse_directionality"],
-                **{
-                    key: params[key]
-                    for key in (
-                        "exposure_ratios",
-                        "volatility_ema_1m",
-                        "volatility_ema_1h",
-                        "adverse_directionality",
-                        "grid_max_entries",
-                    )
-                },
+                "exposure_ratios": params["exposure_ratios"],
+                "log_range_ema_1m": params["volatility_ema_1m"],
+                "log_range_ema_1h": params["volatility_ema_1h"],
+                "adverse_directionality": params["adverse_directionality"],
+                "grid_max_entries": params["grid_max_entries"],
                 "calculate_grid": any(
                     check["metric"] == "grid_span" and side in check["sides"]
                     for check in checks

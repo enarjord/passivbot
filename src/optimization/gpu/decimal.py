@@ -19,10 +19,10 @@ _TM_DECIMAL_WORDS = _TM_DECIMAL_VALUE_WORDS + 4
 _TM_DECIMAL_MODIFIER_GROUPS = tuple(
     tuple(prefix + "_" + suffix for suffix in suffixes)
     for prefix, suffixes in (
-        ("entry_threshold", ("exposure_ratio_coefficient", "volatility_1h_weight", "volatility_1m_weight")),
-        ("entry_retracement", ("exposure_ratio_coefficient", "volatility_1h_weight", "volatility_1m_weight")),
-        ("close_threshold", ("exposure_ratio_coefficient", "volatility_1h_weight", "volatility_1m_weight")),
-        ("close_retracement", ("volatility_1h_weight", "volatility_1m_weight")),
+        ("entry_threshold", ("exposure_ratio_coefficient", "log_range_1h_coefficient", "log_range_1m_coefficient")),
+        ("entry_retracement", ("exposure_ratio_coefficient", "log_range_1h_coefficient", "log_range_1m_coefficient")),
+        ("close_threshold", ("exposure_ratio_coefficient", "log_range_1h_coefficient", "log_range_1m_coefficient")),
+        ("close_retracement", ("log_range_1h_coefficient", "log_range_1m_coefficient")),
     )
 )
 

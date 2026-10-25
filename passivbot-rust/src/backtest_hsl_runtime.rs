@@ -646,8 +646,8 @@ mod tests {
                     side.unstuck_loss_allowance_pct = 0.01;
                     side.unstuck_close_pct = 0.1;
                     side.unstuck_threshold = 0.95;
-                    side.ema_span_0 = 1.0;
-                    side.ema_span_1 = 2.0;
+                    side.ema_span_0_minutes = 1.0;
+                    side.ema_span_1_minutes = 2.0;
                 }
                 pair
             })

@@ -366,7 +366,7 @@ def test_v8_legacy_limits_are_explicitly_converted_and_reported():
 
 def test_inactive_retired_strategy_subtree_is_reported_without_substitution():
     config = v8_config()
-    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0": 17.5}
+    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0_minutes": 17.5}
     result = migrate(config, memory_span_minutes=123.5)
     assert "trailing_grid_v7" not in result.config["bot"]["long"]["strategy"]
     assert any("inactive retired strategy" in item["reason"] for item in result.changes)
@@ -375,7 +375,7 @@ def test_inactive_retired_strategy_subtree_is_reported_without_substitution():
 def test_active_retired_strategy_requires_explicit_replacement():
     config = v8_config()
     config["live"]["strategy_kind"] = "trailing_grid_v7"
-    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0": 17.5}
+    config["bot"]["long"]["strategy"]["trailing_grid_v7"] = {"ema_span_0_minutes": 17.5}
     with pytest.raises(ValueError, match="choose a retained strategy explicitly"):
         migrate(config, memory_span_minutes=123.5)
 

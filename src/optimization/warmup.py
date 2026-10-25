@@ -356,8 +356,8 @@ def optimizer_dead_param_values(
             canonical_base = retracement_base
         result[f"{pside}_close_retracement_base_fraction"] = float(canonical_base)
         for field in (
-            "retracement_volatility_1h_weight",
-            "retracement_volatility_1m_weight",
+            "retracement_log_range_1h_coefficient",
+            "retracement_log_range_1m_coefficient",
         ):
             bound_key = f"{pside}_close_{field}"
             path = resolve_optimizer_key_path(config, bound_key)

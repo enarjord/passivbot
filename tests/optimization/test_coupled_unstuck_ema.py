@@ -250,13 +250,15 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
     proxy.sides = ["long", "short"]
     proxy.couple_unstuck_emas = True
     proxy.base_params = {side: {key: 1.0 for key in keys} for side in proxy.sides}
+    sources = model.COUPLED_UNSTUCK_EMA_SOURCE_KEYS[kind]
+    span0, span1 = sources["unstuck_ema_span_0"], sources["unstuck_ema_span_1"]
     proxy.static_coin_override_params = {
-        "long": {"ema_span_0": 71.5, "unstuck_ema_span_0": 4.0}
+        "long": {span0: 71.5, "unstuck_ema_span_0": 4.0}
     }
     candidates = [
         {
-            "long_ema_span_0": 17.25,
-            "long_ema_span_1": 211.75,
+            f"long_{span0}": 17.25,
+            f"long_{span1}": 211.75,
             "long_unstuck_ema_span_1": 9.0,
         }
     ]
@@ -295,10 +297,10 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
             }
         }
     }
-    from config.strategy_paths import lower_runtime_strategy_side
-    strategy = lower_runtime_strategy_side(kind, config["bot"][side]["strategy"][kind])
+
+    strategy = deepcopy(config["bot"][side]["strategy"][kind])
     (strategy["entry"] if kind == "trailing_martingale" else strategy)[
-        "ema_span_0"
+        "ema_span_0_minutes"
     ] = 71.5
     payload = SimpleNamespace(
         backtest_params={

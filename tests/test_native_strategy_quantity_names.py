@@ -10,7 +10,7 @@ import pytest
 from config import get_template_config
 from config.param_paths import resolve_optimizer_key_path
 from config.strategy import build_runtime_strategy_side
-from config.strategy_paths import STRATEGY_NATIVE_TO_PUBLIC_PATHS
+
 from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS, TRAILING_MARTINGALE_PARAM_KEYS
 from test_orchestrator_json_api import make_input, make_symbol
 
@@ -60,7 +60,6 @@ def test_quantity_metadata_and_optimizer_bindings_need_no_runtime_alias(kind, ol
         for part in path:
             current = current[part]
         assert current == record["default"]
-    assert old not in STRATEGY_NATIVE_TO_PUBLIC_PATHS[kind]
     assert not any(tuple(row["config_path"][2:]) == old for row in native["parameters"])
 
 
@@ -70,10 +69,10 @@ def test_native_parser_rejects_retired_quantity_keys(kind, old, path, native_id)
     config["bot"]["portfolio"]["strategy_kind"] = kind
     strategy = build_runtime_strategy_side(config["bot"]["long"], strategy_kind=kind, pside="long")
     if kind == "ema_anchor":
-        strategy.update(ema_span_0=10.0, ema_span_1=20.0)
+        strategy.update(ema_span_0_minutes=10.0, ema_span_1_minutes=20.0)
     else:
-        strategy["entry"].update(ema_span_0=10.0, ema_span_1=20.0)
-        strategy.update(volatility_ema_span_1m=10.0, volatility_ema_span_1h=0.0)
+        strategy["entry"].update(ema_span_0_minutes=10.0, ema_span_1_minutes=20.0)
+        strategy.update(log_range_ema_span_minutes=10.0, log_range_ema_span_1h_candles=0.0)
     symbol = make_symbol(0, bid=100.0, ask=100.1,
                          long_strategy=strategy, short_strategy=deepcopy(strategy))
     payload = make_input(balance=1000.0, strategy_kind=kind, symbols=[symbol])
@@ -90,24 +89,24 @@ def test_native_parser_rejects_retired_quantity_keys(kind, old, path, native_id)
 
 def test_quantity_parameter_columns_keep_the_existing_gpu_order():
     assert EMA_ANCHOR_PARAM_KEYS[:10] == (
-        "base_qty_fraction", "ema_span_0", "ema_span_1",
+        "base_qty_fraction", "ema_span_0_minutes", "ema_span_1_minutes",
         "entry_qty_exposure_coefficient", "offset_fraction",
-        "inventory_offset_exposure_coefficient", "offset_volatility_1h_weight",
-        "offset_volatility_1m_weight", "offset_volatility_ema_span_1h",
-        "offset_volatility_ema_span_1m",
+        "inventory_offset_exposure_coefficient", "offset_log_range_1h_coefficient",
+        "offset_log_range_1m_coefficient", "offset_log_range_ema_span_1h_candles",
+        "offset_log_range_ema_span_minutes",
     )
     assert TRAILING_MARTINGALE_PARAM_KEYS[:23] == (
-        "ema_span_0", "ema_span_1", "volatility_ema_span_1h", "volatility_ema_span_1m",
+        "entry_ema_span_0_minutes", "entry_ema_span_1_minutes", "log_range_ema_span_1h_candles", "log_range_ema_span_minutes",
         "entry_reentry_qty_multiplier", "entry_initial_ema_distance_fraction",
         "entry_initial_qty_fraction", "entry_threshold_base_fraction",
-        "entry_threshold_exposure_ratio_coefficient", "entry_threshold_volatility_1h_weight",
-        "entry_threshold_volatility_1m_weight", "entry_retracement_base_fraction",
-        "entry_retracement_exposure_ratio_coefficient", "entry_retracement_volatility_1h_weight",
-        "entry_retracement_volatility_1m_weight", "close_qty_fraction",
+        "entry_threshold_exposure_ratio_coefficient", "entry_threshold_log_range_1h_coefficient",
+        "entry_threshold_log_range_1m_coefficient", "entry_retracement_base_fraction",
+        "entry_retracement_exposure_ratio_coefficient", "entry_retracement_log_range_1h_coefficient",
+        "entry_retracement_log_range_1m_coefficient", "close_qty_fraction",
         "close_threshold_base_fraction", "close_threshold_exposure_ratio_coefficient",
-        "close_threshold_volatility_1h_weight", "close_threshold_volatility_1m_weight",
-        "close_retracement_base_fraction", "close_retracement_volatility_1h_weight",
-        "close_retracement_volatility_1m_weight",
+        "close_threshold_log_range_1h_coefficient", "close_threshold_log_range_1m_coefficient",
+        "close_retracement_base_fraction", "close_retracement_log_range_1h_coefficient",
+        "close_retracement_log_range_1m_coefficient",
     )
 
 
@@ -118,6 +117,6 @@ def test_direct_entry_keywords_keep_ignored_mirrors_in_their_original_positions(
         "entry_grid_reentry_qty_multiplier", "entry_grid_threshold_base_fraction",
         "entry_initial_ema_distance_fraction", "entry_initial_qty_fraction",
         "entry_trailing_reentry_qty_multiplier", "entry_trailing_retracement_base_fraction",
-        "entry_trailing_threshold_base_fraction", "entry_weight_volatility_1h",
-        "entry_weight_volatility_1m", "entry_exposure_ratio_coefficient", "wallet_exposure_limit",
+        "entry_trailing_threshold_base_fraction", "entry_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient", "entry_exposure_ratio_coefficient", "wallet_exposure_limit",
     )

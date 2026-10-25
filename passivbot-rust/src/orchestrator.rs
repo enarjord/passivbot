@@ -42,12 +42,12 @@ mod core {
         GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
     };
     use crate::strategies::{
-        generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
-        strategy_entry_volatility_span_hours, strategy_initial_entry_offset_fraction,
+        generate_orders as generate_strategy_orders, parse_strategy_params, strategy_price_ema_spans_minutes,
+        strategy_log_range_ema_span_1h_candles, strategy_initial_entry_offset_fraction,
         strategy_initial_qty_fraction, strategy_needs_log_range_1h,
         strategy_needs_log_range_1h_for_request, strategy_needs_log_range_1m,
         strategy_needs_log_range_1m_for_request, strategy_needs_trailing_for_request,
-        strategy_offset_volatility_span_minutes, strategy_requires_sequential_entry_staging,
+        strategy_log_range_ema_span_minutes, strategy_requires_sequential_entry_staging,
         EmaGateMode, NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest,
         StrategySide,
     };
@@ -957,31 +957,31 @@ mod core {
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<EMABands, OrchestratorError> {
-        let (ema_span_0, ema_span_1) = strategy_ema_spans(strategy_params);
-        derive_ema_bands_for_spans(symbol_idx, emas, ema_span_0, ema_span_1)
+        let (ema_span_0_minutes, ema_span_1_minutes) = strategy_price_ema_spans_minutes(strategy_params);
+        derive_ema_bands_for_spans(symbol_idx, emas, ema_span_0_minutes, ema_span_1_minutes)
     }
 
     fn derive_ema_bands_for_spans(
         symbol_idx: usize,
         emas: &EmaBundle,
-        ema_span_0: f64,
-        ema_span_1: f64,
+        ema_span_0_minutes: f64,
+        ema_span_1_minutes: f64,
     ) -> Result<EMABands, OrchestratorError> {
-        if !ema_span_0.is_finite()
-            || ema_span_0 <= 0.0
-            || !ema_span_1.is_finite()
-            || ema_span_1 <= 0.0
+        if !ema_span_0_minutes.is_finite()
+            || ema_span_0_minutes <= 0.0
+            || !ema_span_1_minutes.is_finite()
+            || ema_span_1_minutes <= 0.0
         {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "ema_spans",
                 symbol_idx: Some(symbol_idx),
             });
         }
-        let ema0 = ema_lookup(&emas.m1.close, ema_span_0)
+        let ema0 = ema_lookup(&emas.m1.close, ema_span_0_minutes)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
-        let ema1 = ema_lookup(&emas.m1.close, ema_span_1)
+        let ema1 = ema_lookup(&emas.m1.close, ema_span_1_minutes)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
-        let ema2_span = (ema_span_0 * ema_span_1).sqrt();
+        let ema2_span = (ema_span_0_minutes * ema_span_1_minutes).sqrt();
         let ema2 = ema_lookup(&emas.m1.close, ema2_span)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         let lower = ema0.min(ema1).min(ema2);
@@ -995,7 +995,7 @@ mod core {
         Ok(EMABands { upper, lower })
     }
 
-    fn derive_volatility_ema_1h(
+    fn derive_log_range_ema_1h(
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
@@ -1003,7 +1003,7 @@ mod core {
         if !strategy_needs_log_range_1h(strategy_params) {
             return Ok(0.0);
         }
-        let Some(span) = strategy_entry_volatility_span_hours(strategy_params) else {
+        let Some(span) = strategy_log_range_ema_span_1h_candles(strategy_params) else {
             return Ok(0.0);
         };
         if span <= 0.0 {
@@ -1013,14 +1013,14 @@ mod core {
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         if !(v.is_finite() && v >= 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
-                field: "volatility_ema_1h",
+                field: "log_range_ema_1h",
                 symbol_idx: Some(symbol_idx),
             });
         }
         Ok(v)
     }
 
-    fn derive_volatility_ema_1m(
+    fn derive_log_range_ema_1m(
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
@@ -1028,7 +1028,7 @@ mod core {
         if !strategy_needs_log_range_1m(strategy_params) {
             return Ok(0.0);
         }
-        let Some(span) = strategy_offset_volatility_span_minutes(strategy_params) else {
+        let Some(span) = strategy_log_range_ema_span_minutes(strategy_params) else {
             return Ok(0.0);
         };
         if span <= 0.0 {
@@ -1038,7 +1038,7 @@ mod core {
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         if !(v.is_finite() && v >= 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
-                field: "volatility_ema_1m",
+                field: "log_range_ema_1m",
                 symbol_idx: Some(symbol_idx),
             });
         }
@@ -1216,31 +1216,31 @@ mod core {
         Ok(ema_bands)
     }
 
-    fn cached_volatility_ema_1h(
+    fn cached_log_range_ema_1h(
         cache: &mut [CachedSideDerived],
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
-        if let Some(v) = cache[symbol_idx].volatility_ema_1h {
+        if let Some(v) = cache[symbol_idx].log_range_ema_1h {
             return Ok(v);
         }
-        let v = derive_volatility_ema_1h(symbol_idx, emas, strategy_params)?;
-        cache[symbol_idx].volatility_ema_1h = Some(v);
+        let v = derive_log_range_ema_1h(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].log_range_ema_1h = Some(v);
         Ok(v)
     }
 
-    fn cached_volatility_ema_1m(
+    fn cached_log_range_ema_1m(
         cache: &mut [CachedSideDerived],
         symbol_idx: usize,
         emas: &EmaBundle,
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
-        if let Some(v) = cache[symbol_idx].volatility_ema_1m {
+        if let Some(v) = cache[symbol_idx].log_range_ema_1m {
             return Ok(v);
         }
-        let v = derive_volatility_ema_1m(symbol_idx, emas, strategy_params)?;
-        cache[symbol_idx].volatility_ema_1m = Some(v);
+        let v = derive_log_range_ema_1m(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].log_range_ema_1m = Some(v);
         Ok(v)
     }
 
@@ -2984,21 +2984,21 @@ mod core {
         } else {
             EMABands::default()
         };
-        let volatility_ema_1h = if strategy_needs_log_range_1h_for_request(
+        let log_range_ema_1h = if strategy_needs_log_range_1h_for_request(
             &strategy_params,
             wants_entries,
             wants_closes,
         ) {
-            cached_volatility_ema_1h(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+            cached_log_range_ema_1h(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
         } else {
             0.0
         };
-        let volatility_ema_1m = if strategy_needs_log_range_1m_for_request(
+        let log_range_ema_1m = if strategy_needs_log_range_1m_for_request(
             &strategy_params,
             wants_entries,
             wants_closes,
         ) {
-            cached_volatility_ema_1m(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+            cached_log_range_ema_1m(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
         } else {
             0.0
         };
@@ -3006,8 +3006,8 @@ mod core {
             balance: input.balance,
             order_book: symbol.order_book,
             ema_bands,
-            volatility_ema_1m,
-            volatility_ema_1h,
+            log_range_ema_1m,
+            log_range_ema_1h,
         };
         let cooldown_minutes = if wants_entries {
             effective_cooldown(symbol, pside, input.balance, runtime_budget)?
@@ -3138,8 +3138,8 @@ mod core {
     struct CachedSideDerived {
         strategy_params: Option<crate::strategies::StrategyParams>,
         ema_bands: Option<EMABands>,
-        volatility_ema_1h: Option<f64>,
-        volatility_ema_1m: Option<f64>,
+        log_range_ema_1h: Option<f64>,
+        log_range_ema_1m: Option<f64>,
     }
 
     /// Reusable buffers for performance-critical backtest loops.
@@ -4869,32 +4869,32 @@ mod core {
             bot_params: &BotParams,
         ) -> crate::strategies::TrailingMartingaleParams {
             crate::strategies::TrailingMartingaleParams {
-                volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
-                volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+                log_range_ema_span_1h_candles: bot_params.entry_log_range_ema_span_1h_candles,
+                log_range_ema_span_minutes: bot_params.entry_log_range_ema_span_minutes,
                 entry: crate::strategies::TrailingMartingaleEntryParams {
-                    ema_span_0: bot_params.ema_span_0,
-                    ema_span_1: bot_params.ema_span_1,
+                    ema_span_0_minutes: bot_params.ema_span_0_minutes,
+                    ema_span_1_minutes: bot_params.ema_span_1_minutes,
                     reentry_qty_multiplier: bot_params.entry_grid_reentry_qty_multiplier,
                     ema_gate_mode: crate::strategies::EmaGateMode::Initial,
                     initial_ema_distance_fraction: bot_params.entry_initial_ema_distance_fraction,
                     initial_qty_fraction: bot_params.entry_initial_qty_fraction,
                     threshold_base_fraction: bot_params.entry_grid_threshold_base_fraction,
                     threshold_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
-                    threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-                    threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                    threshold_log_range_1h_coefficient: bot_params.entry_log_range_1h_coefficient,
+                    threshold_log_range_1m_coefficient: bot_params.entry_log_range_1m_coefficient,
                     retracement_base_fraction: bot_params.entry_trailing_retracement_base_fraction,
                     retracement_exposure_ratio_coefficient: bot_params.entry_exposure_ratio_coefficient,
-                    retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-                    retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                    retracement_log_range_1h_coefficient: bot_params.entry_log_range_1h_coefficient,
+                    retracement_log_range_1m_coefficient: bot_params.entry_log_range_1m_coefficient,
                 },
                 close: crate::strategies::TrailingMartingaleCloseParams {
                     qty_fraction: bot_params.close_grid_qty_fraction,
                     threshold_base_fraction: bot_params.close_trailing_threshold_base_fraction,
-                    threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-                    threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                    threshold_log_range_1h_coefficient: bot_params.close_log_range_1h_coefficient,
+                    threshold_log_range_1m_coefficient: bot_params.close_log_range_1m_coefficient,
                     retracement_base_fraction: bot_params.close_trailing_retracement_base_fraction,
-                    retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-                    retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                    retracement_log_range_1h_coefficient: bot_params.close_log_range_1h_coefficient,
+                    retracement_log_range_1m_coefficient: bot_params.close_log_range_1m_coefficient,
                     ..Default::default()
                 },
             }
@@ -4912,9 +4912,9 @@ mod core {
             emas.h1.log_range.push((1.0_f64, 1.0));
 
             let mut bp = BotParams::default();
-            bp.ema_span_0 = 10.0;
-            bp.ema_span_1 = 20.0;
-            bp.entry_volatility_ema_span_1h = 1.0;
+            bp.ema_span_0_minutes = 10.0;
+            bp.ema_span_1_minutes = 20.0;
+            bp.entry_log_range_ema_span_1h_candles = 1.0;
             bp.filter_volume_ema_span_1m = 10.0;
             bp.filter_volatility_ema_span_1m = 10.0;
             bp.total_wallet_exposure_limit = 1.0;

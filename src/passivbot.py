@@ -830,7 +830,7 @@ def compute_live_warmup_windows(
     def _get_strategy(pside: str, key: str, sym: str) -> float:
         if strategy_lookup is not None:
             return _to_float(strategy_lookup(pside, key, sym))
-        if key == "entry_volatility_ema_span_1h":
+        if key == "entry_log_range_ema_span_1h_candles":
             legacy_hours = _get_bp(pside, "entry_volatility_ema_span_hours", sym)
             if legacy_hours > 0.0:
                 return legacy_hours
@@ -3874,8 +3874,8 @@ class Passivbot:
 
                 # No initial entry - check if EMA gating is the reason
                 try:
-                    span0 = float(self.bp(pside, "ema_span_0", symbol))
-                    span1 = float(self.bp(pside, "ema_span_1", symbol))
+                    span0 = float(self.bp(pside, "entry_ema_span_0_minutes", symbol))
+                    span1 = float(self.bp(pside, "entry_ema_span_1_minutes", symbol))
                     ema_dist = float(self.bp(pside, "entry_initial_ema_distance_fraction", symbol))
 
                     if span0 <= 0 or span1 <= 0:
@@ -4518,7 +4518,7 @@ class Passivbot:
         strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
         if not callable(strategy_getter):
             try:
-                if key == "entry_volatility_ema_span_1h":
+                if key == "entry_log_range_ema_span_1h_candles":
                     raw = self.bp(pside, "entry_volatility_ema_span_hours", symbol)
                 else:
                     raw = self.bp(pside, key, symbol)
@@ -4578,13 +4578,13 @@ class Passivbot:
                 error_label="live warmup",
                 optional=False,
                 paths=(
-                    ("entry", "threshold_volatility_1h_weight"),
-                    ("entry", "retracement_volatility_1h_weight"),
+                    ("entry", "threshold_log_range_1h_coefficient"),
+                    ("entry", "retracement_log_range_1h_coefficient"),
                     ("entry", "grid_spacing_volatility_weight"),
                     ("entry", "trailing_threshold_volatility_weight"),
                     ("entry", "trailing_retracement_volatility_weight"),
-                    ("entry_weight_volatility_1h",),
-                    ("offset_volatility_1h_weight",),
+                    ("entry_log_range_1h_coefficient",),
+                    ("offset_log_range_1h_coefficient",),
                 ),
             ),
             strategy_abs_max_weight(
@@ -4595,10 +4595,10 @@ class Passivbot:
                 error_label="live warmup",
                 optional=False,
                 paths=(
-                    ("close", "threshold_volatility_1h_weight"),
-                    ("close", "retracement_volatility_1h_weight"),
-                    ("close_weight_volatility_1h",),
-                    ("offset_volatility_1h_weight",),
+                    ("close", "threshold_log_range_1h_coefficient"),
+                    ("close", "retracement_log_range_1h_coefficient"),
+                    ("close_log_range_1h_coefficient",),
+                    ("offset_log_range_1h_coefficient",),
                 ),
             ),
         )
@@ -4622,30 +4622,30 @@ class Passivbot:
                     symbol=symbol,
                 )
 
-            h1_span = legacy_value("entry_volatility_ema_span_1h")
+            h1_span = legacy_value("entry_log_range_ema_span_1h_candles")
             if h1_span <= 0.0:
                 h1_span = legacy_value("entry_volatility_ema_span_hours")
             if h1_span <= 0.0:
-                h1_span = legacy_value("volatility_ema_span_1h")
+                h1_span = legacy_value("log_range_ema_span_1h_candles")
             strategy_params = {
-                "ema_span_0": legacy_value("ema_span_0"),
-                "ema_span_1": legacy_value("ema_span_1"),
-                "volatility_ema_span_1m": legacy_value("entry_volatility_ema_span_1m"),
-                "volatility_ema_span_1h": h1_span,
+                "ema_span_0_minutes": legacy_value("ema_span_0_minutes"),
+                "ema_span_1_minutes": legacy_value("ema_span_1_minutes"),
+                "log_range_ema_span_minutes": legacy_value("entry_log_range_ema_span_minutes"),
+                "log_range_ema_span_1h_candles": h1_span,
                 "entry": {
-                    "threshold_volatility_1m_weight": legacy_value(
-                        "entry_weight_volatility_1m"
+                    "threshold_log_range_1m_coefficient": legacy_value(
+                        "entry_log_range_1m_coefficient"
                     ),
-                    "threshold_volatility_1h_weight": legacy_value(
-                        "entry_weight_volatility_1h"
+                    "threshold_log_range_1h_coefficient": legacy_value(
+                        "entry_log_range_1h_coefficient"
                     ),
                 },
                 "close": {
-                    "threshold_volatility_1m_weight": legacy_value(
-                        "close_weight_volatility_1m"
+                    "threshold_log_range_1m_coefficient": legacy_value(
+                        "close_log_range_1m_coefficient"
                     ),
-                    "threshold_volatility_1h_weight": legacy_value(
-                        "close_weight_volatility_1h"
+                    "threshold_log_range_1h_coefficient": legacy_value(
+                        "close_log_range_1h_coefficient"
                     ),
                 },
             }
@@ -14969,22 +14969,22 @@ class Passivbot:
             "close_trailing_retracement_base_fraction",
             "close_trailing_qty_fraction",
             "close_trailing_threshold_base_fraction",
-            "close_weight_volatility_1h",
-            "close_weight_volatility_1m",
+            "close_log_range_1h_coefficient",
+            "close_log_range_1m_coefficient",
             "entry_grid_reentry_qty_multiplier",
             "entry_grid_threshold_base_fraction",
-            "entry_volatility_ema_span_1h",
-            "entry_volatility_ema_span_1m",
-            "entry_weight_volatility_1h",
-            "entry_weight_volatility_1m",
+            "entry_log_range_ema_span_1h_candles",
+            "entry_log_range_ema_span_minutes",
+            "entry_log_range_1h_coefficient",
+            "entry_log_range_1m_coefficient",
             "entry_exposure_ratio_coefficient",
             "entry_initial_ema_distance_fraction",
             "entry_initial_qty_fraction",
             "entry_trailing_reentry_qty_multiplier",
             "entry_trailing_retracement_base_fraction",
             "entry_trailing_threshold_base_fraction",
-            "ema_span_0",
-            "ema_span_1",
+            "ema_span_0_minutes",
+            "ema_span_1_minutes",
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
@@ -14992,14 +14992,14 @@ class Passivbot:
             "close_trailing_retracement_base_fraction",
             "close_trailing_qty_fraction",
             "close_trailing_threshold_base_fraction",
-            "close_weight_volatility_1h",
-            "close_weight_volatility_1m",
+            "close_log_range_1h_coefficient",
+            "close_log_range_1m_coefficient",
             "entry_grid_reentry_qty_multiplier",
             "entry_grid_threshold_base_fraction",
-            "entry_volatility_ema_span_1h",
-            "entry_volatility_ema_span_1m",
-            "entry_weight_volatility_1h",
-            "entry_weight_volatility_1m",
+            "entry_log_range_ema_span_1h_candles",
+            "entry_log_range_ema_span_minutes",
+            "entry_log_range_1h_coefficient",
+            "entry_log_range_1m_coefficient",
             "entry_exposure_ratio_coefficient",
             "entry_initial_ema_distance_fraction",
             "entry_initial_qty_fraction",
@@ -15526,52 +15526,52 @@ class Passivbot:
                         else strategy_params
                     )
                     span0 = Passivbot._positive_finite_warmup_value(
-                        price_ema_params["ema_span_0"],
-                        context=f"strategy {pside}.ema_span_0",
+                        price_ema_params["ema_span_0_minutes"],
+                        context=f"strategy {pside}.ema_span_0_minutes",
                         symbol=symbol,
                     )
                     span1 = Passivbot._positive_finite_warmup_value(
-                        price_ema_params["ema_span_1"],
-                        context=f"strategy {pside}.ema_span_1",
+                        price_ema_params["ema_span_1_minutes"],
+                        context=f"strategy {pside}.ema_span_1_minutes",
                         symbol=symbol,
                     )
                 else:
-                    span0 = _legacy_bp_warmup_value(pside, "ema_span_0", symbol)
-                    span1 = _legacy_bp_warmup_value(pside, "ema_span_1", symbol)
+                    span0 = _legacy_bp_warmup_value(pside, "ema_span_0_minutes", symbol)
+                    span1 = _legacy_bp_warmup_value(pside, "ema_span_1_minutes", symbol)
                     m1_span = _legacy_bp_warmup_value(
-                        pside, "entry_volatility_ema_span_1m", symbol
+                        pside, "entry_log_range_ema_span_minutes", symbol
                     )
                     h1_span_legacy = _legacy_bp_warmup_value(
-                        pside, "entry_volatility_ema_span_1h", symbol
+                        pside, "entry_log_range_ema_span_1h_candles", symbol
                     )
                     if h1_span_legacy <= 0.0:
                         h1_span_legacy = _legacy_bp_warmup_value(
                             pside, "entry_volatility_ema_span_hours", symbol
                         )
                     m1_weight = _legacy_bp_warmup_value(
-                        pside, "entry_weight_volatility_1m", symbol
+                        pside, "entry_log_range_1m_coefficient", symbol
                     )
                     h1_weight = _legacy_bp_warmup_value(
-                        pside, "entry_weight_volatility_1h", symbol
+                        pside, "entry_log_range_1h_coefficient", symbol
                     )
                     close_m1_weight = _legacy_bp_warmup_value(
-                        pside, "close_weight_volatility_1m", symbol
+                        pside, "close_log_range_1m_coefficient", symbol
                     )
                     close_h1_weight = _legacy_bp_warmup_value(
-                        pside, "close_weight_volatility_1h", symbol
+                        pside, "close_log_range_1h_coefficient", symbol
                     )
                     strategy_params = {
-                        "ema_span_0": span0,
-                        "ema_span_1": span1,
-                        "volatility_ema_span_1m": m1_span,
-                        "volatility_ema_span_1h": h1_span_legacy,
+                        "ema_span_0_minutes": span0,
+                        "ema_span_1_minutes": span1,
+                        "log_range_ema_span_minutes": m1_span,
+                        "log_range_ema_span_1h_candles": h1_span_legacy,
                         "entry": {
-                            "threshold_volatility_1m_weight": m1_weight,
-                            "threshold_volatility_1h_weight": h1_weight,
+                            "threshold_log_range_1m_coefficient": m1_weight,
+                            "threshold_log_range_1h_coefficient": h1_weight,
                         },
                         "close": {
-                            "threshold_volatility_1m_weight": close_m1_weight,
-                            "threshold_volatility_1h_weight": close_h1_weight,
+                            "threshold_log_range_1m_coefficient": close_m1_weight,
+                            "threshold_log_range_1h_coefficient": close_h1_weight,
                         },
                     }
                 span2 = (
@@ -15616,10 +15616,10 @@ class Passivbot:
                             error_label="live warmup",
                             optional=False,
                             paths=(
-                                ("entry", "threshold_volatility_1m_weight"),
-                                ("entry", "retracement_volatility_1m_weight"),
-                                ("entry_weight_volatility_1m",),
-                                ("offset_volatility_1m_weight",),
+                                ("entry", "threshold_log_range_1m_coefficient"),
+                                ("entry", "retracement_log_range_1m_coefficient"),
+                                ("entry_log_range_1m_coefficient",),
+                                ("offset_log_range_1m_coefficient",),
                             ),
                         ),
                         strategy_abs_max_weight(
@@ -15630,10 +15630,10 @@ class Passivbot:
                             error_label="live warmup",
                             optional=False,
                             paths=(
-                                ("close", "threshold_volatility_1m_weight"),
-                                ("close", "retracement_volatility_1m_weight"),
-                                ("close_weight_volatility_1m",),
-                                ("offset_volatility_1m_weight",),
+                                ("close", "threshold_log_range_1m_coefficient"),
+                                ("close", "retracement_log_range_1m_coefficient"),
+                                ("close_log_range_1m_coefficient",),
+                                ("offset_log_range_1m_coefficient",),
                             ),
                         ),
                     )

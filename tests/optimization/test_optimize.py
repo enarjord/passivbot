@@ -1704,7 +1704,7 @@ class TestIndividualToConfig:
                         },
                     },
                     "strategy": {
-                        "trailing_martingale": {"ema_span_0": 100.0},
+                        "trailing_martingale": {"ema_span_0_minutes": 100.0},
                         "ema_anchor": {"ema_span_0_minutes": 999.0},
                     },
                 },
@@ -1720,7 +1720,7 @@ class TestIndividualToConfig:
                         },
                     },
                     "strategy": {
-                        "trailing_martingale": {"ema_span_0": 200.0},
+                        "trailing_martingale": {"ema_span_0_minutes": 200.0},
                         "ema_anchor": {"ema_span_0_minutes": 123.0},
                     },
                 },
@@ -1885,9 +1885,9 @@ class TestIndividualToConfig:
         key_to_idx = _shape_indices_with_native_ids(template, shape)
 
         vector[key_to_idx["long_close_retracement_base_fraction"]] = -0.0005
-        vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
-        vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
-        vector[key_to_idx["long_close_threshold_volatility_1h_weight"]] = 39.0
+        vector[key_to_idx["long_close_retracement_log_range_1h_coefficient"]] = 37.0
+        vector[key_to_idx["long_close_retracement_log_range_1m_coefficient"]] = 38.0
+        vector[key_to_idx["long_close_threshold_log_range_1h_coefficient"]] = 39.0
 
         result = individual_to_config(
             vector,
@@ -1928,10 +1928,10 @@ class TestIndividualToConfig:
         key_to_idx = _shape_indices_with_native_ids(template, shape)
 
         vector[key_to_idx["long_close_retracement_base_fraction"]] = -0.0005
-        vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
-        vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
+        vector[key_to_idx["long_close_retracement_log_range_1h_coefficient"]] = 37.0
+        vector[key_to_idx["long_close_retracement_log_range_1m_coefficient"]] = 38.0
         vector[key_to_idx["short_close_retracement_base_fraction"]] = 0.002
-        vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] = 71.0
+        vector[key_to_idx["short_close_retracement_log_range_1h_coefficient"]] = 71.0
 
         config = _canonicalize_optimizer_individual(
             vector,
@@ -1948,16 +1948,16 @@ class TestIndividualToConfig:
             0.0
         )
         assert vector[
-            key_to_idx["long_close_retracement_volatility_1h_weight"]
+            key_to_idx["long_close_retracement_log_range_1h_coefficient"]
         ] == pytest.approx(0.01)
         assert vector[
-            key_to_idx["long_close_retracement_volatility_1m_weight"]
+            key_to_idx["long_close_retracement_log_range_1m_coefficient"]
         ] == pytest.approx(0.01)
         assert vector[key_to_idx["short_close_retracement_base_fraction"]] == pytest.approx(
             0.002
         )
         assert vector[
-            key_to_idx["short_close_retracement_volatility_1h_weight"]
+            key_to_idx["short_close_retracement_log_range_1h_coefficient"]
         ] == pytest.approx(70.0)
         assert long_close["retracement_base_fraction"] == pytest.approx(0.0)
         assert short_close["retracement_log_range_1h_coefficient"] == pytest.approx(70.0)

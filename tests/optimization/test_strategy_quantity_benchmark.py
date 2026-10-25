@@ -45,14 +45,14 @@ def test_feature_flags_and_frozen_zero_sensitivities_match_native_packets(kind, 
             for leg in ("entry", "close"):
                 for role in ("threshold", "retracement"):
                     for horizon in ("1m", "1h"):
-                        assert native[side][leg][f"{role}_volatility_{horizon}_weight"] == (0.1 if volatility else 0.0)
+                        assert native[side][leg][f"{role}_log_range_{horizon}_coefficient"] == (0.1 if volatility else 0.0)
         else:
             # This field used to be a double-down factor, so it must not be
             # newly classified as an optional distance weight by its suffix.
             assert native[side]["entry_qty_exposure_coefficient"] == 0.625
             assert native[side]["inventory_offset_exposure_coefficient"] == (0.1 if volatility else 0.0)
             for horizon in ("1m", "1h"):
-                assert native[side][f"offset_volatility_{horizon}_weight"] == (0.1 if volatility else 0.0)
+                assert native[side][f"offset_log_range_{horizon}_coefficient"] == (0.1 if volatility else 0.0)
     _population, _vectors, bounds = sampled_population(config, case, 3, 7)
     for row in bounds:
         leaf = row["path"][-1]

@@ -21,7 +21,7 @@ from config.optimize_bounds import flatten_optimize_bounds, get_optimize_bounds_
 from config.overrides import parse_overrides
 from config.strategy import build_runtime_strategy_side
 from config.strategy_spec import get_supported_strategy_kinds
-from config.strategy_paths import project_native_strategy_side, project_strategy_spec
+
 
 
 def _set_path(mapping, path, value):
@@ -72,12 +72,12 @@ def test_shipped_ema_anchor_smoke_example_loads_with_preserved_inputs():
     }.items():
         assert config["backtest"][key] == expected
     expected_native_strategy = {
-        "base_qty_fraction": 0.04, "ema_span_0": 48.0, "ema_span_1": 288.0,
-        "offset_fraction": 0.003, "offset_volatility_ema_span_1m": 60.0,
-        "offset_volatility_1m_weight": 0.0, "offset_volatility_ema_span_1h": 24.0,
-        "offset_volatility_1h_weight": 0.0, "inventory_offset_exposure_coefficient": 0.2,
+        "base_qty_fraction": 0.04, "ema_span_0_minutes": 48.0, "ema_span_1_minutes": 288.0,
+        "offset_fraction": 0.003, "offset_log_range_ema_span_minutes": 60.0,
+        "offset_log_range_1m_coefficient": 0.0, "offset_log_range_ema_span_1h_candles": 24.0,
+        "offset_log_range_1h_coefficient": 0.0, "inventory_offset_exposure_coefficient": 0.2,
     }
-    expected_strategy = project_native_strategy_side("ema_anchor", expected_native_strategy)
+    expected_strategy = deepcopy(expected_native_strategy)
     for side in ("long", "short"):
         assert config["bot"][side]["hsl"]["enabled"] is False
         assert config["bot"][side]["risk"]["max_positions"] == 2.0
@@ -132,10 +132,10 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
 @pytest.mark.parametrize("path", [
     "bot.long.unstuck_ema_span_0",
-    "bot.long.strategy.trailing_martingale.ema_span_0",
-    "long.unstuck.ema_span_0",
-    "bot.long.strategy.entry.ema_span_0",
-    "long.strategy.entry.ema_span_0",
+    "bot.long.strategy.trailing_martingale.ema_span_0_minutes",
+    "long.unstuck.ema_span_0_minutes",
+    "bot.long.strategy.entry.ema_span_0_minutes",
+    "long.strategy.entry.ema_span_0_minutes",
 ])
 def test_authored_patches_reject_retired_paths_and_selector_shorthand(location, path):
     source = get_template_config()
@@ -307,7 +307,7 @@ def test_rust_strategy_spec_matches_python_template_defaults(strategy_kind):
     source['bot']["portfolio"]['strategy_kind'] = strategy_kind
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     expected = _nested_strategy_values_from_spec(
-        project_strategy_spec(strategy_kind, pbr.get_strategy_spec(strategy_kind)), "default"
+        deepcopy(pbr.get_strategy_spec(strategy_kind)), "default"
     )
 
     assert _strategy_side(prepared, "long", strategy_kind) == expected["long"]
@@ -442,7 +442,7 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "long_filter_volume_ema_span_1m" not in prepared["optimize"]["bounds"]
     assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
     assert prepared['bot']["portfolio"]['strategy_kind'] == "trailing_martingale"
-    assert "ema_span_0" not in get_template_config()["bot"]["long"]
+    assert "ema_span_0_minutes" not in get_template_config()["bot"]["long"]
     assert "entry_grid_threshold_base_fraction" not in get_template_config()["bot"]["short"]
     assert (
         _strategy_side(prepared, "long")["entry"]["ema_span_0_minutes"]
@@ -465,7 +465,7 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_marti
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor"])
 @pytest.mark.parametrize(
-    "flat_key", ["entry_grid_threshold_base_fraction", "entry_volatility_ema_span_1h"]
+    "flat_key", ["entry_grid_threshold_base_fraction", "entry_log_range_ema_span_1h_candles"]
 )
 def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_kind(
     strategy_kind,

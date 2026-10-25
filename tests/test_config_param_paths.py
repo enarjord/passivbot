@@ -43,16 +43,16 @@ def test_group_resolution_matches_single_keys_with_one_metadata_projection(
 def test_later_group_observes_current_strategy_mode_and_bot_shape():
     config = get_template_config()
     config['bot']["portfolio"]['strategy_kind'] = "trailing_martingale"
-    keys = ["long_ema_span_0", "long_n_positions", "hsl_red_threshold"]
+    keys = ["long_ema_span_0_minutes", "long_n_positions", "hsl_red_threshold"]
     first = dict(param_paths.iter_optimizer_key_paths(config, keys))
     config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
     config["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
     config["bot"]["long"] = {"risk": {"max_positions": 2.0}}
     second = dict(param_paths.iter_optimizer_key_paths(config, keys))
-    assert first["long_ema_span_0"] == (
+    assert first["long_ema_span_0_minutes"] == (
         "bot", "long", "strategy", "trailing_martingale", "entry", "ema_span_0_minutes"
     )
-    assert second["long_ema_span_0"] == (
+    assert second["long_ema_span_0_minutes"] == (
         "bot", "long", "strategy", "ema_anchor", "ema_span_0_minutes"
     )
     assert first["long_n_positions"] == ("bot", "long", "risk", "max_positions")

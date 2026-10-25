@@ -48,22 +48,22 @@ ADAPTIVE_STRATEGY_KEYS = {
     "close_trailing_retracement_base_fraction",
     "close_trailing_qty_fraction",
     "close_trailing_threshold_base_fraction",
-    "close_weight_volatility_1h",
-    "close_weight_volatility_1m",
+    "close_log_range_1h_coefficient",
+    "close_log_range_1m_coefficient",
     "entry_grid_reentry_qty_multiplier",
     "entry_grid_threshold_base_fraction",
-    "entry_volatility_ema_span_1h",
-    "entry_volatility_ema_span_1m",
-    "entry_weight_volatility_1h",
-    "entry_weight_volatility_1m",
+    "entry_log_range_ema_span_1h_candles",
+    "entry_log_range_ema_span_minutes",
+    "entry_log_range_1h_coefficient",
+    "entry_log_range_1m_coefficient",
     "entry_exposure_ratio_coefficient",
     "entry_initial_ema_distance_fraction",
     "entry_initial_qty_fraction",
     "entry_trailing_reentry_qty_multiplier",
     "entry_trailing_retracement_base_fraction",
     "entry_trailing_threshold_base_fraction",
-    "ema_span_0",
-    "ema_span_1",
+    "ema_span_0_minutes",
+    "ema_span_1_minutes",
 }
 
 
@@ -79,14 +79,14 @@ LEGACY_STRATEGY_KEY_MAP = {
     "close_trailing_retracement_base_fraction": ("close", "retracement_base_fraction"),
     "close_trailing_qty_fraction": ("close", "qty_fraction"),
     "close_trailing_threshold_base_fraction": ("close", "threshold_base_fraction"),
-    "close_weight_volatility_1h": ("close", "threshold_volatility_1h_weight"),
-    "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
+    "close_log_range_1h_coefficient": ("close", "threshold_log_range_1h_coefficient"),
+    "close_log_range_1m_coefficient": ("close", "threshold_log_range_1m_coefficient"),
     "entry_grid_reentry_qty_multiplier": ("entry", "reentry_qty_multiplier"),
     "entry_grid_threshold_base_fraction": ("entry", "threshold_base_fraction"),
-    "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
-    "entry_volatility_ema_span_1m": ("volatility_ema_span_1m",),
-    "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
-    "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
+    "entry_log_range_ema_span_1h_candles": ("log_range_ema_span_1h_candles",),
+    "entry_log_range_ema_span_minutes": ("log_range_ema_span_minutes",),
+    "entry_log_range_1h_coefficient": ("entry", "threshold_log_range_1h_coefficient"),
+    "entry_log_range_1m_coefficient": ("entry", "threshold_log_range_1m_coefficient"),
     "entry_exposure_ratio_coefficient": ("entry", "threshold_exposure_ratio_coefficient"),
     "entry_initial_ema_distance_fraction": ("entry", "initial_ema_distance_fraction"),
     "entry_initial_qty_fraction": ("entry", "initial_qty_fraction"),
@@ -98,33 +98,33 @@ LEGACY_STRATEGY_KEY_MAP = {
 
 def adaptive_strategy_params(**overrides):
     base = {
-        "volatility_ema_span_1h": 0.0,
-        "volatility_ema_span_1m": 60.0,
+        "log_range_ema_span_1h_candles": 0.0,
+        "log_range_ema_span_minutes": 60.0,
         "entry": {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
+            "ema_span_0_minutes": 10.0,
+            "ema_span_1_minutes": 20.0,
             "reentry_qty_multiplier": 1.0,
             "ema_gate_mode": "initial",
             "initial_ema_distance_fraction": 0.0,
             "initial_qty_fraction": 0.1,
             "threshold_base_fraction": 0.02,
             "threshold_exposure_ratio_coefficient": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
             "retracement_base_fraction": 0.0,
             "retracement_exposure_ratio_coefficient": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
         "close": {
             "qty_fraction": 1.0,
             "threshold_base_fraction": 0.01,
             "threshold_exposure_ratio_coefficient": 0.0,
-            "threshold_volatility_1h_weight": 0.0,
-            "threshold_volatility_1m_weight": 0.0,
+            "threshold_log_range_1h_coefficient": 0.0,
+            "threshold_log_range_1m_coefficient": 0.0,
             "retracement_base_fraction": 0.0,
-            "retracement_volatility_1h_weight": 0.0,
-            "retracement_volatility_1m_weight": 0.0,
+            "retracement_log_range_1h_coefficient": 0.0,
+            "retracement_log_range_1m_coefficient": 0.0,
         },
     }
     for key, value in overrides.items():
@@ -792,8 +792,8 @@ def test_live_authorized_missing_entry_volatility_preserves_independent_closes()
     import passivbot_rust as pbr
 
     strategy = adaptive_strategy_params(
-        entry_volatility_ema_span_1h=4.0,
-        entry_weight_volatility_1h=1.0,
+        entry_log_range_ema_span_1h_candles=4.0,
+        entry_log_range_1h_coefficient=1.0,
     )
     symbol = make_symbol(
         0,
@@ -964,8 +964,8 @@ def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
         short_pos_price=100.0,
         short_bp=enabled_short,
         long_strategy=adaptive_strategy_params(
-            entry_volatility_ema_span_1h=4.0,
-            entry_weight_volatility_1h=1.0,
+            entry_log_range_ema_span_1h_candles=4.0,
+            entry_log_range_1h_coefficient=1.0,
         ),
         short_strategy=adaptive_strategy_params(),
         emas=ema_bundle(h1_log_range=[]),
@@ -1007,8 +1007,8 @@ def test_trailing_martingale_close_only_ignores_entry_only_emas():
     import passivbot_rust as pbr
 
     strategy = adaptive_strategy_params(
-        entry_weight_volatility_1h=1.0,
-        entry_volatility_ema_span_1h=4.0,
+        entry_log_range_1h_coefficient=1.0,
+        entry_log_range_ema_span_1h_candles=4.0,
     )
     symbol = make_symbol(
         0,
@@ -1877,15 +1877,15 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
                 long_pos_price=100.0,
                 long_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.01,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.01,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
@@ -1949,8 +1949,8 @@ def test_ema_anchor_final_close_preserves_only_valid_minimum_remainders(
 
     strategy = {
         "base_qty_fraction": 1.0,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
@@ -2000,8 +2000,8 @@ def test_ema_anchor_market_close_uses_executable_touch_minimum():
 
     strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
@@ -2094,8 +2094,8 @@ def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
 
     strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
@@ -2342,8 +2342,8 @@ def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
 
     strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
@@ -2392,8 +2392,8 @@ def test_sub_tick_ema_anchor_bid_suppresses_long_entry_above_the_book():
 
     strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
@@ -2429,8 +2429,8 @@ def test_genuinely_above_tick_ema_anchor_ask_rounds_up():
 
     strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
@@ -2478,8 +2478,8 @@ def test_ema_anchor_entry_qty_exposure_coefficient_scales_same_side_qty_only():
 
     base_strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.0,
         "inventory_offset_exposure_coefficient": 0.0,
         "entry_qty_exposure_coefficient": 2.0,
@@ -2573,15 +2573,15 @@ def test_ema_anchor_respects_runtime_budget_for_base_clip_size():
                 },
                 long_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.0,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.0,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
@@ -2755,13 +2755,13 @@ def test_ema_anchor_volatility_weights_widen_quotes():
 
     base_strategy = {
         "base_qty_fraction": 0.1,
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
+        "ema_span_0_minutes": 10.0,
+        "ema_span_1_minutes": 20.0,
         "offset_fraction": 0.01,
-        "offset_volatility_ema_span_1m": 15.0,
-        "offset_volatility_1m_weight": 2.0,
-        "offset_volatility_ema_span_1h": 8.0,
-        "offset_volatility_1h_weight": 3.0,
+        "offset_log_range_ema_span_minutes": 15.0,
+        "offset_log_range_1m_coefficient": 2.0,
+        "offset_log_range_ema_span_1h_candles": 8.0,
+        "offset_log_range_1h_coefficient": 3.0,
         "inventory_offset_exposure_coefficient": 0.0,
     }
     calm = make_input(
@@ -2841,15 +2841,15 @@ def test_ema_anchor_one_way_mode_blocks_short_entries_while_long_position_exists
                 long_pos_price=100.0,
                 long_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.01,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.01,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
@@ -2896,15 +2896,15 @@ def test_ema_anchor_one_way_mode_blocks_long_entries_while_short_position_exists
                 short_pos_price=100.0,
                 long_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.01,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },
                 short_strategy={
                     "base_qty_fraction": 0.1,
-                    "ema_span_0": 10.0,
-                    "ema_span_1": 20.0,
+                    "ema_span_0_minutes": 10.0,
+                    "ema_span_1_minutes": 20.0,
                     "offset_fraction": 0.01,
                     "inventory_offset_exposure_coefficient": 0.0,
                 },

@@ -29,9 +29,9 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     overrides = {('long', symbols[0]): .017, ('short', symbols[1]): .028}
     def params(side, symbol):
         calls[side, symbol] += 1
-        from config.strategy_paths import lower_runtime_strategy_side
 
-        result = lower_runtime_strategy_side("trailing_martingale", defaults[side])
+
+        result = deepcopy(defaults[side])
         result['entry']['initial_qty_fraction'] = overrides.get((side, symbol), .011)
         return result
     def bp(side, key, symbol=None):
@@ -84,7 +84,7 @@ def test_market_snapshot_reuses_h1_resolution_and_observes_changes():
 
     def params(side, symbol):
         calls[side, symbol] += 1
-        return {'volatility_ema_span_1h': span}
+        return {'log_range_ema_span_1h_candles': span}
 
     def bp(*args):
         raise KeyError(args)

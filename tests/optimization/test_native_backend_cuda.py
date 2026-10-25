@@ -119,7 +119,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         set_bound("short_total_wallet_exposure_limit", [0, 1])
     if coupled:
         config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
-        set_bound("long_ema_span_0", [2.0, 20.0])
+        set_bound("long_ema_span_0_minutes", [2.0, 20.0])
         for side in ("long", "short"):
             config["bot"][side]["unstuck"].update(enabled=True, ema_gating_enabled=True)
         config["coin_overrides"] = {

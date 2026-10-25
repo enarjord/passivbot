@@ -40,13 +40,13 @@ def _compound_trailing_order_price(kind, side, base, threshold, retracement):
         position_size=-1. if side == "short" else 1., position_price=base,
         min_since_open=base * .5, max_since_min=base * .9,
         max_since_open=base * 1.4, min_since_max=base * .9,
-        volatility_ema_1h=0., volatility_ema_1m=0.)
+        log_range_ema_1h=0., log_range_ema_1m=0.)
     if kind == "entry":
         common.update(entry_grid_reentry_qty_multiplier=.2, entry_grid_threshold_base_fraction=threshold,
             entry_initial_ema_distance_fraction=0., entry_initial_qty_fraction=.0001,
             entry_trailing_reentry_qty_multiplier=.2, entry_trailing_retracement_base_fraction=retracement,
-            entry_trailing_threshold_base_fraction=threshold, entry_weight_volatility_1h=0.,
-            entry_weight_volatility_1m=0., entry_exposure_ratio_coefficient=0.)
+            entry_trailing_threshold_base_fraction=threshold, entry_log_range_1h_coefficient=0.,
+            entry_log_range_1m_coefficient=0., entry_exposure_ratio_coefficient=0.)
         common["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 1. if side == "short" else 100.
         common["order_book_ask" if side == "short" else "order_book_bid"] = base * .6 if side == "short" else base * 1.4
     else:
@@ -113,8 +113,8 @@ def test_calc_entries_long_py_quantizes_results():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_reentry_qty_multiplier=1.0,
-        entry_weight_volatility_1h=0.0,
-        entry_weight_volatility_1m=0.0,
+        entry_log_range_1h_coefficient=0.0,
+        entry_log_range_1m_coefficient=0.0,
         entry_exposure_ratio_coefficient=0.0,
         entry_grid_threshold_base_fraction=0.0,
         entry_initial_ema_distance_fraction=-0.01,
@@ -132,8 +132,8 @@ def test_calc_entries_long_py_quantizes_results():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=0.6545,
-        volatility_ema_1h=0.0,
-        volatility_ema_1m=0.0,
+        log_range_ema_1h=0.0,
+        log_range_ema_1m=0.0,
         order_book_bid=0.66,
     )
     result = pbr.calc_entries_long_py(**params)
@@ -258,13 +258,13 @@ def test_calc_ema_anchor_quote_series_py_supports_inventory_and_volatility_input
         balances,
         flat_psize,
         price_step=0.1,
-        ema_span_0=2.0,
-        ema_span_1=6.0,
+        ema_span_0_minutes=2.0,
+        ema_span_1_minutes=6.0,
         offset_fraction=0.01,
-        offset_volatility_ema_span_1m=2.0,
-        offset_volatility_1m_weight=0.5,
-        offset_volatility_ema_span_1h=2.0,
-        offset_volatility_1h_weight=0.25,
+        offset_log_range_ema_span_minutes=2.0,
+        offset_log_range_1m_coefficient=0.5,
+        offset_log_range_ema_span_1h_candles=2.0,
+        offset_log_range_1h_coefficient=0.25,
         inventory_offset_exposure_coefficient=0.2,
     )
     bid_long, ask_long = pbr.calc_ema_anchor_quote_series_py(
@@ -276,13 +276,13 @@ def test_calc_ema_anchor_quote_series_py_supports_inventory_and_volatility_input
         balances,
         long_psize,
         price_step=0.1,
-        ema_span_0=2.0,
-        ema_span_1=6.0,
+        ema_span_0_minutes=2.0,
+        ema_span_1_minutes=6.0,
         offset_fraction=0.01,
-        offset_volatility_ema_span_1m=2.0,
-        offset_volatility_1m_weight=0.5,
-        offset_volatility_ema_span_1h=2.0,
-        offset_volatility_1h_weight=0.25,
+        offset_log_range_ema_span_minutes=2.0,
+        offset_log_range_1m_coefficient=0.5,
+        offset_log_range_ema_span_1h_candles=2.0,
+        offset_log_range_1h_coefficient=0.25,
         inventory_offset_exposure_coefficient=0.2,
     )
 
@@ -363,12 +363,12 @@ def test_partial_initial_entries_preserve_quantity_steps(side, retracement, size
         entry_grid_reentry_qty_multiplier=0.2, entry_grid_threshold_base_fraction=0.001,
         entry_initial_ema_distance_fraction=0.0, entry_initial_qty_fraction=0.012,
         entry_trailing_reentry_qty_multiplier=0.2, entry_trailing_retracement_base_fraction=retracement,
-        entry_trailing_threshold_base_fraction=0.001, entry_weight_volatility_1h=0.0,
-        entry_weight_volatility_1m=0.0, entry_exposure_ratio_coefficient=0.0, wallet_exposure_limit=0.5,
+        entry_trailing_threshold_base_fraction=0.001, entry_log_range_1h_coefficient=0.0,
+        entry_log_range_1m_coefficient=0.0, entry_exposure_ratio_coefficient=0.0, wallet_exposure_limit=0.5,
         risk_we_excess_allowance_pct=0.0, balance=1102.0,
         position_size=-size if side == "short" else size, position_price=99.85,
         min_since_open=0.0, max_since_min=0.0, max_since_open=0.0, min_since_max=0.0,
-        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+        log_range_ema_1h=0.0, log_range_ema_1m=0.0,
     )
     params["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 70.62
     params["order_book_ask" if side == "short" else "order_book_bid"] = 70.62
@@ -389,12 +389,12 @@ def test_reentry_quantity_recovers_only_half_step_representation_noise(side, fac
         entry_grid_reentry_qty_multiplier=factor, entry_grid_threshold_base_fraction=0.01,
         entry_initial_ema_distance_fraction=0.0, entry_initial_qty_fraction=0.0001,
         entry_trailing_reentry_qty_multiplier=factor, entry_trailing_retracement_base_fraction=0.0,
-        entry_trailing_threshold_base_fraction=0.0, entry_weight_volatility_1h=0.0,
-        entry_weight_volatility_1m=0.0, entry_exposure_ratio_coefficient=0.0, wallet_exposure_limit=1.0,
+        entry_trailing_threshold_base_fraction=0.0, entry_log_range_1h_coefficient=0.0,
+        entry_log_range_1m_coefficient=0.0, entry_exposure_ratio_coefficient=0.0, wallet_exposure_limit=1.0,
         risk_we_excess_allowance_pct=0.0, balance=10000.0,
         position_size=-5.0 if side == "short" else 5.0, position_price=100.0,
         min_since_open=90.0, max_since_min=100.0, max_since_open=110.0, min_since_max=100.0,
-        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+        log_range_ema_1h=0.0, log_range_ema_1m=0.0,
     )
     params["ema_bands_upper" if side == "short" else "ema_bands_lower"] = 100.0
     params["order_book_ask" if side == "short" else "order_book_bid"] = 100.0
@@ -417,7 +417,7 @@ def test_trailing_reentry_preserves_exact_ticks_without_absorbing_off_tick_targe
         entry_initial_ema_distance_fraction=0.0, entry_initial_qty_fraction=0.0001,
         entry_trailing_reentry_qty_multiplier=0.2, entry_trailing_retracement_base_fraction=0.001,
         entry_trailing_threshold_base_fraction=0.0021 if short else 0.0026,
-        entry_weight_volatility_1h=0.0, entry_weight_volatility_1m=0.0,
+        entry_log_range_1h_coefficient=0.0, entry_log_range_1m_coefficient=0.0,
         entry_exposure_ratio_coefficient=0.0, wallet_exposure_limit=1.0, risk_we_excess_allowance_pct=0.0,
         balance=1000.0, position_size=-1.0 if short else 1.0,
         position_price=100.0 + offset if short else 131.25 - offset,
@@ -425,7 +425,7 @@ def test_trailing_reentry_preserves_exact_ticks_without_absorbing_off_tick_targe
         max_since_min=100.0 if short else 130.0,
         max_since_open=110.0 if short else 140.0,
         min_since_max=100.0 if short else 120.0,
-        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+        log_range_ema_1h=0.0, log_range_ema_1m=0.0,
     )
     params["ema_bands_upper" if short else "ema_bands_lower"] = 100.0 if short else 140.0
     params["order_book_ask" if short else "order_book_bid"] = 90.0 if short else 140.0
@@ -448,12 +448,12 @@ def test_partial_initial_qty_at_power_of_two_uses_inward_spacing(side, retraceme
         entry_initial_ema_distance_fraction=0.0, entry_initial_qty_fraction=1.0,
         entry_trailing_reentry_qty_multiplier=1.0,
         entry_trailing_retracement_base_fraction=retracement, entry_trailing_threshold_base_fraction=0.5,
-        entry_weight_volatility_1h=0.0, entry_weight_volatility_1m=0.0, entry_exposure_ratio_coefficient=0.0,
+        entry_log_range_1h_coefficient=0.0, entry_log_range_1m_coefficient=0.0, entry_exposure_ratio_coefficient=0.0,
         wallet_exposure_limit=1.0, risk_we_excess_allowance_pct=0.0,
         balance=819200.0, position_size=(-1 if short else 1) * 4217.878608603804,
         position_price=100.0, min_since_open=100.0, max_since_min=100.0,
         max_since_open=100.0, min_since_max=100.0,
-        volatility_ema_1h=0.0, volatility_ema_1m=0.0,
+        log_range_ema_1h=0.0, log_range_ema_1m=0.0,
     )
     params["ema_bands_upper" if short else "ema_bands_lower"] = 100.0
     params["order_book_ask" if short else "order_book_bid"] = 100.0

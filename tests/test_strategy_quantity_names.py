@@ -13,7 +13,7 @@ from config.migrations.released_v8 import get_released_v8_defaults
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import resolve_optimizer_key_path
 from config.strategy import build_runtime_strategy_side
-from config.strategy_paths import lower_runtime_strategy_side, project_native_strategy_side
+
 from tools.clean_config import cleanup_config
 from tools.migrate_config_v9 import migrate
 
@@ -91,8 +91,8 @@ def test_new_strategy_quantities_roundtrip_with_unchanged_native_values(kind, ol
         public = prepared["bot"][side]["strategy"][kind]
         native = build_runtime_strategy_side(prepared["bot"][side], strategy_kind=kind, pside=side)
         assert at(native, new) == value
-        assert native == lower_runtime_strategy_side(kind, public)
-        assert project_native_strategy_side(kind, native) == public
+        assert native == deepcopy(public)
+        assert deepcopy(native) == public
         assert resolve_optimizer_key_path(prepared, f"{side}_{native_id}") == (
             "bot", side, "strategy", kind, *new)
     registry = get_field_registry()

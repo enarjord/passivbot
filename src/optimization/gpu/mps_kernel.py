@@ -328,8 +328,8 @@ def _scale_directional_minute_parameters(
     before calculating their alphas. It separately compounds HSL's one-minute
     EMA decay over the elapsed minutes, so HSL spans are converted to the
     equivalent per-candle alpha. Entry and HSL cooldowns remain expressed in
-    elapsed minutes and are converted to candle counts. Hour-denominated
-    volatility spans remain unchanged.
+    elapsed minutes and are converted to candle counts. Hour-candle
+    log-range spans remain unchanged.
     """
 
     interval_minutes = float(interval_minutes)
@@ -339,15 +339,18 @@ def _scale_directional_minute_parameters(
     minute_keys = {
         "unstuck_ema_span_0",
         "unstuck_ema_span_1",
-        "ema_span_0",
-        "ema_span_1",
         "entry_cooldown_minutes",
     }
+    minute_keys.update(
+        ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
+        if "entry_ema_span_0_minutes" in keys
+        else ("ema_span_0_minutes", "ema_span_1_minutes")
+    )
     minute_keys.update(ADAPTIVE_PARAM_KEYS[:4])
-    if "offset_volatility_ema_span_1m" in keys:
-        minute_keys.add("offset_volatility_ema_span_1m")
-    if "volatility_ema_span_1m" in keys:
-        minute_keys.add("volatility_ema_span_1m")
+    if "offset_log_range_ema_span_minutes" in keys:
+        minute_keys.add("offset_log_range_ema_span_minutes")
+    if "log_range_ema_span_minutes" in keys:
+        minute_keys.add("log_range_ema_span_minutes")
     if "forager_volume_ema_span_1m" in keys:
         minute_keys.add("forager_volume_ema_span_1m")
     if "forager_volatility_ema_span_1m" in keys:
@@ -517,10 +520,10 @@ def _scale_ema_multicoin_coin_overrides(
         minute_columns={
             EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
             EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
-            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
-            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0_minutes"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1_minutes"),
             EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
-                "offset_volatility_ema_span_1m"
+                "offset_log_range_ema_span_minutes"
             ),
             EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
         },
@@ -542,9 +545,9 @@ def _scale_tm_multicoin_coin_overrides(
         minute_columns={
             TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
             TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
-            override_keys.index("ema_span_0"),
-            override_keys.index("ema_span_1"),
-            override_keys.index("volatility_ema_span_1m"),
+            override_keys.index("entry_ema_span_0_minutes"),
+            override_keys.index("entry_ema_span_1_minutes"),
+            override_keys.index("log_range_ema_span_minutes"),
             TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
         },
         hsl_start_column=TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,

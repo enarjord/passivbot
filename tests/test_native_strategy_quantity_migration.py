@@ -98,10 +98,12 @@ def test_frozen_v8_flat_bound_collision_rejects_conflicting_authority():
     ("ema_anchor", "entry_double_down_factor", "entry_qty_exposure_coefficient"),
 ])
 def test_released_public_names_do_not_depend_on_runtime_projection(monkeypatch, kind, old, new):
-    from config import strategy_paths
+    from config import strategy_spec
     from config.public_names import released_public_path
 
-    monkeypatch.setattr(strategy_paths, "STRATEGY_NATIVE_TO_PUBLIC_PATHS", {})
+    def unexpected_current_metadata(*args, **kwargs):
+        raise AssertionError("released spelling conversion must not read current native metadata")
+    monkeypatch.setattr(strategy_spec, "get_strategy_spec", unexpected_current_metadata)
     assert released_public_path(("bot", "long", "strategy", kind, *old.split("."))) == (
         "bot", "long", "strategy", kind, *new.split("."),
     )

@@ -42,7 +42,7 @@ def test_martingale_close_diagnostics_remain_available(
         "state": {
             "balance": 1000.0, "order_book": {"bid": 110.0, "ask": 110.1},
             "ema_bands": {"lower": 100.0, "upper": 100.0},
-            "volatility_ema_1m": 0.0, "volatility_ema_1h": 0.0,
+            "log_range_ema_1m": 0.0, "log_range_ema_1h": 0.0,
         },
         "bot_params": {
             "wallet_exposure_limit": 1.0, "total_wallet_exposure_limit": 1.0,

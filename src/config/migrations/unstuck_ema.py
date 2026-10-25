@@ -12,15 +12,21 @@ from ..strategy_spec import (
     normalize_strategy_kind,
 )
 from ..shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
-from ..strategy_paths import lower_runtime_strategy_side
 from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 
 
 def _price_spans(strategy, kind):
-    # Referenced files can already carry final public paths. Read their
-    # unchanged native horizons without modifying either authored layer.
-    strategy = lower_runtime_strategy_side(kind, strategy)
-    return strategy.get("entry", {}) if kind == "trailing_martingale" else strategy
+    # This released-only migration also reads referenced documents already
+    # converted to final public paths. Keep its old source vocabulary separate
+    # from the current native strategy schema and do not mutate either layer.
+    spans = deepcopy(strategy.get("entry", {}) if kind == "trailing_martingale" else strategy)
+    for old, public in (("ema_span_0", "ema_span_0_minutes"),
+                        ("ema_span_1", "ema_span_1_minutes")):
+        if public in spans:
+            if old in spans:
+                raise ValueError(f"conflicting strategy path {old}")
+            spans[old] = spans.pop(public)
+    return spans
 
 
 def _has_unstuck_span(mapping, legacy_key):
@@ -269,6 +275,9 @@ def migrate_unstuck_ema_spans(
                     + ("entry." if kind == "trailing_martingale" else "")
                     + key,
                     f"bot.{side}.{key}",
+                    f"bot.{side}.strategy.{kind}."
+                    + ("entry." if kind == "trailing_martingale" else "")
+                    + FLAT_BOT_KEY_TO_GROUP_PATH[f"unstuck_{key}"][-1],
                 ):
                     new_path = f"bot.{side}.unstuck.{key}"
                     public_key = FLAT_BOT_KEY_TO_GROUP_PATH[f"unstuck_{key}"][-1]

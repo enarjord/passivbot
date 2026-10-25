@@ -18,7 +18,7 @@ from config.shared_bot import (
     set_grouped_bot_value,
 )
 from config.strategy import build_runtime_strategy_side
-from config.strategy_paths import lower_runtime_strategy_side, project_native_strategy_side
+
 from tools.clean_config import cleanup_config
 from tools.migrate_config_v9 import migrate
 
@@ -97,10 +97,10 @@ def test_strategy_log_range_roundtrips_preserve_native_ids_and_values(kind, nati
     for side in (("long", "short") if scope == "global" else (scope,)):
         public = prepared["bot"][side]["strategy"][kind]
         lowered = build_runtime_strategy_side(prepared["bot"][side], strategy_kind=kind, pside=side)
-        assert at(lowered, native) == value
-        assert lowered == lower_runtime_strategy_side(kind, public)
-        assert project_native_strategy_side(kind, lowered) == public
-        native_id = f"{side}_{'_'.join(native)}"
+        assert at(lowered, new) == value
+        assert lowered == deepcopy(public)
+        assert deepcopy(lowered) == public
+        native_id = f"{side}_{'_'.join(new)}"
         assert resolve_optimizer_key_path(prepared, native_id) == ("bot", side, "strategy", kind, *new)
     assert get_field_registry().find(path) is not None
     assert get_field_registry().find(("bot", scope, "strategy", kind, *old)) is None
@@ -133,7 +133,7 @@ def test_released_strategy_log_ranges_convert_root_bounds_files_and_reports(tmp_
         path = ("bot", "long", "strategy", kind, *new)
         assert at(result.config, path) == value
         assert at(result.config["coin_overrides"]["BTC"], path) == value * (0.75 if index == 0 else 0.5)
-        assert flat[f"long_{'_'.join(native)}"] == [value, value]
+        assert flat[f"long_{'_'.join(new)}"] == [value, value]
         assert ".".join(path) in result.config["optimize"]["fixed_params"]
         assert any(isinstance(row["new"], dict) and ".".join(path) in row["new"] for row in result.changes)
     file.unlink()
@@ -241,12 +241,12 @@ def test_released_forager_log_range_preserves_bounds_selectors_scenarios_and_fin
 
 
 @pytest.mark.parametrize("kind,native,old,new,value", FIELDS)
-def test_log_range_native_metadata_keeps_frozen_identifiers(kind, native, old, new, value):
+def test_log_range_native_metadata_uses_canonical_identifiers(kind, native, old, new, value):
     records = [row for row in pbr.get_strategy_spec(kind)["parameters"]
-               if row["side"] == "long" and tuple(row["config_path"][2:]) == native]
+               if row["side"] == "long" and tuple(row["config_path"][2:]) == new]
     assert len(records) == 1
-    assert records[0]["name"] == "_".join(native)
-    assert records[0]["optimize_key"] == f"long_{'_'.join(native)}"
+    assert records[0]["name"] == "_".join(new)
+    assert records[0]["optimize_key"] == f"long_{'_'.join(new)}"
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -273,8 +273,8 @@ def test_disabled_retracement_dead_genes_keep_native_ids_public_paths_and_bound_
     dead = optimizer_dead_param_values(prepared, globally_dead_only=globally_dead_only)
     expected = {
         f"{side}_close_retracement_base_fraction": 0.0,
-        f"{side}_close_retracement_volatility_1h_weight": 0.25,
-        f"{side}_close_retracement_volatility_1m_weight": 0.5,
+        f"{side}_close_retracement_log_range_1h_coefficient": 0.25,
+        f"{side}_close_retracement_log_range_1m_coefficient": 0.5,
     }
     if globally_dead_only and policy == "reachable":
         assert not (expected.keys() & dead.keys())

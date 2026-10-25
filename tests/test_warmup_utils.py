@@ -84,7 +84,7 @@ def config_with_coin_overrides(base_config):
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "ema_span_0": 500.0,
+                            "ema_span_0_minutes": 500.0,
                         }
                     },
                 },
@@ -144,8 +144,8 @@ class TestWarmupCalculation:
         assert warmup_minutes == 6000
 
     def test_compute_backtest_warmup_minutes_considers_entry_volatility_hours(self, base_config):
-        """Test that volatility_ema_span_1h is converted to minutes."""
-        # volatility_ema_span_1h = 1.0 -> 60 minutes
+        """Test that log_range_ema_span_1h_candles is converted to minutes."""
+        # log_range_ema_span_1h_candles = 1.0 -> 60 minutes
         # This is less than other spans (2000.0), so max is still 2000.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
@@ -153,7 +153,7 @@ class TestWarmupCalculation:
         # Max span should still be 2000.0 from forager_volume_ema_span_1m
         assert warmup_minutes == 6000
 
-        # Now test with larger volatility_ema_span_1h
+        # Now test with larger log_range_ema_span_1h_candles
         base_config["bot"]["long"]["strategy"]["trailing_martingale"]["log_range_ema_span_1h_candles"] = 100.0
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -166,8 +166,8 @@ class TestWarmupCalculation:
         warmup_minutes = compute_backtest_warmup_minutes(config_with_bounds)
 
         # Max from bounds:
-        # - long_ema_span_1: 10000
-        # - long_volatility_ema_span_1h: 5.0 = 300 minutes
+        # - long_ema_span_1_minutes: 10000
+        # - long_log_range_ema_span_1h_candles: 5.0 = 300 minutes
         # Max is 10000
         # Warmup = 10000 * 3.0 = 30000 minutes
         assert warmup_minutes == 30000
@@ -248,13 +248,13 @@ class TestPerCoinWarmupCalculation:
         assert "BTC" in per_coin_warmup
         assert "ETH" in per_coin_warmup
 
-        # BTC has larger spans: max is 7000 (ema_span_1)
+        # BTC has larger spans: max is 7000 (ema_span_1_minutes)
         # Warmup = 7000 * 3.0 = 21000
         assert per_coin_warmup["BTC"] == 21000
 
         # ETH has mixed spans:
-        # - ema_span_0 override: 500.0
-        # - ema_span_1 from base: 1500.0
+        # - ema_span_0_minutes override: 500.0
+        # - ema_span_1_minutes from base: 1500.0
         # - forager_volume_ema_span_1m from base: 2000.0
         # Max is 2000.0, warmup = 2000 * 3.0 = 6000
         assert per_coin_warmup["ETH"] == 6000
@@ -278,7 +278,7 @@ class TestPerCoinWarmupCalculation:
         assert per_coin_warmup["__default__"] == 5000
 
     def test_per_coin_warmup_with_entry_volatility_hours(self, base_config):
-        """Test that volatility_ema_span_1h is properly handled per-coin."""
+        """Test that log_range_ema_span_1h_candles is properly handled per-coin."""
         base_config["coin_overrides"] = {
             "BTC": {
                 "bot": {
@@ -338,14 +338,14 @@ class TestEMASpanExtraction:
         """Test that all EMA-related fields are considered."""
         # Modify each field to be the maximum and verify it's used
 
-        # Test ema_span_0
+        # Test ema_span_0_minutes
         base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
             "ema_span_0_minutes"
         ] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000  # 10000 * 3.0
 
-        # Reset and test ema_span_1
+        # Reset and test ema_span_1_minutes
         base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
             "ema_span_0_minutes"
         ] = 1000.0
@@ -385,7 +385,7 @@ class TestEMASpanExtraction:
         """Test that bounds for all fields are extracted."""
         warmup = compute_backtest_warmup_minutes(config_with_bounds)
 
-        # Max from bounds is long_ema_span_1: 10000
+        # Max from bounds is long_ema_span_1_minutes: 10000
         # Warmup = 10000 * 3.0 = 30000
         assert warmup == 30000
 

@@ -6,6 +6,14 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use canonical minute and one-hour-candle EMA horizons and `log_range` sensitivities throughout
+  the native strategies, optimizer coordinates and CPU/GPU packets. Remove the redundant runtime
+  strategy path translation; explicit released-v8 conversion retains its own frozen names.
+  Values, floating spans, initialization, formulas and parameter-column order are unchanged.
+  Trailing-inspector inputs now use `--log-range-ema-1m`, `--log-range-ema-1h` and
+  `--log-range-scenarios`; sensitivity flags use `--*-log-range-*-coefficient`, with the same
+  numeric values.
+
 - Align native strategy sizing, price fractions and exposure coefficients with the authored
   configuration names, including optimizer IDs, calculator keywords and trailing diagnostics.
   Numeric values, calculator argument positions and GPU parameter columns are unchanged.
@@ -14,8 +22,8 @@ since the latest release tag; these features may already be available when insta
 
 - Name public candle-range indicators `log_range`: strategy horizons and forager ranking now
   use that name, and strategy sensitivities end in `_coefficient`. The measurement remains the
-  EMA of `ln(high / low)`; values, normalization, native identifiers, and trading formulas are
-  unchanged. Released-v8 conversion emits the new public paths; earlier dev-v9 names are rejected.
+  EMA of `ln(high / low)`; values, normalization and trading formulas are unchanged. Released-v8
+  conversion emits the new public paths; earlier dev-v9 names are rejected.
 
 - Describe strategy sizing and exposure sensitivities explicitly: trailing-martingale uses
   `reentry_qty_multiplier` and `_exposure_ratio_coefficient` leaves; EMA-anchor uses

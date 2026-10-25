@@ -39,13 +39,13 @@ def test_decimal_metadata_finite_limb_roundtrip_and_overflow_sentinel():
 def test_modifier_masks_distinguish_pinned_zero_inheritance_and_underflow():
     global_values = np.zeros((1, len(KEYS)), dtype=np.float64)
     global_values[0, KEYS.index("entry_threshold_exposure_ratio_coefficient")] = 0.25
-    global_values[0, KEYS.index("entry_threshold_volatility_1h_weight")] = 1e-100
+    global_values[0, KEYS.index("entry_threshold_log_range_1h_coefficient")] = 1e-100
     inherited = np.full_like(global_values, np.nan)
     pinned = inherited.copy()
     pinned[0, KEYS.index("entry_threshold_exposure_ratio_coefficient")] = 0.0
-    pinned[0, KEYS.index("entry_threshold_volatility_1h_weight")] = 0.0
+    pinned[0, KEYS.index("entry_threshold_log_range_1h_coefficient")] = 0.0
     tiny_pin = pinned.copy()
-    tiny_pin[0, KEYS.index("entry_threshold_volatility_1m_weight")] = 1e-100
+    tiny_pin[0, KEYS.index("entry_threshold_log_range_1m_coefficient")] = 1e-100
     global_mask = int(_tm_modifier_masks(global_values, KEYS)[0, 0])
     assert global_mask == 3
     encoded = _tm_modifier_masks(np.concatenate((inherited, pinned, tiny_pin)), KEYS,

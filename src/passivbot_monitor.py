@@ -1229,11 +1229,16 @@ def _build_monitor_runtime_market_hints(
                             and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
                         ):
                             continue
-                        prefix, distance_key = "unstuck_", "unstuck_ema_dist"
+                        distance_key = "unstuck_ema_dist"
                     else:
-                        prefix, distance_key = "", "entry_initial_ema_distance_fraction"
-                    span0 = float(self.bp(pside, f"{prefix}ema_span_0", symbol))
-                    span1 = float(self.bp(pside, f"{prefix}ema_span_1", symbol))
+                        distance_key = "entry_initial_ema_distance_fraction"
+                    span_keys = (
+                        ("unstuck_ema_span_0", "unstuck_ema_span_1")
+                        if family == "unstuck"
+                        else ("entry_ema_span_0_minutes", "entry_ema_span_1_minutes")
+                    )
+                    span0 = float(self.bp(pside, span_keys[0], symbol))
+                    span1 = float(self.bp(pside, span_keys[1], symbol))
                     distance = float(self.bp(pside, distance_key, symbol))
                     if (
                         not all(math.isfinite(v) for v in (span0, span1, distance))
@@ -1442,17 +1447,17 @@ def _monitor_strategy_value(
         "entry_trailing_retracement_base_fraction": "entry.retracement_base_fraction",
         "entry_initial_ema_distance_fraction": "entry.initial_ema_distance_fraction",
         "entry_initial_qty_fraction": "entry.initial_qty_fraction",
-        "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
-        "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
+        "entry_log_range_1h_coefficient": "entry.threshold_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient": "entry.threshold_log_range_1m_coefficient",
         "entry_exposure_ratio_coefficient": "entry.threshold_exposure_ratio_coefficient",
-        "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
-        "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
+        "entry_log_range_ema_span_1h_candles": "log_range_ema_span_1h_candles",
+        "entry_log_range_ema_span_minutes": "log_range_ema_span_minutes",
         "close_grid_qty_fraction": "close.qty_fraction",
         "close_trailing_qty_fraction": "close.qty_fraction",
         "close_trailing_threshold_base_fraction": "close.threshold_base_fraction",
         "close_trailing_retracement_base_fraction": "close.retracement_base_fraction",
-        "close_weight_volatility_1h": "close.threshold_volatility_1h_weight",
-        "close_weight_volatility_1m": "close.threshold_volatility_1m_weight",
+        "close_log_range_1h_coefficient": "close.threshold_log_range_1h_coefficient",
+        "close_log_range_1m_coefficient": "close.threshold_log_range_1m_coefficient",
     }
     strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
     if callable(strategy_getter):
@@ -1520,7 +1525,7 @@ def _monitor_h1_entry_logrange(
         span = _monitor_strategy_value(
             self,
             pside,
-            "offset_volatility_ema_span_1h",
+            "offset_log_range_ema_span_1h_candles",
             symbol,
             strategy_cache=strategy_cache,
         )
@@ -1529,7 +1534,7 @@ def _monitor_h1_entry_logrange(
             span = _monitor_strategy_value(
                 self,
                 pside,
-                "entry_volatility_ema_span_1h",
+                "entry_log_range_ema_span_1h_candles",
                 symbol,
                 strategy_cache=strategy_cache,
             )
@@ -1545,7 +1550,7 @@ def _monitor_m1_entry_logrange(
         span = _monitor_strategy_value(
             self,
             pside,
-            "entry_volatility_ema_span_1m",
+            "entry_log_range_ema_span_minutes",
             symbol,
             strategy_cache=strategy_cache,
         )
@@ -1631,8 +1636,8 @@ def _build_monitor_trailing_entry_payload(
         "entry_trailing_reentry_qty_multiplier",
         "entry_trailing_retracement_base_fraction",
         "entry_trailing_threshold_base_fraction",
-        "entry_weight_volatility_1h",
-        "entry_weight_volatility_1m",
+        "entry_log_range_1h_coefficient",
+        "entry_log_range_1m_coefficient",
         "entry_exposure_ratio_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
@@ -1675,8 +1680,8 @@ def _build_monitor_trailing_close_payload(
     )
     if strategy_kind == "trailing_martingale":
         strategy_params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
-        volatility_ema_span_1m = float(strategy_params["volatility_ema_span_1m"])
-        volatility_ema_span_1h = float(strategy_params["volatility_ema_span_1h"])
+        log_range_ema_span_minutes = float(strategy_params["log_range_ema_span_minutes"])
+        log_range_ema_span_1h_candles = float(strategy_params["log_range_ema_span_1h_candles"])
         inputs = {
             "symbol": symbol,
             "pside": pside,
@@ -1689,11 +1694,11 @@ def _build_monitor_trailing_close_payload(
                     "ask": float(current_price),
                 },
                 "ema_bands": {"upper": 0.0, "lower": 0.0},
-                "volatility_ema_1m": float(
-                    _monitor_m1_logrange_for_span(self, symbol, volatility_ema_span_1m)
+                "log_range_ema_1m": float(
+                    _monitor_m1_logrange_for_span(self, symbol, log_range_ema_span_minutes)
                 ),
-                "volatility_ema_1h": float(
-                    _monitor_h1_logrange_for_span(self, symbol, volatility_ema_span_1h)
+                "log_range_ema_1h": float(
+                    _monitor_h1_logrange_for_span(self, symbol, log_range_ema_span_1h_candles)
                 ),
             },
             "bot_params": self._bot_params_to_rust_dict(pside, symbol),
@@ -1745,8 +1750,8 @@ def _build_monitor_trailing_close_payload(
         "close_trailing_qty_fraction",
         "close_trailing_retracement_base_fraction",
         "close_trailing_threshold_base_fraction",
-        "close_weight_volatility_1h",
-        "close_weight_volatility_1m",
+        "close_log_range_1h_coefficient",
+        "close_log_range_1m_coefficient",
     ):
         inputs[key] = _monitor_strategy_value(
             self, pside, key, symbol, strategy_cache=strategy_cache

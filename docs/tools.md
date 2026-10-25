@@ -288,19 +288,19 @@ passivbot tool trailing-inspect configs/examples/default_trailing_martingale_lon
 # Customize the overview grid (values are config ratios, not percentage numbers).
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --exposure-ratios 0,0.25,0.5,0.75,0.95 \
-  --volatility-scenarios quiet:0.001:0.0005,normal:0.005:0.0025,high:0.015:0.0075
+  --log-range-scenarios quiet:0.001:0.0005,normal:0.005:0.0025,high:0.015:0.0075
 
 # Detailed single-scenario mode remains available.
 passivbot tool trailing-inspect \
   --symbol COIN --side long \
   --position-size 150 --position-price 20 \
   --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
-  --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033
+  --log-range-ema-1m 0.007 --log-range-ema-1h 0.0033
 
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json \
   --side long --position-price 20 \
   --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
-  --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033 \
+  --log-range-ema-1m 0.007 --log-range-ema-1h 0.0033 \
   --entry-threshold-base-fraction 0.02 --json
 ```
 

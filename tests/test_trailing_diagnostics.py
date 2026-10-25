@@ -34,8 +34,8 @@ def require_real_passivbot_rust_module():
 def _sample_config():
     params = {
         "entry_grid_reentry_qty_multiplier": 1.0,
-        "entry_weight_volatility_1h": 0.0,
-        "entry_weight_volatility_1m": 0.0,
+        "entry_log_range_1h_coefficient": 0.0,
+        "entry_log_range_1m_coefficient": 0.0,
         "entry_exposure_ratio_coefficient": 0.0,
         "entry_grid_threshold_base_fraction": 0.01,
         "entry_initial_ema_distance_fraction": 0.01,
@@ -195,8 +195,8 @@ def _hype_trailing_martingale_close_inputs():
             "balance": 99.88140021,
             "order_book": {"bid": 60.6695, "ask": 60.6695},
             "ema_bands": {"upper": 60.6695, "lower": 60.6695},
-            "volatility_ema_1m": 0.0014553489538740175,
-            "volatility_ema_1h": 0.013108943219306139,
+            "log_range_ema_1m": 0.0014553489538740175,
+            "log_range_ema_1h": 0.013108943219306139,
         },
         "bot_params": {
             "wallet_exposure_limit": 0.5,
@@ -211,11 +211,11 @@ def _hype_trailing_martingale_close_inputs():
             "qty_fraction": 0.23,
             "threshold_base_fraction": -0.0143,
             "threshold_exposure_ratio_coefficient": -0.0278,
-            "threshold_volatility_1h_weight": 0.19,
-            "threshold_volatility_1m_weight": 7.93,
+            "threshold_log_range_1h_coefficient": 0.19,
+            "threshold_log_range_1m_coefficient": 7.93,
             "retracement_base_fraction": 0.0001,
-            "retracement_volatility_1h_weight": 12.11,
-            "retracement_volatility_1m_weight": 4.49,
+            "retracement_log_range_1h_coefficient": 12.11,
+            "retracement_log_range_1m_coefficient": 4.49,
         },
         "position": {"size": 0.1, "price": 60.675},
         "trailing": {
@@ -240,13 +240,13 @@ def test_trailing_martingale_close_diagnostic_uses_rust_dynamic_terms(
     expected_threshold = (
         -0.0143
         + wallet_exposure_ratio * -0.0278
-        + inputs["state"]["volatility_ema_1m"] * 7.93
-        + inputs["state"]["volatility_ema_1h"] * 0.19
+        + inputs["state"]["log_range_ema_1m"] * 7.93
+        + inputs["state"]["log_range_ema_1h"] * 0.19
     )
     expected_retracement = 0.0001 * (
         1.0
-        + inputs["state"]["volatility_ema_1m"] * 4.49
-        + inputs["state"]["volatility_ema_1h"] * 12.11
+        + inputs["state"]["log_range_ema_1m"] * 4.49
+        + inputs["state"]["log_range_ema_1h"] * 12.11
     )
 
     assert diagnostic is not None
@@ -255,11 +255,11 @@ def test_trailing_martingale_close_diagnostic_uses_rust_dynamic_terms(
     assert sum(diagnostic["threshold_terms"].values()) == pytest.approx(expected_threshold)
     assert diagnostic["effective_wallet_exposure_limit"] == pytest.approx(effective_wel)
     assert diagnostic["wallet_exposure_ratio"] == pytest.approx(wallet_exposure_ratio)
-    assert diagnostic["volatility_ema_1m"] == pytest.approx(
-        inputs["state"]["volatility_ema_1m"]
+    assert diagnostic["log_range_ema_1m"] == pytest.approx(
+        inputs["state"]["log_range_ema_1m"]
     )
-    assert diagnostic["volatility_ema_1h"] == pytest.approx(
-        inputs["state"]["volatility_ema_1h"]
+    assert diagnostic["log_range_ema_1h"] == pytest.approx(
+        inputs["state"]["log_range_ema_1h"]
     )
     assert diagnostic["threshold_fraction"] != pytest.approx(-0.014500652114747214)
 
