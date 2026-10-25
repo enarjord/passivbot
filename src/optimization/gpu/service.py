@@ -152,7 +152,7 @@ CORE_OUTPUT_KEYS = {
     "loss_sum_long",
     "profit_sum_short",
     "loss_sum_short",
-    "entry_initial_balance_pct",
+    "initial_entry_balance_fraction",
     "initial_entry_balance_fraction_long",
     "initial_entry_balance_fraction_short",
     "entry_interval_sum_steps",
@@ -1329,15 +1329,15 @@ def _nan_max(left, right):
     )
 
 
-def _directional_entry_initial_metrics(side: str, entry_pct):
+def _directional_entry_initial_metrics(side: str, initial_entry_balance_fraction):
     """Expand one directional Metal value into the shared two-side surface."""
 
     if side not in {"long", "short"}:
         raise ValueError(f"expected long or short entry metric side, got {side!r}")
-    zeros = entry_pct.new_zeros(entry_pct.shape)
+    zeros = initial_entry_balance_fraction.new_zeros(initial_entry_balance_fraction.shape)
     return {
-        "initial_entry_balance_fraction_long": entry_pct if side == "long" else zeros,
-        "initial_entry_balance_fraction_short": entry_pct if side == "short" else zeros,
+        "initial_entry_balance_fraction_long": initial_entry_balance_fraction if side == "long" else zeros,
+        "initial_entry_balance_fraction_short": initial_entry_balance_fraction if side == "short" else zeros,
     }
 
 
@@ -2360,7 +2360,7 @@ class SharedAccountReplay:
                 )
                 output.update(
                     _directional_entry_initial_metrics(
-                        side, output["entry_initial_balance_pct"]
+                        side, output["initial_entry_balance_fraction"]
                     )
                 )
             if recovery_distribution is not None:

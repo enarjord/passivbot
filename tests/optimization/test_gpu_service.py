@@ -669,7 +669,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "profit_sum",
         "loss_sum",
         "position_unchanged_max_ms",
-        "entry_initial_balance_pct",
+        "initial_entry_balance_fraction",
         "initial_entry_balance_fraction_long",
         "initial_entry_balance_fraction_short",
         "absolute_net_wallet_exposure_max_ratio",
@@ -842,7 +842,7 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
             "last_eq_ts",
             "profit_sum",
             "loss_sum",
-            "entry_initial_balance_pct",
+            "initial_entry_balance_fraction",
         )
     }
     raw["hsl_triggers_long"] = torch.tensor([2.0])

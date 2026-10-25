@@ -261,7 +261,7 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
-    assert "entry_initial_balance_pct" not in output
+    assert "initial_entry_balance_fraction" not in output
     assert torch.equal(output["initial_entry_balance_fraction_long"], scalars[:, 21])
     assert torch.equal(output["hsl_drawdown_ema_max_long"], scalars[:, 55])
     assert torch.equal(output["hsl_drawdown_ema_max_short"], scalars[:, 56])
@@ -5799,7 +5799,8 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     unchanged_ms = output["position_unchanged_max_ms"].item()
     assert unchanged_ms > 0.0
     assert unchanged_ms <= output["held_max_ms"].item()
-    assert output["entry_initial_balance_pct"].item() == pytest.approx(0.5)
+    assert output["initial_entry_balance_fraction"].item() == pytest.approx(0.5)
+    assert "entry_initial_balance_pct" not in output
     assert output["absolute_net_wallet_exposure_max_ratio"].item() > 0.0
     assert (
         output["absolute_net_wallet_exposure_max_ratio"].item()
@@ -5852,8 +5853,8 @@ def test_mps_multicoin_fixed_wel_uses_configured_position_denominator(
     # Fixed WEL allocates TWEL 1.0 across both configured slots even though
     # the second prepared coin is explicitly ineligible for this side. Dynamic
     # mode allocates the same TWEL to its one observed eligible slot.
-    assert fixed["entry_initial_balance_pct"].item() == pytest.approx(0.5)
-    assert dynamic["entry_initial_balance_pct"].item() == pytest.approx(1.0)
+    assert fixed["initial_entry_balance_fraction"].item() == pytest.approx(0.5)
+    assert dynamic["initial_entry_balance_fraction"].item() == pytest.approx(1.0)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -5942,7 +5943,7 @@ def test_mps_multicoin_tracks_fill_counts_by_symbol(strategy_kind, side):
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_initial_entry_pct_uses_first_coin_override(strategy_kind, side):
+def test_mps_multicoin_initial_entry_fraction_uses_first_coin_override(strategy_kind, side):
     override_cols = (
         EMA_ANCHOR_COIN_OVERRIDE_COLS
         if strategy_kind == "ema_anchor"
@@ -5961,13 +5962,13 @@ def test_mps_multicoin_initial_entry_pct_uses_first_coin_override(strategy_kind,
     synchronize()
 
     # TWEL 1.0 / two effective positions, with a bounded 50% allowance.
-    assert output["entry_initial_balance_pct"].item() == pytest.approx(0.1875)
+    assert output["initial_entry_balance_fraction"].item() == pytest.approx(0.1875)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_initial_entry_pct_freezes_denominator_at_liquidation(
+def test_mps_multicoin_initial_entry_fraction_freezes_denominator_at_liquidation(
     strategy_kind, side
 ):
     runner, row = _multicoin_exposure_fixture(
@@ -5984,13 +5985,13 @@ def test_mps_multicoin_initial_entry_pct_freezes_denominator_at_liquidation(
     assert not output["alive"].item()
     # The liquidation floor terminates before the second coin becomes
     # tradable, so exact Rust retains a one-position divisor.
-    assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
+    assert output["initial_entry_balance_fraction"].item() == pytest.approx(1.0)
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_initial_entry_pct_freezes_before_post_fill_balance_depletion(
+def test_mps_multicoin_initial_entry_fraction_freezes_before_post_fill_balance_depletion(
     strategy_kind, side
 ):
     markets = [
@@ -6012,7 +6013,7 @@ def test_mps_multicoin_initial_entry_pct_freezes_before_post_fill_balance_deplet
     # Coin one fills and its fee depletes balance on the same candle that coin
     # two first becomes tradable. Exact Rust liquidates before growing the
     # effective-position denominator.
-    assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
+    assert output["initial_entry_balance_fraction"].item() == pytest.approx(1.0)
 
 
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
