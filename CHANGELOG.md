@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Name benchmark GPU utilization samples `global_gpu_utilization_max_percent`, preserving
+  integer percentage values and the maximum across devices in each sample.
+
 - Best-effort released-v8 migration has explicit ordinary fallbacks for four retired weighted
   metric families without EW counterparts. Report the changed recency formula and any resulting
   duplicate-objective consolidation; strict conversion and explicit formula choices retain priority.

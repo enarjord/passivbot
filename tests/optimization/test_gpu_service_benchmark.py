@@ -246,7 +246,7 @@ def test_failed_device_samples_do_not_claim_availability(monkeypatch, response):
 def test_successful_device_samples_support_availability_with_transient_gaps():
     assert not benchmark.sampling_availability([])['global_device']
     rows = [{'process_tree_rss_bytes': 100},
-            {'process_tree_rss_bytes': None, 'global_device_used_bytes': 42, 'global_gpu_utilization_max_pct': 0}]
+            {'process_tree_rss_bytes': None, 'global_device_used_bytes': 42, 'global_gpu_utilization_max_percent': 0}]
     assert benchmark.sampling_availability(rows) == {'process_tree_rss': False, 'global_device': True}
 
 
@@ -258,3 +258,24 @@ def test_real_worker_rss_control_skips_unsupported_child_lists(monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=77, stderr=''))
     with pytest.raises(pytest.skip.Exception, match='worker child lists are unavailable'):
         test_rss_tree_counts_a_real_linux_worker_spawned_child()
+
+
+@pytest.mark.parametrize("response,expected", [("42, 0\n101, 0", 0), ("42, 37\n101, 87", 87)])
+def test_device_utilization_percent_preserves_integer_device_max_and_external_query(monkeypatch, response, expected):
+    sampler = benchmark.Sampler()
+    sampler.smi = "installed-nvidia-smi"
+    commands = []
+
+    def sample(command, **kwargs):
+        commands.append(command)
+        return response
+
+    monkeypatch.setattr(benchmark.subprocess, "check_output", sample)
+    monkeypatch.setattr(sampler.stop, "wait", lambda seconds: sampler.stop.set())
+    sampler._sample()
+    assert commands == [["installed-nvidia-smi", "--query-gpu=memory.used,utilization.gpu", "--format=csv,noheader,nounits"]]
+    row = sampler.rows[0]
+    assert type(row["global_gpu_utilization_max_percent"]) is int
+    assert row["global_gpu_utilization_max_percent"] == expected
+    assert "global_gpu_utilization_max_pct" not in row
+    assert benchmark.sampling_availability(sampler.rows)["global_device"]
