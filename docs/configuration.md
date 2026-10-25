@@ -868,7 +868,7 @@ after migration.
     - `position_held_days_max`
     - `drawdown_worst_strategy_eq`
     - `loss_profit_ratio`
-    - `strategy_eq_underwater_pct_mean`
+    - `pain_index_strategy_eq`
   - With the default `pymoo` backend, Passivbot uses `nsga2` for `3` or fewer objectives and `nsga3` for `4+` objectives unless explicitly overridden.
   - Built-in shorthand metrics and their default goals are registered in
     `src/config/scoring.py`; see `docs/optimizing.md` for metric descriptions.

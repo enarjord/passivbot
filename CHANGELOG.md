@@ -20,6 +20,13 @@ since the latest release tag; these features may already be available when insta
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently
   select a renamed field.
 
+- Replace `strategy_eq_underwater_pct_mean` with `pain_index_strategy_eq`, the mean
+  drawdown across all recorded strategy-equity samples, and add `ulcer_index_strategy_eq`,
+  their root mean square. Both use minute-level samples with standard one-minute candles,
+  include zero drawdowns, and support backtest results, optimizer scoring and limits,
+  suites, and GPU screening. Remove `strategy_eq_underwater_pct_median` without aliases;
+  re-evaluate old thresholds and optimizer results under the new definitions.
+
 - Automatically stream local integer tick inputs for large Metal trailing-martingale histories.
   Keep historical bars and exact bootstrap inputs available, compact one-minute hourly ranges
   without changing their values, and admit the bounded device footprint against the safety budget.

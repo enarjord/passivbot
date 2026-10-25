@@ -1688,7 +1688,7 @@ class _MulticoinReplayRunner:
         )
         self.daily_cols = (
             MPS_MULTICOIN_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
-            + int(self.raw_strategy_risk_enabled)
+            + 4 * int(self.raw_strategy_risk_enabled)
             + 2 * int(self.raw_strategy_growth_enabled)
         )
         self.recovery_stride = 1 if self.recovery_distribution_enabled else 0
@@ -1887,7 +1887,7 @@ class _MulticoinReplayRunner:
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
         self._buffers[batch_size][0][:, :, 5].fill_(float("inf"))
         if self.raw_strategy_growth_enabled:
-            offset = self.daily_cols - int(self.raw_strategy_risk_enabled) - 1
+            offset = self.daily_cols - 4 * int(self.raw_strategy_risk_enabled) - 1
             self._buffers[batch_size][0][:, :, offset].fill_(float("inf"))
         return self._buffers[batch_size]
 
@@ -1983,7 +1983,7 @@ class _MulticoinReplayRunner:
             + self._hsl_history_bytes_per_candidate()
             + 4 * BOOTSTRAP_COUNT_COLS * self.replay_sides * self.n_coins
             + (int(self._replay_state_bytes or 0) if self._temporal_replay_enabled() else 0)
-            + (4 * self.n_days if self.raw_strategy_risk_enabled else 0)
+            + (16 * self.n_days if self.raw_strategy_risk_enabled else 0)
             + (8 * self.n_days if self.raw_strategy_growth_enabled else 0)
             + (_recovery_history_bytes(self.n_recovery_samples)
                if self.recovery_distribution_enabled else 0)
@@ -2598,9 +2598,12 @@ class _MulticoinReplayRunner:
             for index, scope in enumerate(self._hsl_ema_tail_scopes()):
                 output[f"hsl_drawdown_ema_mean_worst_1pct_{scope}"] = ema_tails[:, index]
         if self.raw_strategy_risk_enabled:
-            output["raw_strategy_day_max_dd"] = daily[:, :, -1]
+            output["raw_strategy_day_max_dd"] = daily[:, :, -4]
+            output["raw_strategy_day_dd_sum"] = daily[:, :, -3]
+            output["raw_strategy_day_dd_squared_sum"] = daily[:, :, -2]
+            output["raw_strategy_day_sample_count"] = daily[:, :, -1]
         if self.raw_strategy_growth_enabled:
-            offset = self.daily_cols - int(self.raw_strategy_risk_enabled) - 2
+            offset = self.daily_cols - 4 * int(self.raw_strategy_risk_enabled) - 2
             output["raw_strategy_day_end_eq"] = daily[:, :, offset]
             output["raw_strategy_day_min_eq"] = daily[:, :, offset + 1]
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
