@@ -44,9 +44,9 @@ The complete conditional HSL override group is:
 
 - `hsl.enabled`
 - `hsl.scale_budget_with_excess_allowance`
-- `hsl.drawdown_ratio_threshold`
+- `hsl.drawdown_threshold_fraction`
 - `hsl.memory_ema_span_minutes`
-- `hsl.drawdown_ratio_ema_span_minutes`
+- `hsl.drawdown_fraction_ema_span_minutes`
 - `hsl.cooldown_after_red_minutes`
 - `hsl.panic_close_order_type`
 
@@ -96,12 +96,12 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           },
           "hsl": {
             "enabled": true,
-            "drawdown_ratio_threshold": 0.08,
-            "drawdown_ratio_ema_span_minutes": 10.0,
+            "drawdown_threshold_fraction": 0.08,
+            "drawdown_fraction_ema_span_minutes": 10.0,
             "cooldown_after_red_minutes": 60.0,
             "panic_close_order_type": "market"
           },
-          "wallet_exposure_limit": 0.18
+          "wallet_exposure_limit_ratio": 0.18
         },
         "short": {
           "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.055}}}
@@ -147,7 +147,7 @@ Main config:
           }
         }
       },
-      "wallet_exposure_limit": 0.12
+      "wallet_exposure_limit_ratio": 0.12
     },
     "short": {
       "strategy": {
@@ -179,7 +179,7 @@ Main config:
 - Don’t expect per-override approved coin lists to take effect; keep the master coin list in the
   main config.
 - A per-coin `unstuck.loss_allowance_fraction` overrides only the selected coin+side's loss allowance
-  percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit`;
+  percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit_ratio`;
   it does not create a separate per-coin realized-PnL tracker.
 - A per-coin `entry_cooldown.base_duration_minutes` gates only position-increasing entries for the selected
   coin+side. A per-coin `unstuck.ema_gating_enabled=false` disables only that coin+side's unstuck
@@ -258,7 +258,7 @@ fields are errors, including typos, inactive-strategy paths, and HSL selectors o
 
 For example, append `--override-mode verbose` to preserve the per-coin parameters when editing the
 master afterward. This does not make each coin a standalone configuration: global values such as
-Aggregate side `total_wallet_exposure_limit`, `max_positions`, Forager settings, and the HSL scope remain
+Aggregate side `total_wallet_exposure_limit_ratio`, `max_positions`, Forager settings, and the HSL scope remain
 shared. Runtime-derived wallet exposure is not automatically frozen. HSL fields can be pinned
 only in `coin` signal mode. Verbose mode also pins the disabled side, so its values survive a later
 global enablement change.

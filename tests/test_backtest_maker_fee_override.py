@@ -23,8 +23,8 @@ def _base_config():
     set_side_universe_sources(cfg, 'approved_coins', {
         "long": ["BTC", "ETH"], "short": ["BTC", "ETH"],
     })
-    cfg["backtest"]["maker_fee_override"] = None
-    cfg["backtest"]["taker_fee_override"] = None
+    cfg["backtest"]["maker_fee_override_fraction"] = None
+    cfg["backtest"]["taker_fee_override_fraction"] = None
     return cfg
 
 
@@ -62,30 +62,30 @@ def _multi_coin_mss(*, eth_maker=0.0001, eth_taker=0.0005):
     return mss
 
 
-def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
+def test_prep_backtest_args_uses_exchange_maker_fee_fraction_when_no_override():
     config = _base_config()
     mss = _base_mss()
     _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["maker_fee"] == 0.0001
-    assert backtest_params["taker_fee"] == 0.0005
-    assert exchange_params[0]["maker_fee"] == 0.0001
-    assert exchange_params[0]["taker_fee"] == 0.0005
+    assert backtest_params["maker_fee_fraction"] == 0.0001
+    assert backtest_params["taker_fee_fraction"] == 0.0005
+    assert exchange_params[0]["maker_fee_fraction"] == 0.0001
+    assert exchange_params[0]["taker_fee_fraction"] == 0.0005
 
 
-def test_prep_backtest_args_uses_maker_fee_override_when_set():
+def test_prep_backtest_args_uses_maker_fee_override_fraction_when_set():
     config = _base_config()
-    config["backtest"]["maker_fee_override"] = 0.0002
+    config["backtest"]["maker_fee_override_fraction"] = 0.0002
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["maker_fee"] == 0.0002
+    assert backtest_params["maker_fee_fraction"] == 0.0002
 
 
-def test_prep_backtest_args_uses_taker_fee_override_when_set():
+def test_prep_backtest_args_uses_taker_fee_override_fraction_when_set():
     config = _base_config()
-    config["backtest"]["taker_fee_override"] = 0.0008
+    config["backtest"]["taker_fee_override_fraction"] = 0.0008
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["taker_fee"] == 0.0008
+    assert backtest_params["taker_fee_fraction"] == 0.0008
 
 
 def test_prep_backtest_args_uses_per_coin_maker_fees_without_override():
@@ -94,8 +94,8 @@ def test_prep_backtest_args_uses_per_coin_maker_fees_without_override():
 
     _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
 
-    assert [item["maker_fee"] for item in exchange_params] == [0.0001, 0.0002]
-    assert backtest_params["maker_fee"] == 0.0002
+    assert [item["maker_fee_fraction"] for item in exchange_params] == [0.0001, 0.0002]
+    assert backtest_params["maker_fee_fraction"] == 0.0002
 
 
 def test_prep_backtest_args_uses_per_coin_taker_fees_without_override():
@@ -104,11 +104,11 @@ def test_prep_backtest_args_uses_per_coin_taker_fees_without_override():
 
     _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
 
-    assert [item["taker_fee"] for item in exchange_params] == [0.0005, 0.0007]
-    assert backtest_params["taker_fee"] == 0.0007
+    assert [item["taker_fee_fraction"] for item in exchange_params] == [0.0005, 0.0007]
+    assert backtest_params["taker_fee_fraction"] == 0.0007
 
 
-def test_prep_backtest_args_rejects_missing_taker_fee_without_override():
+def test_prep_backtest_args_rejects_missing_taker_fee_fraction_without_override():
     config = _base_config()
     mss = _base_mss()
     del mss["BTC/USDT:USDT"]["taker"]
@@ -119,24 +119,24 @@ def test_prep_backtest_args_rejects_missing_taker_fee_without_override():
 
 def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
     config = _multi_coin_config()
-    config["backtest"]["maker_fee_override"] = 0.0003
-    config["backtest"]["taker_fee_override"] = 0.0009
+    config["backtest"]["maker_fee_override_fraction"] = 0.0003
+    config["backtest"]["taker_fee_override_fraction"] = 0.0009
     mss = _multi_coin_mss(eth_maker=0.0002, eth_taker=0.0007)
 
     _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
 
-    assert backtest_params["maker_fee"] == 0.0003
-    assert backtest_params["taker_fee"] == 0.0009
-    assert {item["maker_fee"] for item in exchange_params} == {0.0003}
-    assert {item["taker_fee"] for item in exchange_params} == {0.0009}
+    assert backtest_params["maker_fee_fraction"] == 0.0003
+    assert backtest_params["taker_fee_fraction"] == 0.0009
+    assert {item["maker_fee_fraction"] for item in exchange_params} == {0.0003}
+    assert {item["taker_fee_fraction"] for item in exchange_params} == {0.0009}
 
 
-def test_prep_backtest_args_passes_market_order_slippage_pct():
+def test_prep_backtest_args_passes_market_order_slippage_fraction():
     config = _base_config()
     config["backtest"]["market_order_slippage_fraction"] = 0.0015
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["market_order_slippage_pct"] == 0.0015
+    assert backtest_params["market_order_slippage_fraction"] == 0.0015
 
 
 def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload():
@@ -144,7 +144,7 @@ def test_prep_backtest_args_preserves_bot_near_touch_fraction_in_native_payload(
     config['bot']["portfolio"]['execution']['market_order_near_touch_fraction'] = 0.0017
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["market_order_near_touch_threshold"] == 0.0017
+    assert backtest_params["market_order_near_touch_fraction"] == 0.0017
 
 
 def test_prep_backtest_args_uses_market_orders_allowed_from_live():
@@ -170,21 +170,21 @@ def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_ga
 
 def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
     config = _base_config()
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.1
+    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.1
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["max_realized_loss_pct"] == 0.1
+    assert backtest_params["loss_gate_max_drawdown_fraction"] == 0.1
     assert "realized_loss_gate_lookback_minutes" not in backtest_params
     assert backtest_params["loss_gate_memory_ema_span_minutes"] == 43200.0
     assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_transports_equity_floor_ratio():
+def test_prep_backtest_args_transports_equity_floor_fraction():
     config = _base_config()
-    config["backtest"]["equity_floor_ratio"] = 0.07
+    config["backtest"]["equity_floor_fraction"] = 0.07
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["liquidation_threshold"] == 0.07
+    assert backtest_params["equity_floor_fraction"] == 0.07
 
 
 def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
@@ -201,14 +201,14 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
 
 def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coin_override():
     config = _base_config()
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     mss = _base_mss()
 
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
 
     assert len(bot_params_list) == 1
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == -1.0
-    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == -1.0
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == -1.0
+    assert bot_params_list[0]["short"]["wallet_exposure_limit_ratio"] == -1.0
 
 
 def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
@@ -219,7 +219,7 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
         "short": ["ABCUSDT"],
     })
     config["bot"]["short"]["risk"]["max_positions"] = 1
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     market_settings = {
         coin: {
             "maker": 0.0001,
@@ -236,20 +236,20 @@ def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
     bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
 
     params_by_coin = dict(zip(sorted(market_settings), bot_params_list))
-    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit"] == -1.0
-    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit"] == 0.0
-    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit"] == 0.0
-    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit_ratio"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit_ratio"] == 0.0
+    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit_ratio"] == -1.0
 
 
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     config = _base_config()
-    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
-                "long": {"wallet_exposure_limit": 0.25},
-                "short": {"wallet_exposure_limit": 0.5},
+                "long": {"wallet_exposure_limit_ratio": 0.25},
+                "short": {"wallet_exposure_limit_ratio": 0.5},
             }
         }
     }
@@ -258,21 +258,21 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
 
     assert len(bot_params_list) == 1
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
-    assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.25
+    assert bot_params_list[0]["short"]["wallet_exposure_limit_ratio"] == 0.5
 
 
 def test_zero_coin_wallet_override_preserves_side_total_exposure():
     config = _base_config()
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.5
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.5
     config["coin_overrides"] = {
-        "BTC/USDT:USDT": {"bot": {"long": {"wallet_exposure_limit": 0.0}}}
+        "BTC/USDT:USDT": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.0}}}
     }
 
     bot_params_list, _, _, _ = prep_backtest_args(config, _base_mss(), "binance")
 
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.0
-    assert bot_params_list[0]["long"]["total_wallet_exposure_limit"] == 1.5
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.0
+    assert bot_params_list[0]["long"]["total_wallet_exposure_limit_ratio"] == 1.5
     assert bot_params_list[0]["long"]["n_positions"] > 0
 
 
@@ -280,14 +280,14 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
     config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
     config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.2
+    config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.2
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
                 "long": {
                     "hsl": {
                         "enabled": True,
-                        "drawdown_ratio_threshold": 0.01,
+                        "drawdown_threshold_fraction": 0.01,
                     }
                 }
             }
@@ -301,9 +301,9 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     policies = backtest_params["equity_hard_stop_loss"]
     btc_long = policies["coins"]["BTC/USDT:USDT"][0]
     assert btc_long["enabled"] is True
-    assert btc_long["red_threshold"] == pytest.approx(0.01)
+    assert btc_long["drawdown_threshold_fraction"] == pytest.approx(0.01)
     assert policies["sides"][0]["enabled"] is False
-    assert policies["sides"][0]["red_threshold"] == pytest.approx(0.2)
+    assert policies["sides"][0]["drawdown_threshold_fraction"] == pytest.approx(0.2)
     assert all(
         not any(k.startswith("hsl_") for k in pair["long"]) for pair in bot_params_list
     )
@@ -327,7 +327,7 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(
     config["backtest"]["coins"] = {"binance": ["BTC"]}
     set_side_universe_sources(config, 'approved_coins', {"long": ["BTC"], "short": []})
     config["coin_overrides"] = {
-        "BTCUSDT": {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
+        "BTCUSDT": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.25}}}
     }
     market_settings = {
         "BTC": {
@@ -339,7 +339,7 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(
 
     bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
 
-    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
+    assert bot_params_list[0]["long"]["wallet_exposure_limit_ratio"] == 0.25
 
 
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():
@@ -357,10 +357,10 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
     )
 
     assert len(bot_params_list) == 1
-    assert "ema_span_0" not in bot_params_list[0]["long"]
-    assert "entry_grid_spacing_pct" not in bot_params_list[0]["short"]
-    assert strategy_params_list[0]["long"]["entry"]["ema_span_0"] == 321.0
-    assert strategy_params_list[0]["short"]["entry"]["threshold_base_pct"] == 0.0123
+    assert "ema_span_0_minutes" not in bot_params_list[0]["long"]
+    assert "entry_grid_threshold_base_fraction" not in bot_params_list[0]["short"]
+    assert strategy_params_list[0]["long"]["entry"]["ema_span_0_minutes"] == 321.0
+    assert strategy_params_list[0]["short"]["entry"]["threshold_base_fraction"] == 0.0123
 
 
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
@@ -371,25 +371,25 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
         "base_qty_fraction": 0.02,
         "ema_span_0_minutes": 55.0,
         "ema_span_1_minutes": 144.0,
-        "entry_double_down_factor": 0.8,
+        "entry_qty_exposure_coefficient": 0.8,
         "offset_fraction": 0.003,
-        "offset_volatility_ema_span_minutes": 30.0,
-        "offset_volatility_1m_weight": 2.5,
-        "offset_volatility_ema_span_1h_candles": 12.0,
-        "offset_volatility_1h_weight": 1.75,
-        "offset_psize_weight": 0.2,
+        "offset_log_range_ema_span_minutes": 30.0,
+        "offset_log_range_1m_coefficient": 2.5,
+        "offset_log_range_ema_span_1h_candles": 12.0,
+        "offset_log_range_1h_coefficient": 1.75,
+        "inventory_offset_exposure_coefficient": 0.2,
     }
     config["bot"]["short"]["strategy"]["ema_anchor"] = {
         "base_qty_fraction": 0.03,
         "ema_span_0_minutes": 34.0,
         "ema_span_1_minutes": 89.0,
-        "entry_double_down_factor": 0.5,
+        "entry_qty_exposure_coefficient": 0.5,
         "offset_fraction": 0.004,
-        "offset_volatility_ema_span_minutes": 45.0,
-        "offset_volatility_1m_weight": 3.5,
-        "offset_volatility_ema_span_1h_candles": 18.0,
-        "offset_volatility_1h_weight": 0.5,
-        "offset_psize_weight": 0.1,
+        "offset_log_range_ema_span_minutes": 45.0,
+        "offset_log_range_1m_coefficient": 3.5,
+        "offset_log_range_ema_span_1h_candles": 18.0,
+        "offset_log_range_1h_coefficient": 0.5,
+        "inventory_offset_exposure_coefficient": 0.1,
     }
     mss = _base_mss()
 
@@ -400,17 +400,17 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     assert backtest_params["strategy_kind"] == "ema_anchor"
     assert len(bot_params_list) == 1
     assert len(strategy_params_list) == 1
-    assert "base_qty_pct" not in bot_params_list[0]["long"]
-    assert "offset_volatility_ema_span_1m" not in bot_params_list[0]["long"]
+    assert "base_qty_fraction" not in bot_params_list[0]["long"]
+    assert "offset_log_range_ema_span_minutes" not in bot_params_list[0]["long"]
     assert bot_params_list[0]["long"]["risk_entry_cooldown_minutes"] == 3.0
-    assert strategy_params_list[0]["long"]["base_qty_pct"] == 0.02
-    assert strategy_params_list[0]["long"]["entry_double_down_factor"] == 0.8
-    assert strategy_params_list[0]["long"]["offset_volatility_ema_span_1m"] == 30.0
-    assert strategy_params_list[0]["long"]["offset_volatility_1m_weight"] == 2.5
-    assert strategy_params_list[0]["short"]["offset_volatility_ema_span_1h"] == 18.0
-    assert strategy_params_list[0]["short"]["offset_volatility_1h_weight"] == 0.5
-    assert strategy_params_list[0]["short"]["offset"] == 0.004
-    assert strategy_params_list[0]["short"]["entry_double_down_factor"] == 0.5
+    assert strategy_params_list[0]["long"]["base_qty_fraction"] == 0.02
+    assert strategy_params_list[0]["long"]["entry_qty_exposure_coefficient"] == 0.8
+    assert strategy_params_list[0]["long"]["offset_log_range_ema_span_minutes"] == 30.0
+    assert strategy_params_list[0]["long"]["offset_log_range_1m_coefficient"] == 2.5
+    assert strategy_params_list[0]["short"]["offset_log_range_ema_span_1h_candles"] == 18.0
+    assert strategy_params_list[0]["short"]["offset_log_range_1h_coefficient"] == 0.5
+    assert strategy_params_list[0]["short"]["offset_fraction"] == 0.004
+    assert strategy_params_list[0]["short"]["entry_qty_exposure_coefficient"] == 0.5
 
 
 def test_prep_backtest_args_does_not_log_execution_settings_by_default(caplog):
@@ -549,10 +549,10 @@ def test_run_backtest_bundle_rejects_unrecognized_strategy_pair_keys(strategy_ki
 
 
 @pytest.mark.parametrize("strategy_kind,path", [
-    ("trailing_martingale", ("volatility_ema_span_1m",)),
-    ("trailing_martingale", ("entry", "double_down_factor")),
-    ("trailing_martingale", ("close", "qty_pct")),
-    ("ema_anchor", ("offset",)),
+    ("trailing_martingale", ("log_range_ema_span_minutes",)),
+    ("trailing_martingale", ("entry", "reentry_qty_multiplier")),
+    ("trailing_martingale", ("close", "qty_fraction")),
+    ("ema_anchor", ("offset_fraction",)),
 ])
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 @pytest.mark.parametrize("pside", ["long", "short"])
@@ -570,11 +570,11 @@ def test_run_backtest_bundle_rejects_nonfinite_strategy_values(strategy_kind, pa
 @pytest.mark.parametrize("strategy_kind,optional", [
     ("trailing_martingale", [("entry", "ema_gate_mode")]),
     ("ema_anchor", [
-        ("entry_double_down_factor",),
-        ("offset_volatility_ema_span_1m",),
-        ("offset_volatility_1m_weight",),
-        ("offset_volatility_ema_span_1h",),
-        ("offset_volatility_1h_weight",),
+        ("entry_qty_exposure_coefficient",),
+        ("offset_log_range_ema_span_minutes",),
+        ("offset_log_range_1m_coefficient",),
+        ("offset_log_range_ema_span_1h_candles",),
+        ("offset_log_range_1h_coefficient",),
     ]),
 ])
 def test_run_backtest_bundle_keeps_supported_optional_strategy_defaults(strategy_kind, optional):

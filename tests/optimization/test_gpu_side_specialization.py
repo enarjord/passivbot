@@ -37,7 +37,7 @@ def test_prepared_side_preserves_every_raw_output_and_general_cache(
 
     proxy = make_proxy("portfolio", strategy, sides, minutes=512, coin_count=coins,
                        enabled=hsl, factual_hsl=True)
-    candidates = [{"hsl_red_threshold": 1e-6}, {"hsl_red_threshold": 1e-6}]
+    candidates = [{"hsl_drawdown_threshold_fraction": 1e-6}, {"hsl_drawdown_threshold_fraction": 1e-6}]
     runner, specialized = raw(proxy, candidates)
     assert specialized["fill_count"].min().item() > 0
     if hsl:

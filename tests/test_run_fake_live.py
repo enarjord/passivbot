@@ -401,7 +401,7 @@ def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fractio
     config = get_expanded_config_prototype()
     config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 15.0
     config["bot"]["portfolio"]["loss_gate"].update(
-        memory_ema_span_minutes=3.0, max_drawdown_ratio=gate_fraction
+        memory_ema_span_minutes=3.0, max_drawdown_fraction=gate_fraction
     )
     for pside in ("long", "short"):
         config["bot"][pside]["hsl"]["enabled"] = False
@@ -474,52 +474,52 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
             }
             self.coin_overrides = {}
             self.values = {
-                "close_grid_qty_pct": 1.0,
-                "close_trailing_retracement_pct": 0.001,
-                "close_trailing_qty_pct": 0.0,
-                "close_trailing_threshold_pct": 0.001,
-                "close_weight_volatility_1h": 0.0,
-                "close_weight_volatility_1m": 0.0,
-                "entry_grid_double_down_factor": 1.0,
-                "entry_weight_volatility_1h": 0.0,
-                "entry_weight_volatility_1m": 0.0,
-                "entry_we_weight": 0.0,
-                "entry_grid_spacing_pct": 0.01,
-                "entry_volatility_ema_span_1h": 0.0,
-                "entry_volatility_ema_span_1m": 60.0,
-                "entry_initial_ema_dist": -0.001,
-                "entry_initial_qty_pct": 0.1,
-                "entry_trailing_double_down_factor": 1.0,
-                "entry_trailing_retracement_pct": 0.001,
-                "entry_trailing_threshold_pct": 0.001,
-                "filter_volatility_ema_span_1m": 0.0,
-                "filter_volume_ema_span_1m": 1.0,
+                "close_grid_qty_fraction": 1.0,
+                "close_trailing_retracement_base_fraction": 0.001,
+                "close_trailing_qty_fraction": 0.0,
+                "close_trailing_threshold_base_fraction": 0.001,
+                "close_log_range_1h_coefficient": 0.0,
+                "close_log_range_1m_coefficient": 0.0,
+                "entry_grid_reentry_qty_multiplier": 1.0,
+                "entry_log_range_1h_coefficient": 0.0,
+                "entry_log_range_1m_coefficient": 0.0,
+                "entry_exposure_ratio_coefficient": 0.0,
+                "entry_grid_threshold_base_fraction": 0.01,
+                "entry_log_range_ema_span_1h_candles": 0.0,
+                "entry_log_range_ema_span_minutes": 60.0,
+                "entry_initial_ema_distance_fraction": -0.001,
+                "entry_initial_qty_fraction": 0.1,
+                "entry_trailing_reentry_qty_multiplier": 1.0,
+                "entry_trailing_retracement_base_fraction": 0.001,
+                "entry_trailing_threshold_base_fraction": 0.001,
+                "forager_log_range_ema_span_minutes": 0.0,
+                "forager_volume_ema_span_minutes": 1.0,
                 "forager_score_weights": {
                     "unilateralness": 0.0,
                     "volume": 1.0,
                     "ema_readiness": 0.0,
-                    "volatility": 0.0,
+                    "log_range": 0.0,
                 },
-                "ema_span_0": 2.0,
-                "ema_span_1": 4.0,
+                "ema_span_0_minutes": 2.0,
+                "ema_span_1_minutes": 4.0,
                 "hsl_enabled": True,
                 "hsl_panic_close_order_type": "market",
                 "n_positions": 1.0,
-                "total_wallet_exposure_limit": 5.0,
-                "wallet_exposure_limit": 5.0,
+                "total_wallet_exposure_limit_ratio": 5.0,
+                "wallet_exposure_limit_ratio": 5.0,
                 "risk_entry_cooldown_minutes": 0.0,
                 "entry_cooldown_min_duration_minutes": 0.0,
                 "entry_cooldown_max_duration_minutes": None,
                 "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-                "unilateralness_ema_span_1m": 60.0,
-                "risk_wel_enforcer_threshold": 1.0,
+                "unilateralness_ema_span_minutes": 60.0,
+                "risk_wel_enforcer_threshold_ratio": 1.0,
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
-                "risk_twel_enforcer_threshold": 1.0,
-                "risk_we_excess_allowance_pct": 0.0,
-                "unstuck_close_pct": 0.01,
-                "unstuck_ema_dist": 0.0,
-                "unstuck_loss_allowance_pct": 0.1,
-                "unstuck_threshold": 1.0,
+                "risk_twel_enforcer_threshold_ratio": 1.0,
+                "risk_we_excess_allowance_fraction": 0.0,
+                "unstuck_close_fraction": 0.01,
+                "unstuck_ema_distance_fraction": 0.0,
+                "unstuck_loss_allowance_fraction": 0.1,
+                "unstuck_exposure_trigger_ratio": 1.0,
             }
 
         def bot_value(self, _pside, key):
@@ -538,7 +538,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
         "unilateralness": pytest.approx(0.0),
         "volume": pytest.approx(1.0),
         "ema_readiness": pytest.approx(0.0),
-        "volatility": pytest.approx(0.0),
+        "log_range": pytest.approx(0.0),
     }
 
     stub = _Stub()
@@ -555,59 +555,59 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
             self.config = {
                 "bot": {
                     "long": {
-                        "close_grid_qty_pct": 1.0,
-                        "close_trailing_retracement_pct": 0.001,
-                        "close_trailing_qty_pct": 0.0,
-                        "close_trailing_threshold_pct": 0.001,
-                        "close_weight_volatility_1h": 0.0,
-                        "close_weight_volatility_1m": 0.0,
-                        "entry_grid_double_down_factor": 1.0,
-                        "entry_weight_volatility_1h": 0.0,
-                        "entry_weight_volatility_1m": 0.0,
-                        "entry_we_weight": 0.0,
-                        "entry_grid_spacing_pct": 0.01,
-                        "entry_volatility_ema_span_1h": 0.0,
-                        "entry_volatility_ema_span_1m": 60.0,
-                        "entry_initial_ema_dist": -0.001,
-                        "entry_initial_qty_pct": 0.1,
-                        "entry_trailing_double_down_factor": 1.0,
-                        "entry_trailing_retracement_pct": 0.001,
-                        "entry_trailing_threshold_pct": 0.001,
-                        "forager_volatility_ema_span_1m": 0.0,
-                        "forager_volume_ema_span_1m": 1.0,
+                        "close_grid_qty_fraction": 1.0,
+                        "close_trailing_retracement_base_fraction": 0.001,
+                        "close_trailing_qty_fraction": 0.0,
+                        "close_trailing_threshold_base_fraction": 0.001,
+                        "close_log_range_1h_coefficient": 0.0,
+                        "close_log_range_1m_coefficient": 0.0,
+                        "entry_grid_reentry_qty_multiplier": 1.0,
+                        "entry_log_range_1h_coefficient": 0.0,
+                        "entry_log_range_1m_coefficient": 0.0,
+                        "entry_exposure_ratio_coefficient": 0.0,
+                        "entry_grid_threshold_base_fraction": 0.01,
+                        "entry_log_range_ema_span_1h_candles": 0.0,
+                        "entry_log_range_ema_span_minutes": 60.0,
+                        "entry_initial_ema_distance_fraction": -0.001,
+                        "entry_initial_qty_fraction": 0.1,
+                        "entry_trailing_reentry_qty_multiplier": 1.0,
+                        "entry_trailing_retracement_base_fraction": 0.001,
+                        "entry_trailing_threshold_base_fraction": 0.001,
+                        "forager_log_range_ema_span_minutes": 0.0,
+                        "forager_volume_ema_span_minutes": 1.0,
                         "forager_score_weights": {
                             "unilateralness": 0.0,
                             "volume": 1.0,
                             "ema_readiness": 0.0,
-                            "volatility": 0.0,
+                            "log_range": 0.0,
                         },
-                        "ema_span_0": 2.0,
-                        "ema_span_1": 4.0,
+                        "ema_span_0_minutes": 2.0,
+                        "ema_span_1_minutes": 4.0,
                         "hsl_enabled": True,
                         "hsl_panic_close_order_type": "market",
                         "n_positions": 1.0,
-                        "total_wallet_exposure_limit": 5.0,
-                        "wallet_exposure_limit": 5.0,
+                        "total_wallet_exposure_limit_ratio": 5.0,
+                        "wallet_exposure_limit_ratio": 5.0,
                         "risk_entry_cooldown_minutes": 0.0,
                         "entry_cooldown_min_duration_minutes": 0.0,
                         "entry_cooldown_max_duration_minutes": None,
                         "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
-                        "unilateralness_ema_span_1m": 60.0,
+                        "unilateralness_ema_span_minutes": 60.0,
                         "risk_wel_enforcer_enabled": True,
-                        "risk_wel_enforcer_threshold": 1.0,
+                        "risk_wel_enforcer_threshold_ratio": 1.0,
                         "risk_twel_enforcer_enabled": True,
                         "risk_twel_enforcer_policy": "reduce_overweight",
                         "risk_twel_entry_gate_enabled": True,
-                        "risk_twel_enforcer_threshold": 1.0,
-                        "risk_we_excess_allowance_pct": 0.0,
-                        "unstuck_close_pct": 0.01,
-                        "unstuck_ema_dist": 0.0,
-                        "unstuck_ema_span_0": 2.0,
-                        "unstuck_ema_span_1": 4.0,
+                        "risk_twel_enforcer_threshold_ratio": 1.0,
+                        "risk_we_excess_allowance_fraction": 0.0,
+                        "unstuck_close_fraction": 0.01,
+                        "unstuck_ema_distance_fraction": 0.0,
+                        "unstuck_ema_span_0_minutes": 2.0,
+                        "unstuck_ema_span_1_minutes": 4.0,
                         "unstuck_enabled": True,
                         "unstuck_ema_gating_enabled": True,
-                        "unstuck_loss_allowance_pct": 0.1,
-                        "unstuck_threshold": 1.0,
+                        "unstuck_loss_allowance_fraction": 0.1,
+                        "unstuck_exposure_trigger_ratio": 1.0,
                     },
                     "short": {},
                 }
@@ -622,7 +622,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                     "bot": {
                         "long": {
                             "entry_grid_inflation_enabled": False,
-                            "unstuck_loss_allowance_pct": 0.025,
+                            "unstuck_loss_allowance_fraction": 0.025,
                         }
                     }
                 }
@@ -646,7 +646,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
     assert "entry_grid_inflation_enabled" not in out
-    assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
+    assert out["unstuck_loss_allowance_fraction"] == pytest.approx(0.025)
 
 
 def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():
@@ -964,7 +964,7 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
     # both HSL and auto-unstuck disabled.
     for pside in ("long", "short"):
         cfg["bot"][pside]["unstuck"]["enabled"] = False
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 0.5
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.5
     cfg["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
     config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
@@ -1086,10 +1086,10 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
         "initial_qty_fraction"
     ] = 0.0276
     cfg["bot"]["long"]["risk"]["max_positions"] = 5
-    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.8
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.8
     cfg["bot"]["long"]["risk"]["we_excess_allowance_fraction"] = 0.37
     cfg["bot"]["short"]["risk"]["max_positions"] = 0
-    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     cfg['bot']["long"]['universe']['approved_coins'] = ["SOL"]
     cfg['bot']["short"]['universe']['approved_coins'] = []
     cfg['bot']["long"]['universe']['ignored_coins'] = []

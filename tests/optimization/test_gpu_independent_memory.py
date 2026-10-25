@@ -42,8 +42,8 @@ def test_side_hsl_memory_rates_are_independent_but_portfolio_policy_is_coherent(
     width = len(keys)
     matrix = np.zeros((1, 2 * width))
     for side in range(2):
-        for key, value in {"hsl_enabled": 1, "hsl_red_threshold": .1,
-                           "hsl_drawdown_ratio_ema_span_minutes": 3,
+        for key, value in {"hsl_enabled": 1, "hsl_drawdown_threshold_fraction": .1,
+                           "hsl_drawdown_fraction_ema_span_minutes": 3,
                            "hsl_memory_ema_span_minutes": 3 if side == 0 else 7,
                            "hsl_signal_mode": 1}.items():
             matrix[0, side * width + keys.index(key)] = value

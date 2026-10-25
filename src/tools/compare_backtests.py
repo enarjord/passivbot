@@ -75,9 +75,10 @@ def _row_counter(frame: pd.DataFrame, columns: Iterable[str]) -> Counter:
     )
 
 
-def _multiset_match_ratio(
+def _multiset_match_fraction(
     base: pd.DataFrame, candidate: pd.DataFrame, columns: Iterable[str]
 ) -> float:
+    """Matched row multiplicity / larger row count; two empty inputs yield zero."""
     base_counter = _row_counter(base, columns)
     candidate_counter = _row_counter(candidate, columns)
     matched = sum((base_counter & candidate_counter).values())
@@ -135,6 +136,7 @@ def _dataset_identity(base: dict, candidate: dict) -> dict:
 
 
 def _metric_comparison(base: dict, candidate: dict) -> dict:
+    """Keep source metric units; express relative deltas as delta / abs(base)."""
     metrics = {}
     for key in ANALYSIS_METRICS:
         if key not in base or key not in candidate:
@@ -146,7 +148,7 @@ def _metric_comparison(base: dict, candidate: dict) -> dict:
             "base": base_value,
             "candidate": candidate_value,
             "absolute_delta": absolute_delta,
-            "relative_delta": (
+            "relative_delta_fraction": (
                 None if base_value == 0.0 else absolute_delta / abs(base_value)
             ),
         }
@@ -181,10 +183,10 @@ def _fill_comparison(base: pd.DataFrame, candidate: pd.DataFrame) -> dict:
         "base_count": len(base),
         "candidate_count": len(candidate),
         "count_delta": len(candidate) - len(base),
-        "event_multiset_match_ratio": _multiset_match_ratio(
+        "event_multiset_match_fraction": _multiset_match_fraction(
             base, candidate, EVENT_FILL_KEY_COLUMNS
         ),
-        "exact_multiset_match_ratio": _multiset_match_ratio(
+        "exact_multiset_match_fraction": _multiset_match_fraction(
             base, candidate, exact_columns
         ),
         "exact_match_columns": list(exact_columns),
@@ -224,6 +226,7 @@ def _equity_series(frame: pd.DataFrame, *, source: str) -> pd.Series:
 
 
 def _equity_comparison(base: pd.DataFrame, candidate: pd.DataFrame) -> dict:
+    """Compare sampled equity, retaining each metric's base-equity denominator."""
     base_series = _equity_series(base, source="base balance_and_equity.csv.gz")
     candidate_series = _equity_series(
         candidate, source="candidate balance_and_equity.csv.gz"
@@ -237,7 +240,7 @@ def _equity_comparison(base: pd.DataFrame, candidate: pd.DataFrame) -> dict:
     initial_equity = abs(float(base_series.iloc[0]))
     if initial_equity == 0.0:
         raise ValueError(
-            "base strategy equity starts at zero; percentage comparison is undefined"
+            "base strategy equity starts at zero; relative comparison is undefined"
         )
     denominator = base_common.abs().replace(0.0, np.nan)
     final_base = float(base_series.iloc[-1])
@@ -248,15 +251,15 @@ def _equity_comparison(base: pd.DataFrame, candidate: pd.DataFrame) -> dict:
         "common_sample_count": len(common_index),
         "final_base": final_base,
         "final_candidate": final_candidate,
-        "final_pct_delta": (
+        "final_equity_relative_delta_fraction": (
             None
             if final_base == 0.0
             else (final_candidate - final_base) / abs(final_base)
         ),
-        "rmse_pct_of_initial": float(
+        "equity_rmse_initial_equity_fraction": float(
             np.sqrt(np.mean(np.square(delta))) / initial_equity
         ),
-        "max_abs_pct_delta": float((delta.abs() / denominator).max()),
+        "max_abs_relative_equity_delta_fraction": float((delta.abs() / denominator).max()),
     }
 
 
@@ -287,7 +290,7 @@ def compare_backtest_artifacts(base_dir: str | Path, candidate_dir: str | Path) 
     }
 
 
-def _format_pct(value: float | None) -> str:
+def _format_fraction_as_percent(value: float | None) -> str:
     return "n/a" if value is None else f"{value * 100:+.3f}%"
 
 
@@ -301,10 +304,12 @@ def format_human_summary(report: dict) -> str:
             f"{fills['base_count']} -> {fills['candidate_count']} "
             f"({fills['count_delta']:+d})"
         ),
-        f"Fill-event match: {fills['event_multiset_match_ratio'] * 100:.2f}%",
-        f"Exact fill-row match: {fills['exact_multiset_match_ratio'] * 100:.2f}%",
-        f"Final strategy equity delta: {_format_pct(equity['final_pct_delta'])}",
-        f"Equity RMSE vs initial balance: {equity['rmse_pct_of_initial'] * 100:.3f}%",
+        f"Fill-event match: {fills['event_multiset_match_fraction'] * 100:.2f}%",
+        f"Exact fill-row match: {fills['exact_multiset_match_fraction'] * 100:.2f}%",
+        "Final strategy equity delta: "
+        f"{_format_fraction_as_percent(equity['final_equity_relative_delta_fraction'])}",
+        "Equity RMSE vs initial strategy equity: "
+        f"{equity['equity_rmse_initial_equity_fraction'] * 100:.3f}%",
     ]
     for key in (
         "adg_fraction_strategy_equity",
@@ -318,7 +323,7 @@ def format_human_summary(report: dict) -> str:
             continue
         lines.append(
             f"{key}: {metric['base']:.8g} -> {metric['candidate']:.8g} "
-            f"(relative {_format_pct(metric['relative_delta'])})"
+            f"(relative {_format_fraction_as_percent(metric['relative_delta_fraction'])})"
         )
     type_deltas = sorted(
         fills["type_count_delta"].items(), key=lambda item: (-abs(item[1]), item[0])

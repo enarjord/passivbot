@@ -64,18 +64,18 @@ def _legacy_replay_config():
             volatility_ema_span_1h=1,
         )
         t["entry"].update(
-            initial_qty_pct=0.25,
-            initial_ema_dist=-0.001,
-            double_down_factor=1,
+            initial_qty_fraction=0.25,
+            initial_ema_distance_fraction=-0.001,
+            reentry_qty_multiplier=1,
             ema_gate_mode="all",
-            threshold_base_pct=0.015,
-            retracement_base_pct=0,
+            threshold_base_fraction=0.015,
+            retracement_base_fraction=0,
         )
         t["close"].update(
-            qty_pct=0.2,
-            threshold_base_pct=0.01,
-            retracement_base_pct=0,
-            threshold_we_weight=0,
+            qty_fraction=0.2,
+            threshold_base_fraction=0.01,
+            retracement_base_fraction=0,
+            threshold_exposure_ratio_coefficient=0,
         )
         for group in ("entry", "close"):
             for key in t[group]:
@@ -205,17 +205,17 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
         raw[section] = deepcopy(migrated[section])
     inactive_side = "short" if active_side == "long" else "long"
     raw["bot"][active_side]["risk"].update(
-        max_positions=2, total_wallet_exposure_limit=1.0
+        max_positions=2, total_wallet_exposure_limit_ratio=1.0
     )
     raw["bot"][inactive_side]["risk"].update(
-        max_positions=0, total_wallet_exposure_limit=0.0
+        max_positions=0, total_wallet_exposure_limit_ratio=0.0
     )
     set_side_universe_sources(raw, 'approved_coins', {
         active_side: ["BTC", "ETH"], inactive_side: []
     })
     raw["bot"][active_side]["hsl"].update(
         enabled=hsl_enabled,
-        drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.001,
+        drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.001,
         cooldown_after_red_minutes=7.0,
     )
     config = parse_overrides(prepare_config(raw, verbose=False), verbose=False)

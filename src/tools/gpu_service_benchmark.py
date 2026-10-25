@@ -211,7 +211,7 @@ def main(argv=None):
     inputs = fixture_inputs(parity_parser().parse_args([
         "--fixture", args.strategy, "--sides", "both", "--coins", str(args.coins),
         "--bars", str(args.bars), "--seed", "7", "--hsl", args.hsl,
-        "--hsl-red-threshold", ".99", "--hsl-memory-ema-span-minutes", "1440",
+        "--hsl-drawdown-threshold-fraction", ".99", "--hsl-memory-ema-span-minutes", "1440",
     ]))
     metrics = ("adg_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "fills_per_day",
                "backtest_completion_fraction", "hsl_red_time_fraction",

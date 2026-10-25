@@ -19,7 +19,7 @@ def _bot(*, ages=(2.5, 0.0), enabled=(True, True), exchange="binance"):
     for side, days, active in zip(SIDES, ages, enabled):
         bot.config["bot"][side]["enabled"] = active
         bot.config["bot"][side]["universe"]["minimum_coin_age_days"] = days
-        bot.config["bot"][side]["risk"]["total_wallet_exposure_limit"] = 1.0 if active else 0.0
+        bot.config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0 if active else 0.0
         bot.config["bot"][side]["risk"]["max_positions"] = 1
     bot.exchange = exchange
     bot.first_timestamps = {}
@@ -61,7 +61,7 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
     if planning:
         bot.update_effective_min_cost = AsyncMock()
         bot.refresh_approved_ignored_coins_lists = lambda: None
-        bot.set_wallet_exposure_limits = lambda: None
+        bot.set_wallet_exposure_limit_ratios = lambda: None
         bot._assert_supported_live_state = lambda: None
         bot._build_live_symbol_universe = lambda: []
         await bot.prepare_planning_universe()
@@ -92,7 +92,7 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
 async def test_positive_age_disabled_side_does_not_acquire_facts(monkeypatch, disabled_by):
     bot = _bot(ages=(2.5, 0.0))
     if disabled_by == "exposure":
-        bot.config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+        bot.config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     else:
         bot.config["bot"]["long"]["risk"]["max_positions"] = 0
     lookup = AsyncMock(side_effect=AssertionError("disabled sides do not require inception"))

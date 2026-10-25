@@ -32,20 +32,20 @@ pub struct Policy {
     pub slow_beta: f32,
     pub fast_alpha: f32,
     pub fast_beta: f32,
-    pub threshold: f32,
+    pub drawdown_threshold_fraction: f32,
     pub cooldown_ms: i64,
 }
 
 impl Policy {
     pub fn new(
         memory_ema_span_minutes: f64,
-        drawdown_ratio_ema_span_minutes: f64,
-        red_threshold: f64,
+        drawdown_fraction_ema_span_minutes: f64,
+        drawdown_threshold_fraction: f64,
         cooldown_ms: i64,
     ) -> Result<Self, String> {
         let (slow_alpha, slow_beta) = coefficients(memory_ema_span_minutes)?;
-        let (fast_alpha, fast_beta) = coefficients(drawdown_ratio_ema_span_minutes)?;
-        let threshold = number(red_threshold, "HSL threshold")?;
+        let (fast_alpha, fast_beta) = coefficients(drawdown_fraction_ema_span_minutes)?;
+        let threshold = number(drawdown_threshold_fraction, "HSL threshold")?;
         if !(0.0..=1.0).contains(&threshold) || cooldown_ms < 0 {
             return Err("invalid v9 HSL threshold or cooldown".into());
         }
@@ -54,7 +54,7 @@ impl Policy {
             slow_beta,
             fast_alpha,
             fast_beta,
-            threshold,
+            drawdown_threshold_fraction: threshold,
             cooldown_ms,
         })
     }
@@ -76,9 +76,9 @@ pub struct Decision {
     pub action: Action,
     pub exposed: bool,
     pub red: bool,
-    pub raw: f64,
-    pub ema: f64,
-    pub drawdown: f64,
+    pub signal_raw_fraction: f64,
+    pub signal_ema_fraction: f64,
+    pub drawdown_memory_usd: f64,
     pub cooldown_until: Option<i64>,
     pub flatten_qualified: bool,
     pub nonpositive_equity: bool,
@@ -132,7 +132,7 @@ impl ScopeState {
         }
         Ok((
             raw,
-            nonpositive || raw.min(self.m) > policy.threshold,
+            nonpositive || raw.min(self.m) > policy.drawdown_threshold_fraction,
             nonpositive,
         ))
     }
@@ -229,9 +229,9 @@ impl ScopeState {
             action,
             exposed: event.exposed,
             red,
-            raw: raw as f64,
-            ema: self.m as f64,
-            drawdown: self.d as f64,
+            signal_raw_fraction: raw as f64,
+            signal_ema_fraction: self.m as f64,
+            drawdown_memory_usd: self.d as f64,
             cooldown_until: self.cooldown_until,
             flatten_qualified,
             nonpositive_equity,
@@ -287,8 +287,8 @@ impl ScopeState {
         next.m = raw;
         next.minute_prior_m = raw;
         let mut result = next.last.clone().unwrap();
-        result.ema = raw as f64;
-        result.red = nonpositive || raw > policy.threshold;
+        result.signal_ema_fraction = raw as f64;
+        result.red = nonpositive || raw > policy.drawdown_threshold_fraction;
         result.action = if result.red {
             Action::Panic
         } else {
@@ -306,9 +306,9 @@ impl ScopeState {
             action: Action::Normal,
             exposed: false,
             red: false,
-            raw: 0.0,
-            ema: 0.0,
-            drawdown: 0.0,
+            signal_raw_fraction: 0.0,
+            signal_ema_fraction: 0.0,
+            drawdown_memory_usd: 0.0,
             cooldown_until: self.cooldown_until,
             flatten_qualified: false,
             nonpositive_equity: false,
@@ -377,41 +377,41 @@ impl RealizedMemory {
         self.d as f64
     }
 
-    pub fn allowance(&self, balance: f64, effective_pct: f64) -> Result<f64, String> {
-        allowance(balance, effective_pct, self.drawdown())
+    pub fn allowance(&self, balance: f64, effective_fraction: f64) -> Result<f64, String> {
+        allowance(balance, effective_fraction, self.drawdown())
     }
 }
 
-pub fn allowance(balance: f64, effective_pct: f64, drawdown: f64) -> Result<f64, String> {
+pub fn allowance(balance: f64, effective_fraction: f64, drawdown: f64) -> Result<f64, String> {
     let balance = number(balance, "realized-loss allowance balance")?;
-    let pct = number(effective_pct, "realized-loss allowance percentage")?;
+    let fraction = number(effective_fraction, "realized-loss allowance fraction")?;
     let d = number(drawdown, "realized-loss allowance drawdown")?;
-    if balance <= 0.0 || pct < 0.0 || d < 0.0 {
+    if balance <= 0.0 || fraction < 0.0 || d < 0.0 {
         return Err("invalid v9 realized-loss allowance input".into());
     }
     let peak = balance + d;
-    let value = pct.mul_add(peak, -d).max(0.0);
+    let value = fraction.mul_add(peak, -d).max(0.0);
     if !peak.is_finite() || !value.is_finite() {
         return Err("v9 realized-loss allowance exceeds the finite risk domain".into());
     }
     Ok(value as f64)
 }
 
-/// Preserve the authored binary32 percentage graph across CPU and devices.
+/// Preserve the authored binary32 fraction graph across CPU and devices.
 pub fn allowance_for(
     balance: f64,
-    loss_allowance_pct: f64,
-    total_wallet_exposure_limit: f64,
+    loss_allowance_fraction: f64,
+    total_wallet_exposure_limit_ratio: f64,
     drawdown: f64,
 ) -> Result<f64, String> {
-    let loss_pct = number(loss_allowance_pct, "unstuck loss allowance percentage")?;
-    let twel = number(total_wallet_exposure_limit, "unstuck total exposure limit")?;
-    if loss_pct < 0.0 || twel < 0.0 {
-        return Err("negative v9 unstuck allowance percentage or exposure limit".into());
+    let loss_fraction = number(loss_allowance_fraction, "unstuck loss allowance fraction")?;
+    let twel = number(total_wallet_exposure_limit_ratio, "unstuck total exposure limit")?;
+    if loss_fraction < 0.0 || twel < 0.0 {
+        return Err("negative v9 unstuck allowance fraction or exposure limit".into());
     }
-    let effective = loss_pct * twel;
+    let effective = loss_fraction * twel;
     if !effective.is_finite() {
-        return Err("v9 unstuck effective percentage exceeds the finite risk domain".into());
+        return Err("v9 unstuck effective fraction exceeds the finite risk domain".into());
     }
     allowance(balance, effective as f64, drawdown)
 }
@@ -489,13 +489,16 @@ mod tests {
         let mut state = ScopeState::default();
         state.observe(&p, event(0, 0.0, 0.0, true)).unwrap();
         let first = state.observe(&p, event(60_000, -10.0, 0.0, true)).unwrap();
-        assert_eq!(first.drawdown, 10.0);
-        assert_eq!(first.raw as f32, 0.1_f32);
-        assert_eq!(first.ema as f32, 0.05_f32);
+        assert_eq!(first.drawdown_memory_usd, 10.0);
+        assert_eq!(first.signal_raw_fraction as f32, 0.1_f32);
+        assert_eq!(first.signal_ema_fraction as f32, 0.05_f32);
         let next = state.observe(&p, event(120_000, -10.0, 0.0, true)).unwrap();
-        assert_eq!(next.drawdown, 5.0);
-        assert_eq!(next.raw as f32, 5.0_f32 / 95.0);
-        assert_eq!(next.ema as f32, 0.5_f32.mul_add(0.05, 0.5 * (5.0 / 95.0)));
+        assert_eq!(next.drawdown_memory_usd, 5.0);
+        assert_eq!(next.signal_raw_fraction as f32, 5.0_f32 / 95.0);
+        assert_eq!(
+            next.signal_ema_fraction as f32,
+            0.5_f32.mul_add(0.05, 0.5 * (5.0 / 95.0))
+        );
     }
 
     #[test]
@@ -505,11 +508,11 @@ mod tests {
         state.observe(&p, event(0, 0.0, 0.0, true)).unwrap();
         state.observe(&p, event(1, 0.0, 20.0, true)).unwrap();
         let loss = state.observe(&p, event(2, 0.0, -20.0, true)).unwrap();
-        assert_eq!(loss.drawdown, 20.0);
-        assert_eq!(loss.ema as f32, 0.5 * (20.0_f32 / 120.0));
-        let before = loss.ema;
+        assert_eq!(loss.drawdown_memory_usd, 20.0);
+        assert_eq!(loss.signal_ema_fraction as f32, 0.5 * (20.0_f32 / 120.0));
+        let before = loss.signal_ema_fraction;
         for _ in 0..10 {
-            assert_eq!(state.current(59_999).ema, before);
+            assert_eq!(state.current(59_999).signal_ema_fraction, before);
         }
     }
 
@@ -518,7 +521,7 @@ mod tests {
         let p = policy();
         let mut state = ScopeState::default();
         let entry = state.observe(&p, event(0, 0.0, -1.0, true)).unwrap();
-        assert_eq!(entry.drawdown, 1.0);
+        assert_eq!(entry.drawdown_memory_usd, 1.0);
         let red = state.observe(&p, event(60_000, -20.0, 0.0, true)).unwrap();
         assert_eq!(red.action, Action::Panic);
         let flat = state.observe(&p, event(60_001, 0.0, 30.0, false)).unwrap();
@@ -530,7 +533,7 @@ mod tests {
         assert_eq!(later.cooldown_until, flat.cooldown_until);
         assert_eq!(state.current(120_001).action, Action::Normal);
         let reopen = state.observe(&p, event(120_001, 0.0, -2.0, true)).unwrap();
-        assert_eq!(reopen.drawdown, 2.0);
+        assert_eq!(reopen.drawdown_memory_usd, 2.0);
         assert_eq!(reopen.cooldown_until, None);
     }
 
@@ -553,9 +556,9 @@ mod tests {
         let mut changed = event(1, -10.0, 0.0, true);
         changed.budget = 200.0;
         let result = state.observe(&p, changed).unwrap();
-        assert_eq!(result.drawdown, 10.0);
-        assert_eq!(result.raw as f32, 0.05);
-        assert_eq!(result.ema as f32, 0.025);
+        assert_eq!(result.drawdown_memory_usd, 10.0);
+        assert_eq!(result.signal_raw_fraction as f32, 0.05);
+        assert_eq!(result.signal_ema_fraction as f32, 0.025);
     }
 
     #[test]
@@ -572,8 +575,8 @@ mod tests {
         let p = policy();
         let mut state = ScopeState::default();
         let result = state.seed_unknown(&p, 0, 100.0, -20.0).unwrap();
-        assert_eq!(result.drawdown, 20.0);
-        assert_eq!(result.raw, result.ema);
+        assert_eq!(result.drawdown_memory_usd, 20.0);
+        assert_eq!(result.signal_raw_fraction, result.signal_ema_fraction);
         assert_eq!(result.action, Action::Panic);
     }
 
@@ -604,8 +607,14 @@ mod tests {
         let mut invalid = event(60_000, -10.0, 0.0, true);
         invalid.budget = f64::MAX;
         assert!(state.observe(&p, invalid).is_err());
-        assert_eq!(state.current(0).drawdown, initial.drawdown);
-        assert_eq!(state.current(0).ema, initial.ema);
+        assert_eq!(
+            state.current(0).drawdown_memory_usd,
+            initial.drawdown_memory_usd
+        );
+        assert_eq!(
+            state.current(0).signal_ema_fraction,
+            initial.signal_ema_fraction
+        );
     }
 
     #[test]
@@ -626,16 +635,16 @@ mod tests {
                 .unwrap()
                 .red
         );
-        assert_eq!(with_previews.current(20_000).drawdown, 0.0);
+        assert_eq!(with_previews.current(20_000).drawdown_memory_usd, 0.0);
         let actual = with_previews
             .observe(&p, event(60_000, -5.0, 0.0, true))
             .unwrap();
         let expected = without_previews
             .observe(&p, event(60_000, -5.0, 0.0, true))
             .unwrap();
-        assert_eq!(actual.drawdown, expected.drawdown);
-        assert_eq!(actual.raw, expected.raw);
-        assert_eq!(actual.ema, expected.ema);
+        assert_eq!(actual.drawdown_memory_usd, expected.drawdown_memory_usd);
+        assert_eq!(actual.signal_raw_fraction, expected.signal_raw_fraction);
+        assert_eq!(actual.signal_ema_fraction, expected.signal_ema_fraction);
         assert_eq!(actual.action, expected.action);
         assert!(with_previews
             .preview(&p, event(60_001, 0.0, 1.0, false))

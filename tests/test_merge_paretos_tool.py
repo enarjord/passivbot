@@ -31,7 +31,7 @@ def _nested_side_config(side: str, value: float, *, enabled: bool) -> dict:
     return {
         "risk": {
             "n_positions": 1.0,
-            "total_wallet_exposure_limit": 1.0 if enabled else 0.0,
+            "total_wallet_exposure_limit_ratio": 1.0 if enabled else 0.0,
         },
         "strategy": {"marker": value},
         f"{side}_marker": value,
@@ -151,14 +151,14 @@ def _make_nested_front(tmp_path: Path, name: str, *, enabled_side: str) -> Path:
             "long": {
                 "risk": {
                     "n_positions": [1.0, 1.0, 1.0],
-                    "total_wallet_exposure_limit": [0.75, 1.50, 0.01],
+                    "total_wallet_exposure_limit_ratio": [0.75, 1.50, 0.01],
                 },
                 "strategy": {"initial_qty_pct": [0.10, 0.50, 0.02]},
             },
             "short": {
                 "risk": {
                     "n_positions": [1.0, 1.0, 1.0],
-                    "total_wallet_exposure_limit": [0.0, 0.0, 0.01],
+                    "total_wallet_exposure_limit_ratio": [0.0, 0.0, 0.01],
                 },
                 "strategy": {"initial_qty_pct": [0.20, 0.80, 0.04]},
             },
@@ -167,14 +167,14 @@ def _make_nested_front(tmp_path: Path, name: str, *, enabled_side: str) -> Path:
             "long": {
                 "risk": {
                     "n_positions": [1.0, 1.0, 1.0],
-                    "total_wallet_exposure_limit": [0.0, 0.0, 0.01],
+                    "total_wallet_exposure_limit_ratio": [0.0, 0.0, 0.01],
                 },
                 "strategy": {"initial_qty_pct": [0.10, 0.50, 0.02]},
             },
             "short": {
                 "risk": {
                     "n_positions": [1.0, 1.0, 1.0],
-                    "total_wallet_exposure_limit": [0.65, 1.40, 0.01],
+                    "total_wallet_exposure_limit_ratio": [0.65, 1.40, 0.01],
                 },
                 "strategy": {"initial_qty_pct": [0.20, 0.80, 0.04]},
             },
@@ -234,14 +234,14 @@ def test_merge_paretos_supports_nested_v8_side_risk_and_bounds(tmp_path: Path):
     assert index["count"] == 5
 
     merged = json.loads((output_dir / index["files"][0]).read_text())
-    assert merged["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.0
-    assert merged["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.0
-    assert merged["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+    assert merged["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
+    assert merged["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
+    assert merged["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == [
         0.75,
         1.5,
         0.01,
     ]
-    assert merged["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] == [
+    assert merged["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == [
         0.65,
         1.4,
         0.01,
@@ -273,22 +273,23 @@ def test_merge_paretos_supports_canonical_v9_risk_and_bound_union(tmp_path: Path
             bounds = merged["optimize"]["bounds"][side]["risk"]
             assert bounds["max_positions"] == [1, 1, 1]
             assert "n_positions" not in bounds
-            assert bounds["total_wallet_exposure_limit"] == exposure_bounds
+            assert bounds["total_wallet_exposure_limit_ratio"] == exposure_bounds
     assert all(path.read_bytes() == raw for path, raw in originals.items())
 
 
 @pytest.mark.parametrize("count,exposure,enabled", [(2, .5, True), (0, .5, False), (2, 0, False)])
 def test_canonical_pareto_side_enablement(count, exposure, enabled):
-    assert _side_is_enabled({"risk": {"max_positions": count, "total_wallet_exposure_limit": exposure}}) is enabled
+    assert _side_is_enabled({"risk": {"max_positions": count, "total_wallet_exposure_limit_ratio": exposure}}) is enabled
 
 
 @pytest.mark.parametrize("alias_patch", [
     {"n_positions": 0},
     {"total_wallet_exposure_limit": 0},
     {"risk": {"n_positions": 0}},
+    {"risk": {"total_wallet_exposure_limit": 0}},
 ])
 def test_canonical_pareto_policy_rejects_conflicting_historical_aliases(alias_patch):
-    side = {"risk": {"max_positions": 2, "total_wallet_exposure_limit": .5}}
+    side = {"risk": {"max_positions": 2, "total_wallet_exposure_limit_ratio": .5}}
     for key, value in alias_patch.items():
         if key == "risk":
             side[key].update(value)
@@ -301,8 +302,50 @@ def test_canonical_pareto_policy_rejects_conflicting_historical_aliases(alias_pa
 def test_historical_pareto_reader_accepts_consistent_duplicate_policy_values():
     assert _side_is_enabled({
         "n_positions": 2, "total_wallet_exposure_limit": .5,
-        "risk": {"max_positions": 2, "n_positions": 2, "total_wallet_exposure_limit": .5},
+        "risk": {"max_positions": 2, "n_positions": 2, "total_wallet_exposure_limit_ratio": .5},
     })
+
+
+@pytest.mark.parametrize("count,exposure,enabled", [(2, .5, True), (0, .5, False), (2, 0, False)])
+def test_released_v8_grouped_pareto_side_enablement(count, exposure, enabled):
+    assert _side_is_enabled({
+        "risk": {"n_positions": count, "total_wallet_exposure_limit": exposure}
+    }) is enabled
+
+
+def test_historical_pareto_reader_keeps_current_exposure_authoritative():
+    assert not _side_is_enabled({
+        "risk": {
+            "n_positions": 2,
+            "total_wallet_exposure_limit_ratio": 0,
+            "total_wallet_exposure_limit": .5,
+        }
+    })
+
+
+def test_merge_paretos_preserves_released_v8_grouped_capacity(tmp_path: Path):
+    fronts = [_make_nested_front(tmp_path, side, enabled_side=side) for side in ("long", "short")]
+    originals = {}
+    for front in fronts:
+        for path in (front / "pareto").glob("*.json"):
+            entry = json.loads(path.read_text())
+            for side in ("long", "short"):
+                risk = entry["bot"][side]["risk"]
+                risk["total_wallet_exposure_limit"] = risk.pop("total_wallet_exposure_limit_ratio")
+                bounds = entry["optimize"]["bounds"][side]["risk"]
+                bounds["total_wallet_exposure_limit"] = bounds.pop("total_wallet_exposure_limit_ratio")
+            path.write_text(json.dumps(entry))
+            originals[path] = path.read_bytes()
+    output = tmp_path / "released-v8-merged"
+    assert main([str(p) for p in fronts] + [str(output), "--max", "5"]) == 0
+    index = json.loads((output / "index.json").read_text())
+    assert index["count"] == 5
+    for filename in index["files"]:
+        merged = json.loads((output / filename).read_text())
+        for side in ("long", "short"):
+            assert merged["bot"][side]["risk"]["total_wallet_exposure_limit"] == 1.0
+            assert "total_wallet_exposure_limit_ratio" not in merged["bot"][side]["risk"]
+    assert all(path.read_bytes() == raw for path, raw in originals.items())
 
 
 def test_merge_paretos_fills_after_core_until_max(tmp_path: Path):

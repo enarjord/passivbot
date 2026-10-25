@@ -1656,7 +1656,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
             name = f"{metric}_per_twel_ratio_btc_{side}"
             if name not in requested:
                 continue
-            denominator = out[f"candidate_total_wallet_exposure_limit_{side}"].to(
+            denominator = out[f"candidate_total_wallet_exposure_limit_ratio_{side}"].to(
                 torch.float64
             )
             values[name] = torch.where(
@@ -2059,7 +2059,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue
-        denominator = out[f"candidate_total_wallet_exposure_limit_{side}"].to(
+        denominator = out[f"candidate_total_wallet_exposure_limit_ratio_{side}"].to(
             torch.float64
         )
         objectives[name] = torch.where(

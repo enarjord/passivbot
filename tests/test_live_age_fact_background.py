@@ -24,7 +24,7 @@ def _bot(side="long", exchange="binance"):
     for pside in ("long", "short"):
         bot.config["bot"][pside]["enabled"] = pside == side
         bot.config["bot"][pside]["risk"].update(
-            max_positions=1, total_wallet_exposure_limit=1.0 if side == pside else 0.0,
+            max_positions=1, total_wallet_exposure_limit_ratio=1.0 if side == pside else 0.0,
         )
         bot.config["bot"][pside]["universe"]["minimum_coin_age_days"] = 7.25
     bot.exchange = exchange
@@ -51,7 +51,7 @@ def _bot(side="long", exchange="binance"):
     bot.WS_ohlcvs_1m_tasks = {}
     bot.update_effective_min_cost = AsyncMock()
     bot.refresh_approved_ignored_coins_lists = lambda: None
-    bot.set_wallet_exposure_limits = lambda: None
+    bot.set_wallet_exposure_limit_ratios = lambda: None
     bot._assert_supported_live_state = lambda: None
     bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.refresh_market_state_if_needed = AsyncMock(return_value=True)

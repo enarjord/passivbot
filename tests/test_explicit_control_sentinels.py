@@ -328,14 +328,14 @@ def test_released_v8_sentinels_convert_at_every_layer_and_report(tmp_path):
 
 def test_legitimate_zeros_and_backtest_null_inheritance_remain_authored():
     source = get_expanded_config_prototype()
-    source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     source["bot"]["long"]["forager"]["score_weights"] = dict.fromkeys(
         source["bot"]["long"]["forager"]["score_weights"], 0.0,
     )
     source["live"]["execution"]["execution_delay_seconds"] = 0.0
     source["backtest"]["filter_by_min_effective_cost"] = None
     result = prepare_config(source, verbose=False)
-    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     assert not any(result["bot"]["long"]["forager"]["score_weights"].values())
     assert result["live"]["execution"]["execution_delay_seconds"] == 0.0
     assert result["backtest"]["filter_by_min_effective_cost"] is None

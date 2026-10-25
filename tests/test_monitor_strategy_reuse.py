@@ -29,10 +29,10 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     overrides = {('long', symbols[0]): .017, ('short', symbols[1]): .028}
     def params(side, symbol):
         calls[side, symbol] += 1
-        from config.strategy_paths import lower_runtime_strategy_side
 
-        result = lower_runtime_strategy_side("trailing_martingale", defaults[side])
-        result['entry']['initial_qty_pct'] = overrides.get((side, symbol), .011)
+
+        result = deepcopy(defaults[side])
+        result['entry']['initial_qty_fraction'] = overrides.get((side, symbol), .011)
         return result
     def bp(side, key, symbol=None):
         return 'bounded' if key == 'risk_we_excess_allowance_mode' else .2
@@ -58,7 +58,7 @@ def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
     calls.clear()
     overrides['long', symbols[0]] = .043
     fresh = build()
-    assert fresh[symbols[0]]['long']['entry']['entry_initial_qty_pct'] == .043
+    assert fresh[symbols[0]]['long']['entry']['entry_initial_qty_fraction'] == .043
     assert fresh[symbols[1]] == cached[symbols[1]]
     assert calls == Counter({(side, s): 1 for s in symbols for side in ('long', 'short')})
 
@@ -69,13 +69,13 @@ def test_failed_strategy_resolution_is_not_cached():
         calls.append(1)
         if len(calls) == 1:
             raise ValueError('invalid strategy')
-        return {'entry': {'initial_qty_pct': .02}}
+        return {'entry': {'initial_qty_fraction': .02}}
     bot = SimpleNamespace(_strategy_params_to_rust_dict=getter)
     cache = {}
     with pytest.raises(ValueError):
-        monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_pct', 'A', strategy_cache=cache)
+        monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_fraction', 'A', strategy_cache=cache)
     assert cache == {}
-    assert monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_pct', 'A', strategy_cache=cache) == .02
+    assert monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_fraction', 'A', strategy_cache=cache) == .02
 
 
 def test_market_snapshot_reuses_h1_resolution_and_observes_changes():
@@ -84,7 +84,7 @@ def test_market_snapshot_reuses_h1_resolution_and_observes_changes():
 
     def params(side, symbol):
         calls[side, symbol] += 1
-        return {'volatility_ema_span_1h': span}
+        return {'log_range_ema_span_1h_candles': span}
 
     def bp(*args):
         raise KeyError(args)
@@ -100,5 +100,5 @@ def test_market_snapshot_reuses_h1_resolution_and_observes_changes():
     calls.clear()
     second = monitor._build_monitor_market_section(bot)
     assert calls == Counter({('long', 'A'): 1, ('short', 'A'): 1})
-    assert first['A']['entry_volatility_logrange_ema'] == {'long': .02, 'short': .02}
-    assert second['A']['entry_volatility_logrange_ema'] == {'long': .03, 'short': .03}
+    assert first['A']['entry_log_range_ema_1h'] == {'long': .02, 'short': .02}
+    assert second['A']['entry_log_range_ema_1h'] == {'long': .03, 'short': .03}

@@ -29,7 +29,7 @@ def facts(now, *, size=1.0, mark=100.0, position_at=None, balance=1000.0):
             )],
         ),
         slots=1, scale_budget_with_excess_allowance=False, exposure_budget=None,
-        memory_ema_span_minutes=43200.0, drawdown_ratio_ema_span_minutes=1.0, threshold=0.005, cooldown_ms=60_000,
+        memory_ema_span_minutes=43200.0, drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.005, cooldown_ms=60_000,
         budget_observations=[dict(timestamp=0, order=-1, balance=1000.0, slots=1,
             scale_budget_with_excess_allowance=False, exposure_budget=None, estimated=True)],
     )
@@ -70,7 +70,7 @@ def test_actual_capture_fill_payload_cannot_cross_its_independent_source_cut(mod
     pair = json.loads(request.payload)["snapshot"]["pairs"][0]
     assert pair["fills"][0]["timestamp"] > pair["fills_at"]
     assert "post_capture_fill" in excluded["reasons"]
-    assert excluded["risk"]["drawdown"] == 0.
+    assert excluded["risk"]["drawdown_memory_usd"] == 0.
     request, admitted = read(NOW, NOW)
     from v9_risk_reference import coefficients, fma
     _, beta = coefficients(json.loads(request.payload)["memory_ema_span_minutes"])
@@ -79,7 +79,7 @@ def test_actual_capture_fill_payload_cannot_cross_its_independent_source_cut(mod
     # minute contributes its ordinary zero-loss slow decay after admission.
     for _ in range(NOW // 60_000 - (NOW-500) // 60_000):
         expected = fma(beta, expected, 0.)
-    assert admitted["risk"]["drawdown"] == expected
+    assert admitted["risk"]["drawdown_memory_usd"] == expected
     assert admitted["decision"]["action"] == "panic"
     request.replay.clear_derived_cache()
     assert read(NOW, NOW)[1] == admitted
@@ -111,7 +111,7 @@ def test_native_forward_capture_cut_matches_only_the_supported_reference(kind):
     assert diagnostic in result["reasons"]
     pair.update(fills_at=120_001, prices_at=120_001)
     admitted = evaluate(replay, value)
-    assert admitted["risk"]["drawdown"] == expected_d
+    assert admitted["risk"]["drawdown_memory_usd"] == expected_d
     assert evaluate(replay, value) == admitted
     replay.clear_derived_cache()
     assert evaluate(replay, value) == admitted
@@ -122,14 +122,14 @@ def test_native_quarantines_a_retained_revision_before_clipping_or_latest_select
     evaluate(replay, facts(1))
     earlier = facts(100)
     earlier["snapshot"]["pairs"][0]["fills"] = [fill("revision", 50, 0., -10.)]
-    assert evaluate(replay, earlier)["risk"]["drawdown"] == 10.
+    assert evaluate(replay, earlier)["risk"]["drawdown_memory_usd"] == 10.
     later = facts(200)
     later["snapshot"]["start"] = 60
     later["snapshot"]["pairs"][0].update(
         fills_at=100, fills=[fill("revision", 150, 0., -100.)],
     )
     excluded = evaluate(replay, later)
-    assert excluded["risk"]["drawdown"] == 0.
+    assert excluded["risk"]["drawdown_memory_usd"] == 0.
     replay.clear_derived_cache()
     assert evaluate(replay, later) == excluded
 
@@ -140,13 +140,13 @@ def test_native_deferred_equal_anchor_fill_advances_after_the_immutable_initiali
     first["snapshot"]["pairs"][0].update(
         fills_at=90, fills=[fill("after-cut-at-anchor", 100, 0., -100.)],
     )
-    assert evaluate(replay, first)["risk"]["drawdown"] == 0.
+    assert evaluate(replay, first)["risk"]["drawdown_memory_usd"] == 0.
     later = facts(200)
     later["snapshot"]["pairs"][0].update(
         fills_at=200, fills=first["snapshot"]["pairs"][0]["fills"],
     )
     admitted = evaluate(replay, later)
-    assert admitted["risk"]["drawdown"] == 100.
+    assert admitted["risk"]["drawdown_memory_usd"] == 100.
     assert "ambiguous_bootstrap_fill_phase" in admitted["reasons"]
     replay.clear_derived_cache()
     assert evaluate(replay, later) == admitted
@@ -162,7 +162,7 @@ def test_native_later_receipt_repairs_prefix_without_retiming_original_capture()
         fills_at=200, fills=[fill("later-historical-receipt", 95, 0., -100.)],
     )
     repaired = evaluate(replay, later)
-    assert repaired["risk"]["drawdown"] == 100.
+    assert repaired["risk"]["drawdown_memory_usd"] == 100.
     replay.clear_derived_cache()
     assert evaluate(replay, later) == repaired
     assert first["snapshot"]["pairs"][0]["fills_at"] == 90
@@ -177,10 +177,10 @@ def test_native_revision_correction_advances_only_after_its_source_cut():
     value["snapshot"]["pairs"][0].update(
         fills_at=100, fills=[fill("revision", 50, 0., -10.), revised],
     )
-    assert evaluate(replay, value)["risk"]["drawdown"] == 10.
+    assert evaluate(replay, value)["risk"]["drawdown_memory_usd"] == 10.
     value["snapshot"]["pairs"][0]["fills_at"] = 200
     repaired = evaluate(replay, value)
-    assert repaired["risk"]["drawdown"] == 20.
+    assert repaired["risk"]["drawdown_memory_usd"] == 20.
     replay.clear_derived_cache()
     assert evaluate(replay, value) == repaired
 
@@ -193,12 +193,12 @@ def test_native_regressed_cut_keeps_all_previously_admitted_conflicting_variants
     supported["snapshot"]["pairs"][0].update(fills_at=200, fills=variants)
     conflict = evaluate(replay, supported)
     assert "conflicting_identity" in conflict["reasons"]
-    assert conflict["risk"]["drawdown"] == 0.
+    assert conflict["risk"]["drawdown_memory_usd"] == 0.
     older = facts(300)
     older["snapshot"]["pairs"][0].update(fills_at=100, fills=variants)
     repeated = evaluate(replay, older)
     assert "conflicting_identity" in repeated["reasons"]
-    assert repeated["risk"]["drawdown"] == 0.
+    assert repeated["risk"]["drawdown_memory_usd"] == 0.
     replay.clear_derived_cache()
     assert evaluate(replay, older) == repeated
 
@@ -238,7 +238,7 @@ def test_native_fill_between_anchor_source_and_capture_keeps_actual_economic_tim
         after["snapshot"]["pairs"][0].update(position_at=200)
         after["snapshot"]["pairs"][0]["position"]["size"] = .5
     result = evaluate(replay, after)
-    assert result["risk"]["drawdown"] == 10.
+    assert result["risk"]["drawdown_memory_usd"] == 10.
     if known_origin:
         assert result["risk"] == evaluate(pbr.HslV9Replay(), after)["risk"]
     assert result["risk"]["cooldown_until"] == (None if partial else 60_095)
@@ -260,7 +260,7 @@ def test_native_unknown_source_inventory_waits_for_the_execution_mark(partial):
                                   -5. if partial else -10., 90.)],
     )
     result = evaluate(replay, after)
-    assert result["risk"]["drawdown"] == 10.
+    assert result["risk"]["drawdown_memory_usd"] == 10.
     assert "unknown_prefix_causal_mark_seed" in result["reasons"]
     assert result["risk"]["cooldown_until"] == (None if partial else 60_095)
     replay.clear_derived_cache()
@@ -290,7 +290,7 @@ def test_native_bootstrap_source_tail_requires_marks_for_the_entire_held_scope()
     assert blocked["risk"] is None
     after["snapshot"]["pairs"][1]["prices"] = {"0": 100.}
     recovered = evaluate(replay, after)
-    assert recovered["risk"]["drawdown"] == 30.
+    assert recovered["risk"]["drawdown_memory_usd"] == 30.
     replay.clear_derived_cache()
     assert evaluate(replay, after) == recovered
 
@@ -321,7 +321,7 @@ def test_native_terminal_unknown_bootstrap_uses_its_original_quote_at_its_own_cl
         assert result["risk"] is None
     else:
         assert result["unavailable_reason"] is None
-        assert result["risk"]["drawdown"] == 20.
+        assert result["risk"]["drawdown_memory_usd"] == 20.
         assert "unknown_prefix_causal_mark_seed" in result["reasons"]
     replay.clear_derived_cache()
     assert evaluate(replay, after) == result
@@ -417,7 +417,7 @@ def test_partial_fill_stale_quantity_is_unavailable_then_recovers_without_double
 
     def account(now, size, mark):
         value = facts(now, size=direction * size, mark=mark)
-        value["threshold"] = 0.012
+        value["drawdown_threshold_fraction"] = 0.012
         value["snapshot"]["pside"] = side
         value["snapshot"]["pairs"][0]["position"]["pside"] = side
         if mode == "portfolio":
@@ -447,7 +447,7 @@ def test_partial_fill_stale_quantity_is_unavailable_then_recovers_without_double
     recovered = evaluate(replay, fresh)
     assert recovered["unavailable_reason"] is None
     assert recovered["decision"]["action"] == "normal"
-    assert recovered["risk"]["drawdown"] == 10.0
+    assert recovered["risk"]["drawdown_memory_usd"] == 10.0
     replay.clear_derived_cache()
     assert evaluate(replay, fresh) == recovered
 
@@ -524,11 +524,11 @@ def test_malformed_native_unavailability_remains_a_fatal_producer_error(change):
 def test_same_receipt_actual_source_endpoints_preserve_reconciliation_and_pre_red(sources):
     replay = pbr.HslV9Replay()
     initial = facts(1)
-    initial["threshold"] = 0.012
+    initial["drawdown_threshold_fraction"] = 0.012
     evaluate(replay, initial)
     partial = fill("partial", 60_000, -0.5, -5.0, 90.0)
     account = facts(60_001, mark=90.0)
-    account["threshold"] = 0.012
+    account["drawdown_threshold_fraction"] = 0.012
     account["snapshot"]["pairs"][0]["fills"] = [partial]
     for index, source in enumerate(sources):
         account["snapshot"]["pairs"][0]["position_at"] = source
@@ -537,7 +537,7 @@ def test_same_receipt_actual_source_endpoints_preserve_reconciliation_and_pre_re
             assert current["unavailable_reason"] == "causal_position_snapshot_precedes_fill"
         else:
             assert current["unavailable_reason"] is None
-            assert current["risk"]["drawdown"] == 15.0
+            assert current["risk"]["drawdown_memory_usd"] == 15.0
     committed = replay.cache_info()["committed_events"]
     advanced = replay.cache_info()["advanced_events"]
     stable = evaluate(replay, account)
@@ -546,12 +546,12 @@ def test_same_receipt_actual_source_endpoints_preserve_reconciliation_and_pre_re
     replay.clear_derived_cache()
     assert evaluate(replay, account) == stable
     flat = facts(60_002, size=0.0, mark=90.0)
-    flat["threshold"] = 0.012
+    flat["drawdown_threshold_fraction"] = 0.012
     flat["snapshot"]["pairs"][0]["fills"] = [
         partial, fill("rebated_exit", 60_002, -1.0, 0.0, 90.0)
     ]
     terminal = evaluate(replay, flat)
-    assert terminal["risk"]["drawdown"] == 5.0
+    assert terminal["risk"]["drawdown_memory_usd"] == 5.0
     assert terminal["risk"]["cooldown_until"] == 120_002
     assert terminal["decision"]["flat_at"] == 60_002
     replay.clear_derived_cache()
@@ -566,7 +566,7 @@ def test_real_utc_capture_latency_cannot_retime_monotonic_account_facts(processi
     from test_hsl_runtime import NOW, SYMBOL, bot
 
     value, executions = bot(), []
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.012
+    value.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.012
     value._pnls_manager.get_events = lambda **_: list(executions)
 
     def read(utc, now, source, size, mark):
@@ -673,14 +673,14 @@ def test_corrected_native_position_sources_are_ordered_before_no_op_detection():
                      [(50_000, 2.0), (40_000, 1.0), (60_000, 1.0)]):
         replay = pbr.HslV9Replay()
         initial = facts(1)
-        initial["threshold"] = 0.012
+        initial["drawdown_threshold_fraction"] = 0.012
         evaluate(replay, initial)
         for index, (source, size) in enumerate(readings):
             account = facts(60_001 + index * 10_000, position_at=source, size=size, mark=90.0)
-            account["threshold"] = 0.012
+            account["drawdown_threshold_fraction"] = 0.012
             evaluate(replay, account)
         flat = facts(90_001, size=0.0, mark=90.0)
-        flat["threshold"] = 0.012
+        flat["drawdown_threshold_fraction"] = 0.012
         flat["snapshot"]["pairs"][0]["fills"] = [fill("exit", 90_000, -1.0, -10.0, 90.0)]
         terminal = evaluate(replay, flat)
         assert terminal["risk"]["cooldown_until"] is None

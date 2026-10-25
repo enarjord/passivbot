@@ -30,7 +30,7 @@ def query(value, now, mark, sources=None):
 
 def test_current_quote_replacement_does_not_reseed_the_committed_initializer():
     value = bot()
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_ema_span_minutes"] = 1_000_000.0
+    value.config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     initial, replay = query(value, NOW, 90.0)
     advances = replay.cache_info()["advanced_events"]
     recovered, same = query(value, NOW + 1, 100.0)
@@ -39,8 +39,8 @@ def test_current_quote_replacement_does_not_reseed_the_committed_initializer():
     assert initial.action == returned.action == "panic"
     assert recovered.action == "normal"
     assert replay.cache_info()["advanced_events"] == advances
-    assert json.loads(initial.payload)["risk"]["drawdown"] == 100.0
-    assert json.loads(returned.payload)["risk"]["drawdown"] == 100.0
+    assert json.loads(initial.payload)["risk"]["drawdown_memory_usd"] == 100.0
+    assert json.loads(returned.payload)["risk"]["drawdown_memory_usd"] == 100.0
     assert replay.anchor.observed_ms == NOW
 
 
@@ -75,7 +75,7 @@ def test_policy_change_reuses_the_raw_initializer_with_the_current_policy():
     value = bot()
     initial, replay = query(value, NOW, 90.0)
     anchor = replay.anchor
-    value.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
+    value.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.99
     current, same = query(value, NOW + 1, 90.0)
     assert initial.action == "panic" and current.action == "normal"
     assert same is replay and replay.anchor is anchor
@@ -92,7 +92,7 @@ def test_same_timestamp_account_correction_is_committed_before_preview():
     value.positions[SYMBOL]["long"]["size"] = 20.0
     changed, same = query(value, NOW, 90.0)
     assert same is replay
-    assert json.loads(changed.payload)["risk"]["drawdown"] == 200.0
+    assert json.loads(changed.payload)["risk"]["drawdown_memory_usd"] == 200.0
     value.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
     flat, _ = query(value, NOW, 90.0)
     assert not json.loads(flat.payload)["risk"]["exposed"]

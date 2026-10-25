@@ -134,14 +134,14 @@ def test_context_demand_is_side_enabled_approved_and_not_ignored(tmp_path, side,
     config = _cache_config(tmp_path, (0.0, 0.0))
     for position in ("long", "short"):
         config["bot"][position]["universe"]["approved_coins"] = ["AAA", "BBB"]
-        config["bot"][position]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+        config["bot"][position]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
     universe = deepcopy(config["bot"][side]["universe"])
     universe.update(minimum_coin_age_days=7.0, approved_coins=[] if policy == "empty" else ["AAA"],
                     ignored_coins=["AAA"] if policy == "ignored" else [])
     patch = {f"bot.{position}.universe": {**deepcopy(universe), "minimum_coin_age_days": 7.0 if position == side else 0.0}
              for position in ("long", "short")}
     if policy == "disabled":
-        patch[f"bot.{side}.risk.total_wallet_exposure_limit"] = 0.0
+        patch[f"bot.{side}.risk.total_wallet_exposure_limit_ratio"] = 0.0
     scenarios, _ = build_scenarios({"scenarios": [{"label": "side", "overrides": patch}]}, ["binance"])
     context = _contexts(config, scenarios)["side"]
     assert context.inception_coins == frozenset(expected)
@@ -203,7 +203,7 @@ def test_prepared_universe_cannot_be_reused_for_different_recipe(tmp_path, chang
         config["bot"][side]["universe"]["approved_coins"] = ["AAA", "BBB"]
     if change == "enabled":
         config["bot"]["long"]["universe"]["minimum_coin_age_days"] = 7.0
-        config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+        config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     materialize_side_universe_sources(config, "approved_coins", {"long": ["AAA"], "short": ["AAA"]})
     scenarios, _ = build_scenarios({"scenarios": [{"label": "context"}]}, ["binance"])
     context = _contexts(config, scenarios)["context"]
@@ -211,7 +211,7 @@ def test_prepared_universe_cannot_be_reused_for_different_recipe(tmp_path, chang
     if change == "age":
         changed["bot"]["long"]["universe"]["minimum_coin_age_days"] = 7.0
     elif change == "enabled":
-        changed["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+        changed["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
     elif change == "source":
         changed["bot"]["long"]["universe"]["approved_coins"] = ["BBB"]
     elif change == "prepared_membership":
@@ -233,7 +233,7 @@ def test_positive_numeric_changes_keep_same_acquisition_authority(tmp_path):
     context = _contexts(config, scenarios)["context"]
     changed = deepcopy(config)
     changed["bot"]["long"]["universe"]["minimum_coin_age_days"] = 14.0
-    changed["bot"]["long"]["risk"]["total_wallet_exposure_limit"] *= 2
+    changed["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] *= 2
     result, _ = _scenario(changed, scenarios[0], context)
     assert result["bot"]["long"]["universe"]["minimum_coin_age_days"] == 14.0
 
@@ -242,11 +242,11 @@ def test_positive_numeric_changes_keep_same_acquisition_authority(tmp_path):
 def test_ordinary_inference_skips_other_side_ignored_and_disabled_members(tmp_path, side):
     import backtest as bt
     config = _cache_config(tmp_path, (0.0, 0.0))
-    config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit=1.0)
+    config["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
     config["bot"][side]["universe"].update(minimum_coin_age_days=7.0, approved_coins=["AAA", "BBB"], ignored_coins=["BBB"])
     mss = {coin: {"inception_timestamp_ms": None} for coin in ("AAA", "BBB")}
     assert bt._automatic_cache_unresolved_inception_coins(config, ["AAA", "BBB"], mss) == ["AAA"]
-    config["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
     assert bt._automatic_cache_unresolved_inception_coins(config, ["AAA", "BBB"], mss) == []
 
 

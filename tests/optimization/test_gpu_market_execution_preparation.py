@@ -62,11 +62,11 @@ def test_runner_rejects_stale_or_malformed_execution_inputs_before_allocation(in
     data = {"n": 3, "n_coins": 2, "bars": torch.zeros((3, 2, 4)),
             "market_execution_ticks": torch.ones((3, 2, 2), dtype=torch.int32),
             "market_execution_ticks_abi": MARKET_EXECUTION_TICKS_ABI,
-            "market_order_slippage_pct": slip}
+            "market_order_slippage_fraction": slip}
     assert _validate_market_execution_data(data, slip) is data["market_execution_ticks"]
     if invalid == "missing": del data["market_execution_ticks"]
     if invalid == "abi": data["market_execution_ticks_abi"] += 1
-    if invalid == "f64_slippage": data["market_order_slippage_pct"] = np.nextafter(slip, np.inf)
+    if invalid == "f64_slippage": data["market_order_slippage_fraction"] = np.nextafter(slip, np.inf)
     if invalid == "shape": data["market_execution_ticks"] = torch.ones((3, 2), dtype=torch.int32)
     if invalid == "dtype": data["market_execution_ticks"] = data["market_execution_ticks"].to(torch.float32)
     if invalid == "noncontiguous": data["market_execution_ticks"] = data["market_execution_ticks"].transpose(1, 2)

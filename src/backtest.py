@@ -538,12 +538,12 @@ def _build_coin_metadata_entries(
         base_from_symbol, quote_from_symbol = _split_symbol_parts(symbol)
         coin_shorthand = entry.get("coin") or entry.get("base") or base_from_symbol
         entry_exchange = entry.get("exchange") or exchange
-        maker_fee = entry.get("maker_fee")
-        if maker_fee is None:
-            maker_fee = entry.get("maker")
-        taker_fee = entry.get("taker_fee")
-        if taker_fee is None:
-            taker_fee = entry.get("taker")
+        maker_fee_fraction = entry.get("maker_fee")
+        if maker_fee_fraction is None:
+            maker_fee_fraction = entry.get("maker")
+        taker_fee_fraction = entry.get("taker_fee")
+        if taker_fee_fraction is None:
+            taker_fee_fraction = entry.get("taker")
         entries.append(
             {
                 "index": (
@@ -561,8 +561,8 @@ def _build_coin_metadata_entries(
                 "min_qty": _float_or(entry.get("min_qty")),
                 "min_cost": _float_or(entry.get("min_cost")),
                 "c_mult": _float_or(entry.get("c_mult"), 1.0),
-                "maker_fee": _float_or(maker_fee),
-                "taker_fee": _float_or(taker_fee),
+                "maker_fee_fraction": _float_or(maker_fee_fraction),
+                "taker_fee_fraction": _float_or(taker_fee_fraction),
                 "first_valid_index": _int_or(first_valid_indices[idx]),
                 "last_valid_index": _int_or(last_valid_indices[idx]),
                 "warmup_minutes": _int_or(warmup_minutes[idx]),
@@ -572,7 +572,8 @@ def _build_coin_metadata_entries(
     return entries
 
 
-def _market_fee_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
+def _market_fee_fraction_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
+    """Adapt existing exchange/cache fee keys without changing their precedence."""
     entry = mss.get(coin, {}) if isinstance(mss, dict) else {}
     if fee_kind == "maker":
         raw_fee = entry.get("maker_fee", entry.get("maker"))
@@ -590,7 +591,7 @@ def _market_fee_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
     return fee
 
 
-def _resolve_backtest_fees(
+def _resolve_backtest_fee_fractions(
     *,
     coins: Sequence[str],
     mss: dict,
@@ -601,10 +602,10 @@ def _resolve_backtest_fees(
         fee = float(override_value)
         if not math.isfinite(fee):
             raise ValueError(
-                f"backtest.{fee_kind}_fee_override must be finite, got {override_value}"
+                f"backtest.{fee_kind}_fee_override_fraction must be finite, got {override_value}"
             )
         return fee, {coin: fee for coin in coins}
-    fees = {coin: _market_fee_for_backtest(mss, coin, fee_kind) for coin in coins}
+    fees = {coin: _market_fee_fraction_for_backtest(mss, coin, fee_kind) for coin in coins}
     if not fees:
         raise ValueError(f"cannot resolve {fee_kind} fee without backtest coins")
     return max(fees.values()), fees
@@ -950,9 +951,9 @@ def _validate_hlcvs_valid_windows_from_mss(
 @dataclass
 class BacktestExecutionSettings:
     market_orders_allowed: bool
-    market_order_near_touch_threshold: float
-    market_order_slippage_pct: float
-    limit_order_fill_buffer_pct: float
+    market_order_near_touch_fraction: float
+    market_order_slippage_fraction: float
+    limit_order_fill_buffer_fraction: float
     unstuck_memory_ema_span_minutes: float
     loss_gate_memory_ema_span_minutes: float
 
@@ -1227,7 +1228,7 @@ def build_backtest_payload(
         from config.entry_cooldown import uses_adverse_rms
         if any(
             p["entry_eligible"] and p["n_positions"] > 0
-            and p["total_wallet_exposure_limit"] > 0 and uses_adverse_rms(p)
+            and p["total_wallet_exposure_limit_ratio"] > 0 and uses_adverse_rms(p)
             for pair in bot_params_list for p in pair.values()
         ):
             # Python has explicitly calculated a zero non-RMS activation budget.
@@ -1345,11 +1346,11 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             float(equities_array[-1, 1]) if equities_array.size else float("nan")
         )
         logging.debug(
-            "Backtest liquidated early | final_equity_usd=%.6f | liquidation_threshold=%.6f",
+            "Backtest liquidated early | final_equity_usd=%.6f | equity_floor_fraction=%.6f",
             final_equity_usd,
             float(
                 get_optional_config_value(
-                    config, "backtest.equity_floor_ratio", 0.05
+                    config, "backtest.equity_floor_fraction", 0.05
                 )
                 or 0.0
             ),
@@ -2629,27 +2630,27 @@ def get_backtest_execution_settings(
 ) -> BacktestExecutionSettings:
     if not is_runtime_compiled:
         config = compile_runtime_config(config, runtime="backtest", record_step=False)
-    from config.validate import validate_limit_order_fill_buffer_pct
+    from config.validate import validate_limit_order_fill_buffer_fraction
 
-    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
+    limit_order_fill_buffer_fraction = validate_limit_order_fill_buffer_fraction(
         require_config_value(config, "backtest.limit_order_fill_buffer_fraction")
     )
-    market_order_slippage_pct = float(
+    market_order_slippage_fraction = float(
         get_optional_config_value(config, "backtest.market_order_slippage_fraction", 0.0005)
         or 0.0
     )
-    if market_order_slippage_pct < 0.0:
+    if market_order_slippage_fraction < 0.0:
         raise ValueError("backtest.market_order_slippage_fraction must be >= 0.0")
     market_orders_allowed_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_orders_allowed', False)
     market_orders_allowed = _coerce_config_bool(
         market_orders_allowed_raw,
         field_name='bot.portfolio.execution.market_orders_allowed',
     )
-    market_order_near_touch_threshold_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_order_near_touch_fraction', 0.001)
-    market_order_near_touch_threshold = float(
-        market_order_near_touch_threshold_raw or 0.0
+    market_order_near_touch_fraction_raw = get_optional_config_value(config, 'bot.portfolio.execution.market_order_near_touch_fraction', 0.001)
+    market_order_near_touch_fraction = float(
+        market_order_near_touch_fraction_raw or 0.0
     )
-    if market_order_near_touch_threshold < 0.0:
+    if market_order_near_touch_fraction < 0.0:
         raise ValueError("bot.portfolio.execution.market_order_near_touch_fraction must be >= 0.0")
     unstuck_memory_span = normalize_memory_ema_span_minutes(
         require_config_value(config, "bot.portfolio.unstuck.memory_ema_span_minutes"),
@@ -2661,9 +2662,9 @@ def get_backtest_execution_settings(
     )
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
-        market_order_near_touch_threshold=market_order_near_touch_threshold,
-        market_order_slippage_pct=market_order_slippage_pct,
-        limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
+        market_order_near_touch_fraction=market_order_near_touch_fraction,
+        market_order_slippage_fraction=market_order_slippage_fraction,
+        limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction,
         unstuck_memory_ema_span_minutes=unstuck_memory_span,
         loss_gate_memory_ema_span_minutes=loss_gate_memory_span,
     )
@@ -2681,15 +2682,15 @@ def log_backtest_execution_settings(
     )
     logging.info(
         "[backtest]   market_order_near_touch_fraction = %s (bot.portfolio.execution)",
-        execution_settings.market_order_near_touch_threshold,
+        execution_settings.market_order_near_touch_fraction,
     )
     logging.info(
         "[backtest]   market_order_slippage_fraction = %s (backtest)",
-        execution_settings.market_order_slippage_pct,
+        execution_settings.market_order_slippage_fraction,
     )
     logging.info(
         "[backtest]   limit_order_fill_buffer_fraction = %s (backtest)",
-        execution_settings.limit_order_fill_buffer_pct,
+        execution_settings.limit_order_fill_buffer_fraction,
     )
     logging.info(
         "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.portfolio.unstuck)",
@@ -2822,11 +2823,11 @@ def prep_backtest_args(
                 exchange=mss.get(coin, {}).get("exchange") or exchange,
                 market_symbol=mss.get(coin, {}).get("symbol"), members=approved_exact)
             if not approved:
-                coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
-            elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
-                coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
+                coin_specific_bot_params[pside]["wallet_exposure_limit_ratio"] = 0.0
+            elif "wallet_exposure_limit_ratio" not in coin_override_bot.get(pside, {}):
+                coin_specific_bot_params[pside]["wallet_exposure_limit_ratio"] = -1.0
             coin_specific_bot_params[pside]["entry_eligible"] = (
-                coin_specific_bot_params[pside]["wallet_exposure_limit"] != 0.0
+                coin_specific_bot_params[pside]["wallet_exposure_limit_ratio"] != 0.0
             )
         hsl_coin_policies[coin] = [
             {
@@ -2837,23 +2838,23 @@ def prep_backtest_args(
         ]
         bot_params_list.append(coin_specific_bot_params)
         strategy_params_list.append(coin_specific_strategy_params)
-    maker_fee_override = get_optional_config_value(
-        config, "backtest.maker_fee_override", None
+    maker_fee_override_fraction = get_optional_config_value(
+        config, "backtest.maker_fee_override_fraction", None
     )
-    taker_fee_override = get_optional_config_value(
-        config, "backtest.taker_fee_override", None
+    taker_fee_override_fraction = get_optional_config_value(
+        config, "backtest.taker_fee_override_fraction", None
     )
-    maker_fee, maker_fees_by_coin = _resolve_backtest_fees(
+    maker_fee_fraction, maker_fee_fractions_by_coin = _resolve_backtest_fee_fractions(
         coins=coins,
         mss=mss,
         fee_kind="maker",
-        override_value=maker_fee_override,
+        override_value=maker_fee_override_fraction,
     )
-    taker_fee, taker_fees_by_coin = _resolve_backtest_fees(
+    taker_fee_fraction, taker_fee_fractions_by_coin = _resolve_backtest_fee_fractions(
         coins=coins,
         mss=mss,
         fee_kind="taker",
-        override_value=taker_fee_override,
+        override_value=taker_fee_override_fraction,
     )
     effective_mss = _effective_backtest_market_settings(config, mss, exchange, coins)
     missing_c_mult_warnings: set[tuple[str, str, str]] = set()
@@ -2883,8 +2884,8 @@ def prep_backtest_args(
                     market_settings=effective_mss[coin],
                     warned=missing_c_mult_warnings,
                 ),
-                "maker_fee": float(maker_fees_by_coin[coin]),
-                "taker_fee": float(taker_fees_by_coin[coin]),
+                "maker_fee_fraction": float(maker_fee_fractions_by_coin[coin]),
+                "taker_fee_fraction": float(taker_fee_fractions_by_coin[coin]),
             }
             for coin in coins
         ]
@@ -2908,32 +2909,32 @@ def prep_backtest_args(
             raise ValueError("cached HSL policies differ from the effective config")
     if backtest_params is None:
         hard_stop_cfg_long = _resolve_backtest_hsl(config, hsl_coin_policies)
-        liquidation_threshold = float(
-            get_optional_config_value(config, "backtest.equity_floor_ratio", 0.05)
+        equity_floor_fraction = float(
+            get_optional_config_value(config, "backtest.equity_floor_fraction", 0.05)
             or 0.0
         )
-        if not (0.0 <= liquidation_threshold < 1.0):
+        if not (0.0 <= equity_floor_fraction < 1.0):
             raise ValueError(
-                "backtest.equity_floor_ratio must satisfy 0.0 <= x < 1.0"
+                "backtest.equity_floor_fraction must satisfy 0.0 <= x < 1.0"
             )
-        btc_collateral_cap = float(
-            require_config_value(config, "backtest.btc_collateral_cap")
+        btc_collateral_target_ratio = float(
+            require_config_value(config, "backtest.btc_collateral_target_ratio")
         )
-        btc_collateral_ltv_cap = require_config_value(
-            config, "backtest.btc_collateral_ltv_cap"
+        max_usd_debt_to_wallet_value_ratio = require_config_value(
+            config, "backtest.max_usd_debt_to_wallet_value_ratio"
         )
-        if btc_collateral_ltv_cap is not None:
-            btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
+        if max_usd_debt_to_wallet_value_ratio is not None:
+            max_usd_debt_to_wallet_value_ratio = float(max_usd_debt_to_wallet_value_ratio)
         backtest_params = {
             "starting_balance": require_config_value(
                 config, "backtest.starting_balance"
             ),
             "strategy_kind": strategy_kind,
-            "maker_fee": maker_fee,
-            "taker_fee": taker_fee,
+            "maker_fee_fraction": maker_fee_fraction,
+            "taker_fee_fraction": taker_fee_fraction,
             "coins": coins,
-            "btc_collateral_cap": btc_collateral_cap,
-            "btc_collateral_ltv_cap": btc_collateral_ltv_cap,
+            "btc_collateral_target_ratio": btc_collateral_target_ratio,
+            "max_usd_debt_to_wallet_value_ratio": max_usd_debt_to_wallet_value_ratio,
             "requested_start_timestamp_ms": 0,
             "first_valid_indices": [],
             "last_valid_indices": [],
@@ -2954,18 +2955,18 @@ def prep_backtest_args(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
             "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
-            "max_realized_loss_pct": float(
-                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_ratio")
+            "loss_gate_max_drawdown_fraction": float(
+                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_fraction")
             ),
             "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
             "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,
             "equity_hard_stop_loss": hard_stop_cfg_long,
-            "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
-            "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,
+            "market_order_slippage_fraction": execution_settings.market_order_slippage_fraction,
+            "limit_order_fill_buffer_fraction": execution_settings.limit_order_fill_buffer_fraction,
             "market_orders_allowed": execution_settings.market_orders_allowed,
-            "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
+            "market_order_near_touch_fraction": execution_settings.market_order_near_touch_fraction,
             "forager_score_hysteresis": hysteresis,
-            "liquidation_threshold": liquidation_threshold,
+            "equity_floor_fraction": equity_floor_fraction,
         }
     if backtest_params["equity_hard_stop_loss"].get("engine") == "hsl":
         # One authority for HSL policies: the explicit scope config above.
@@ -2991,7 +2992,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     for pside in ["long", "short"]:
         twel = float(
             flatten_shared_bot_side(config.get("bot", {}).get(pside, {})).get(
-                "total_wallet_exposure_limit", 0.0
+                "total_wallet_exposure_limit_ratio", 0.0
             )
             or 0.0
         )

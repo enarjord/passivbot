@@ -165,7 +165,7 @@ def test_optimizer_suite_rejects_partial_legacy_backtest_suite(tmp_path: Path):
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-@pytest.mark.parametrize("selector", ["long.unstuck.ema_span_0", "bot.long.strategy.entry.ema_span_0"])
+@pytest.mark.parametrize("selector", ["long.unstuck.ema_span_0_minutes", "bot.long.strategy.entry.ema_span_0_minutes"])
 def test_external_suite_rejects_authored_selector_shorthand_before_projection(tmp_path, wrapped, selector):
     section = {"scenarios": [{"label": "bad", "overrides": {selector: 17.5}}]}
     document = {"backtest": section} if wrapped else section

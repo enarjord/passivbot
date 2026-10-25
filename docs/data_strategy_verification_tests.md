@@ -345,15 +345,15 @@ config = {
             {
                 "label": "conservative",
                 "overrides": {
-                    "bot.long.risk.total_wallet_exposure_limit": 0.5,
-                    "bot.short.risk.total_wallet_exposure_limit": 0.5
+                    "bot.long.risk.total_wallet_exposure_limit_ratio": 0.5,
+                    "bot.short.risk.total_wallet_exposure_limit_ratio": 0.5
                 }
             }
         ]
     },
     "bot": {
-        "long": {"risk": {"total_wallet_exposure_limit": 1.0}},
-        "short": {"risk": {"total_wallet_exposure_limit": 1.0}}
+        "long": {"risk": {"total_wallet_exposure_limit_ratio": 1.0}},
+        "short": {"risk": {"total_wallet_exposure_limit_ratio": 1.0}}
     }
 }
 ```
@@ -367,11 +367,11 @@ config = {
         "scenarios": [
             {
                 "label": "long_only",
-                "overrides": {"bot.short.risk.total_wallet_exposure_limit": 0}
+                "overrides": {"bot.short.risk.total_wallet_exposure_limit_ratio": 0}
             },
             {
                 "label": "short_only",
-                "overrides": {"bot.long.risk.total_wallet_exposure_limit": 0}
+                "overrides": {"bot.long.risk.total_wallet_exposure_limit_ratio": 0}
             }
         ]
     }

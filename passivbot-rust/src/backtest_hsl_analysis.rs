@@ -33,9 +33,9 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
         let mut emas = [0.0_f64; 3];
         for scope in &self.hsl_scopes {
             if let Some(decision) = &scope.result.decision {
-                emas[0] = emas[0].max(decision.ema);
+                emas[0] = emas[0].max(decision.signal_ema_fraction);
                 if let Some(side) = scope.side {
-                    emas[side + 1] = emas[side + 1].max(decision.ema);
+                    emas[side + 1] = emas[side + 1].max(decision.signal_ema_fraction);
                 }
             }
         }

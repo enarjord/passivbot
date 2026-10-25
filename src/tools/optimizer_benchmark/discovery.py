@@ -18,8 +18,8 @@ from .account_metrics import METRIC_DEFINITION, SCORABLE_METRICS
 
 COLD_PHASES = frozenset({"preparation", "startup", "compilation", "gpu_tuning", "search",
                          "cpu_confirmation", "heldout", "export"})
-_ACTIVITY = frozenset({"fill_count", "close_fill_count", "active_days", "traded_notional",
-                       "exposed_fraction"})
+_ACTIVITY = frozenset({"fill_count", "close_fill_count", "active_day_count", "traded_notional",
+                       "exposed_time_fraction"})
 _OPERATIONAL = {
     ("live",): frozenset({"base_dir", "base_config_path", "session_name"}),
     ("live", "account"): frozenset({"user"}),
@@ -139,7 +139,7 @@ def validate_protocol(protocol):
                 "timer_origin", "timing_phases", "target_measure"}
     if required - protocol.keys():
         raise ValueError(f"protocol missing {', '.join(sorted(required - protocol.keys()))}")
-    if protocol["version"] != 1 or type(protocol["version"]) is not int:
+    if protocol["version"] != 2 or type(protocol["version"]) is not int:
         raise ValueError("unsupported discovery protocol version")
     for name in ("scenarios", "heldout_scenarios", "runtime_identities"):
         mapping = protocol[name]

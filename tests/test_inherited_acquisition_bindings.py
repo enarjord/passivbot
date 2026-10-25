@@ -16,9 +16,9 @@ def source(kind="trailing_martingale"):
     return {"config_version": "v9.0.0", "bot": {
         "portfolio": {"strategy_kind": kind},
         "long": {"enabled": True}, "short": {"enabled": True}, "global": { "risk": {
-            "max_positions": 0, "total_wallet_exposure_limit": 0.0}}},
+            "max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0}}},
         "optimize": {"bounds": {"global": {"risk": {
-            "max_positions": [0, 3], "total_wallet_exposure_limit": [0.0, 2.0]}}}}}
+            "max_positions": [0, 3], "total_wallet_exposure_limit_ratio": [0.0, 2.0]}}}}}
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
@@ -28,17 +28,17 @@ def test_acquisition_gate_genes_fan_out_without_changing_pins_or_ranges(kind, sh
     raw = source(kind)
     if short_pin:
         raw["bot"]["short"] = {"enabled": True, "risk": {
-            "max_positions": 0, "total_wallet_exposure_limit": 0.0}}
+            "max_positions": 0, "total_wallet_exposure_limit_ratio": 0.0}}
     if fixed:
         raw["optimize"]["fixed_runtime_overrides"] = {
             "bot.global.risk.max_positions": 5,
-            "bot.global.risk.total_wallet_exposure_limit": 4.0}
+            "bot.global.risk.total_wallet_exposure_limit_ratio": 4.0}
     base = prepare_config(raw, verbose=False)
     original = deepcopy(base)
     identity = get_bound_plan(base).identity()
     data = build_optimizer_data_config(base)
     expected = {"max_positions": 5 if fixed else 3,
-                "total_wallet_exposure_limit": 4.0 if fixed else 2.0}
+                "total_wallet_exposure_limit_ratio": 4.0 if fixed else 2.0}
     for field, value in expected.items():
         assert data["bot"]["long"]["risk"][field] == value
         assert data["bot"]["short"]["risk"][field] == (0 if short_pin else value)
@@ -83,11 +83,11 @@ def test_plain_source_replacing_equal_prepared_membership_is_an_explicit_pin(fie
 
 def test_authored_facade_preserves_prior_canonical_edits_and_rejects_invalid_aliases():
     config = prepare_config(source(), verbose=False)
-    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.25
-    apply_bot_config_patch(config, {"bot.global.risk.total_wallet_exposure_limit": 2.0})
-    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.25
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] = 1.25
+    apply_bot_config_patch(config, {"bot.global.risk.total_wallet_exposure_limit_ratio": 2.0})
+    assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.25
     invalid = deepcopy(config)
-    invalid["bot"]["long"]["wallet_exposure_limit"] = 0.5
+    invalid["bot"]["long"]["wallet_exposure_limit_ratio"] = 0.5
     with pytest.raises(ValueError, match="unknown"):
         apply_bot_config_patch(invalid, {"bot.long.enabled": False})
     invalid = deepcopy(config)
@@ -138,7 +138,7 @@ def test_vector_reconciliation_cannot_erase_an_unprepared_source_edit(tmp_path, 
     raw["bot"]["global"]["universe"] = {"approved_coins": str(original)}
     config = prepare_config(raw, verbose=False)
     if anchored:
-        install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit"],
+        install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit_ratio"],
                                       "unused", starting_configs_override=[bot_policy_source_view(config)])
     shape = build_optimization_shape(config)
     config["bot"]["global"]["universe"]["approved_coins"] = str(replacement)

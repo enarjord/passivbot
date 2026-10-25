@@ -12,7 +12,7 @@ from tools.live_config_preflight import build_live_config_diff_report, build_liv
 
 def _policy(enabled=False):
     return {"enabled": enabled, "scale_budget_with_excess_allowance": False,
-            "drawdown_ratio_threshold": 0.05, "drawdown_ratio_ema_span_minutes": 120.0,
+            "drawdown_threshold_fraction": 0.05, "drawdown_fraction_ema_span_minutes": 120.0,
             "memory_ema_span_minutes": 43200.0, "panic_close_order_type": "limit",
             "cooldown_after_red_minutes": 60.0}
 
@@ -41,7 +41,7 @@ def _inspect(tmp_path, baseline, target, inspection):
 @pytest.mark.parametrize("inspection", ["preflight", "diff"])
 @pytest.mark.parametrize("scope", ["global", "long", "short"])
 @pytest.mark.parametrize("field,value,message", [
-    ("drawdown_ratio_threshold", -0.1, "outside its finite supported range"),
+    ("drawdown_threshold_fraction", -0.1, "outside its finite supported range"),
     ("scale_budget_with_excess_allowance", True, "requires coin HSL mode"),
 ])
 def test_portfolio_scope_still_validates_resolved_directional_hsl(tmp_path, inspection, scope, field, value, message):

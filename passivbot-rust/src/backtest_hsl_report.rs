@@ -18,9 +18,9 @@ pub struct Summary {
     pub red_minutes: f64,
     pub observed_minutes: f64,
     pub panic_close_fills: u32,
-    pub panic_close_loss: f64,
-    pub worst_raw: f64,
-    pub worst_ema: f64,
+    pub panic_fill_loss_sum_usd: f64,
+    pub signal_raw_max_fraction: f64,
+    pub signal_ema_max_fraction: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,8 +31,8 @@ pub struct Sample {
     pub coin: Option<usize>,
     pub phase: &'static str,
     pub action: Option<Action>,
-    pub raw: Option<f64>,
-    pub ema: Option<f64>,
+    pub signal_raw_fraction: Option<f64>,
+    pub signal_ema_fraction: Option<f64>,
     pub red_at: Option<i64>,
     pub flat_at: Option<i64>,
     pub reasons: Vec<String>,
@@ -172,14 +172,22 @@ impl Report {
                 &mut scope,
             );
             if let Some(d) = decision {
-                self.stats.trigger_scores.push(d.raw.min(d.ema));
+                self.stats
+                    .trigger_scores
+                    .push(d.signal_raw_fraction.min(d.signal_ema_fraction));
             }
         } else if action == Action::Normal && scope.red {
             self.restart(key, now, None, "current_permission", &mut scope);
         }
         if let Some(d) = decision {
-            self.summary.worst_raw = self.summary.worst_raw.max(d.raw);
-            self.summary.worst_ema = self.summary.worst_ema.max(d.ema);
+            self.summary.signal_raw_max_fraction = self
+                .summary
+                .signal_raw_max_fraction
+                .max(d.signal_raw_fraction);
+            self.summary.signal_ema_max_fraction = self
+                .summary
+                .signal_ema_max_fraction
+                .max(d.signal_ema_fraction);
         }
         self.sequence += 1;
         if self.detailed {
@@ -190,8 +198,8 @@ impl Report {
                 coin: key.1,
                 phase,
                 action: decision.map(|d| d.action),
-                raw: decision.map(|d| d.raw),
-                ema: decision.map(|d| d.ema),
+                signal_raw_fraction: decision.map(|d| d.signal_raw_fraction),
+                signal_ema_fraction: decision.map(|d| d.signal_ema_fraction),
                 red_at: decision.and_then(|d| d.red_at),
                 flat_at: decision.and_then(|d| d.flat_at),
                 reasons: output.reasons.iter().cloned().collect(),
@@ -276,16 +284,18 @@ impl Report {
     }
 
     fn event(&mut self, key: Key, now: i64, event: &LifecycleEvent, scope: &mut Scope) {
-        if let Some(raw) = event.raw {
-            self.summary.worst_raw = self.summary.worst_raw.max(raw);
+        if let Some(raw) = event.signal_raw_fraction {
+            self.summary.signal_raw_max_fraction = self.summary.signal_raw_max_fraction.max(raw);
         }
-        if let Some(ema) = event.ema {
-            self.summary.worst_ema = self.summary.worst_ema.max(ema);
+        if let Some(ema) = event.signal_ema_fraction {
+            self.summary.signal_ema_max_fraction = self.summary.signal_ema_max_fraction.max(ema);
         }
         match event.kind {
             "red" => {
                 self.trigger(key, now, Some(event.timestamp), event.reason, scope);
-                if let (Some(raw), Some(ema)) = (event.raw, event.ema) {
+                if let (Some(raw), Some(ema)) =
+                    (event.signal_raw_fraction, event.signal_ema_fraction)
+                {
                     self.stats.trigger_scores.push(raw.min(ema));
                 }
             }
@@ -328,7 +338,7 @@ impl Report {
         if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
             let loss = (-net_pnl).max(0.0);
             self.summary.panic_close_fills += 1;
-            self.summary.panic_close_loss += loss;
+            self.summary.panic_fill_loss_sum_usd += loss;
             self.stats.panic_loss_max = self.stats.panic_loss_max.max(loss);
             scope.panic_loss += loss;
             scope
@@ -416,12 +426,12 @@ impl Report {
             red_duration_mean_minutes: stats.durations.mean(),
             red_duration_max_minutes: stats.durations.max,
             trigger_signal_mean_fraction: stats.trigger_scores.mean(),
-            panic_fill_loss_sum_usd: s.panic_close_loss,
+            panic_fill_loss_sum_usd: s.panic_fill_loss_sum_usd,
             panic_fill_loss_max_usd: stats.panic_loss_max,
             panic_episode_loss_min_fraction: stats.panic_loss_ratios.min,
             panic_episode_loss_mean_fraction: stats.panic_loss_ratios.mean(),
             panic_episode_loss_max_fraction: stats.panic_loss_ratios.max,
-            panic_loss_starting_balance_fraction: s.panic_close_loss
+            panic_loss_starting_balance_fraction: s.panic_fill_loss_sum_usd
                 / starting_balance.max(f64::EPSILON),
             flatten_time_mean_minutes: stats.flatten_minutes.mean(),
             restart_retrigger_fraction: if s.restarts > 0 {
@@ -444,9 +454,9 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
         if ![
             metrics.red_minutes,
             metrics.observed_minutes,
-            metrics.panic_close_loss,
-            metrics.worst_raw,
-            metrics.worst_ema,
+            metrics.panic_fill_loss_sum_usd,
+            metrics.signal_raw_max_fraction,
+            metrics.signal_ema_max_fraction,
         ]
         .iter()
         .all(|x| x.is_finite())
@@ -522,8 +532,8 @@ mod tests {
                 red_at: (action != Action::Normal).then_some(60000),
                 flat_at: (action == Action::Halted).then_some(now),
                 reason: "fixture",
-                raw: 0.2,
-                ema: 0.1,
+                signal_raw_fraction: 0.2,
+                signal_ema_fraction: 0.1,
                 numeric_range_approximation: false,
             }),
             events,
@@ -542,8 +552,8 @@ mod tests {
                 red_at: now,
                 flat_at: (kind != "red").then_some(now),
                 reason: "fixture",
-                raw: Some(0.2),
-                ema: Some(0.1),
+                signal_raw_fraction: Some(0.2),
+                signal_ema_fraction: Some(0.1),
             })
             .collect()
     }
@@ -621,8 +631,8 @@ mod tests {
             red_at: 120_000,
             flat_at: None,
             reason: "drawdown",
-            raw: Some(0.2),
-            ema: Some(0.1),
+            signal_raw_fraction: Some(0.2),
+            signal_ema_fraction: Some(0.1),
         };
         // Reconstruction can reveal a new hypothetical breach at the previous
         // watermark. Today's GREEN permission never observed that stop.
@@ -685,7 +695,7 @@ mod tests {
             (1, 1)
         );
         assert_eq!(report.summary.panic_close_fills, 2);
-        assert_eq!(report.summary.panic_close_loss, 25.0);
+        assert_eq!(report.summary.panic_fill_loss_sum_usd, 25.0);
         assert_eq!(report.summary.red_minutes, 3.0);
         assert_eq!(report.summary.observed_minutes, 4.0);
         let rendered = serde_json::to_value(&report.summary).unwrap();
@@ -758,8 +768,8 @@ mod tests {
                         red_at: 120_000,
                         flat_at: (*kind == "flat").then_some(now),
                         reason: "fixture",
-                        raw: Some(0.2),
-                        ema: Some(0.1),
+                        signal_raw_fraction: Some(0.2),
+                        signal_ema_fraction: Some(0.1),
                     })
                     .collect();
                 report.observe(key, now, "fixture", &output(now, action, events));
@@ -827,8 +837,8 @@ mod tests {
             red_at,
             flat_at: None,
             reason: "fixture",
-            raw: Some(0.2),
-            ema: Some(0.1),
+            signal_raw_fraction: Some(0.2),
+            signal_ema_fraction: Some(0.1),
         };
         report.observe(key, 0, "bar_close", &output(0, Action::Normal, vec![]));
         report.observe(

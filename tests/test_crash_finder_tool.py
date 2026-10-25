@@ -5,6 +5,7 @@ import logging
 from datetime import UTC, datetime
 
 import numpy as np
+import pytest
 
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_store import OhlcvStore, month_start_ts
@@ -29,7 +30,8 @@ def test_crash_finder_defaults_to_hourly_discovery_from_minute_candles():
     assert args.source_timeframe == "1m"
     assert args.timeframe == "1h"
     assert args.direction == "down"
-    assert args.pump_threshold == 0.10
+    assert args.crash_log_return_threshold == -0.10
+    assert args.pump_log_return_threshold == 0.10
     assert args.exchange == ["binance", "bybit"]
     assert crash_finder._duration_timeframe_to_ms("4h") == 4 * HOUR_MS
     assert crash_finder._duration_timeframe_to_ms("12h") == 12 * HOUR_MS
@@ -57,7 +59,7 @@ def test_crash_finder_identifies_clusters_and_writes_outputs(tmp_path, capsys):
                 str(root),
                 "--exchange",
                 "binance",
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.20",
                 "--min-valid-minutes",
                 "2",
@@ -75,6 +77,17 @@ def test_crash_finder_identifies_clusters_and_writes_outputs(tmp_path, capsys):
     rendered_report = capsys.readouterr().out
     payload = json.loads(rendered_report)
     assert rendered_report == json.dumps(payload, indent=2, sort_keys=False) + "\n"
+    assert payload["crash_log_return_threshold"] == -0.20
+    assert payload["pump_log_return_threshold"] == 0.10
+    assert "threshold" not in payload
+    assert "pump_threshold" not in payload
+    event = payload["events"][0]
+    assert event["low_over_high_log_ratio"] == pytest.approx(
+        np.log(event["bucket_low"] / event["bucket_high"])
+    )
+    assert "range_log" not in event
+    assert "severity_log_return" in payload["clusters"][0]
+    assert "severity" not in payload["clusters"][0]
     assert payload["symbols_scanned"] == 5
     assert payload["events_selected"] >= 4
     assert payload["clusters_selected"] == 2
@@ -123,7 +136,7 @@ def test_ordered_metric_does_not_treat_low_before_high_as_crash(tmp_path):
             [
                 "--root",
                 str(root),
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.50",
                 "--min-valid-minutes",
                 "2",
@@ -162,9 +175,9 @@ def test_ordered_metric_discovers_low_to_later_high_as_pump(tmp_path):
                 str(root),
                 "--direction",
                 "both",
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.50",
-                "--pump-threshold",
+                "--pump-log-return-threshold",
                 "0.50",
                 "--min-valid-minutes",
                 "2",
@@ -178,7 +191,7 @@ def test_ordered_metric_discovers_low_to_later_high_as_pump(tmp_path):
 
     assert payload["events_selected"] == 1
     assert payload["events"][0]["direction"] == "up"
-    assert payload["events"][0]["ordered_low_to_later_high_log"] > 1.0
+    assert payload["events"][0]["ordered_low_to_later_high_log_return"] > 1.0
     assert payload["clusters"][0]["label"].startswith("pump_")
 
 
@@ -191,7 +204,7 @@ def test_adverse_force_mode_is_directional():
         "end_ts": timestamp,
         "start_iso": crash_finder._ts_to_iso(timestamp),
         "end_iso": crash_finder._ts_to_iso(timestamp),
-        "severity": -1.0,
+        "severity_log_return": -1.0,
         "event_count": 1,
         "affected_coin_count": 1,
         "affected_coins": ["TEST"],
@@ -233,7 +246,7 @@ def test_adverse_force_mode_isolates_market_wide_side():
         "end_ts": timestamp,
         "start_iso": crash_finder._ts_to_iso(timestamp),
         "end_iso": crash_finder._ts_to_iso(timestamp),
-        "severity": -1.0,
+        "severity_log_return": -1.0,
         "event_count": 3,
         "affected_coin_count": 3,
         "affected_coins": ["BTC", "ETH", "SOL"],
@@ -259,10 +272,10 @@ def test_adverse_force_mode_isolates_market_wide_side():
 
     scenarios = {item["label"]: item for item in payload["backtest"]["scenarios"]}
     assert scenarios["crash_market"]["overrides"] == {
-        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+        "bot.short.risk.total_wallet_exposure_limit_ratio": 0.0,
     }
     assert scenarios["pump_market"]["overrides"] == {
-        "bot.long.risk.total_wallet_exposure_limit": 0.0,
+        "bot.long.risk.total_wallet_exposure_limit_ratio": 0.0,
     }
 
 
@@ -291,7 +304,7 @@ def test_larger_scan_timeframe_combines_source_minutes_across_hour_boundary(tmp_
                 str(root),
                 "--timeframe",
                 "1h",
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.50",
                 "--min-valid-minutes",
                 "1",
@@ -305,7 +318,7 @@ def test_larger_scan_timeframe_combines_source_minutes_across_hour_boundary(tmp_
                 str(root),
                 "--timeframe",
                 "4h",
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.50",
                 "--min-valid-minutes",
                 "1",
@@ -338,7 +351,7 @@ def test_full_scan_all_scanned_coin_mode_keeps_non_crashing_scanned_coins(tmp_pa
             [
                 "--root",
                 str(root),
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.20",
                 "--min-valid-minutes",
                 "2",
@@ -371,7 +384,7 @@ def test_crash_finder_skips_symbol_with_missing_checksum(tmp_path):
             [
                 "--root",
                 str(root),
-                "--threshold",
+                "--crash-log-return-threshold",
                 "-0.20",
                 "--min-valid-minutes",
                 "2",
@@ -403,7 +416,7 @@ def test_suite_builder_merged_market_wide_scenario_suppresses_forced_normal():
             end_ts=market_ts,
             start_iso="2025-10-10T21:00:00Z",
             end_iso="2025-10-10T21:00:00Z",
-            severity=-1.0,
+            severity_log_return=-1.0,
             event_count=4,
             affected_coin_count=3,
             affected_coins=["BTC", "M", "OM"],
@@ -418,7 +431,7 @@ def test_suite_builder_merged_market_wide_scenario_suppresses_forced_normal():
             end_ts=coin_ts,
             start_iso="2025-09-29T17:00:00Z",
             end_iso="2025-09-29T17:00:00Z",
-            severity=-0.5,
+            severity_log_return=-0.5,
             event_count=2,
             affected_coin_count=2,
             affected_coins=["DEXE", "M"],
@@ -460,7 +473,7 @@ def test_suite_builder_can_filter_market_wide_clusters():
             end_ts=base,
             start_iso="2025-04-01T00:00:00Z",
             end_iso="2025-04-01T00:00:00Z",
-            severity=-0.4,
+            severity_log_return=-0.4,
             event_count=4,
             affected_coin_count=4,
             affected_coins=["BTC", "ETH", "SOL", "XRP"],
@@ -475,7 +488,7 @@ def test_suite_builder_can_filter_market_wide_clusters():
             end_ts=base + HOUR_MS,
             start_iso="2025-04-01T01:00:00Z",
             end_iso="2025-04-01T01:00:00Z",
-            severity=-0.9,
+            severity_log_return=-0.9,
             event_count=1,
             affected_coin_count=1,
             affected_coins=["OM"],
@@ -511,7 +524,7 @@ def test_suite_builder_can_filter_strict_single_coin_clusters():
             end_ts=base,
             start_iso="2025-04-01T00:00:00Z",
             end_iso="2025-04-01T00:00:00Z",
-            severity=-0.9,
+            severity_log_return=-0.9,
             event_count=1,
             affected_coin_count=1,
             affected_coins=["OM"],
@@ -526,7 +539,7 @@ def test_suite_builder_can_filter_strict_single_coin_clusters():
             end_ts=base + HOUR_MS,
             start_iso="2025-04-01T01:00:00Z",
             end_iso="2025-04-01T01:00:00Z",
-            severity=-0.8,
+            severity_log_return=-0.8,
             event_count=2,
             affected_coin_count=2,
             affected_coins=["DEXE", "M"],
@@ -566,7 +579,7 @@ def test_suite_builder_splits_merged_idiosyncratic_force_targets_into_pairs():
                 end_ts=ts,
                 start_iso="2025-04-13T18:00:00Z",
                 end_iso="2025-04-13T18:00:00Z",
-                severity=-1.0 + idx * 0.1,
+                severity_log_return=-1.0 + idx * 0.1,
                 event_count=1,
                 affected_coin_count=1,
                 affected_coins=[coin],
@@ -609,7 +622,7 @@ def test_suite_builder_filters_coins_without_data_in_scenario_window():
         end_ts=event_ts,
         start_iso="2026-06-25T00:00:00Z",
         end_iso="2026-06-25T00:00:00Z",
-        severity=-1.0,
+        severity_log_return=-1.0,
         event_count=2,
         affected_coin_count=2,
         affected_coins=["LEGACY", "M"],
@@ -658,7 +671,7 @@ def test_suite_builder_skips_targeted_scenario_when_all_coins_are_filtered(caplo
         end_ts=event_ts,
         start_iso="2026-06-25T00:00:00Z",
         end_iso="2026-06-25T00:00:00Z",
-        severity=-1.0,
+        severity_log_return=-1.0,
         event_count=1,
         affected_coin_count=1,
         affected_coins=["LEGACY"],
@@ -701,7 +714,7 @@ def test_suite_builder_none_coin_mode_keeps_inherit_base_scenario():
         end_ts=event_ts,
         start_iso="2026-06-25T00:00:00Z",
         end_iso="2026-06-25T00:00:00Z",
-        severity=-1.0,
+        severity_log_return=-1.0,
         event_count=1,
         affected_coin_count=1,
         affected_coins=["M"],
@@ -738,7 +751,7 @@ def test_suite_builder_includes_coin_with_data_exactly_on_end_date():
         end_ts=event_ts,
         start_iso="2026-06-25T00:00:00Z",
         end_iso="2026-06-25T00:00:00Z",
-        severity=-1.0,
+        severity_log_return=-1.0,
         event_count=1,
         affected_coin_count=1,
         affected_coins=["END"],
@@ -776,7 +789,7 @@ def test_clusters_csv_fast_path_copies_source_scan_artifacts(tmp_path):
     clusters_csv.write_text(
         "\n".join(
             [
-                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity,event_count,affected_coin_count,affected_coins,exchanges,market_wide",
+                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity_log_return,event_count,affected_coin_count,affected_coins,exchanges,market_wide",
                 "crash_2025_04_13_18_om,1744567200000,2025-04-13T18:00:00Z,1744567200000,1744567200000,2025-04-13T18:00:00Z,2025-04-13T18:00:00Z,-1.0,1,1,OM,binance,False",
             ]
         )
@@ -836,7 +849,7 @@ def test_clusters_csv_fast_path_does_not_create_empty_scan_artifacts(tmp_path):
     clusters_csv.write_text(
         "\n".join(
             [
-                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity,event_count,affected_coin_count,affected_coins,exchanges,market_wide",
+                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity_log_return,event_count,affected_coin_count,affected_coins,exchanges,market_wide",
                 "crash_2025_04_13_18_om,1744567200000,2025-04-13T18:00:00Z,1744567200000,1744567200000,2025-04-13T18:00:00Z,2025-04-13T18:00:00Z,-1.0,1,1,OM,binance,False",
             ]
         )
@@ -862,7 +875,7 @@ def test_clusters_csv_preserves_directions_unless_explicitly_filtered(tmp_path):
     clusters_csv.write_text(
         "\n".join(
             [
-                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity,event_count,affected_coin_count,affected_coins,exchanges,market_wide,direction",
+                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity_log_return,event_count,affected_coin_count,affected_coins,exchanges,market_wide,direction",
                 "crash_test,1744567200000,2025-04-13T18:00:00Z,1744567200000,1744567200000,2025-04-13T18:00:00Z,2025-04-13T18:00:00Z,-1.0,1,1,OM,binance,False,down",
                 "pump_test,1744653600000,2025-04-14T18:00:00Z,1744653600000,1744653600000,2025-04-14T18:00:00Z,2025-04-14T18:00:00Z,-1.0,1,1,ALGO,bybit,False,up",
             ]
@@ -892,3 +905,21 @@ def test_logging_configuration_honors_requested_level_with_existing_handlers():
 
 
 HOUR_MS = 60 * 60_000
+
+
+@pytest.mark.parametrize("retired_flag", ["--threshold", "--pump-threshold", "--crash-log"])
+def test_crash_finder_rejects_retired_or_abbreviated_threshold_flags(retired_flag):
+    with pytest.raises(SystemExit) as exc:
+        crash_finder.build_parser().parse_args([f"{retired_flag}=-0.1"])
+    assert exc.value.code == 2
+
+
+def test_ordered_log_return_helpers_keep_natural_log_values():
+    high = np.array([100.0, 125.0])
+    low = np.array([80.0, 90.0])
+    assert crash_finder._worst_ordered_high_to_later_low_log_return(high, low) == pytest.approx(
+        np.log(90.0 / 125.0)
+    )
+    assert crash_finder._worst_ordered_low_to_later_high_log_return(high, low) == pytest.approx(
+        np.log(125.0 / 80.0)
+    )

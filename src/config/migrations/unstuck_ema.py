@@ -11,30 +11,38 @@ from ..strategy_spec import (
     get_strategy_optimize_bounds,
     normalize_strategy_kind,
 )
-from ..shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
-from ..strategy_paths import lower_runtime_strategy_side
+from .released_v8_unstuck import RELEASED_V8_UNSTUCK_FLAT_PATHS
+from .final_v9 import canonicalize_released_shared_bot_side as canonicalize_shared_bot_side
 from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 
 
 def _price_spans(strategy, kind):
-    # Referenced files can already carry final public paths. Read their
-    # unchanged native horizons without modifying either authored layer.
-    strategy = lower_runtime_strategy_side(kind, strategy)
-    return strategy.get("entry", {}) if kind == "trailing_martingale" else strategy
+    # This released-only migration also reads referenced documents already
+    # converted to final public paths. Keep its old source vocabulary separate
+    # from the current native strategy schema and do not mutate either layer.
+    spans = deepcopy(strategy.get("entry", {}) if kind == "trailing_martingale" else strategy)
+    for old, public in (("ema_span_0", "ema_span_0_minutes"),
+                        ("ema_span_1", "ema_span_1_minutes")):
+        if public in spans:
+            if old in spans:
+                raise ValueError(f"conflicting strategy path {old}")
+            spans[old] = spans.pop(public)
+    return spans
 
 
 def _has_unstuck_span(mapping, legacy_key):
     # Flat released aliases may already have been grouped through the public
     # field map. They remain explicit inputs, never missing values to infer.
-    public_key = FLAT_BOT_KEY_TO_GROUP_PATH[f"unstuck_{legacy_key}"][-1]
+    public_key = RELEASED_V8_UNSTUCK_FLAT_PATHS[f"unstuck_{legacy_key}"][-1]
     return legacy_key in mapping or public_key in mapping
 
 
 def _migrate_inactive_zero_span(value, bot, default, path):
     unstuck = bot.get("unstuck", {})
+    risk = bot.get("risk", {})
     if value == 0 and (
-        bot.get("risk", {}).get("total_wallet_exposure_limit") == 0
-        or bot.get("wallet_exposure_limit") == 0
+        risk.get("total_wallet_exposure_limit_ratio", risk.get("total_wallet_exposure_limit")) == 0
+        or bot.get("wallet_exposure_limit_ratio", bot.get("wallet_exposure_limit")) == 0
         or unstuck.get("enabled") is False
         or unstuck.get("ema_gating_enabled") is False
     ):
@@ -269,9 +277,12 @@ def migrate_unstuck_ema_spans(
                     + ("entry." if kind == "trailing_martingale" else "")
                     + key,
                     f"bot.{side}.{key}",
+                    f"bot.{side}.strategy.{kind}."
+                    + ("entry." if kind == "trailing_martingale" else "")
+                    + RELEASED_V8_UNSTUCK_FLAT_PATHS[f"unstuck_{key}"][-1],
                 ):
                     new_path = f"bot.{side}.unstuck.{key}"
-                    public_key = FLAT_BOT_KEY_TO_GROUP_PATH[f"unstuck_{key}"][-1]
+                    public_key = RELEASED_V8_UNSTUCK_FLAT_PATHS[f"unstuck_{key}"][-1]
                     public_path = f"bot.{side}.unstuck.{public_key}"
                     if old_path in leaves and new_path not in leaves and public_path not in leaves:
                         overrides[new_path] = _migrate_inactive_zero_span(

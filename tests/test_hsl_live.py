@@ -54,15 +54,15 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            max_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
     blocks = [cfg["bot"]["portfolio"]["hsl"]] if mode == "portfolio" else [cfg["bot"][side]["hsl"]]
     for block in blocks:
         block.update(
             enabled=True,
-            drawdown_ratio_threshold=0.06,
+            drawdown_threshold_fraction=0.06,
             # Execution/admission fixtures isolate the connector from EMA warmup.
-            drawdown_ratio_ema_span_minutes=1.0,
+            drawdown_fraction_ema_span_minutes=1.0,
             panic_close_order_type="market",
         )
     set_risk_memory_spans(cfg, 288.0)
@@ -409,7 +409,7 @@ def test_hsl_wave_is_not_execution_authority_after_inputs_change(monkeypatch, ch
     elif change == "stale_quote":
         instance.quotes[SYMBOL] = replace(quotes()[SYMBOL], fetched_ms=NOW - 10_001)
     elif change == "policy":
-        bot.config["bot"]["long"]["hsl"]["drawdown_ratio_threshold"] = 0.99
+        bot.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.99
     elif change == "disabled":
         bot.config["bot"]["long"]["hsl"]["enabled"] = False
     elif change == "generation":
@@ -438,11 +438,11 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 1.0
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
     cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
     set_risk_memory_spans(cfg, 288.0)
     policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
-    policy.update(enabled=True, drawdown_ratio_ema_span_minutes=1.0, drawdown_ratio_threshold=0.5)
+    policy.update(enabled=True, drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.5)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
@@ -544,8 +544,8 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
     cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
     cfg["bot"]["long"]["hsl"].update(
         enabled=True,
-        drawdown_ratio_ema_span_minutes=1.0,
-        drawdown_ratio_threshold=0.06,
+        drawdown_fraction_ema_span_minutes=1.0,
+        drawdown_threshold_fraction=0.06,
         panic_close_order_type="limit",
     )
     set_risk_memory_spans(cfg, 288.0)
@@ -796,15 +796,15 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
     )
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_ratio"] = 1.0
+    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
     for side in ("long", "short"):
         cfg["bot"][side]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
-        drawdown_ratio_threshold=0.06,
-        drawdown_ratio_ema_span_minutes=1.0,
+        drawdown_threshold_fraction=0.06,
+        drawdown_fraction_ema_span_minutes=1.0,
         panic_close_order_type="market",
         cooldown_after_red_minutes=cooldown_minutes,
     )
@@ -993,8 +993,8 @@ async def test_hsl_startup_services_new_red_during_stalled_warmup(
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
-        drawdown_ratio_threshold=0.06,
-        drawdown_ratio_ema_span_minutes=1.0,
+        drawdown_threshold_fraction=0.06,
+        drawdown_fraction_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
     config_path = tmp_path / "config.json"
@@ -1904,7 +1904,7 @@ def test_ordinary_admission_rejects_changed_risk_inputs(
         if mode == "portfolio"
         else bot.config["bot"][side]["hsl"]
     )
-    block["drawdown_ratio_threshold"] = 0.2
+    block["drawdown_threshold_fraction"] = 0.2
     bot.get_exchange_time = lambda: NOW
     bot.approved_coins_minus_ignored_coins = {
         s: {SYMBOL} if s == side else set() for s in ("long", "short")
@@ -2179,8 +2179,8 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
     block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
     block.update(
         enabled=True,
-        drawdown_ratio_threshold=0.06,
-        drawdown_ratio_ema_span_minutes=1.0,
+        drawdown_threshold_fraction=0.06,
+        drawdown_fraction_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
     config_path = tmp_path / "config.json"
@@ -2504,7 +2504,7 @@ async def test_flat_unselected_order_only_panic_is_retired_by_protective_executo
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
         cfg["bot"]["long"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
-            max_positions=0, total_wallet_exposure_limit=0.0
+            max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
     cfg["bot"][side]["hsl"].update(enabled=True)
     config_path = tmp_path / "config.json"
