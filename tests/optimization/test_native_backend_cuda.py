@@ -111,7 +111,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
     quantity_key = "base_qty_fraction" if strategy_kind == "ema_anchor" else "entry_initial_qty_fraction"
     for side in ("long", "short"):
         for key, field in (("n_positions", "max_positions"),
-                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit")):
+                           ("total_wallet_exposure_limit", "total_wallet_exposure_limit_ratio")):
             value = config["bot"][side]["risk"][field]
             set_bound(f"{side}_{key}", [value, value])
         set_bound(f"{side}_{quantity_key}", [0.01, 0.05])
