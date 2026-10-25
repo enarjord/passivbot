@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import gzip
+from io import BytesIO
 from multiprocessing import shared_memory
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ import numpy as np
 
 
 FILE_ARRAY_CHUNK_BYTES = 8 * 2**20
+_NPY_HEADER_MAX_BYTES = 10_000
 
 
 def _file_identity(stat):
@@ -34,7 +36,29 @@ def numpy_artifact_header(path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rb") as handle:
         version = np.lib.format.read_magic(handle)
-        shape, fortran_order, dtype = np.lib.format._read_array_header(handle, version)
+        if version not in {(1, 0), (2, 0), (3, 0)}:
+            raise ValueError(f"unsupported NPY version: {version!r}")
+        length_size = 2 if version == (1, 0) else 4
+        length_bytes = handle.read(length_size)
+        if len(length_bytes) != length_size:
+            raise ValueError("incomplete NPY header length")
+        header_size = int.from_bytes(length_bytes, "little")
+        if header_size > _NPY_HEADER_MAX_BYTES:
+            raise ValueError(f"NPY header exceeds {_NPY_HEADER_MAX_BYTES} bytes")
+        header = handle.read(header_size)
+        if len(header) != header_size:
+            raise ValueError("incomplete NPY header")
+        if version == (3, 0):
+            # V3 differs from V2 only in its UTF-8 header encoding. Escape
+            # non-ASCII characters inside its Python literal for the public
+            # V2 reader, retaining Unicode field names without private APIs.
+            header = header.decode("utf-8").encode("ascii", "backslashreplace")
+            length_bytes = len(header).to_bytes(4, "little")
+        reader = (np.lib.format.read_array_header_1_0 if version == (1, 0)
+                  else np.lib.format.read_array_header_2_0)
+        # ASCII escaping expands a UTF-8 header by at most three times.
+        limit = _NPY_HEADER_MAX_BYTES * (3 if version == (3, 0) else 1)
+        shape, fortran_order, dtype = reader(BytesIO(length_bytes + header), max_header_size=limit)
     return tuple(shape), np.dtype(dtype), fortran_order
 
 

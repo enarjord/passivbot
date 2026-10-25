@@ -3,6 +3,7 @@ import json
 import os
 import pickle
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -25,6 +26,56 @@ def _save(path, values):
             np.save(handle, values, allow_pickle=False)
     else:
         np.save(path, values, allow_pickle=False)
+
+
+@pytest.mark.parametrize("version", [(1, 0), (2, 0), (3, 0)])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_numpy_header_reads_all_versions_using_only_public_readers(
+    tmp_path, monkeypatch, version, compressed,
+):
+    path = tmp_path / ("hlcvs.npy.gz" if compressed else "hlcvs.npy")
+    values = np.asfortranarray(np.arange(24, dtype=np.float64).reshape(3, 2, 4))
+    format_module = np.lib.format
+    opener = gzip.open if compressed else open
+    with opener(path, "wb") as handle:
+        format_module.write_array(handle, values, version=version, allow_pickle=False)
+    public_format = SimpleNamespace(
+        read_magic=format_module.read_magic,
+        read_array_header_1_0=format_module.read_array_header_1_0,
+        read_array_header_2_0=format_module.read_array_header_2_0,
+    )
+    monkeypatch.setattr(shared_arrays.np.lib, "format", public_format)
+    assert shared_arrays.numpy_artifact_header(path) == (values.shape, values.dtype, True)
+
+
+def test_numpy_v3_header_retains_unicode_dtype_names_with_public_readers(tmp_path, monkeypatch):
+    path = tmp_path / "unicode.npy"
+    values = np.zeros(3, dtype=[("価格", "<f8"), ("δ🙂", "<i4")])
+    format_module = np.lib.format
+    with path.open("wb") as handle:
+        format_module.write_array(handle, values, version=(3, 0), allow_pickle=False)
+    monkeypatch.setattr(shared_arrays.np.lib, "format", SimpleNamespace(
+        read_magic=format_module.read_magic,
+        read_array_header_1_0=format_module.read_array_header_1_0,
+        read_array_header_2_0=format_module.read_array_header_2_0,
+    ))
+    shape, dtype, fortran = shared_arrays.numpy_artifact_header(path)
+    assert shape == values.shape and dtype == values.dtype and fortran is False
+
+
+@pytest.mark.parametrize("version", [(1, 0), (2, 0), (3, 0)])
+@pytest.mark.parametrize("failure", ["oversized", "short_length", "short_header"])
+def test_numpy_header_rejects_invalid_lengths_without_reading_payload(tmp_path, version, failure):
+    path = tmp_path / "bad.npy"
+    length_size = 2 if version == (1, 0) else 4
+    length = (10_001 if failure == "oversized" else 10).to_bytes(length_size, "little")
+    if failure == "short_length":
+        length = length[:-1]
+    path.write_bytes(np.lib.format.magic(*version) + length)
+    message = {"oversized": "exceeds", "short_length": "incomplete NPY header length",
+               "short_header": "incomplete NPY header"}[failure]
+    with pytest.raises(ValueError, match=message):
+        shared_arrays.numpy_artifact_header(path)
 
 
 @pytest.mark.parametrize("compressed", [False, True])
