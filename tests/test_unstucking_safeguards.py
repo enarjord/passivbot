@@ -469,7 +469,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "unilateralness": 0.0,
                     "volume": 0.0,
                     "ema_readiness": 0.0,
-                    "volatility": 1.0,
+                    "log_range": 1.0,
                 },
                 "risk_wel_enforcer_threshold_ratio": 0.0,
                 "unstuck_exposure_trigger_ratio": 0.0,
@@ -489,7 +489,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "unilateralness": 0.0,
                     "volume": 0.0,
                     "ema_readiness": 0.0,
-                    "volatility": 1.0,
+                    "log_range": 1.0,
                 },
                 "unstuck_loss_allowance_fraction": 0.0,
             }
