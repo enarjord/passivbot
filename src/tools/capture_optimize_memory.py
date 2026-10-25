@@ -37,8 +37,8 @@ class ProcessInfo:
     ppid: int
     rss_kb: int
     vsz_kb: int
-    cpu_pct: float
-    mem_pct: float
+    cpu_percent: float
+    memory_percent: float
     elapsed_s: int
     args: str
 
@@ -70,8 +70,8 @@ def collect_ps() -> list[ProcessInfo]:
                     ppid=int(ppid),
                     rss_kb=int(rss),
                     vsz_kb=int(vsz),
-                    cpu_pct=float(pcpu),
-                    mem_pct=float(pmem),
+                    cpu_percent=float(pcpu),
+                    memory_percent=float(pmem),
                     elapsed_s=int(etimes),
                     args=args,
                 )

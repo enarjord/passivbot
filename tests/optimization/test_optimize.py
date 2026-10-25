@@ -1298,11 +1298,21 @@ def test_optimize_parser_accepts_polish_bounds_mode():
     optimize.add_extra_options(advanced_group, help_all=True)
 
     args = parser.parse_args(
-        ["--polish-pct", "0.2", "--polish-bounds-mode", "override-all"]
+        ["--polish-bounds-fraction", "0.2", "--polish-bounds-mode", "override-all"]
     )
 
-    assert args.polish_bounds_pct == 0.2
+    assert args.polish_bounds_fraction == 0.2
     assert args.polish_bounds_mode == "override-all"
+    assert "0.1 means plus/minus 10 percent" in " ".join(parser.format_help().split())
+
+
+@pytest.mark.parametrize("retired_flag", ["--polish-pct", "--polish-bounds-pct"])
+def test_optimize_parser_rejects_retired_percentage_polish_flags(retired_flag):
+    parser = argparse.ArgumentParser()
+    optimize.add_extra_options(parser, help_all=True)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([retired_flag, "0.2"])
 
 
 def test_starting_configs_option_is_visible_in_default_help():
@@ -2894,7 +2904,7 @@ class TestApplyPolishBounds:
             "long_entry_threshold_base_pct"
         ] == pytest.approx([0.04, 0.06])
 
-    def test_invalid_percentage_raises(self):
+    def test_invalid_fraction_raises(self):
         with pytest.raises(ValueError, match="finite non-negative"):
             apply_polish_bounds({"optimize": {"bounds": {}}}, -0.1)
 
@@ -4361,7 +4371,7 @@ class TestEvaluator:
     """Test Evaluator class initialization and basic methods."""
 
     def test_perturb_step_digits(self):
-        """Test perturbation with different change probabilities."""
+        """Test perturbation with probabilities of keeping values unchanged."""
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4379,13 +4389,13 @@ class TestEvaluator:
 
         # Use a simple individual matching bounds length
         individual = [1.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_step_digits(individual, change_chance=0.5)
+        perturbed = evaluator.perturb_step_digits(individual, keep_value_probability=0.5)
 
         # Should have same length
         assert len(perturbed) == len(individual)
 
-    def test_perturb_x_pct(self):
-        """Test percentage-based perturbation."""
+    def test_perturb_relative_fraction(self):
+        """Test relative-fraction perturbation."""
         from optimize import Evaluator
         from config.schema import get_expanded_config_prototype
 
@@ -4401,9 +4411,41 @@ class TestEvaluator:
         )
 
         individual = [5.0] * len(evaluator.bounds)
-        perturbed = evaluator.perturb_x_pct(individual, magnitude=0.01)
+        perturbed = evaluator.perturb_relative_fraction(individual, magnitude_fraction=0.01)
 
         assert len(perturbed) == len(individual)
+
+    @pytest.mark.parametrize("keep_value_probability,expected", [(1.0, 5.0), (0.0, 6.0)])
+    def test_step_perturbation_probability_describes_unchanged_values(
+        self, monkeypatch, keep_value_probability, expected
+    ):
+        from types import SimpleNamespace
+
+        evaluator = SimpleNamespace(
+            bounds=[SimpleNamespace(low=0.0, high=10.0, is_stepped=True, step=1.0)]
+        )
+        monkeypatch.setattr(np.random, "random", lambda: 0.5)
+        monkeypatch.setattr(np.random, "choice", lambda values: 1.0)
+
+        assert optimize.Evaluator.perturb_step_digits(
+            evaluator, [5.0], keep_value_probability=keep_value_probability
+        ) == [expected]
+
+    def test_relative_perturbation_fraction_preserves_scale_one_magnitude(self, monkeypatch):
+        from types import SimpleNamespace
+
+        evaluator = SimpleNamespace(
+            bounds=[SimpleNamespace(low=0.0, high=10.0, is_stepped=True)]
+        )
+
+        def positive_edge(low, high):
+            assert (low, high) == (-0.01, 0.01)
+            return high
+
+        monkeypatch.setattr(np.random, "uniform", positive_edge)
+        assert optimize.Evaluator.perturb_relative_fraction(
+            evaluator, [5.0], magnitude_fraction=0.01
+        ) == pytest.approx([5.05])
 
     def test_perturb_random_subset(self):
         """Test random subset perturbation."""
