@@ -49,13 +49,13 @@ def test_current_scope_proximity_and_raw_pending_survive_reporting():
     captured = groups()
     status = report._summarize_hsl_status(captured)
     assert status["total"] == 1
-    assert status["closest_to_red"][0]["red_proximity_pct"] == 50.0
+    assert status["closest_to_red"][0]["red_proximity_percent"] == 50.0
     assert status["closest_to_red"][0]["symbol"] == "BTC/USDT:USDT"
     assert status["observations"][0]["omitted_scopes"] == 2
     assert status["observations"][0]["scope_count"] == 3
     pending = report._summarize_hsl_raw_red_pending(captured)
     assert pending["total"] == 1
-    assert pending["pending"][0]["ema_gap_to_red_pct"] == 50.0
+    assert pending["pending"][0]["ema_gap_to_red_percent"] == 50.0
     shareable = report._shareable_hsl_status(status)
     assert "red_threshold" not in shareable["closest_to_red"][0]
     assert shareable["observations"][0]["omitted_scopes"] == 2

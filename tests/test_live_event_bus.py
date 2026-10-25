@@ -2200,7 +2200,7 @@ def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
     live_event_emitters.emit_memory_snapshot_event(
         bot,
         rss_bytes=198 * 1024 * 1024,
-        rss_delta_pct=91.0,
+        rss_delta_percent=91.0,
         cache_bytes=5 * 1024 * 1024,
         cache_candles=100,
         cache_symbols=39,
@@ -2240,7 +2240,7 @@ def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
     )
     data = kwargs["data"]
     assert data["rss_bytes"] == 198 * 1024 * 1024
-    assert data["rss_delta_pct"] == 91.0
+    assert data["rss_delta_percent"] == 91.0
     assert data["cache"]["bytes"] == 5 * 1024 * 1024
     assert len(data["cache"]["samples"]) == 3
     assert data["cache"]["samples"][0]["bytes"] == (1 << 63) - 1
@@ -2261,7 +2261,7 @@ def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
 def test_memory_snapshot_console_formatter_is_compact_and_omits_samples():
     data = {
         "rss_bytes": 198 * 1024 * 1024,
-        "rss_delta_pct": 91.0,
+        "rss_delta_percent": 91.0,
         "cache": {
             "bytes": 5 * 1024 * 1024,
             "symbols": 39,
@@ -3454,7 +3454,7 @@ def test_console_format_summarizes_unstuck_selection():
             "changed": True,
             "entry_price": 1.0,
             "current_price": 1.1,
-            "price_diff_pct": 10.0,
+            "price_change_percent": 10.0,
             "allowance": -12.3,
         },
     )

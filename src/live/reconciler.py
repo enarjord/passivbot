@@ -3685,7 +3685,7 @@ def annotate_order_deltas(
         cancel_order.setdefault("_context", "retire")
         cancel_order.setdefault("_reason", "retire")
 
-    def pct(a: float, b: float) -> float:
+    def relative_difference_percent(a: float, b: float) -> float:
         if a == 0 and b == 0:
             return 0.0
         if a == 0:
@@ -3708,11 +3708,11 @@ def annotate_order_deltas(
                 float(c[1].get("price", 0.0)) - float(cancel_order.get("price", 0.0))
             ),
         )
-        raw_price_diff = pct(
+        raw_price_diff = relative_difference_percent(
             float(cancel_order.get("price", 0.0)),
             float(best_order.get("price", 0.0)),
         )
-        raw_qty_diff = pct(
+        raw_qty_diff = relative_difference_percent(
             float(cancel_order.get("qty", 0.0)), float(best_order.get("qty", 0.0))
         )
         price_diff = (
@@ -3732,20 +3732,20 @@ def annotate_order_deltas(
         cancel_order["_delta"] = {
             "price_old": cancel_order.get("price"),
             "price_new": best_order.get("price"),
-            "price_pct_diff": price_diff,
+            "price_difference_percent": price_diff,
             "qty_old": cancel_order.get("qty"),
             "qty_new": best_order.get("qty"),
-            "qty_pct_diff": qty_diff,
+            "qty_difference_percent": qty_diff,
         }
         cancel_order["_context"] = "replace"
         cancel_order["_reason"] = reason
         best_order["_delta"] = {
             "price_old": cancel_order.get("price"),
             "price_new": best_order.get("price"),
-            "price_pct_diff": price_diff,
+            "price_difference_percent": price_diff,
             "qty_old": cancel_order.get("qty"),
             "qty_new": best_order.get("qty"),
-            "qty_pct_diff": qty_diff,
+            "qty_difference_percent": qty_diff,
         }
         best_order["_context"] = "replace"
         best_order["_reason"] = reason
