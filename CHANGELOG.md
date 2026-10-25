@@ -9,11 +9,50 @@ since the latest release tag; these features may already be available when insta
 - Align operational runtime IDs, balance hysteresis and fill-fee policy arguments with their
   public `_fraction` names; preserve released-v8 conversion through explicit source-name metadata.
 
+- Make backtest quantity units explicit: BTC collateral target and USD-debt/equity ratios,
+  signed fee override fractions, and the starting-balance equity floor fraction. Warmup
+  now uses `activation_span_fraction`; live acquisition still uses `span * (1 + r)` and
+  backtest/activation still uses `span * r`, with fractional-minute caps preserved.
+  Released-v8 migration emits the final names without rescaling values.
+
+- Make optimizer prefilter assumptions explicit with `exposure_probe_fractions`,
+  `adverse_directionality_score` and log-range EMA inputs. Geometry checks use `_fraction`
+  metric names; measurements, rule arithmetic and the native probe protocol are unchanged.
+
+- Spell pymoo crossover and mutation controls explicitly with `_probability`,
+  `_probability_per_variable`, and `_distribution_index`. Values, automatic defaults, and
+  external pymoo arguments are unchanged; released-v8 conversion reports the final paths.
+
+- Name public candle-range indicators `log_range`: strategy horizons and forager ranking now
+  use that name, and strategy sensitivities end in `_coefficient`. The measurement remains the
+  EMA of `ln(high / low)`; values, normalization, native identifiers, and trading formulas are
+  unchanged. Released-v8 conversion emits the new public paths; earlier dev-v9 names are rejected.
+
+- Describe strategy sizing and exposure sensitivities explicitly: trailing-martingale uses
+  `reentry_qty_multiplier` and `_exposure_ratio_coefficient` leaves; EMA-anchor uses
+  `entry_qty_exposure_coefficient` and `inventory_offset_exposure_coefficient`. Values, bounds,
+  formulas, and native optimizer identifiers are unchanged. Explicit v8 conversion emits the
+  new names; earlier development-v9 spellings are unsupported.
+
 - Make public risk units explicit: HSL uses `drawdown_threshold_fraction` and
   `drawdown_fraction_ema_span_minutes`, the loss gate uses `max_drawdown_fraction`, and wallet
   exposure limits use `_ratio` names. Defaults, numeric values, bounds, and native execution
   remain unchanged. Released-v8 migration reports the final names; unpublished v9 spellings
   are rejected instead of silently aliased.
+
+- Publish immutable analysis quantity metadata and a generated reference covering units,
+  denominators, observation populations, aggregation and weighting without changing formulas.
+
+- Rename optimizer polish to `--polish-bounds-fraction`: `0.25` still narrows bounds by a
+  relative half-width of 25%, without rescaling values. Perturbation helpers now distinguish
+  relative fractions from probabilities of retaining an unchanged parameter.
+
+- Use explicit `_fraction` names in backtest comparison JSON and plotting range arguments.
+  Comparison values and plot slicing stay unchanged; human summaries still display percentages.
+- Name crash-finder thresholds and event fields explicitly as log returns or log ratios;
+  report and CSV values retain natural-log units and existing directional ranking.
+- Spell scale-100 diagnostic and telemetry values with `_percent`; preserve values, rounding,
+  missing-value behavior and human percentage formatting across producers and report consumers.
 
 - Require complete config-override long-option spellings in the live, backtest and optimizer
   command parsers. Explicit short aliases remain supported; an undeclared prefix cannot silently

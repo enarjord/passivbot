@@ -21,7 +21,7 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
     set_side_universe_sources(config, 'approved_coins', {'long': ['LONGCOIN'], 'short': ['SHORTCOIN']})
     set_side_universe_sources(config, 'ignored_coins', {'long': [], 'short': []})
     config['bot']["portfolio"]['hedge_mode'] = hedge_mode
-    config['bot']["portfolio"]['warmup']['span_multiplier'] = 1.0
+    config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = 10
     config["backtest"].update(
         {
@@ -44,7 +44,7 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
         config["bot"][pside]["forager"].update(
             {
                 "volume_ema_span_minutes": 2,
-                "volatility_ema_span_minutes": 2,
+                "log_range_ema_span_minutes": 2,
             }
         )
         config["bot"][pside]["strategy"]["ema_anchor"].update(
@@ -53,24 +53,24 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
                 "ema_span_1_minutes": 3.0,
                 "base_qty_fraction": 0.2,
                 "offset_fraction": 0.001,
-                "offset_psize_weight": 0.0,
-                "entry_double_down_factor": 0.0,
-                "offset_volatility_ema_span_minutes": 2.0,
-                "offset_volatility_ema_span_1h_candles": 2.0,
-                "offset_volatility_1m_weight": 0.0,
-                "offset_volatility_1h_weight": 0.0,
+                "inventory_offset_exposure_coefficient": 0.0,
+                "entry_qty_exposure_coefficient": 0.0,
+                "offset_log_range_ema_span_minutes": 2.0,
+                "offset_log_range_ema_span_1h_candles": 2.0,
+                "offset_log_range_1m_coefficient": 0.0,
+                "offset_log_range_1h_coefficient": 0.0,
             }
         )
     # Without side eligibility, these rankings intentionally prefer the coin
     # approved only for the opposite side and reproduce the regression.
     config["bot"]["long"]["forager"]["score_weights"] = {
         "ema_readiness": 0.0,
-        "volatility": 1.0,
+        "log_range": 1.0,
         "volume": 0.0,
     }
     config["bot"]["short"]["forager"]["score_weights"] = {
         "ema_readiness": 0.0,
-        "volatility": 0.0,
+        "log_range": 0.0,
         "volume": 1.0,
     }
     if not include_dataset:

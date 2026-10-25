@@ -377,7 +377,7 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
                         now_monotonic=now_monotonic, window_seconds=window_seconds
                     ),
                     "activation_count": activation_count,
-                    "market_distance_threshold_pct": threshold * 100.0,
+                    "market_distance_threshold_percent": threshold * 100.0,
                 },
             )
     admission_summary = state.record_admission_reasons(

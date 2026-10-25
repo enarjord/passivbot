@@ -2104,7 +2104,7 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
 def format_memory_snapshot_console(data: Mapping[str, Any]) -> str:
     """Project a bounded memory snapshot without retaining diagnostic samples."""
     rss_bytes = _data_int(data, "rss_bytes")
-    delta_pct = _data_number(data, "rss_delta_pct")
+    delta_pct = _data_number(data, "rss_delta_percent")
     cache = data.get("cache") if isinstance(data.get("cache"), Mapping) else {}
     timeframe_cache = (
         data.get("timeframe_cache")
@@ -2701,7 +2701,7 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"current={current_price:g}")
-    diff_pct = _data_number(data, "price_diff_pct")
+    diff_pct = _data_number(data, "price_change_percent")
     if diff_pct is not None:
         parts.append(f"pos_pnl_dist={diff_pct:.4f}%")
     allowance = _data_number(data, "allowance")

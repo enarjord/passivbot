@@ -14,7 +14,7 @@ Forager answers that question in a simple sequence:
 2. rank the survivors by a weighted score
 3. fill the available shortlist slots from that ranking
 
-This lets you control the tradeoff between liquidity, volatility, entry readiness, and sustained directionality directly in config.
+This lets you control the tradeoff between liquidity, log range, entry readiness, and sustained directionality directly in config.
 
 ## Inputs
 
@@ -22,8 +22,8 @@ For each side (`bot.long` and `bot.short`), forager uses:
 
 - `forager_volume_drop_pct`
 - `forager.volume_ema_span_minutes`
-- `forager.volatility_ema_span_minutes`
-- `forager_score_weights`
+- `forager.log_range_ema_span_minutes`
+- `forager.score_weights`
 - `unilateralness_ema_span_minutes` (floating-point span, default 60)
 - `ema_span_0_minutes`
 - `ema_span_1_minutes`
@@ -46,7 +46,7 @@ At a high level, forager selection is:
 2. Disable candidates that fail trading constraints such as effective min cost.
 3. Apply coarse low-volume pruning using `forager_volume_drop_pct`.
 4. Normalize the remaining feature values.
-5. Compute a weighted score using `forager_score_weights`.
+5. Compute a weighted score using `forager.score_weights`.
 6. Return the best candidates needed to fill the available shortlist slots.
 
 The canonical shortlist logic now lives in Rust and is shared by live selection and orchestrator/backtest selection.
@@ -66,9 +66,9 @@ that happened to have the freshest candles.
 - Higher is better.
 - If `forager_volume_drop_pct > 0`, volume is required even if the volume score weight is zero.
 
-### Volatility
+### Log Range
 
-`forager.volatility_ema_span_minutes` controls the 1m EMA of log range:
+`forager.log_range_ema_span_minutes` controls the 1m EMA of log range:
 
 `log_range = ln(high / low)`
 
@@ -105,13 +105,13 @@ to zero and the floating-point `unilateralness_ema_span_minutes` defaults to 60.
 See [adaptive entry cooldown and RMS](adaptive_entry_cooldown.md) for the formula,
 normalization, completed-candle readiness and decay through flat prices.
 
-## `forager_score_weights`
+## `forager.score_weights`
 
-`forager_score_weights` is a dict with required keys:
+`forager.score_weights` is a dict with required keys:
 
 - `volume`
 - `ema_readiness`
-- `volatility`
+- `log_range`
 - `unilateralness`
 
 Rules:
@@ -123,21 +123,21 @@ Rules:
 
 Examples:
 
-- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}`
-  - prioritize the most volatile candidates
-- `{"volume": 1.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0}`
+- `{"volume": 0.0, "ema_readiness": 0.0, "log_range": 1.0, "unilateralness": 0.0}`
+  - prioritize the candidates with the highest log-range EMA
+- `{"volume": 1.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0}`
   - maximize liquidity after coarse pruning
-- `{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}`
+- `{"volume": 0.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0}`
   - prioritize symbols closest to a real initial entry
-- `{"volume": 0.2, "ema_readiness": 0.6, "volatility": 0.2, "unilateralness": 0.0}`
+- `{"volume": 0.2, "ema_readiness": 0.6, "log_range": 0.2, "unilateralness": 0.0}`
   - bias toward actual setups while still preferring liquid, active symbols
-- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 0.0}`
+- `{"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 0.0}`
   - normalize to EMA-readiness-only ranking
 
-- `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 0.0, "unilateralness": 1.0}`
+- `{"volume": 0.0, "ema_readiness": 0.0, "log_range": 0.0, "unilateralness": 1.0}`
   - prefer the least unilateral retained candidates
-- `{"volume": 0.0, "ema_readiness": 0.2, "volatility": 0.4, "unilateralness": 0.4}`
-  - balance entry readiness and volatility against sustained one-way movement
+- `{"volume": 0.0, "ema_readiness": 0.2, "log_range": 0.4, "unilateralness": 0.4}`
+  - balance entry readiness and log range against sustained one-way movement
 
 The optimizer retains these internal sub-weight identifiers; authored bounds use the nested
 `optimize.bounds.<side>.forager.score_weights` paths:
@@ -165,7 +165,7 @@ optimizer search. Explicit ranges are preserved. Canonical exports use
 Important: these weights only rank candidates for available initial-entry slots. They do not force
 entries, bypass entry conditions, or bypass risk/min-size gates. If all four weights are set to
 zero, the canonical config is EMA-readiness-only ranking, so the saved config will show
-`{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0, "unilateralness": 0.0}`. That means forager prefers symbols
+`{"volume": 0.0, "ema_readiness": 1.0, "log_range": 0.0, "unilateralness": 0.0}`. That means forager prefers symbols
 closest to their real initial-entry threshold when filling empty slots; it does not mean every
 approved symbol will immediately open or keep adding entries.
 
@@ -212,7 +212,7 @@ invent local substitute values.
 
 ## Practical Tuning Notes
 
-- Start with volatility-only if you want the shortlist to favor active, moving symbols.
+- Start with log-range-only if you want the shortlist to favor active, moving symbols.
 - Add `ema_readiness` when you want empty slots to favor symbols closer to producing a real initial entry.
 - Keep some volume pruning or volume weight if your candidate universe contains many illiquid tails.
 - If rankings look noisy, first widen the forager EMA spans before changing entry parameters.
@@ -221,7 +221,7 @@ invent local substitute values.
 
 - Canonical shortlist scoring and selection live in Rust.
 - Python is responsible for gathering market data, building payloads, and calling Rust.
-- The canonical config names are `forager.volume_ema_span_minutes` and `forager.volatility_ema_span_minutes`.
+- The canonical config names are `forager.volume_ema_span_minutes` and `forager.log_range_ema_span_minutes`.
 
 When unilateralness is enabled, the monitor's ranking total comes from the latest
 Rust scoring diagnostic, including all four components, volume pruning and tie

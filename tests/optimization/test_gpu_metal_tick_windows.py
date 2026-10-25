@@ -374,11 +374,11 @@ def _tick_window_fixture(sides, hsl):
         )
         bot["forager"].update(unilateralness_ema_span_minutes=3.25,
                                volume_ema_span_minutes=7.5,
-                               volatility_ema_span_minutes=11.25)
+                               log_range_ema_span_minutes=11.25)
         bot["forager"]["score_weights"]["unilateralness"] = 0.35
         strategy = bot["strategy"]["trailing_martingale"]
         strategy["entry"].update(ema_span_0_minutes=7.5, ema_span_1_minutes=13.25)
-        strategy.update(volatility_ema_span_minutes=9.5, volatility_ema_span_1h_candles=2.5)
+        strategy.update(log_range_ema_span_minutes=9.5, log_range_ema_span_1h_candles=2.5)
         bot["unstuck"].update(ema_span_0_minutes=5.5, ema_span_1_minutes=11.25)
     return inputs
 

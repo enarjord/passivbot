@@ -90,7 +90,7 @@ DIFF_SETTING_PATHS = (
         "bot.portfolio.warmup.max_minutes",
         ("bot", "portfolio", "warmup", "max_minutes"),
     ),
-    ("cache", "bot.portfolio.warmup.span_multiplier", ("bot", "portfolio", "warmup", "span_multiplier")),
+    ("cache", "bot.portfolio.warmup.activation_span_fraction", ("bot", "portfolio", "warmup", "activation_span_fraction")),
 )
 
 
@@ -367,7 +367,7 @@ def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     forager_values = {
         key: get_grouped_bot_value(side_config, flat_key, default=None)
         for key, flat_key in (
-            ("volatility_ema_span_minutes", "forager_volatility_ema_span_1m"),
+            ("log_range_ema_span_minutes", "forager_volatility_ema_span_1m"),
             ("volume_ema_span_minutes", "forager_volume_ema_span_1m"),
         )
     }
@@ -636,7 +636,7 @@ def _cache_readiness_report(
 ) -> dict[str, Any]:
     checks = {key: _live_setting_display(live, key) for key in CACHE_SETTING_CHECK_KEYS}
     warmup = config.get("bot", {}).get("portfolio", {}).get("warmup", {})
-    checks.update({f"bot.portfolio.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "span_multiplier")})
+    checks.update({f"bot.portfolio.warmup.{key}": _setting_display(warmup, key) for key in ("max_minutes", "activation_span_fraction")})
     candles = _surface_report("candles")
     fills = _surface_report("fills")
     hsl = _surface_report("hsl")
@@ -705,18 +705,18 @@ def _cache_readiness_report(
     if max_minutes_status != "present":
         _append_attention(candles, f"max_warmup_minutes_{max_minutes_status}",
                           f"bot.portfolio.warmup.max_minutes is {max_minutes_status}; warmup cap intent is unclear")
-    warmup_ratio_status = _numeric_status(_setting_value(warmup, "span_multiplier"), allow_zero=True)
-    if warmup_ratio_status == "missing":
+    activation_span_fraction_status = _numeric_status(_setting_value(warmup, "activation_span_fraction"), allow_zero=True)
+    if activation_span_fraction_status == "missing":
         _append_attention(
             candles,
-            "warmup_ratio_missing",
-            "bot.portfolio.warmup.span_multiplier is missing; EMA warmup buffer intent is implicit",
+            "activation_span_fraction_missing",
+            "bot.portfolio.warmup.activation_span_fraction is missing; EMA warmup buffer intent is implicit",
         )
-    elif warmup_ratio_status != "present":
+    elif activation_span_fraction_status != "present":
         _append_attention(
             candles,
-            f"warmup_ratio_{warmup_ratio_status}",
-            f"bot.portfolio.warmup.span_multiplier is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+            f"activation_span_fraction_{activation_span_fraction_status}",
+            f"bot.portfolio.warmup.activation_span_fraction is {activation_span_fraction_status}; EMA warmup buffer is suspicious",
         )
 
     archive_status = _bool_status(
@@ -1290,7 +1290,7 @@ def build_live_config_preflight_report(
         "cache": {
             "live_settings": _selected_live_values(live, CACHE_LIVE_KEYS),
             "bot_settings": _selected_values(
-                bot.get("portfolio", {}).get("warmup", {}), ("max_minutes", "span_multiplier")
+                bot.get("portfolio", {}).get("warmup", {}), ("max_minutes", "activation_span_fraction")
             ),
             "readiness": _cache_readiness_report(
                 live,

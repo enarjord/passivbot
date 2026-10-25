@@ -145,9 +145,9 @@ _FIELDS_BY_TYPE = {
     },
     FieldType.FLOAT: {
         "backtest": """
-            btc_collateral_cap equity_floor_ratio gap_tolerance_ohlcvs_minutes
-            maker_fee_override market_order_slippage_fraction limit_order_fill_buffer_fraction
-            starting_balance taker_fee_override
+            btc_collateral_target_ratio equity_floor_fraction gap_tolerance_ohlcvs_minutes
+            maker_fee_override_fraction market_order_slippage_fraction limit_order_fill_buffer_fraction
+            starting_balance taker_fee_override_fraction
         """,
         "live": """
             balance_hysteresis_snap_fraction candle_lock_timeout_seconds execution_delay_seconds
@@ -167,15 +167,15 @@ _FIELDS_BY_TYPE = {
             checkpoint_interval_minutes event_rotation_mb event_rotation_minutes
             retain_days snapshot_interval_seconds
         """,
-        "optimize.prefilter": "adverse_directionality volatility_ema_1m volatility_ema_1h penalty_weight",
+        "optimize.prefilter": "adverse_directionality_score log_range_ema_1m log_range_ema_1h penalty_weight",
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
-        "optimize.pymoo.shared": "crossover_eta crossover_prob_var mutation_eta",
+        "optimize.pymoo.shared": "crossover_distribution_index crossover_probability_per_variable mutation_distribution_index",
         "bot.portfolio.loss_gate": "max_drawdown_fraction memory_ema_span_minutes",
         "bot.portfolio.unstuck": "memory_ema_span_minutes",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
-        "bot.portfolio.warmup": "span_multiplier",
+        "bot.portfolio.warmup": "activation_span_fraction",
     },
     FieldType.BOOLEAN: {
         "backtest": """
@@ -216,7 +216,7 @@ _FIELDS_BY_TYPE = {
         "backtest": "exchanges scenarios visible_metrics",
         "logging": "live_event_debug_profiles",
         "optimize": "enable_overrides fixed_params limits scoring",
-        "optimize.prefilter": "checks exposure_ratios",
+        "optimize.prefilter": "checks exposure_probe_fractions",
         "optimize.gpu.screening": "scenarios",
     },
     FieldType.OBJECT: {
@@ -232,7 +232,7 @@ _FIELDS_BY_TYPE = {
 _NULLABLE_FIELDS = {
     FieldType.FLOAT: (
         "bot.portfolio.warmup.max_minutes",
-        "backtest.btc_collateral_ltv_cap", "backtest.ew_half_life_days",
+        "backtest.max_usd_debt_to_equity_ratio", "backtest.ew_half_life_days",
         "live.balance_override", "live.max_forager_candle_staleness_minutes",
     ),
     FieldType.INTEGER: (
@@ -251,8 +251,8 @@ _SHARED_SIDE_FIELDS = {
     FieldType.FLOAT: """
         universe.minimum_coin_age_days
         forager.score_weights.unilateralness forager.score_weights.ema_readiness
-        forager.score_weights.volatility forager.score_weights.volume
-        forager.unilateralness_ema_span_minutes forager.volatility_ema_span_minutes
+        forager.score_weights.log_range forager.score_weights.volume
+        forager.unilateralness_ema_span_minutes forager.log_range_ema_span_minutes
         forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
         hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
@@ -321,7 +321,7 @@ def get_field_registry() -> FieldRegistry:
                 path = f"{prefix}.{name}" if prefix else name
                 add(path, kind, nullable=path in {
                     "backtest.filter_by_min_effective_cost",
-                    "backtest.maker_fee_override", "backtest.taker_fee_override",
+                    "backtest.maker_fee_override_fraction", "backtest.taker_fee_override_fraction",
                     "backtest.visible_metrics",
                 })
     for kind, paths in _NULLABLE_FIELDS.items():
@@ -370,7 +370,7 @@ def get_field_registry() -> FieldRegistry:
     add("live.warmup_concurrency", (FieldType.INTEGER, FieldType.STRING))
     add("optimize.pymoo.algorithms.nsga3.ref_dirs.n_partitions",
         (FieldType.INTEGER, FieldType.STRING))
-    for name in ("mutation_prob", "mutation_prob_per_variable"):
+    for name in ("mutation_probability", "mutation_probability_per_variable"):
         add(f"optimize.pymoo.shared.{name}", (FieldType.FLOAT, FieldType.STRING))
     for name in ("approved_coins", "ignored_coins"):
         for side in ("long", "short"):
@@ -403,7 +403,7 @@ def get_field_registry() -> FieldRegistry:
     add("backtest.scenarios.*.exchanges", (FieldType.ARRAY, FieldType.STRING), nullable=True)
     add("backtest.scenarios.*.coin_sources", FieldType.OBJECT, nullable=True)
     add("backtest.scenarios.*.overrides", FieldType.OBJECT)
-    add("optimize.prefilter.exposure_ratios.*", FieldType.FLOAT)
+    add("optimize.prefilter.exposure_probe_fractions.*", FieldType.FLOAT)
     add("optimize.prefilter.checks.*.enabled", FieldType.BOOLEAN)
     add("optimize.prefilter.checks.*.metric", FieldType.STRING)
     add("optimize.prefilter.checks.*.sides", FieldType.ARRAY)

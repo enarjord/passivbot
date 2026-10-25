@@ -293,7 +293,7 @@ def test_schema_cli_is_offline_and_registered():
     "bot.portfolio.strategy_kind", "bot.portfolio.hedge_mode",
     "bot.long.universe.minimum_coin_age_days", "bot.long.universe.filter_by_min_effective_cost",
     "bot.portfolio.execution.market_orders_allowed", "bot.portfolio.execution.market_order_near_touch_fraction",
-    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.span_multiplier", "bot.portfolio.warmup.max_minutes",
+    "bot.global.forager.score_hysteresis_margin", "bot.portfolio.warmup.activation_span_fraction", "bot.portfolio.warmup.max_minutes",
     "bot.long.universe.approved_coins", "bot.short.universe.ignored_coins",
     "bot.long.forager.always_include",
 ])
