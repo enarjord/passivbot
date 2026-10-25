@@ -443,7 +443,7 @@
           ["tier", payload.tier],
           ["scopes", payload.scope_count],
           ["sample", Array.isArray(payload.scopes) ? payload.scopes.map((scope) =>
-            `${scope.symbol || scope.signal_mode || "portfolio"}/${scope.pside || "all"} ${scope.action || scope.availability || "inactive"} raw ${fmtCompact(scope.raw, 4)} ema ${fmtCompact(scope.ema, 4)}`
+            `${scope.symbol || scope.signal_mode || "portfolio"}/${scope.pside || "all"} ${scope.action || scope.availability || "inactive"} raw ${fmtCompact(scope.signal_raw_fraction, 4)} ema ${fmtCompact(scope.signal_ema_fraction, 4)}`
           ).join("; ") : null],
           ["omitted", payload.omitted_scopes],
         ]).map(([key, value]) => `${key} ${value}`).join(" · ");
@@ -583,7 +583,7 @@
     if (Array.isArray(hsl.scopes)) {
       for (const scope of (hsl.scopes || []).slice(0, 3)) {
         const label = [scope.symbol, scope.pside].filter(Boolean).join(" ") || "portfolio";
-        rows.push([`HSL ${label}`, `${hslScopeStatus(scope)} · DD ${fmtCompact(scope.score, 4)} / ${fmtCompact(scope.threshold, 4)} · ${scope.estimated ? "estimated" : scope.availability}`]);
+        rows.push([`HSL ${label}`, `${hslScopeStatus(scope)} · DD ${fmtCompact(scope.trigger_signal_fraction, 4)} / ${fmtCompact(scope.drawdown_threshold_fraction, 4)} · ${scope.estimated ? "estimated" : scope.availability}`]);
       }
       if ((hsl.scope_count || 0) > 3) rows.push(["More HSL scopes", String(hsl.scope_count - 3)]);
     }

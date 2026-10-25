@@ -58,8 +58,8 @@ def create_hsl_figures(report, *, figsize, autoplot, return_figures, display=Non
         fig, (signal_ax, state_ax) = plt.subplots(
             2, 1, sharex=True, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]}
         )
-        signal_ax.plot(x, frame["raw"].astype(float), label="Raw drawdown", alpha=0.6)
-        signal_ax.plot(x, frame["ema"].astype(float), label="EMA drawdown")
+        signal_ax.plot(x, frame["signal_raw_fraction"].astype(float), label="Raw drawdown", alpha=0.6)
+        signal_ax.plot(x, frame["signal_ema_fraction"].astype(float), label="EMA drawdown")
         signal_ax.axhline(
             policy["red_threshold"],
             color="firebrick",

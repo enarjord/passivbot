@@ -5466,7 +5466,7 @@ def _hsl_scope_groups(group):
         if not isinstance(scope, dict):
             continue
         raw, ema, threshold = (
-            _numeric_value(scope.get(key)) for key in ("raw", "ema", "threshold")
+            _numeric_value(scope.get(key)) for key in ("signal_raw_fraction", "signal_ema_fraction", "drawdown_threshold_fraction")
         )
         score = min(raw, ema) if raw is not None and ema is not None else None
         available = (
@@ -5481,11 +5481,11 @@ def _hsl_scope_groups(group):
             "red_at": scope.get("red_at"),
             "availability": scope.get("availability"),
             "observation_status": data.get("observation_status"),
-            "drawdown_raw": raw,
-            "drawdown_ema": ema,
-            "drawdown_score": score if available else None,
-            "red_threshold": threshold,
-            "dist_to_red": (
+            "signal_raw_fraction": raw,
+            "signal_ema_fraction": ema,
+            "trigger_signal_fraction": score if available else None,
+            "drawdown_threshold_fraction": threshold,
+            "red_threshold_gap_fraction": (
                 threshold - score
                 if available and score is not None and threshold is not None
                 else None
@@ -5592,19 +5592,28 @@ def _summarize_hsl_status(
                         if value not in (None, "", {})
                     }
                 )
-            dist_to_red = _numeric_value(data.get("dist_to_red"))
+            # Current scoped observations use explicit units; old event tapes keep
+            # their original top-level vocabulary at this isolated reader.
+            current = "_current_raw_pending" in scoped
+            dist_to_red = _numeric_value(data.get(
+                "red_threshold_gap_fraction" if current else "dist_to_red"
+            ))
             if dist_to_red is None:
                 continue
-            red_threshold = _numeric_value(data.get("red_threshold"))
-            drawdown_score = _numeric_value(data.get("drawdown_score"))
-            red_proximity_pct = None
+            red_threshold = _numeric_value(data.get(
+                "drawdown_threshold_fraction" if current else "red_threshold"
+            ))
+            drawdown_score = _numeric_value(data.get(
+                "trigger_signal_fraction" if current else "drawdown_score"
+            ))
+            red_threshold_proximity_percent = None
             if red_threshold is not None and red_threshold > 0:
                 if drawdown_score is not None:
-                    red_proximity_pct = round(
+                    red_threshold_proximity_percent = round(
                         (drawdown_score / red_threshold) * 100.0, 3
                     )
                 else:
-                    red_proximity_pct = round(
+                    red_threshold_proximity_percent = round(
                         max(0.0, 1.0 - (dist_to_red / red_threshold)) * 100.0,
                         3,
                     )
@@ -5618,9 +5627,9 @@ def _summarize_hsl_status(
                     "signal_mode": (
                         str(signal_mode) if signal_mode not in (None, "") else None
                     ),
-                    "dist_to_red": dist_to_red,
-                    "red_threshold": red_threshold,
-                    "red_proximity_pct": red_proximity_pct,
+                    "red_threshold_gap_fraction": dist_to_red,
+                    "drawdown_threshold_fraction": red_threshold,
+                    "red_threshold_proximity_percent": red_threshold_proximity_percent,
                     "latest_ts": _non_negative_int(group.get("latest_ts")),
                 }.items()
                 if value not in (None, "", {})
@@ -5638,7 +5647,7 @@ def _summarize_hsl_status(
     closest_sorted = sorted(
         closest,
         key=lambda item: (
-            float(item.get("dist_to_red")),
+            float(item.get("red_threshold_gap_fraction")),
             str(item.get("bot") or ""),
             str(item.get("symbol") or ""),
             str(item.get("pside") or ""),
@@ -5709,25 +5718,32 @@ def _summarize_hsl_raw_red_pending(
         if signal_mode not in (None, ""):
             signal_mode_counts[str(signal_mode)] += count
         tier = data.get("tier")
-        red_threshold = _numeric_value(data.get("red_threshold"))
-        drawdown_score = _numeric_value(data.get("drawdown_score"))
-        red_proximity_pct = None
+        current = "_current_raw_pending" in group
+        red_threshold = _numeric_value(data.get(
+            "drawdown_threshold_fraction" if current else "red_threshold"
+        ))
+        drawdown_score = _numeric_value(data.get(
+            "trigger_signal_fraction" if current else "drawdown_score"
+        ))
+        red_threshold_proximity_percent = None
         if (
             red_threshold is not None
             and red_threshold > 0
             and drawdown_score is not None
         ):
-            red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
+            red_threshold_proximity_percent = round((drawdown_score / red_threshold) * 100.0, 3)
         if group.get("_current_raw_pending"):
-            data = {**data, "ema_gap_to_red": red_threshold - data["drawdown_ema"]}
-        ema_gap_to_red = _numeric_value(data.get("ema_gap_to_red"))
-        ema_gap_to_red_pct = None
+            data = {**data, "ema_red_threshold_gap_fraction": red_threshold - data["signal_ema_fraction"]}
+        ema_gap_to_red = _numeric_value(data.get(
+            "ema_red_threshold_gap_fraction" if current else "ema_gap_to_red"
+        ))
+        ema_red_threshold_gap_percent = None
         if (
             red_threshold is not None
             and red_threshold > 0
             and ema_gap_to_red is not None
         ):
-            ema_gap_to_red_pct = round((ema_gap_to_red / red_threshold) * 100.0, 3)
+            ema_red_threshold_gap_percent = round((ema_gap_to_red / red_threshold) * 100.0, 3)
         pending.append(
             {
                 key: value
@@ -5739,8 +5755,8 @@ def _summarize_hsl_raw_red_pending(
                     "signal_mode": (
                         str(signal_mode) if signal_mode not in (None, "") else None
                     ),
-                    "red_proximity_pct": red_proximity_pct,
-                    "ema_gap_to_red_pct": ema_gap_to_red_pct,
+                    "red_threshold_proximity_percent": red_threshold_proximity_percent,
+                    "ema_red_threshold_gap_percent": ema_red_threshold_gap_percent,
                     "elapsed_minutes": _non_negative_int(data.get("elapsed_minutes")),
                     "latest_ts": _non_negative_int(group.get("latest_ts")),
                 }.items()
@@ -5759,7 +5775,7 @@ def _summarize_hsl_raw_red_pending(
     pending_sorted = sorted(
         pending,
         key=lambda item: (
-            -float(item.get("red_proximity_pct") or 0.0),
+            -float(item.get("red_threshold_proximity_percent") or 0.0),
             -int(item.get("latest_ts") or 0),
             str(item.get("bot") or ""),
             str(item.get("symbol") or ""),
@@ -5835,7 +5851,7 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
                     "pside",
                     "tier",
                     "signal_mode",
-                    "red_proximity_pct",
+                    "red_threshold_proximity_percent",
                     "latest_ts",
                 )
                 if isinstance(item, dict) and item.get(key) not in (None, "", {})
@@ -5897,8 +5913,8 @@ def _shareable_hsl_raw_red_pending(raw_red_pending: Any) -> dict[str, Any]:
                     "pside",
                     "tier",
                     "signal_mode",
-                    "red_proximity_pct",
-                    "ema_gap_to_red_pct",
+                    "red_threshold_proximity_percent",
+                    "ema_red_threshold_gap_percent",
                     "elapsed_minutes",
                     "latest_ts",
                 )

@@ -45,8 +45,8 @@ def closed_request(*, mode="coin", side="long", now=120_000, duration=120_000,
 def test_pre_red_post_green_manual_flatten_starts_finite_deadline(native,mode,side):
     value=closed_request(mode=mode,side=side)
     actual=evaluate(native,value)
-    assert actual["risk"]["raw"] < value["threshold"]
-    assert actual["risk"]["ema"] < value["threshold"]
+    assert actual["risk"]["signal_raw_fraction"] < value["threshold"]
+    assert actual["risk"]["signal_ema_fraction"] < value["threshold"]
     assert actual["decision"]["action"] == "halted"
     assert actual["risk"]["cooldown_until"] == 240_000
     assert actual["decision"]["flat_at"] == 120_000
@@ -69,7 +69,7 @@ def test_zero_duration_and_genuine_reentry_clear_old_terminal_authority(native):
     result=evaluate(native,value)
     assert result["risk"]["exposed"]
     assert result["risk"]["cooldown_until"] is None
-    assert result["risk"]["drawdown"] == 0
+    assert result["risk"]["drawdown_memory_usd"] == 0
     assert result["decision"]["action"] == "normal"
 
 
@@ -82,8 +82,8 @@ def test_unknown_exposed_prefix_has_no_new_fast_warmup(native,side):
     result=evaluate(native,value)
     assert result["decision"]["action"] == "panic"
     assert "unknown_prefix_current_basis_seed" in result["reasons"]
-    assert result["risk"]["drawdown"] == 20.0
-    assert result["risk"]["ema"] == result["risk"]["raw"]
+    assert result["risk"]["drawdown_memory_usd"] == 20.0
+    assert result["risk"]["signal_ema_fraction"] == result["risk"]["signal_raw_fraction"]
 
 
 def test_corrected_facts_rebuild_without_previous_permission_input(native):

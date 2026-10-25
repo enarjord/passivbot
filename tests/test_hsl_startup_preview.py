@@ -135,10 +135,10 @@ def test_hsl_startup_preview_reports_current_scopes_and_marks_expired_observatio
                         "pside": "long",
                         "tier": "red",
                         "action": "panic",
-                        "raw": 0.12,
-                        "ema": 0.11,
-                        "score": 0.11,
-                        "threshold": 0.1,
+                        "signal_raw_fraction": 0.12,
+                        "signal_ema_fraction": 0.11,
+                        "trigger_signal_fraction": 0.11,
+                        "drawdown_threshold_fraction": 0.1,
                         "secret": "nested-must-not-render",
                     }
                 ],
@@ -158,7 +158,7 @@ def test_hsl_startup_preview_reports_current_scopes_and_marks_expired_observatio
     assert report["hsl_status"]["counts_by_status"] == {expected: 1}
     latest = report["hsl_status"]["latest_by_target"][0]
     assert latest["last_observed_tier"] == "red"
-    assert latest["latest_data"]["scopes"][0]["score"] == 0.11
+    assert latest["latest_data"]["scopes"][0]["trigger_signal_fraction"] == 0.11
     assert latest["current_drawdown"]["available"] is False
     assert latest["cooldown"]["available"] is False
     assert report["startup_panic_orders"]["available"] is False

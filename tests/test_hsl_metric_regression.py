@@ -23,8 +23,8 @@ def test_current_equity_anchor_and_strict_red_threshold(
 ):
     snapshot = frame(pair(size=1, basis=100, mark=mark))
     result = evaluate(snapshot, mode, threshold=0.1, **selectors)["decision"]
-    assert result["raw"] == pytest.approx(expected)
-    assert result["ema"] == pytest.approx(expected)
+    assert result["signal_raw_fraction"] == pytest.approx(expected)
+    assert result["signal_ema_fraction"] == pytest.approx(expected)
     assert result["action"] == ("panic" if expected > 0.1 else "normal")
 
 
@@ -32,8 +32,8 @@ def test_coin_budget_uses_slots_and_aggregate_uses_whole_balance():
     snapshot = frame(pair(size=1, basis=100, mark=90), balance=200)
     coin = evaluate(snapshot, "coin", slots=2, pside="long", symbol="A")["decision"]
     aggregate = evaluate(snapshot, "portfolio")["decision"]
-    assert coin["raw"] == pytest.approx(0.1)
-    assert aggregate["raw"] == pytest.approx(0.05)
+    assert coin["signal_raw_fraction"] == pytest.approx(0.1)
+    assert aggregate["signal_raw_fraction"] == pytest.approx(0.05)
 
 
 @pytest.mark.parametrize("expired_at", [M - 1, M + 9999])

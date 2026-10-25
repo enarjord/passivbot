@@ -6452,9 +6452,9 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "pside": "long",
                     "tier": "yellow",
                     "signal_mode": "coin",
-                    "dist_to_red": 0.02,
-                    "red_threshold": 0.1,
-                    "red_proximity_pct": 80.0,
+                    "red_threshold_gap_fraction": 0.02,
+                    "drawdown_threshold_fraction": 0.1,
+                    "red_threshold_proximity_percent": 80.0,
                     "latest_ts": 3000,
                 },
             ],
@@ -6635,7 +6635,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "pside": "long",
             "tier": "yellow",
             "signal_mode": "coin",
-            "red_proximity_pct": 80.0,
+            "red_threshold_proximity_percent": 80.0,
             "latest_ts": 3000,
         }
     ]
@@ -6669,7 +6669,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "pside": "long",
                 "tier": "yellow",
                 "signal_mode": "coin",
-                "red_proximity_pct": 80.0,
+                "red_threshold_proximity_percent": 80.0,
                 "latest_ts": 3000,
             }
         ],
@@ -6811,9 +6811,9 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
         },
     ]
     assert brief["risk_events"]["attention_groups_truncated"] is False
-    assert "red_proximity_pct" in json.dumps(summary["risk_events"]["hsl_status"])
+    assert "red_threshold_proximity_percent" in json.dumps(summary["risk_events"]["hsl_status"])
     assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
-    assert "red_threshold" not in json.dumps(brief["risk_events"]["hsl_status"])
+    assert '"red_threshold":' not in json.dumps(brief["risk_events"]["hsl_status"])
     assert "drawdown_raw" not in json.dumps(brief["risk_events"]["hsl_status"])
     brief_risk_json = json.dumps(brief["risk_events"], sort_keys=True)
     assert "latest_data" in brief_risk_json
@@ -6821,7 +6821,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert '"sides":' not in brief_risk_json
     assert "price_diff_pct" not in brief_risk_json
     assert "drawdown_raw" not in brief_risk_json
-    assert "red_threshold" not in brief_risk_json
+    assert '"red_threshold":' not in brief_risk_json
     assert "balance" not in brief_risk_json
     assert "flat-secret" not in brief_risk_json
     assert "unstuck-secret" not in brief_risk_json
@@ -7009,8 +7009,8 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
                 "pside": "long",
                 "tier": "red",
                 "signal_mode": "coin",
-                "red_proximity_pct": 95.0,
-                "ema_gap_to_red_pct": 5.0,
+                "red_threshold_proximity_percent": 95.0,
+                "ema_red_threshold_gap_percent": 5.0,
                 "elapsed_minutes": 8,
                 "latest_ts": 2000,
             }
@@ -7034,8 +7034,8 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
                 "pside": "long",
                 "tier": "red",
                 "signal_mode": "coin",
-                "red_proximity_pct": 95.0,
-                "ema_gap_to_red_pct": 5.0,
+                "red_threshold_proximity_percent": 95.0,
+                "ema_red_threshold_gap_percent": 5.0,
                 "elapsed_minutes": 8,
                 "latest_ts": 2000,
             }
@@ -7050,7 +7050,7 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
     assert "drawdown_raw" not in rendered
     assert "drawdown_ema" not in rendered
     assert "dist_to_red" not in rendered
-    assert "red_threshold" not in rendered
+    assert '"red_threshold":' not in rendered
     assert "raw_excess" not in rendered
     assert "12345.67" not in rendered
     assert "98765.43" not in rendered

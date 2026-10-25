@@ -111,8 +111,8 @@ impl Recorder {
                 red_at: d.timestamp_ms,
                 flat_at: None,
                 reason: "drawdown",
-                raw: Some(d.raw),
-                ema: Some(d.ema),
+                signal_raw_fraction: Some(d.signal_raw_fraction),
+                signal_ema_fraction: Some(d.signal_ema_fraction),
             });
         }
         if d.flatten_qualified {
@@ -125,8 +125,8 @@ impl Recorder {
                 red_at: red,
                 flat_at: self.flat_at,
                 reason: "stop_flattened",
-                raw: Some(d.raw),
-                ema: Some(d.ema),
+                signal_raw_fraction: Some(d.signal_raw_fraction),
+                signal_ema_fraction: Some(d.signal_ema_fraction),
             });
         } else if (d.exposed && !d.red) || (!d.exposed && d.action == Action::Normal) {
             if let (Some(red), Some(flat)) = (self.red_at, self.flat_at) {
@@ -136,8 +136,8 @@ impl Recorder {
                     red_at: red,
                     flat_at: Some(flat),
                     reason: "cooldown_complete",
-                    raw: None,
-                    ema: None,
+                    signal_raw_fraction: None,
+                    signal_ema_fraction: None,
                 });
             }
             self.red_at = None;
@@ -407,8 +407,8 @@ mod tests {
         assert_eq!(risk.action, Action::Halted);
         assert!(!risk.red);
         assert_eq!(risk.cooldown_until, Some(180001));
-        assert_eq!(risk.drawdown, 9.0);
-        assert!(risk.raw < 0.095);
+        assert_eq!(risk.drawdown_memory_usd, 9.0);
+        assert!(risk.signal_raw_fraction < 0.095);
         let decision = output.decision.unwrap();
         assert_eq!(decision.flat_at, Some(60001));
         assert_eq!(decision.red_at, Some(60000));
@@ -450,8 +450,8 @@ mod tests {
         let output = evaluate(serde_json::from_value(value).unwrap()).unwrap();
         assert_eq!(output.decision.unwrap().action, Action::Panic);
         let risk = output.risk.unwrap();
-        assert_eq!(risk.drawdown, 100.0);
-        assert_eq!(risk.raw, risk.ema);
+        assert_eq!(risk.drawdown_memory_usd, 100.0);
+        assert_eq!(risk.signal_raw_fraction, risk.signal_ema_fraction);
         assert!(output.reasons.contains("unknown_prefix_current_basis_seed"));
     }
 
@@ -469,11 +469,11 @@ mod tests {
         let output = evaluate(serde_json::from_value(value).unwrap()).unwrap();
         let risk = output.risk.unwrap();
         assert_eq!(risk.action, Action::Panic);
-        assert!(risk.ema > 0.19);
+        assert!(risk.signal_ema_fraction > 0.19);
         // Seed loss100 is repaid by the estimated historical UPNL transition;
         // known netloss201 then one decay and current UPNL loss100 are separate.
-        assert_eq!(risk.drawdown, 200.5);
-        assert_eq!(risk.raw, (200.5_f32 / 600.5_f32) as f64);
+        assert_eq!(risk.drawdown_memory_usd, 200.5);
+        assert_eq!(risk.signal_raw_fraction, (200.5_f32 / 600.5_f32) as f64);
     }
 
     #[test]

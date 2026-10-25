@@ -75,8 +75,11 @@ def test_actual_native_risk_uses_ordered_f32_graph(
                   previous_upnl=0,upnl=-20,net=0,budget=final_budget,
                   slow_span=slow,fast_span=fast)
     actual=evaluate(native,value)["risk"]
-    for key in ["drawdown","raw","ema","nonpositive_equity"]:
-        assert actual[key] == marked[key],(key,actual,marked)
+    for key, reference in [("drawdown_memory_usd", "drawdown"),
+                           ("signal_raw_fraction", "raw"),
+                           ("signal_ema_fraction", "ema"),
+                           ("nonpositive_equity", "nonpositive_equity")]:
+        assert actual[key] == marked[reference],(key,actual,marked)
 
 
 def test_retired_risk_exports_are_absent(native):
@@ -108,7 +111,7 @@ def test_disposable_current_preview_does_not_change_the_factual_request(native):
     assert value == saved
     repaired=deepcopy(value)
     repaired["snapshot"]["pairs"][0]["fills"][0]["fee"]=-1.0
-    assert evaluate(native,repaired)["risk"]["drawdown"] > first["risk"]["drawdown"]
+    assert evaluate(native,repaired)["risk"]["drawdown_memory_usd"] > first["risk"]["drawdown_memory_usd"]
     assert evaluate(native,value) == first
 
 
@@ -127,5 +130,5 @@ def test_scope_upnl_is_summed_before_the_binary32_risk_boundary(native,values):
     value["snapshot"].update(pairs=pairs,balance=1000.0)
     value["budget_observations"]=[]
     output=evaluate(native,value)
-    assert output["risk"]["drawdown"] == 1.0
-    assert output["risk"]["raw"] == pytest.approx(0.001)
+    assert output["risk"]["drawdown_memory_usd"] == 1.0
+    assert output["risk"]["signal_raw_fraction"] == pytest.approx(0.001)

@@ -1326,7 +1326,7 @@ def render_screen(
             )
             summary_lines.append(
                 f"  {label}: {row.get('action') or row.get('tier') or row.get('availability')} "
-                f"DD={_fmt_float(row.get('score'), 4)} threshold={_fmt_float(row.get('threshold'), 4)} "
+                f"DD={_fmt_float(row.get('trigger_signal_fraction'), 4)} threshold={_fmt_float(row.get('drawdown_threshold_fraction'), 4)} "
                 f"quality={'estimated' if row.get('estimated') else row.get('availability', '-')}"
             )
         omitted = max(0, hsl.get("scope_count", 0) - 3)

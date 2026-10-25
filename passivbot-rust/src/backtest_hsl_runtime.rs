@@ -368,8 +368,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                     red_at: red_at.unwrap_or(timestamp),
                     flat_at,
                     reason,
-                    raw: Some(decision.raw),
-                    ema: Some(decision.ema),
+                    signal_raw_fraction: Some(decision.signal_raw_fraction),
+                    signal_ema_fraction: Some(decision.signal_ema_fraction),
                 })
             };
             if decision.action == Action::Panic && prior_action != Action::Panic {
@@ -406,8 +406,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
                     } else {
                         "green"
                     },
-                    raw: decision.raw,
-                    ema: decision.ema,
+                    signal_raw_fraction: decision.signal_raw_fraction,
+                    signal_ema_fraction: decision.signal_ema_fraction,
                     numeric_range_approximation: false,
                 }),
                 events,
@@ -699,12 +699,12 @@ mod tests {
         )
         .unwrap();
         let d = bt.hsl_scopes[0].state.current(60_000);
-        assert_eq!(d.drawdown as f32, 0.1_f32);
+        assert_eq!(d.drawdown_memory_usd as f32, 0.1_f32);
         assert_eq!(d.action, Action::Normal);
         assert_eq!(bt.unstuck_memory.drawdown() as f32, 0.1_f32);
         bt.update_hsl(1).unwrap();
         assert_eq!(bt.hsl_action(LONG, 0), Action::Panic);
-        assert!(bt.hsl_scopes[0].state.current(120_000).drawdown > 99.0);
+        assert!(bt.hsl_scopes[0].state.current(120_000).drawdown_memory_usd > 99.0);
     }
 
     #[test]
@@ -781,7 +781,7 @@ mod tests {
         assert!(bt.liquidated);
         let terminal = bt.hsl_scopes[0].state.current(120_000);
         assert_eq!(terminal.action, Action::Panic);
-        assert!(terminal.drawdown > 1900.0);
+        assert!(terminal.drawdown_memory_usd > 1900.0);
         assert!(terminal.nonpositive_equity);
     }
 
@@ -806,7 +806,11 @@ mod tests {
             assert!(scope.result.reasons.contains("inactive_scope"));
         }
         for sample in &bt.hsl_report.samples {
-            assert!(sample.action.is_none() && sample.raw.is_none() && sample.ema.is_none());
+            assert!(
+                sample.action.is_none()
+                    && sample.signal_raw_fraction.is_none()
+                    && sample.signal_ema_fraction.is_none()
+            );
             assert_eq!(sample.reasons, vec!["inactive_scope"]);
         }
     }
@@ -831,7 +835,7 @@ mod tests {
         )
         .unwrap();
         bt.update_hsl(1).unwrap();
-        let before = bt.hsl_scopes[0].state.current(120_000).drawdown as f32;
+        let before = bt.hsl_scopes[0].state.current(120_000).drawdown_memory_usd as f32;
         bt.process_close_fill_long(
             2,
             0,
@@ -840,7 +844,7 @@ mod tests {
         )
         .unwrap();
         let after = bt.hsl_scopes[0].state.current(120_000);
-        assert_eq!(after.drawdown as f32, before + 0.045_f32);
+        assert_eq!(after.drawdown_memory_usd as f32, before + 0.045_f32);
         assert!(after.exposed);
         assert_eq!(after.cooldown_until, None);
         assert!((bt.balance.usd_total_balance - 994.855).abs() < 1e-10);
@@ -868,7 +872,7 @@ mod tests {
             )
             .unwrap();
             bt.update_hsl(1).unwrap();
-            let before = bt.hsl_scopes[0].state.current(120_000).drawdown;
+            let before = bt.hsl_scopes[0].state.current(120_000).drawdown_memory_usd;
             bt.process_entry_fill_long(
                 2,
                 1,
@@ -878,7 +882,7 @@ mod tests {
             .unwrap();
             let after = bt.hsl_scopes[0].state.current(120_000);
             assert!(
-                after.drawdown >= before,
+                after.drawdown_memory_usd >= before,
                 "{mode} reset an aggregate episode"
             );
             bt.process_close_fill_long(

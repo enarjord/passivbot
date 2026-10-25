@@ -39,8 +39,8 @@ def test_current_quote_replacement_does_not_reseed_the_committed_initializer():
     assert initial.action == returned.action == "panic"
     assert recovered.action == "normal"
     assert replay.cache_info()["advanced_events"] == advances
-    assert json.loads(initial.payload)["risk"]["drawdown"] == 100.0
-    assert json.loads(returned.payload)["risk"]["drawdown"] == 100.0
+    assert json.loads(initial.payload)["risk"]["drawdown_memory_usd"] == 100.0
+    assert json.loads(returned.payload)["risk"]["drawdown_memory_usd"] == 100.0
     assert replay.anchor.observed_ms == NOW
 
 
@@ -92,7 +92,7 @@ def test_same_timestamp_account_correction_is_committed_before_preview():
     value.positions[SYMBOL]["long"]["size"] = 20.0
     changed, same = query(value, NOW, 90.0)
     assert same is replay
-    assert json.loads(changed.payload)["risk"]["drawdown"] == 200.0
+    assert json.loads(changed.payload)["risk"]["drawdown_memory_usd"] == 200.0
     value.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
     flat, _ = query(value, NOW, 90.0)
     assert not json.loads(flat.payload)["risk"]["exposed"]

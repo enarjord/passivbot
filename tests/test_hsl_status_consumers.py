@@ -18,9 +18,9 @@ def groups(status="current", action="normal", omitted=2):
             tier="green" if action == "normal" else "red",
             action=action,
             availability="available",
-            raw=0.1,
-            ema=0.03,
-            threshold=0.06,
+            signal_raw_fraction=0.1,
+            signal_ema_fraction=0.03,
+            drawdown_threshold_fraction=0.06,
             red_at=1000 if action == "halted" else None,
             flat_at=2000 if action == "halted" else None,
         )
@@ -49,13 +49,13 @@ def test_current_scope_proximity_and_raw_pending_survive_reporting():
     captured = groups()
     status = report._summarize_hsl_status(captured)
     assert status["total"] == 1
-    assert status["closest_to_red"][0]["red_proximity_pct"] == 50.0
+    assert status["closest_to_red"][0]["red_threshold_proximity_percent"] == 50.0
     assert status["closest_to_red"][0]["symbol"] == "BTC/USDT:USDT"
     assert status["observations"][0]["omitted_scopes"] == 2
     assert status["observations"][0]["scope_count"] == 3
     pending = report._summarize_hsl_raw_red_pending(captured)
     assert pending["total"] == 1
-    assert pending["pending"][0]["ema_gap_to_red_pct"] == 50.0
+    assert pending["pending"][0]["ema_red_threshold_gap_percent"] == 50.0
     shareable = report._shareable_hsl_status(status)
     assert "red_threshold" not in shareable["closest_to_red"][0]
     assert shareable["observations"][0]["omitted_scopes"] == 2
@@ -89,7 +89,7 @@ def test_multi_scope_report_preserves_identity_without_inventing_portfolio_score
     captured = groups(omitted=0)
     data = next(iter(captured.values()))["latest_data"]
     data["scopes"].append(
-        {**data["scopes"][0], "symbol": "ETH/USDT:USDT", "raw": 0.02, "ema": 0.01}
+        {**data["scopes"][0], "symbol": "ETH/USDT:USDT", "signal_raw_fraction": 0.02, "signal_ema_fraction": 0.01}
     )
     summary = report._summarize_hsl_status(captured)
     assert summary["total"] == 1
@@ -153,7 +153,7 @@ def test_raw_pending_current_status_gets_risk_attention():
     assert report._risk_attention_rank(group) == 0
 
 
-@pytest.mark.parametrize("field", ["raw", "ema", "threshold"])
+@pytest.mark.parametrize("field", ["signal_raw_fraction", "signal_ema_fraction", "drawdown_threshold_fraction"])
 def test_partial_scope_numbers_do_not_crash_or_invent_pending_red(field):
     captured = groups()
     next(iter(captured.values()))["latest_data"]["scopes"][0].pop(field)

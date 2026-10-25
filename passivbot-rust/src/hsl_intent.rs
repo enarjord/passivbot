@@ -16,8 +16,8 @@ pub struct Decision {
     pub red_at: Option<i64>,
     pub flat_at: Option<i64>,
     pub reason: &'static str,
-    pub raw: f64,
-    pub ema: f64,
+    pub signal_raw_fraction: f64,
+    pub signal_ema_fraction: f64,
     pub numeric_range_approximation: bool,
 }
 
@@ -29,6 +29,6 @@ pub struct LifecycleEvent {
     pub red_at: i64,
     pub flat_at: Option<i64>,
     pub reason: &'static str,
-    pub raw: Option<f64>,
-    pub ema: Option<f64>,
+    pub signal_raw_fraction: Option<f64>,
+    pub signal_ema_fraction: Option<f64>,
 }

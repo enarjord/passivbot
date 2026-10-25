@@ -2103,7 +2103,19 @@ pub(crate) fn hsl_report_to_py<const ORGANILLO: bool>(
     let samples = PyList::empty_bound(py);
     for row in backtest.hsl_samples() {
         let dict = PyDict::new_bound(py);
-        fields!(dict, row, sequence, timestamp, side, coin, raw, ema, red_at, flat_at, reasons);
+        fields!(
+            dict,
+            row,
+            sequence,
+            timestamp,
+            side,
+            coin,
+            signal_raw_fraction,
+            signal_ema_fraction,
+            red_at,
+            flat_at,
+            reasons
+        );
         dict.set_item(
             pyo3::intern!(py, "phase"),
             pyo3::types::PyString::intern_bound(py, row.phase),
