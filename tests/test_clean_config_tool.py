@@ -220,7 +220,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
     outputs = []
     for number in (int, float):
         cfg = get_expanded_config_prototype()
-        close = {"retracement_volatility_1h_weight": number(0)}
+        close = {"retracement_log_range_1h_coefficient": number(0)}
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["close"].update(close)
         cfg["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = number(60)
         cfg["bot"]["long"]["risk"]["max_positions"] = number(7)
@@ -250,7 +250,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
             "bot.long.unstuck.ema_span_0_minutes": number(60)
         }
         cfg["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
-            "retracement_volatility_1h_weight"
+            "retracement_log_range_1h_coefficient"
         ] = [number(0), number(1), 0.01]
         output = render_source(
             json.dumps(cfg),
@@ -277,10 +277,10 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
     }
     assert type(patch["bot"]["long"]["entry_cooldown"]["max_duration_minutes"]) is float
     assert set(patch["bot"]["long"]["strategy"]["trailing_martingale"]["close"]) == {
-        "retracement_volatility_1h_weight"
+        "retracement_log_range_1h_coefficient"
     }
     assert type(patch["live"]["account"]["leverage"]) is int
-    assert '"retracement_volatility_1h_weight": 0.0' in outputs[0]
+    assert '"retracement_log_range_1h_coefficient": 0.0' in outputs[0]
     if "backtest" in result:
         assert type(result["backtest"]["balance_sample_divider"]) is int
         assert result["backtest"]["starting_balance"] == 1000.25
@@ -291,7 +291,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
         assert type(pins["bot.long.unstuck.ema_span_0_minutes"]) is float
         bounds = result["optimize"]["bounds"]["long"]
         weight_bounds = bounds["strategy"]["trailing_martingale"]["close"][
-            "retracement_volatility_1h_weight"
+            "retracement_log_range_1h_coefficient"
         ]
         assert all(type(value) is float for value in weight_bounds)
         assert all(type(value) is int for value in bounds["risk"]["max_positions"])
@@ -300,7 +300,7 @@ def test_cleanup_numeric_spellings_follow_field_types(mode, input_format, max_in
 def test_cli_check_and_in_place_standardize_numeric_spelling(tmp_path):
     source = tmp_path / "config.json"
     cfg = get_template_config()
-    close = {"retracement_volatility_1h_weight": 0}
+    close = {"retracement_log_range_1h_coefficient": 0}
     cfg["coin_overrides"] = {
         "BTC": {
             "bot": {"long": {"strategy": {"trailing_martingale": {"close": close}}}}

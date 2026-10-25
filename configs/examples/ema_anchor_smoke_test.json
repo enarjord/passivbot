@@ -2,14 +2,14 @@
     "backtest": {
         "balance_sample_divider": 60,
         "base_dir": "backtests",
-        "btc_collateral_cap": 0.0,
-        "btc_collateral_ltv_cap": null,
+        "btc_collateral_target_ratio": 0.0,
+        "max_usd_debt_to_equity_ratio": null,
         "candle_interval_minutes": 5,
         "coin_sources": {},
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
         "end_date": "2023-01-15",
-        "equity_floor_ratio": 0.05,
+        "equity_floor_fraction": 0.05,
         "ew_half_life_days": null,
         "exchanges": ["binance", "bybit"],
         "filter_by_min_effective_cost": false,
@@ -18,7 +18,7 @@
         "hlcvs_data_override_mode": "intersection",
         "hsl_detailed_report": false,
         "limit_order_fill_buffer_fraction": 0.0,
-        "maker_fee_override": 0.0004,
+        "maker_fee_override_fraction": 0.0004,
         "market_order_slippage_fraction": 0.0005,
         "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
         "market_settings_sources": {},
@@ -37,7 +37,7 @@
         "start_date": "2023-01-01",
         "starting_balance": 100000.0,
         "suite_enabled": false,
-        "taker_fee_override": 0.00055,
+        "taker_fee_override_fraction": 0.00055,
         "visible_metrics": [
             "adg_strategy_eq",
             "mdg_strategy_eq",
@@ -66,9 +66,9 @@
             "forager": {
                 "always_include": [],
                 "score_hysteresis_margin": 0.02,
-                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "volatility": 1.0, "volume": 0.0},
+                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "log_range": 1.0, "volume": 0.0},
                 "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 225.0,
+                "log_range_ema_span_minutes": 225.0,
                 "volume_ema_span_minutes": 520.0
             },
             "hsl": {
@@ -92,13 +92,13 @@
                     "base_qty_fraction": 0.04,
                     "ema_span_0_minutes": 48.0,
                     "ema_span_1_minutes": 288.0,
-                    "entry_double_down_factor": 0.0,
+                    "entry_qty_exposure_coefficient": 0.0,
                     "offset_fraction": 0.003,
-                    "offset_psize_weight": 0.2,
-                    "offset_volatility_1h_weight": 0.0,
-                    "offset_volatility_1m_weight": 0.0,
-                    "offset_volatility_ema_span_1h_candles": 24.0,
-                    "offset_volatility_ema_span_minutes": 60.0
+                    "inventory_offset_exposure_coefficient": 0.2,
+                    "offset_log_range_1h_coefficient": 0.0,
+                    "offset_log_range_1m_coefficient": 0.0,
+                    "offset_log_range_ema_span_1h_candles": 24.0,
+                    "offset_log_range_ema_span_minutes": 60.0
                 }
             },
             "universe": {
@@ -125,7 +125,7 @@
             "loss_gate": {"max_drawdown_fraction": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "ema_anchor",
             "unstuck": {"memory_ema_span_minutes": 43200.0},
-            "warmup": {"max_minutes": null, "span_multiplier": 0.3}
+            "warmup": {"max_minutes": null, "activation_span_fraction": 0.3}
         },
         "long": {"enabled": true},
         "short": {
@@ -138,9 +138,9 @@
             },
             "forager": {
                 "always_include": [],
-                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "volatility": 1.0, "volume": 0.0},
+                "score_weights": {"ema_readiness": 0.0, "unilateralness": 0.0, "log_range": 1.0, "volume": 0.0},
                 "unilateralness_ema_span_minutes": 60.0,
-                "volatility_ema_span_minutes": 10.0,
+                "log_range_ema_span_minutes": 10.0,
                 "volume_ema_span_minutes": 360.0
             },
             "hsl": {
@@ -164,13 +164,13 @@
                     "base_qty_fraction": 0.04,
                     "ema_span_0_minutes": 48.0,
                     "ema_span_1_minutes": 288.0,
-                    "entry_double_down_factor": 0.0,
+                    "entry_qty_exposure_coefficient": 0.0,
                     "offset_fraction": 0.003,
-                    "offset_psize_weight": 0.2,
-                    "offset_volatility_1h_weight": 0.0,
-                    "offset_volatility_1m_weight": 0.0,
-                    "offset_volatility_ema_span_1h_candles": 24.0,
-                    "offset_volatility_ema_span_minutes": 60.0
+                    "inventory_offset_exposure_coefficient": 0.2,
+                    "offset_log_range_1h_coefficient": 0.0,
+                    "offset_log_range_1m_coefficient": 0.0,
+                    "offset_log_range_ema_span_1h_candles": 24.0,
+                    "offset_log_range_ema_span_minutes": 60.0
                 }
             },
             "universe": {
@@ -301,11 +301,11 @@
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
                         "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
+                        "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
                     "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 720, 1],
+                    "log_range_ema_span_minutes": [10, 720, 1],
                     "volume_ema_span_minutes": [360, 2880, 10]
                 },
                 "hsl": {
@@ -326,13 +326,13 @@
                         "base_qty_fraction": [0.001, 0.05, 0.0001],
                         "ema_span_0_minutes": [20, 1440, 1],
                         "ema_span_1_minutes": [20, 1440, 1],
-                        "entry_double_down_factor": [0.0, 2.0, 0.01],
+                        "entry_qty_exposure_coefficient": [0.0, 2.0, 0.01],
                         "offset_fraction": [0, 0.05, 0.0001],
-                        "offset_psize_weight": [0, 2, 0.001],
-                        "offset_volatility_1h_weight": [0, 40, 0.1],
-                        "offset_volatility_1m_weight": [0, 40, 0.1],
-                        "offset_volatility_ema_span_1h_candles": [1, 672, 1],
-                        "offset_volatility_ema_span_minutes": [5, 720, 1]
+                        "inventory_offset_exposure_coefficient": [0, 2, 0.001],
+                        "offset_log_range_1h_coefficient": [0, 40, 0.1],
+                        "offset_log_range_1m_coefficient": [0, 40, 0.1],
+                        "offset_log_range_ema_span_1h_candles": [1, 672, 1],
+                        "offset_log_range_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {
@@ -354,11 +354,11 @@
                     "score_weights": {
                         "ema_readiness": [0, 1, 0.01],
                         "unilateralness": [0.0, 0.0],
-                        "volatility": [0, 1, 0.01],
+                        "log_range": [0, 1, 0.01],
                         "volume": [0, 1, 0.01]
                     },
                     "unilateralness_ema_span_minutes": [60.0, 60.0],
-                    "volatility_ema_span_minutes": [10, 720, 1],
+                    "log_range_ema_span_minutes": [10, 720, 1],
                     "volume_ema_span_minutes": [360, 2880, 10]
                 },
                 "hsl": {
@@ -379,13 +379,13 @@
                         "base_qty_fraction": [0.001, 0.05, 0.0001],
                         "ema_span_0_minutes": [20, 1440, 1],
                         "ema_span_1_minutes": [20, 1440, 1],
-                        "entry_double_down_factor": [0.0, 2.0, 0.01],
+                        "entry_qty_exposure_coefficient": [0.0, 2.0, 0.01],
                         "offset_fraction": [0, 0.05, 0.0001],
-                        "offset_psize_weight": [0, 2, 0.001],
-                        "offset_volatility_1h_weight": [0, 40, 0.1],
-                        "offset_volatility_1m_weight": [0, 40, 0.1],
-                        "offset_volatility_ema_span_1h_candles": [1, 672, 1],
-                        "offset_volatility_ema_span_minutes": [5, 720, 1]
+                        "inventory_offset_exposure_coefficient": [0, 2, 0.001],
+                        "offset_log_range_1h_coefficient": [0, 40, 0.1],
+                        "offset_log_range_1m_coefficient": [0, 40, 0.1],
+                        "offset_log_range_ema_span_1h_candles": [1, 672, 1],
+                        "offset_log_range_ema_span_minutes": [5, 720, 1]
                     }
                 },
                 "unstuck": {
@@ -465,13 +465,13 @@
         "pareto_max_size": 1000,
         "population_size": null,
         "prefilter": {
-            "adverse_directionality": 0.0,
+            "adverse_directionality_score": 0.0,
             "checks": [],
-            "exposure_ratios": [0.25, 0.5, 0.8, 0.95],
+            "exposure_probe_fractions": [0.25, 0.5, 0.8, 0.95],
             "grid_max_entries": 1024,
             "penalty_weight": 1000000.0,
-            "volatility_ema_1h": 0.0,
-            "volatility_ema_1m": 0.0
+            "log_range_ema_1h": 0.0,
+            "log_range_ema_1m": 0.0
         },
         "pymoo": {
             "algorithm": "auto",
@@ -480,12 +480,12 @@
                 "nsga3": {"ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}}
             },
             "shared": {
-                "crossover_eta": 20.0,
-                "crossover_prob_var": 0.5,
+                "crossover_distribution_index": 20.0,
+                "crossover_probability_per_variable": 0.5,
                 "eliminate_duplicates": true,
-                "mutation_eta": 20.0,
-                "mutation_prob": "auto",
-                "mutation_prob_per_variable": "auto"
+                "mutation_distribution_index": 20.0,
+                "mutation_probability": "auto",
+                "mutation_probability_per_variable": "auto"
             }
         },
         "round_to_n_significant_digits": 3,

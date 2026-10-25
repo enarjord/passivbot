@@ -34,11 +34,11 @@ def test_actual_gpu_age_admission_matches_native_counts(monkeypatch, kind, topol
         spans = strategy if kind == "ema_anchor" else strategy["entry"]
         spans.update(ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
         if kind == "ema_anchor":
-            strategy.update(base_qty_fraction=0.01, offset_fraction=0.0, entry_double_down_factor=0.0)
+            strategy.update(base_qty_fraction=0.01, offset_fraction=0.0, entry_qty_exposure_coefficient=0.0)
         else:
-            strategy["entry"].update(initial_qty_fraction=0.01, initial_ema_distance_fraction=0.0, double_down_factor=0.0)
+            strategy["entry"].update(initial_qty_fraction=0.01, initial_ema_distance_fraction=0.0, reentry_qty_multiplier=0.0)
             for group in ("entry", "close"):
-                strategy[group].update(threshold_volatility_1h_weight=0.0, retracement_volatility_1h_weight=0.0)
+                strategy[group].update(threshold_log_range_1h_coefficient=0.0, retracement_log_range_1h_coefficient=0.0)
     for coin, market in markets.items():
         if coin != "__meta__":
             market["inception_timestamp_ms"] = int(timestamps[0])
@@ -110,11 +110,11 @@ def combined_policy_inputs(kind, eligible_side, allow_entry):
         spans = strategy if kind == "ema_anchor" else strategy["entry"]
         spans.update(ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
         if kind == "ema_anchor":
-            strategy.update(base_qty_fraction=0.001, offset_fraction=0.0, entry_double_down_factor=0.0)
+            strategy.update(base_qty_fraction=0.001, offset_fraction=0.0, entry_qty_exposure_coefficient=0.0)
         else:
-            strategy["entry"].update(initial_qty_fraction=0.001, initial_ema_distance_fraction=0.0, double_down_factor=0.0)
+            strategy["entry"].update(initial_qty_fraction=0.001, initial_ema_distance_fraction=0.0, reentry_qty_multiplier=0.0)
             for group in ("entry", "close"):
-                strategy[group].update(threshold_volatility_1h_weight=0.0, retracement_volatility_1h_weight=0.0)
+                strategy[group].update(threshold_log_range_1h_coefficient=0.0, retracement_log_range_1h_coefficient=0.0)
     membership = config["backtest"]["coins"]
     config = prepare_config(clean_config(config), verbose=False)
     config["backtest"]["coins"] = membership

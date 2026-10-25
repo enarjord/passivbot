@@ -34,9 +34,9 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "score_weights_unilateralness": "forager_score_weights_unilateralness",
         "unilateralness_ema_span_minutes": "unilateralness_ema_span_1m",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
-        "score_weights_volatility": "forager_score_weights_volatility",
+        "score_weights_log_range": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
-        "volatility_ema_span_minutes": "forager_volatility_ema_span_1m",
+        "log_range_ema_span_minutes": "forager_volatility_ema_span_1m",
         "volume_ema_span_minutes": "forager_volume_ema_span_1m",
     },
     "hsl": {
@@ -76,10 +76,10 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "forager": {
             "score_weights": {
                 "ema_readiness": [0, 1, 0.01],
-                "volatility": [0, 1, 0.01],
+                "log_range": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
-            "volatility_ema_span_minutes": [10, 2880, 1],
+            "log_range_ema_span_minutes": [10, 2880, 1],
             "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {
@@ -112,10 +112,10 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "forager": {
             "score_weights": {
                 "ema_readiness": [0, 1, 0.01],
-                "volatility": [0, 1, 0.01],
+                "log_range": [0, 1, 0.01],
                 "volume": [0, 1, 0.01],
             },
-            "volatility_ema_span_minutes": [10, 1440, 1],
+            "log_range_ema_span_minutes": [10, 1440, 1],
             "volume_ema_span_minutes": [180, 2880, 1]
         },
         "hsl": {

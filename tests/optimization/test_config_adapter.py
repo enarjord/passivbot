@@ -214,7 +214,7 @@ class TestConfigAdapter:
         config = _canonical_config_with_bounds({
             "long": {"strategy": {"ema_anchor": {
                 "base_qty_fraction": [0.001, 0.05, 0.0001],
-                "offset_volatility_1m_weight": [0.0, 10.0, 0.1],
+                "offset_log_range_1m_coefficient": [0.0, 10.0, 0.1],
             }}},
             "short": {"strategy": {"ema_anchor": {"offset_fraction": [0.0, 0.05, 0.0001]}}},
         }, strategy_kind="ema_anchor")
@@ -224,7 +224,7 @@ class TestConfigAdapter:
         assert ("long_base_qty_pct", ("bot", "long", "strategy", "ema_anchor", "base_qty_fraction")) in key_paths
         assert (
             "long_offset_volatility_1m_weight",
-            ("bot", "long", "strategy", "ema_anchor", "offset_volatility_1m_weight"),
+            ("bot", "long", "strategy", "ema_anchor", "offset_log_range_1m_coefficient"),
         ) in key_paths
         assert ("short_offset", ("bot", "short", "strategy", "ema_anchor", "offset_fraction")) in key_paths
 

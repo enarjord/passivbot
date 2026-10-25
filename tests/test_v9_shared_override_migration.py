@@ -93,8 +93,8 @@ def test_flat_shared_dictionary_map_preserves_each_authored_leaf(owner, nested):
         return
     output = migrate(source, memory_span_minutes=123.5).config
     expected = ({"bot.long.forager.score_weights.volume": 0.375,
-                 "bot.long.forager.score_weights.volatility": 0.625} if nested else
-                {"bot.long.forager.score_weights": weights})
+                 "bot.long.forager.score_weights.log_range": 0.625} if nested else
+                {"bot.long.forager.score_weights": {"volume": 0.375, "log_range": 0.625}})
     assert get_patch(output, owner) == expected
     assert source == before
 
